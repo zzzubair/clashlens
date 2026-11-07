@@ -476,3 +476,29 @@ def test_a_pass_whose_last_step_queues_a_recalculation_finishes(
     assert found == {("missing_day", CLEAN, 2), ("board", CLEAN, 2)}
     assert queued == [(CLEAN, "reconcile_pass", 25, "pending")]
     assert restored == 1
+
+
+def test_a_pass_step_moves_through_batches_then_days_then_finishes() -> None:
+    """A full batch goes on in its day after its last player; a short one
+    goes on to the next day from player 0, or finishes the pass on the
+    newest ended day. Each step is read back from its job's saved input."""
+    first = reconcile_pass.PassStep("2026-10-13:night", day(1))
+    full = list(range(1, reconcile_pass.BATCH_DAYS + 1))
+    assert first.next(full, day(2), 3) == reconcile_pass.PassStep(
+        "2026-10-13:night", day(1), reconcile_pass.BATCH_DAYS, 3)
+    assert first.next([7, 9], day(2), 3) == reconcile_pass.PassStep(
+        "2026-10-13:night", day(2), 0, 3)
+    assert reconcile_pass.PassStep("2026-10-13:night", day(2), 9).next([], day(2), 3) is None
+    saved = {"slot": "2026-10-13:night", "after_player_id": 9, "queued": 3,
+             "ranked_day_start": f"{day(2):%Y-%m-%dT%H:%M:%SZ}"}
+    assert reconcile_pass.PassStep.from_input(saved) == reconcile_pass.PassStep(
+        "2026-10-13:night", day(2), 9, 3)
+
+
+def test_a_finding_is_open_then_fixed_then_escalated_or_resolved() -> None:
+    state, at, states = reconcile_pass.finding_state, day(1), reconcile_pass.FindingState
+    assert state(None, None, fix_saved=False) is states.OPEN
+    assert state(at, None, fix_saved=False) is states.FIX_QUEUED
+    assert state(at, None, fix_saved=True) is states.FIX_SAVED
+    assert state(at, at, fix_saved=True) is states.ESCALATED
+    assert state(at, at, fix_saved=True, resolved=True) is states.RESOLVED

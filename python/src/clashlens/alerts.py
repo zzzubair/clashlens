@@ -22,6 +22,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
 from uuid import uuid4
 
@@ -689,6 +690,97 @@ def save_state(path: Path, state: dict) -> None:
             os.unlink(temporary)
 
 
+class Incident(StrEnum):
+    """Where one alert condition stands, from its entry in alerts.json.
+
+    HEALTHY           no alert open
+    ALERT_PENDING     an alert is saved ("pending") but not yet delivered
+    ALERTED           the alert was delivered and the problem is still seen
+    CLEARING          alerted, and checks have been clear since "clear_since"
+    RECOVERY_PENDING  a recovery is saved but not yet delivered
+
+    Each run's findings move it: True (a problem) takes HEALTHY to
+    ALERT_PENDING; False (clear) takes ALERTED to CLEARING, and CLEARING to
+    RECOVERY_PENDING once clear for RECOVERY_HOLD seconds after the alert
+    went out (`hold_recoveries`); True again in CLEARING goes back to
+    ALERTED. None (a check that could not run) never recovers an incident:
+    it drops "clear_since", so CLEARING goes back to ALERTED and the clear
+    time starts over. Delivering to Discord (`deliver`) takes ALERT_PENDING
+    to ALERTED and RECOVERY_PENDING to HEALTHY.
+
+    Owner: `run`, one at a time under alerts.lock. Every move is saved to
+    alerts.json before Discord is called, so a failed delivery or a crash
+    retries the saved one on the next run. The delivered move is saved only
+    after Discord answers, so a crash between the post and that save sends
+    the same message again on the next run. Time while ./ops had the stack stopped ("resumed_at") never counts
+    as clear time.
+    """
+
+    HEALTHY = "healthy"
+    ALERT_PENDING = "alert_pending"
+    ALERTED = "alerted"
+    CLEARING = "clearing"
+    RECOVERY_PENDING = "recovery_pending"
+
+
+_PENDING = frozenset({Incident.ALERT_PENDING, Incident.RECOVERY_PENDING})
+
+
+def incident_state(incident: dict) -> Incident:
+    pending = incident.get("pending")
+    if pending:
+        return Incident.ALERT_PENDING if pending["active"] else Incident.RECOVERY_PENDING
+    if not incident["active"]:
+        return Incident.HEALTHY
+    return Incident.CLEARING if "clear_since" in incident else Incident.ALERTED
+
+
+class BackupHealth(StrEnum):
+    """What one run's `./ops backup-status` says about backups.
+
+    HEALTHY    it passed: the timer is on, the last scheduled backup did not
+               fail, every delta has its full backup, the newest is under a
+               day old, and change-log archiving is on with uploads on time
+    FAILING    it ran and failed: the backup incident opens at once
+    UNCHECKED  it could not run or timed out, for under BACKUP_UNCHECKED_HOLD
+               seconds since it first could not (or since ./ops last started
+               the stack): no finding, so it neither alerts nor recovers
+    UNCHECKED_TOO_LONG  it could not run for BACKUP_UNCHECKED_HOLD seconds or
+               more: the incident opens, dated from when it first could not
+
+    "backup_failing_since" in alerts.json is when it first could not run; it
+    survives restarts, and only HEALTHY clears it. The incident itself then
+    follows `Incident`.
+    """
+
+    HEALTHY = "healthy"
+    FAILING = "failing"
+    UNCHECKED = "unchecked"
+    UNCHECKED_TOO_LONG = "unchecked_too_long"
+
+
+BACKUP_UNCHECKED_HOLD = 900
+BACKUP_FINDING = {
+    BackupHealth.HEALTHY: False,
+    BackupHealth.FAILING: True,
+    BackupHealth.UNCHECKED: None,
+    BackupHealth.UNCHECKED_TOO_LONG: True,
+}
+
+
+def backup_health(passed: bool | None, state: dict, now: float) -> BackupHealth:
+    """`passed` is None when the check could not run."""
+    if passed is None:
+        since = state.setdefault("backup_failing_since", now)
+        if now - max(since, state.get("resumed_at", 0)) >= BACKUP_UNCHECKED_HOLD:
+            return BackupHealth.UNCHECKED_TOO_LONG
+        return BackupHealth.UNCHECKED
+    if passed:
+        state.pop("backup_failing_since", None)
+        return BackupHealth.HEALTHY
+    return BackupHealth.FAILING
+
+
 def hold_recoveries(state: dict, findings: dict[str, bool | None], now: float) -> None:
     """Keep an alerted incident open until RECOVERY_HOLD seconds of clear checks
     after its alert was delivered."""
@@ -696,11 +788,14 @@ def hold_recoveries(state: dict, findings: dict[str, bool | None], now: float) -
         incident = state.setdefault("incidents", {}).setdefault(name, {"active": False})
         if incident.get("clear_since", now) < state.get("resumed_at", 0):
             del incident["clear_since"]  # Stopped time is not clear time.
-        if active is False and incident.get("pending", incident)["active"]:
+        stage = incident_state(incident)
+        if active is False and stage in (
+            Incident.ALERT_PENDING, Incident.ALERTED, Incident.CLEARING
+        ):
             start = max(
                 incident.setdefault("clear_since", now), incident.get("alerted_at", 0)
             )
-            if incident.get("pending") or now - start < RECOVERY_HOLD:
+            if stage is Incident.ALERT_PENDING or now - start < RECOVERY_HOLD:
                 findings[name] = None
         else:
             incident.pop("clear_since", None)
@@ -714,7 +809,7 @@ def deliver(
     for name, active in findings.items():
         incident = incidents.setdefault(name, {"active": False})
         for _ in range(2):  # Retry saved transition, then report a subsequent recovery.
-            if not incident.get("pending"):
+            if incident_state(incident) not in _PENDING:
                 if active is None or active == incident["active"]:
                     break
                 if active:
@@ -931,25 +1026,19 @@ def observe(
         errors.append("Restart history unavailable; run ./ops logs")
     check_health()
 
+    passed: bool | None = None
     try:
-        backup_failed = (
-            command([str(root / "ops"), "backup-status"], 25).returncode != 0
-        )
+        passed = command([str(root / "ops"), "backup-status"], 25).returncode == 0
     except (OSError, subprocess.SubprocessError) as error:
         errors.append(
             "Backup check timed out after 25 seconds; run ./ops backup-status"
             if isinstance(error, subprocess.TimeoutExpired)
             else "Backup check could not run; run ./ops backup-status"
         )
-        since = state.setdefault("backup_failing_since", now)
-        failing = now - max(since, state.get("resumed_at", 0)) >= 900
-        findings["backup"] = True if failing else None
     else:
-        findings["backup"] = backup_failed
-        if backup_failed:
+        if not passed:
             errors.append("Backup check failed; run ./ops backup-status")
-        else:
-            state.pop("backup_failing_since", None)
+    findings["backup"] = BACKUP_FINDING[backup_health(passed, state, now)]
     check_health()
 
     probe = [

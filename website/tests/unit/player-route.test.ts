@@ -18,9 +18,9 @@ vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
   return {
     ...actual,
-    useState: (initialState: unknown) => {
-      const state = actual.useState(initialState);
-      return initialState === false && mocks.lookupTimedOut ? [true, state[1]] : state;
+    useState: (initial: unknown) => {
+      const timedOut = initial === "waiting" && mocks.lookupTimedOut;
+      return actual.useState(timedOut ? "exhausted" : initial);
     },
   };
 });

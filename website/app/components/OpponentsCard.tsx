@@ -8,6 +8,7 @@ import {
   trophiesGivenUp,
 } from "../lib/dashboard";
 import type { PastBases } from "../lib/dashboard-cards";
+import { basesDayRead } from "../lib/detail-reads";
 import { addToGroupPath, canonicalPlayerPath } from "../lib/player-tag";
 import { CardHead, CardNote, InfoTip } from "./DashboardParts";
 import { DashboardIcon } from "./DashboardIcon";
@@ -47,7 +48,7 @@ export function basesPath(tag: string, day: number): string {
  * The earlier Legend day chosen on Bases you attacked and each earlier day
  * read for `tag`, kept while its account tab is shown: null when it could not
  * be read. The dashboard holds them, as its follow-up reads build the card
- * again.
+ * again. Each day's read moves as `BasesDayRead` says.
  */
 export function useBasesDay(tag: string) {
   // The earlier day chosen; null for today, whichever day today is.
@@ -63,7 +64,8 @@ export function useBasesDay(tag: string) {
     choose(next: number | null) {
       setChosen(next);
       clearTimeout(pause.current);
-      if (next === null || read.get(next) || asking.current.has(next)) return;
+      const state = basesDayRead(next, read, asking.current);
+      if (next === null || state === "read" || state === "asking") return;
       // A failed read is asked again.
       setRead((old) => {
         const kept = new Map(old);

@@ -15,14 +15,16 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 from . import (
+    collector_handover,
     collector_liveness,
     collector_metrics,
     collector_reset,
     collector_uploads,
-    league_week,
     queue_refresh,
+    response_novelty,
 )
 from .db import PYTHON_LIVE_PRIORITY, PYTHON_RESET_PRIORITY
+from .raw_body import DELETABLE_SQL, RECORDED_SQL
 
 UploadClaim = collector_uploads.UploadClaim
 UploadLeaseLost = collector_uploads.UploadLeaseLost
@@ -53,17 +55,6 @@ _SPOOL_DELETE_THREADS = 16
 # response-state row for each (286 million rows, about 60 s). That state branch
 # added nothing: a copy is only marked deleted while complete, and every path
 # away from complete clears the mark, so its rows all have no mark already.
-REFERENCED_SPOOL_HASHES_SQL = """
-    SELECT response_hash
-    FROM collector_response_uploads
-    WHERE local_deleted_at IS NULL
-    UNION
-    SELECT response_hash
-    FROM collector_observations
-    WHERE archive_reference IS NULL
-"""
-
-
 @dataclass(frozen=True, slots=True)
 class CollectorWork:
     player_id: int | None
@@ -555,44 +546,8 @@ class CollectorDatabase:
 
     @staticmethod
     def _regular_admission_open(connection: Any, now: datetime) -> bool:
-        utc_now = now.astimezone(UTC)
-        today_boundary = utc_now.replace(hour=5, minute=0, second=0, microsecond=0)
-        if utc_now < today_boundary:
-            boundary = today_boundary
-            completed_boundary = today_boundary - timedelta(days=1)
-        else:
-            boundary = today_boundary
-            completed_boundary = today_boundary
-        if boundary - timedelta(minutes=5) <= utc_now < boundary:
-            return False
-        if (
-            utc_now >= today_boundary
-            and connection.execute(
-                "SELECT 1 FROM collector_reset_sweeps WHERE boundary_at = %s",
-                (completed_boundary,),
-            ).fetchone()
-            is None
-        ):
-            return False
-        # Asked per sweep so each probe reads only that sweep's unfinished
-        # rows from collector_work_sweep_order, not the whole work table.
-        return not bool(
-            connection.execute(
-                """
-                SELECT 1
-                FROM collector_reset_sweeps AS sweep
-                WHERE sweep.boundary_at <= %s
-                  AND EXISTS (
-                      SELECT 1 FROM collector_work AS work
-                      WHERE work.sweep_id = sweep.id
-                        AND work.kind = 'reset_baseline'
-                        AND work.status IN ('pending', 'waiting_retry')
-                  )
-                LIMIT 1
-                """,
-                (completed_boundary,),
-            ).fetchone()
-        )
+        phase = collector_handover.admission_phase(connection, now)
+        return phase is collector_handover.AdmissionPhase.OPEN
 
     def pending_intents(
         self,
@@ -617,32 +572,20 @@ class CollectorDatabase:
                     (intent_time, held or [], intent_time, collector_reset.COLLECTION_WINDOW, intent_time, collector_reset.BATTLE_LOG_PASS_FROM, interactive, interactive, interactive, reset_limit, limit, limit),
                 ).fetchall()
 
-                # A Reset pair fetches only its profile until its battle-log pass
-                # (collector_reset), then only what has no usable answer yet, and
-                # a battle log older than the profile. A settlement check keeps
-                # its first usable profile and a log started after that arrived.
-                def unanswered(status: int | None) -> bool:
-                    return status is None or not (200 <= status < 300 or status == 404)
-
-                paired = {"reset_baseline", "reset_settlement"}
-
-                intents = [
-                    CollectorIntent(
-                        str(row[1]),
-                        row[2],
-                        None if row[3] is None else int(row[3]),
-                        None if row[4] is None else str(row[4]),
-                        work_id=int(row[0]),
-                        due_at=row[2],
-                        status=str(row[6]),
-                        sweep_id=None if row[5] is None else int(row[5]),
-                        league_history_required=(str(row[7]) != "not_applicable" and unanswered(row[10]) and not collector_reset.profile_pass(row[1], row[13], intent_time)) if row[1] in {"reset_baseline", "discovery_profile", "league_history_refresh"} else str(row[7]) == "pending",
-                        profile_required=row[1] != "league_history_refresh" and (row[1] not in {*paired, "discovery_profile"} or unanswered(row[8])),
-                        battle_log_required=row[1] != "league_history_refresh" and not collector_reset.profile_pass(row[1], row[13], intent_time) and (row[1] not in paired or unanswered(row[8]) or unanswered(row[9]) or bool(row[12 if row[1] == "reset_settlement" else 11])),
-                        collect_before=row[13] + collector_reset.COLLECTION_WINDOW if row[1] == "reset_settlement" else None,
-                    )
-                    for row in rows
-                ]
+        intents = []
+        for row in rows:
+            # A Reset pair's requests follow its proof (collector_handover.PairProof).
+            profile, battle_log, league_history = collector_handover.required_endpoints(
+                row[1], str(row[7]), *row[8:14], intent_time
+            )
+            intents.append(CollectorIntent(
+                str(row[1]), row[2], None if row[3] is None else int(row[3]),
+                None if row[4] is None else str(row[4]), work_id=int(row[0]), due_at=row[2],
+                status=str(row[6]), sweep_id=None if row[5] is None else int(row[5]),
+                league_history_required=league_history, profile_required=profile,
+                battle_log_required=battle_log,
+                collect_before=row[13] + collector_reset.COLLECTION_WINDOW if row[1] == "reset_settlement" else None,
+            ))
         return intents
 
     def health_metrics(self) -> dict[str, int | float]:
@@ -1088,53 +1031,19 @@ class CollectorDatabase:
         with self.pool.connection(timeout=2.0) as connection:
             with connection.transaction():
                 connection.execute("SET LOCAL transaction_timeout = '2s'")
-                state = self._lock_response_state(connection, handoff)
+                state = response_novelty.lock_saved_response(connection, handoff)
                 return self._record_unchanged(connection, handoff, state, None, False)
-
-    @staticmethod
-    def _lock_response_state(
-        connection: Any, handoff: ResponseHandoff
-    ) -> tuple[Any, ...] | None:
-        connection.execute(
-            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-            (f"{handoff.scope}:{handoff.identity_key}:{handoff.endpoint}",),
-        )
-        return connection.execute(
-            """
-            SELECT last_response_hash, last_seen_at, last_observation_id,
-                   last_occurrence_key, last_content_fingerprint,
-                   last_applied_occurrence_key
-            FROM collector_response_state
-            WHERE scope = %s AND identity_key = %s AND endpoint = %s
-            FOR UPDATE
-            """,
-            (handoff.scope, handoff.identity_key, handoff.endpoint),
-        ).fetchone()
 
     def _record_unchanged(
         self, connection: Any, handoff: ResponseHandoff,
-        state: tuple[Any, ...] | None, work_kind: str | None, saved: bool,
+        state: response_novelty.SavedResponse | None, work_kind: str | None, saved: bool,
     ) -> bool:
-        # Reset and settlement checks, and a Monday's first answer after the league display window
-        # (league_week), need their own proof even when the used fields match the previous poll.
-        # Ordinary unchanged responses compact to state: no observation, job, or upload. state[4] is
-        # the field fingerprint; rows upgraded before the column existed hold the old byte hash, so
-        # matching the response hash also counts as unchanged. state[2] must name a live observation:
-        # pruning can NULL it, and a work endpoint marked observed with no observation never completes.
-        if (
-            state is None
-            or state[2] is None
-            or state[4] not in (handoff.content_fingerprint, handoff.response_hash)
-            or work_kind in {"reset_baseline", "reset_settlement"}
-            or league_week.saves_unchanged_answer(connection, handoff, state[2])
+        """Confirm an UNCHANGED response into the saved observation (response_novelty)."""
+        if response_novelty.response_novelty(connection, handoff, state, work_kind) is not (
+            response_novelty.ResponseNovelty.UNCHANGED
         ):
             return False
-        # Discovery reprocesses an unrecognized league; a Refresh re-decides an untracked player's (league_week).
-        if work_kind in {"discovery_profile", "live_refresh"} and handoff.endpoint == "profile" and connection.execute(
-            "SELECT CASE WHEN %s THEN clashlens_profile_observation_unrecognized(%s) ELSE (SELECT NOT active AND eligibility_state = 'ineligible' FROM players WHERE id = %s) END",
-            (work_kind == "discovery_profile", state[2], handoff.player_id),
-        ).fetchone()[0]:
-            return False
+        assert state is not None and state.observation_id is not None
         # Unsaved, skip a row another transaction holds (a body players share,
         # or the worker's player): the caller saves, not waits. The rows a
         # worker inserts that point at this observation only key-share it, so
@@ -1143,7 +1052,7 @@ class CollectorDatabase:
         retained = connection.execute(
             """SELECT response_hash, archive_reference
             FROM collector_observations WHERE id = %s FOR NO KEY UPDATE""" + skip,
-            (state[2],),
+            (state.observation_id,),
         ).fetchone()
         if retained is None:
             return False
@@ -1180,8 +1089,8 @@ class CollectorDatabase:
             return False
         if handoff.endpoint == "battle_log" and 200 <= handoff.http_status < 300:
             queue_refresh.queue_for_check(connection, handoff)
-        self._upsert_response_state(connection, handoff, state[2], saved)
-        self._record_intent_endpoint(connection, handoff, state[2])
+        self._upsert_response_state(connection, handoff, state.observation_id, saved)
+        self._record_intent_endpoint(connection, handoff, state.observation_id)
         # Ignored duplicates still extend the deadline: retention follows raw sightings.
         if moves_deadline:
             connection.execute(
@@ -1211,8 +1120,8 @@ class CollectorDatabase:
                     if recorded is not None:
                         return recorded
                 work_kind = self._validate_work_identity(connection, handoff)
-                state = self._lock_response_state(connection, handoff)
-                if state is not None and state[5] == handoff.occurrence_key:
+                state = response_novelty.lock_saved_response(connection, handoff)
+                if state is not None and state.applied_occurrence_key == handoff.occurrence_key:
                     recorded = self._recorded_observation(
                         connection, handoff, parser_version
                     )
@@ -1418,7 +1327,7 @@ class CollectorDatabase:
         with self._connection() as connection:
             with connection.transaction():
                 connection.execute("SET LOCAL statement_timeout = '10s'")
-                rows = connection.execute(REFERENCED_SPOOL_HASHES_SQL).fetchall()
+                rows = connection.execute(RECORDED_SQL).fetchall()
         return {str(row[0]) for row in rows}
 
     def deletable_hashes(self, *, limit: int = 100) -> list[str]:
@@ -1426,20 +1335,10 @@ class CollectorDatabase:
             raise ValueError("cleanup limit must be positive")
         with self._connection() as connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT upload.response_hash
                 FROM collector_response_uploads AS upload
-                WHERE upload.state = 'complete'
-                  AND upload.local_deleted_at IS NULL
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM python_processing_jobs AS job
-                      JOIN collector_observations AS observation
-                        ON observation.id = job.observation_id
-                      WHERE job.work_type = 'process_observation'
-                        AND observation.response_hash = upload.response_hash
-                        AND job.status <> 'complete'
-                  )
+                WHERE {DELETABLE_SQL}
                 ORDER BY upload.latest_sighting_at, upload.completed_at,
                          upload.response_hash
                 LIMIT %s
@@ -1464,21 +1363,10 @@ class CollectorDatabase:
                     (hashes,),
                 )
                 eligible = connection.execute(
-                    """
+                    f"""
                     SELECT upload.response_hash
                     FROM collector_response_uploads AS upload
-                    WHERE upload.response_hash = ANY(%s)
-                      AND upload.state = 'complete'
-                      AND upload.local_deleted_at IS NULL
-                      AND NOT EXISTS (
-                          SELECT 1
-                          FROM python_processing_jobs AS job
-                          JOIN collector_observations AS observation
-                            ON observation.id = job.observation_id
-                          WHERE job.work_type = 'process_observation'
-                            AND observation.response_hash = upload.response_hash
-                            AND job.status <> 'complete'
-                      )
+                    WHERE upload.response_hash = ANY(%s) AND {DELETABLE_SQL}
                     FOR UPDATE
                     """,
                     (hashes,),

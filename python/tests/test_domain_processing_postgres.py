@@ -15,7 +15,7 @@ from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from psycopg_pool import ConnectionPool
 
-from clashlens import battle_ingestion, ingestion
+from clashlens import battle_ingestion, season_anchors
 from clashlens.api_db import _screen_events
 from clashlens.archive import S3ArchiveReader
 from clashlens.db import DEFAULT_POOL_SIZE, Database
@@ -990,7 +990,7 @@ def test_concurrent_initial_season_anchors_use_the_single_confirmed_seam(
             normalized_tag="#8PP",
         )
         barrier = Barrier(2)
-        original_anchor = ingestion._record_season_anchor
+        original_anchor = season_anchors.record
 
         def barriered_anchor(
             connection: Any, profile_version_id: int, profile: Any
@@ -1001,7 +1001,7 @@ def test_concurrent_initial_season_anchors_use_the_single_confirmed_seam(
         database, processor = _processor(connection_info, archive_server)
         try:
             with patch.object(
-                ingestion, "_record_season_anchor", barriered_anchor
+                season_anchors, "record", barriered_anchor
             ), ThreadPoolExecutor(max_workers=2) as executor:
                 futures = [
                     executor.submit(

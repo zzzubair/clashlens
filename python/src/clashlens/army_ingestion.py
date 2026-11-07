@@ -26,39 +26,9 @@ from .army_season_summaries import (
 from .catalog import CATALOG_HASH, CATALOG_VERSION
 from .db import Claim, Database, _text_value
 from .domain import SEASON_ANCHOR_RULE_VERSION, DomainRuleError, anchored_ranked_day
+from .publication_states import DecodeVerdict, decode_verdict
 
 ARMY_FACT_PLAYER_BATCH = 500
-
-
-def _decode_has_evidence(active: Any, evidence_id: int, raw_code: Any) -> bool:
-    """Whether the active decode row was made from this evidence and code."""
-    if active is None or int(active[1]) != int(evidence_id):
-        return False
-    return (active[2] is None) == (raw_code is None) and (
-        raw_code is None or _text_value(active[2]) == _text_value(raw_code)
-    )
-
-
-def _decode_is_current(
-    active: Any, evidence_id: int, raw_code: Any, decoded: DecodedArmy | DecodeFailure
-) -> bool:
-    """Whether the side's newest active decode row (id, evidence_id, raw_code,
-    identity_hash, status, failure_category) already records this result.
-
-    A row saved under any unit list counts: saved armies hold ids, not names,
-    so a unit list change saves nothing again. So does an older row that kept
-    unnamed ids apart ("partial"): reading puts them back (with_unnamed_ids).
-    """
-    if not _decode_has_evidence(active, evidence_id, raw_code):
-        return False
-    if isinstance(decoded, DecodedArmy):
-        if _text_value(active[4]) == "partial":
-            return True
-        return (
-            _text_value(active[4]) == "decoded"
-            and _text_value(active[3]) == decoded.identity_hash
-        )
-    return _text_value(active[5]) == decoded.category
 
 
 def _upsert_army_decodes(
@@ -115,7 +85,8 @@ def _upsert_army_decodes(
     decoded_rows = [
         row
         for row in decoded_rows
-        if not _decode_is_current(current.get((row[0], row[2])), row[1], row[3], row[4])
+        if decode_verdict(current.get((row[0], row[2])), row[1], row[3], row[4])
+        is not DecodeVerdict.CURRENT
     ]
     # Most battle logs repeat battles whose decodes are already saved. Those
     # change nothing a Reset publishes, so they skip the Reset locks below,
@@ -215,7 +186,7 @@ def _upsert_army_decodes(
             """,
             (DECODER_VERSION, [battle_id], perspective),
         ).fetchone()
-        if _decode_is_current(active, evidence_id, raw_code, decoded):
+        if decode_verdict(active, evidence_id, raw_code, decoded) is DecodeVerdict.CURRENT:
             continue
         supersedes = None
         if active is not None:

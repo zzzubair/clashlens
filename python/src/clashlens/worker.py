@@ -9,12 +9,12 @@ from collections import deque
 from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from threading import Event, Lock, Semaphore
 from time import monotonic
 from typing import Any
 
-import psycopg
 from psycopg.errors import (
     DataError,
     DeadlockDetected,
@@ -37,7 +37,6 @@ from . import (
     army_types,
     battle_ingestion,
     boundary_publication,
-    collector_uploads,
     ingestion,
     job_outcomes,
     late_battle_sweep,
@@ -47,7 +46,7 @@ from . import (
     reconciliation_db,
     snapshots,
 )
-from .archive import ArchiveReadError, ArchiveReadResult, S3ArchiveReader
+from .archive import ArchiveReadError, S3ArchiveReader
 from .battle import (
     BattleLogParseError,
     parse_battle_log,
@@ -65,11 +64,13 @@ from .db import (
     LeaseLost,
 )
 from .domain import DomainRuleError
+from .evidence_recovery import read_saved_evidence
 from .league_history import (
     LeagueHistoryParseError,
     complete_league_history,
     parse_league_history,
 )
+from .maintenance_permit import MaintenancePermit
 from .operating import WORKER_JOB_STAGES
 from .profile import ProfileParseError, parse_profile
 from .rankings import (
@@ -77,8 +78,8 @@ from .rankings import (
     parse_global_player_rankings,
 )
 from .source_observation_contract import validate_source_observation_contract
-from .spool import SpoolError
 from .stage_metrics import StageMetrics
+from .worker_claims import ClaimLedger
 from .worker_liveness import progress_file
 
 MAX_CONCURRENCY = 32
@@ -199,45 +200,28 @@ def lane_work_types(
     return (DERIVED_WITHOUT_BUILDS,)
 
 
-# Only one worker process at a time runs the Reset publication checks, the
-# correction sweep and the army rank-band count, so two processes neither
-# repeat that work nor race on it. The process whose own connection holds
-# this lock runs them until it stops. Queue maintenance is cheap and safe to
-# repeat, so every process runs it.
-MAINTENANCE_PERMIT_KEY = "worker-publication-maintenance"
+class PublicationTurn(StrEnum):
+    """What one maintenance tick does with the publication checks.
 
+    ``NOT_DUE``: under 10 seconds since the last decision. ``STANDBY``:
+    another process holds the maintenance permit (``maintenance_permit``),
+    so this one looks again in 10 seconds. ``WAITING_FOR_LANE``: this
+    process holds the permit but every derived lane's turn is taken, so
+    the checks stay due and the next tick tries again. ``RUN``: the checks
+    run now on a derived lane's turn, given back when they end, and are
+    next due 10 seconds after they started.
 
-class MaintenancePermit:
-    """A session lock the one maintaining process holds on its own connection."""
+    ``TimedMaintenance._publication_turn`` alone decides it. A failed run
+    raises to the timer, which logs its type and tries again next tick;
+    a stop sets ``stopping``, which ends the league week thread, and closes
+    the permit. After a restart the checks are due at once, and the permit
+    goes to whichever process takes it first.
+    """
 
-    def __init__(self, conninfo: str) -> None:
-        self.conninfo = conninfo
-        self.connection: psycopg.Connection[Any] | None = None
-        self.held = False
-
-    def acquire(self) -> bool:
-        """Whether this process holds the permit, taking it when it is free."""
-        try:
-            if self.connection is None:
-                self.connection = psycopg.connect(
-                    self.conninfo, autocommit=True, connect_timeout=10
-                )
-            if self.held:
-                # The lock lasts as long as its connection does.
-                self.connection.execute("SELECT 1")
-            else:
-                self.held = bool(self.connection.execute(
-                    "SELECT pg_try_advisory_lock(hashtextextended(%s, 0))",
-                    (MAINTENANCE_PERMIT_KEY,),
-                ).fetchone()[0])
-        except Error:
-            self.close()
-        return self.held
-
-    def close(self) -> None:
-        connection, self.connection, self.held = self.connection, None, False
-        if connection is not None:
-            connection.close()
+    NOT_DUE = "not_due"
+    STANDBY = "standby"
+    WAITING_FOR_LANE = "waiting_for_lane"
+    RUN = "run"
 
 
 class TimedMaintenance:
@@ -278,22 +262,32 @@ class TimedMaintenance:
         if self.permit is not None:
             self.permit.close()
 
+    def leads(self) -> bool:
+        """Whether this process runs the shared publication maintenance."""
+        return self.permit is None or self.permit.acquire()
+
     def reevaluate(self) -> None:
         if isinstance(self.database, Database):
             boundary_publication.reevaluate_boundary_publications(self.database)
 
-    def run_due(self, derived_turns: Semaphore | None = None) -> None:
-        current_time = monotonic()
-        if current_time >= self.next_reevaluation_at and not (
-            self.permit is None or self.permit.acquire()
-        ):
-            # Another process maintains publications; look again later.
+    def _publication_turn(
+        self, current_time: float, derived_turns: Semaphore | None
+    ) -> PublicationTurn:
+        if current_time < self.next_reevaluation_at:
+            return PublicationTurn.NOT_DUE
+        if not self.leads():
             self.next_reevaluation_at = current_time + 10
-        if current_time >= self.next_reevaluation_at and (
-            derived_turns is None or derived_turns.acquire(blocking=False)
-        ):
+            return PublicationTurn.STANDBY
+        if derived_turns is not None and not derived_turns.acquire(blocking=False):
+            return PublicationTurn.WAITING_FOR_LANE
+        self.next_reevaluation_at = current_time + 10
+        return PublicationTurn.RUN
+
+    def run_due(self, derived_turns: Semaphore | None = None) -> PublicationTurn:
+        current_time = monotonic()
+        turn = self._publication_turn(current_time, derived_turns)
+        if turn is PublicationTurn.RUN:
             try:
-                self.next_reevaluation_at = current_time + 10
                 if self.league_weeks is None and isinstance(self.database, Database):
                     self.league_weeks = threading.Thread(
                         target=league_week.decide_until, args=(self.database, self.stopping),
@@ -318,6 +312,7 @@ class TimedMaintenance:
             self.stage_metrics.record(
                 "python_queue_maintenance", monotonic() - maintenance_started_at
             )
+        return turn
 
 
 def _run_lanes(concurrency: int, claim_loop: Callable[[int, Event], None]) -> None:
@@ -654,18 +649,17 @@ class ObservationProcessor:
         # claims per kind: one transaction leases up to ``claim_batch`` jobs,
         # no more than that kind's ``batch_lanes`` not running a job, and
         # whichever lane frees up first takes the next. A build is never
-        # batched. Each claim waits with the time it was claimed.
+        # batched. ``claims`` owns whether each claim is buffered or running.
         self.claim_batch = claim_batch
-        self._batches: dict[tuple[str, ...], deque[tuple[float, Claim]]] = {
-            RESPONSE_WORK_TYPES: deque(), DERIVED_WITHOUT_BUILDS: deque()
-        }
-        self._batch_locks = {kind: Lock() for kind in self._batches}
-        self._batch_turns = dict.fromkeys(self._batches, 0)
-        self.batch_lanes = dict.fromkeys(self._batches, 1)
-        self._running = dict.fromkeys(self._batches, 0)
+        self.claims = ClaimLedger((RESPONSE_WORK_TYPES, DERIVED_WITHOUT_BUILDS))
+        self._batch_turns = dict.fromkeys((RESPONSE_WORK_TYPES, DERIVED_WITHOUT_BUILDS), 0)
         # Process n of N plans only jobs whose number leaves n - 1 divided by
         # N, so processes never race for the same newest jobs.
         self.plan_share = (1, 1)
+
+    @property
+    def batch_lanes(self) -> dict[tuple[str, ...], int]:
+        return self.claims.lanes
 
     def _record_stage(self, stage: str, started_at: float) -> None:
         if self.stage_metrics is not None:
@@ -684,13 +678,10 @@ class ObservationProcessor:
         # made. The build lane is one of the derived lanes, so it claims no
         # build while claims its batch leased wait for a lane.
         kind = DERIVED_WITHOUT_BUILDS if work_types == POPULATION_BUILD_WORK_TYPES else work_types
-        batched = self.claim_batch > 1 and work_types in self._batches
-        counted = kind in self._running
-        if counted and not batched:
-            with self._batch_locks[kind]:
-                if self._batches[kind]:
-                    return None
-                self._count_running(kind, 1)
+        batched = self.claim_batch > 1 and work_types in self.claims
+        counted = kind in self.claims
+        if counted and not batched and not self.claims.start_alone(kind):
+            return None
         claim = None
         try:
             claim = self._claim_next(
@@ -702,11 +693,7 @@ class ObservationProcessor:
             return self._process_claim(claim, lease_seconds=lease_seconds)
         finally:
             if counted and (claim is not None or not batched):
-                self._count_running(kind, -1)
-
-    def _count_running(self, kind: tuple[str, ...], change: int) -> None:
-        with self._plan_lock:
-            self._running[kind] += change
+                self.claims.finish(kind)
 
     def _claim_next(
         self,
@@ -715,29 +702,12 @@ class ObservationProcessor:
         lease_seconds: int,
         work_types: tuple[str, ...] | None = None,
     ) -> Claim | None:
-        if self.claim_batch > 1 and work_types in self._batches:
+        if self.claim_batch > 1 and work_types in self.claims:
             assert work_types is not None
-            with self._batch_locks[work_types]:
-                batch = self._batches[work_types]
-                if not batch:
-                    claimed_at = monotonic()
-                    batch.extend((claimed_at, claim) for claim in
-                                 self._claim_batch(owner, lease_seconds, work_types))
-                while batch:
-                    claimed_at, claim = batch[0]
-                    if monotonic() - claimed_at >= lease_seconds / 2:
-                        # Slow jobs ahead of it, such as army redecodes, used
-                        # half its lease: renew it before it starts, unless it
-                        # is lost. It stays in the batch until renewed.
-                        try:
-                            self.database.renew_claim(claim, lease_seconds=lease_seconds)
-                        except LeaseLost:
-                            batch.popleft()
-                            continue
-                    batch.popleft()
-                    self._count_running(work_types, 1)
-                    return claim
-                return None
+            return self.claims.take(
+                work_types, lease_seconds=lease_seconds,
+                fill=lambda: self._claim_batch(owner, lease_seconds, work_types),
+                renew=lambda claim: self.database.renew_claim(claim, lease_seconds=lease_seconds))
         # The newest-first plan holds only responses, so derived lanes skip it.
         limit = {} if work_types is None else {"work_types": work_types}
         with self._plan_lock:
@@ -791,9 +761,7 @@ class ObservationProcessor:
         turn = self._batch_turns[work_types]
         self._batch_turns[work_types] = turn + 1
         reset_turn = turn % RESET_FIRST_CLAIM_EVERY == 0
-        with self._plan_lock:
-            free_lanes = self.batch_lanes[work_types] - self._running[work_types]
-        size = max(1, min(self.claim_batch, free_lanes))
+        size = max(1, min(self.claim_batch, self.claims.free_lanes(work_types)))
         limit = {"owner": owner, "lease_seconds": lease_seconds, "limit": size,
                  "work_types": work_types, "reset_first": reset_turn}
         claims: list[Claim] = []
@@ -811,11 +779,7 @@ class ObservationProcessor:
 
     def release_batched_claims(self) -> int:
         """Give back batched claims no lane started; each is claimable at once."""
-        claims: list[Claim] = []
-        for kind, batch in self._batches.items():
-            with self._batch_locks[kind]:
-                claims.extend(claim for _claimed_at, claim in batch)
-                batch.clear()
+        claims = self.claims.release()
         return self.database.release_claims(claims) if claims else 0
 
     def _next_planned_job(self) -> int | None:
@@ -1087,7 +1051,7 @@ class ObservationProcessor:
             archive_started_at = monotonic()
             try:
                 if uses_local_spool:
-                    archived = self._read_local(claim, renew_lease)
+                    archived = read_saved_evidence(self.database, self.archive, claim, renew_lease)
                 else:
                     archived = self.archive.read_verified(
                         claim.archive_reference,
@@ -1217,88 +1181,6 @@ class ObservationProcessor:
         except LeaseLost:
             return ProcessResult(claim.job_id, "lease_lost")
         return ProcessResult(claim.job_id, outcome)
-
-    def _read_local(
-        self, claim: Claim, renew_lease: Callable[[], None]
-    ) -> ArchiveReadResult:
-        spool = getattr(self.archive, "spool", None)
-        verify = getattr(spool, "verify", None)
-        if not callable(verify):
-            raise ArchiveReadError(
-                "spool_missing",
-                "new observation has no local spool reader",
-                retryable=False,
-            )
-        try:
-            body = verify(claim.response_hash)
-        except (OSError, SpoolError) as error:
-            # A failed disk read is not a missing response: wait and retry it
-            # without spending an attempt. Database failures stay separate.
-            raise ArchiveReadError(
-                "spool_io_failed", "local evidence read failed", retryable=True
-            ) from error
-        if body is None:
-            return self._read_archived_copy(claim, renew_lease)
-        return ArchiveReadResult(
-            body=body,
-            reference=claim.archive_reference or "",
-            sha256=claim.response_hash or "",
-        )
-
-    def _read_archived_copy(
-        self, claim: Claim, renew_lease: Callable[[], None]
-    ) -> ArchiveReadResult:
-        """Read back the archived copy of a response whose saved copy is gone.
-
-        A lost disk, or a database restored to before spool cleanup ran, leaves
-        a job without its saved copy while the archive holds one. The reader
-        checks its hash and saves it locally again. Only bytes the archive
-        cannot hold are missing proof.
-        """
-        assert claim.response_hash is not None
-        bucket = getattr(getattr(self.archive, "archive", None), "bucket", None)
-        copy = (
-            None
-            if bucket is None
-            else collector_uploads.archived_copy(
-                self.database, claim.response_hash, bucket=bucket
-            )
-        )
-        if copy is None:
-            raise ArchiveReadError(
-                "spool_missing",
-                "new observation is missing from the local spool and the archive",
-                retryable=True,
-            )
-        renew_lease()
-        try:
-            return self.archive.read_verified(
-                copy.reference, claim.response_hash, heartbeat=renew_lease
-            )
-        except ArchiveReadError as error:
-            # A recorded copy that cannot be found yet, or an upload still in
-            # flight or whose last write may yet land, is retried within the
-            # job's attempts.
-            if error.category != "archive_missing" or copy.recorded or copy.uploading:
-                raise
-            marker = self.archive.check_marker_health()
-            if marker == "degraded":
-                raise ArchiveReadError(
-                    "archive_unavailable",
-                    "archive marker could not be checked",
-                    retryable=True,
-                ) from error
-            if marker == "terminal":
-                raise ArchiveReadError(
-                    "archive_marker_mismatch",
-                    "archive marker does not match its configured hash",
-                    retryable=True,
-                ) from error
-            raise ArchiveReadError(
-                "spool_missing",
-                "new observation is missing from the local spool and was never archived",
-                retryable=True,
-            ) from error
 
     def _fail_rejected(self, claim: Claim, error: Error) -> ProcessResult:
         # PostgreSQL refused this job's writes, such as a Reset evidence row

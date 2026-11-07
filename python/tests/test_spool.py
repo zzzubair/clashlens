@@ -302,7 +302,7 @@ def test_directory_flush_does_not_block_an_unrelated_publication_or_cleanup_fenc
     first_thread: list[int] = []
     cleanup_thread: list[int] = []
     original_sync = spool_module._fsync_dir
-    original_condition_wait = spool._publication_condition.wait
+    original_condition_wait = spool._barrier.condition.wait
 
     def controlled_sync(fd: int) -> None:
         info = os.fstat(fd)
@@ -352,7 +352,7 @@ def test_directory_flush_does_not_block_an_unrelated_publication_or_cleanup_fenc
         return spool.remove_unreferenced(lambda: {first_digest, second_digest})
 
     monkeypatch.setattr(spool_module, "_fsync_dir", controlled_sync)
-    monkeypatch.setattr(spool._publication_condition, "wait", observed_condition_wait)
+    monkeypatch.setattr(spool._barrier.condition, "wait", observed_condition_wait)
     with ThreadPoolExecutor(max_workers=3) as executor:
         first = executor.submit(publish_first)
         assert first_flush_started.wait(timeout=2)
@@ -484,7 +484,7 @@ def test_unreferenced_sweep_flushes_each_prefix_before_publication_resumes(
     publication_thread: list[int] = []
     prefix_flushes = 0
     original_sync = spool_module._fsync_dir
-    original_condition_wait = spool._publication_condition.wait
+    original_condition_wait = spool._barrier.condition.wait
 
     def controlled_sync(fd: int) -> None:
         nonlocal prefix_flushes
@@ -512,7 +512,7 @@ def test_unreferenced_sweep_flushes_each_prefix_before_publication_resumes(
         )
 
     monkeypatch.setattr(spool_module, "_fsync_dir", controlled_sync)
-    monkeypatch.setattr(spool._publication_condition, "wait", observed_condition_wait)
+    monkeypatch.setattr(spool._barrier.condition, "wait", observed_condition_wait)
     try:
         with ThreadPoolExecutor(max_workers=2) as executor:
             sweep = executor.submit(
@@ -638,7 +638,7 @@ def test_waiting_cleanup_runs_before_a_new_publication(
     second_started = threading.Event()
     second_entered = threading.Event()
     original_write_handoff = spool.write_handoff
-    original_condition_wait = spool._publication_condition.wait
+    original_condition_wait = spool._barrier.condition.wait
     cleanup_thread: list[int] = []
 
     def controlled_write_handoff(name: str, payload: bytes) -> None:
@@ -674,7 +674,7 @@ def test_waiting_cleanup_runs_before_a_new_publication(
         )
 
     monkeypatch.setattr(spool, "write_handoff", controlled_write_handoff)
-    monkeypatch.setattr(spool._publication_condition, "wait", observed_condition_wait)
+    monkeypatch.setattr(spool._barrier.condition, "wait", observed_condition_wait)
     try:
         with ThreadPoolExecutor(max_workers=3) as executor:
             try:
@@ -739,7 +739,7 @@ def test_deletion_batch_blocks_publication_and_keeps_sidecar_snapshot(
     publication_waiting = threading.Event()
     publication_finished = threading.Event()
     publication_thread: list[int] = []
-    original_condition_wait = spool._publication_condition.wait
+    original_condition_wait = spool._barrier.condition.wait
 
     def observed_condition_wait(timeout: float | None = None) -> bool:
         if publication_thread and threading.get_ident() == publication_thread[0]:
@@ -759,7 +759,7 @@ def test_deletion_batch_blocks_publication_and_keeps_sidecar_snapshot(
         )
         publication_finished.set()
 
-    monkeypatch.setattr(spool._publication_condition, "wait", observed_condition_wait)
+    monkeypatch.setattr(spool._barrier.condition, "wait", observed_condition_wait)
     try:
         with ThreadPoolExecutor(max_workers=2) as executor:
             batch = executor.submit(delete_batch)

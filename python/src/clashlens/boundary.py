@@ -46,6 +46,7 @@ from .past_reset_pacing import (
     operator_generation,
     past_reset_build_waits,
 )
+from .publication_states import MEMBER_STATUSES_SQL, ArtifactState
 
 
 def lock_boundary_publication(
@@ -351,14 +352,12 @@ def _try_enqueue_boundary_artifacts(
         return
 
     classifications = connection.execute(
-        """
+        f"""
         SELECT count(*) AS member_count,
                count(*) FILTER (WHERE snapshot_status = 'pending') AS snapshot_pending,
                count(*) FILTER (WHERE army_status = 'pending') AS army_pending,
-               count(*) FILTER (WHERE snapshot_status NOT IN
-                   ('complete','partial','failed','missing','unavailable','inconsistent','malformed','pending')) AS bad_snapshot,
-               count(*) FILTER (WHERE army_status NOT IN
-                   ('complete','partial','failed','missing','unavailable','inconsistent','malformed','pending')) AS bad_army
+               count(*) FILTER (WHERE snapshot_status NOT IN ({MEMBER_STATUSES_SQL})) AS bad_snapshot,
+               count(*) FILTER (WHERE army_status NOT IN ({MEMBER_STATUSES_SQL})) AS bad_army
         FROM boundary_publication_generation_members
         WHERE generation_id = %s
         """,
@@ -378,16 +377,14 @@ def _try_enqueue_boundary_artifacts(
     if now < target:
         return
     affected_artifacts = [_text_value(value) for value in (generation[5] or [])]
-    if snapshot_pending == 0 and _text_value(generation[2]) == "pending":
-        connection.execute(
-            "UPDATE boundary_publication_generations SET snapshot_state = 'ready', updated_at = clock_timestamp() WHERE id = %s AND snapshot_state = 'pending'",
-            (generation_id,),
-        )
-    if army_pending == 0 and _text_value(generation[3]) == "pending":
-        connection.execute(
-            "UPDATE boundary_publication_generations SET army_state = 'ready', updated_at = clock_timestamp() WHERE id = %s AND army_state = 'pending'",
-            (generation_id,),
-        )
+    # Settled members move each artifact PENDING to READY.
+    for column, pending, state in (("snapshot_state", snapshot_pending, generation[2]),
+                                   ("army_state", army_pending, generation[3])):
+        if pending == 0 and _text_value(state) == ArtifactState.PENDING:
+            connection.execute(
+                f"UPDATE boundary_publication_generations SET {column} = %s, updated_at = clock_timestamp() WHERE id = %s AND {column} = %s",
+                (ArtifactState.READY.value, generation_id, ArtifactState.PENDING.value),
+            )
     snapshot = connection.execute(
         "SELECT snapshot_state, snapshot_manifest_id FROM boundary_publication_generations WHERE id = %s FOR UPDATE",
         (generation_id,),

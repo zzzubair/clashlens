@@ -37,7 +37,8 @@ import time
 from collections import Counter
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from enum import StrEnum
+from typing import TYPE_CHECKING, NamedTuple
 
 from . import weekly_eligibility
 from .collector_db import CollectorDatabase
@@ -64,9 +65,56 @@ LEGEND_III_TIER_ID = 105000034
 _WEEK = timedelta(days=7)
 _WEEK_ANCHOR = datetime(2000, 1, 3, 5, tzinfo=UTC)  # a Monday Reset
 
-# (tag, outcome, tier, trophies, answered at); outcome is promoted, listed or
-# removed (not found, or a recognized tier outside Legend II and III).
-Answer = tuple[str, str, int | None, int | None, datetime]
+
+class Outcome(StrEnum):
+    """What one usable answer says about a listed player. PROMOTED: Legend
+    I. LISTED: Legend II or III, the tier it shows. REMOVED: not found, or a
+    recognised tier outside Legend II and III. A failed request, or an
+    answer that cannot be read or shows an uncertain tier, is no answer
+    (``_ask`` gives None): the player stays due."""
+
+    PROMOTED = "promoted"
+    LISTED = "listed"
+    REMOVED = "removed"
+
+
+class Answer(NamedTuple):
+    tag: str
+    outcome: Outcome
+    tier: int | None
+    trophies: int | None
+    answered_at: datetime
+
+
+class Step(StrEnum):
+    """What one answer does to its promotion list row, the only state a
+    listed player has here.
+
+    A row is due from 06:00 each Monday until a ``checked_at`` after then
+    is saved (``due_tags``). REFRESH saves the answer's tier and trophies
+    and the time, so the row is not due again until next Monday; a promoted
+    player's row is kept this way once handed on to tracking or discovery.
+    REMOVE deletes the row. LEAVE_DUE keeps the old row as it was: a
+    promoted player whose hand-over another job's lock refused. A newer
+    answer saved meanwhile by profile processing wins over either write. A
+    player left due, or with no answer, is asked again in this run only
+    once the rest of its tier has been (``check_batch``), and from the
+    start after a restart, as nothing about a pass is saved.
+    """
+
+    REFRESH = "refresh"
+    REMOVE = "remove"
+    LEAVE_DUE = "leave_due"
+
+
+def step(outcome: Outcome, handed: bool) -> Step:
+    """The row's step for an answer; ``handed`` says a promoted player was
+    handed on (``clashlens_queue_promoted_player``)."""
+    if outcome is Outcome.REMOVED:
+        return Step.REMOVE
+    if outcome is Outcome.PROMOTED and not handed:
+        return Step.LEAVE_DUE
+    return Step.REFRESH
 
 
 def week_start(now: datetime) -> datetime:
@@ -125,15 +173,15 @@ def record_answers(database: CollectorDatabase, answers: list[Answer]) -> set[st
     check newer than this answer; one another job holds is left out, keeps
     its old row, stays due and is asked again later.
     """
-    left_out: set[str] = set()
     with database._connection() as connection, connection.transaction():
-        for tag in (answer[0] for answer in answers if answer[1] == "promoted"):
-            if not connection.execute(
-                "SELECT handed FROM clashlens_queue_promoted_player(%s)", (tag,)
-            ).fetchone()[0]:
-                left_out.add(tag)
-        answers = [answer for answer in answers if answer[0] not in left_out]
-        kept = [answer for answer in answers if answer[1] != "removed"]
+        steps: list[tuple[Answer, Step]] = []
+        for answer in answers:
+            handed = answer.outcome is not Outcome.PROMOTED or bool(connection.execute(
+                "SELECT handed FROM clashlens_queue_promoted_player(%s)", (answer.tag,)
+            ).fetchone()[0])
+            steps.append((answer, step(answer.outcome, handed)))
+        kept = [answer for answer, next_step in steps if next_step is Step.REFRESH]
+        removed = [answer for answer, next_step in steps if next_step is Step.REMOVE]
         # A newer answer saved by profile processing meanwhile is kept.
         connection.execute(
             """
@@ -147,10 +195,10 @@ def record_answers(database: CollectorDatabase, answers: list[Answer]) -> set[st
               AND candidate.checked_at < answer.checked
             """,
             (
-                [answer[0] for answer in kept],
-                [answer[2] for answer in kept],
-                [answer[3] for answer in kept],
-                [answer[4] for answer in kept],
+                [answer.tag for answer in kept],
+                [answer.tier for answer in kept],
+                [answer.trophies for answer in kept],
+                [answer.answered_at for answer in kept],
             ),
         )
         connection.execute(
@@ -161,11 +209,11 @@ def record_answers(database: CollectorDatabase, answers: list[Answer]) -> set[st
               AND candidate.checked_at < answer.checked
             """,
             (
-                [answer[0] for answer in answers if answer[1] == "removed"],
-                [answer[4] for answer in answers if answer[1] == "removed"],
+                [answer.tag for answer in removed],
+                [answer.answered_at for answer in removed],
             ),
         )
-    return left_out
+    return {answer.tag for answer, next_step in steps if next_step is Step.LEAVE_DUE}
 
 
 async def _ask(collector: Collector, tag: str) -> Answer | None:
@@ -175,7 +223,7 @@ async def _ask(collector: Collector, tag: str) -> Answer | None:
         return None
     at = response.response_completed_at
     if response.http_status == 404:
-        return (tag, "removed", None, None, at)
+        return Answer(tag, Outcome.REMOVED, None, None, at)
     if response.http_status != 200:
         return None
     try:
@@ -191,11 +239,11 @@ async def _ask(collector: Collector, tag: str) -> Answer | None:
     if profile.eligibility_state not in {"eligible", "ineligible"}:
         return None
     if profile.league_tier_id == LEGEND_I_TIER_ID:
-        return (tag, "promoted", None, profile.trophies, at)
+        return Answer(tag, Outcome.PROMOTED, None, profile.trophies, at)
     if profile.league_tier_id in CANDIDATE_TIER_IDS:
         trophies = profile.trophies if profile.trophies >= 0 else None
-        return (tag, "listed", profile.league_tier_id, trophies, at)
-    return (tag, "removed", None, None, at)
+        return Answer(tag, Outcome.LISTED, profile.league_tier_id, trophies, at)
+    return Answer(tag, Outcome.REMOVED, None, None, at)
 
 
 class Admission:
@@ -228,13 +276,7 @@ class Admission:
     def _keys_idle(self) -> bool:
         """At least one key's worth of regular request slots is idle."""
         keys = self._collector.regular_keys
-        now = time.monotonic()
-        idle = sum(
-            keys.concurrency_per_key - state.active
-            for state in keys._states
-            if state.healthy and state.paused_until <= now
-        )
-        return idle >= keys.concurrency_per_key
+        return keys.free_ready_slots() >= keys.concurrency_per_key
 
     async def __call__(self) -> bool:
         """Wait for this request's start slot; False when it must not start now."""
@@ -295,9 +337,10 @@ async def check_batch(
         for tag, answer in zip(tags, answers, strict=True)
         if answer is None and tag not in refused
     )
-    totals = Counter(answer[1] for answer in found)
+    totals = Counter(answer.outcome.value for answer in found)
     totals.update(
-        asked=asked, failed=asked - len(found), queued=totals["promoted"] - len(left_due)
+        asked=asked, failed=asked - len(found),
+        queued=totals[Outcome.PROMOTED.value] - len(left_due),
     )
     return totals
 

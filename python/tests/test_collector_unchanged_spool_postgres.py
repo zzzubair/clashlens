@@ -21,7 +21,7 @@ from test_collector_uploads_postgres import (
     upload_database,
 )
 
-from clashlens import league_week
+from clashlens import league_week, response_novelty
 from clashlens.collector_db import CollectorDatabase, CollectorWork, ResponseHandoff
 from clashlens.collector_http import FetchedResponse, KeyPool
 from clashlens.collector_uploads import claim_upload, complete_upload
@@ -229,7 +229,7 @@ def test_collection_moves_on_while_the_worker_holds_its_player(
                 assert time.monotonic() - started < 5
                 assert len(spool.iter_handoffs()) == 1
                 assert _sightings(connection_info)[0] == 1
-            await asyncio.wait_for(asyncio.gather(*collector._later_commits), 15)
+            await asyncio.wait_for(asyncio.gather(*collector.commits._later), 15)
 
         try:
             asyncio.run(scenario())
@@ -237,7 +237,7 @@ def test_collection_moves_on_while_the_worker_holds_its_player(
             assert checks[0][0] is False
             assert checks[0][1] < 1
             assert collector.outcomes["commit_deferred"] == 1
-            assert not collector._handoff_recovery_required
+            assert not collector.spool_health.recovery_required
             polls, _, observations = _sightings(connection_info)
             assert (polls, observations) == (2, 1)
             assert hashlib.sha256(ignored).hexdigest() in spool.final_hashes()
@@ -290,7 +290,7 @@ def test_full_regular_check_moves_on_while_the_worker_holds_its_player(
                 check = collector.collect_player(work, lane="ordinary")
                 assert await asyncio.wait_for(check, 15) == ["recorded"]
                 assert time.monotonic() - started < 9
-            await asyncio.wait_for(asyncio.gather(*collector._later_commits), 15)
+            await asyncio.wait_for(asyncio.gather(*collector.commits._later), 15)
 
         try:
             asyncio.run(scenario())
@@ -449,5 +449,59 @@ def test_unsaved_sighting_keeps_a_saved_refresh_recoverable(database_url: str) -
             assert marker == ("refresh",)
             database.record_recovered_response(refresh, serialized=True)
             assert _sightings(connection_info)[0] == 3
+        finally:
+            database.close()
+
+
+def test_a_response_is_new_needs_its_own_proof_or_confirms_the_saved_one(
+    database_url: str,
+) -> None:
+    new, own_proof, unchanged = (
+        response_novelty.ResponseNovelty.NEW,
+        response_novelty.ResponseNovelty.NEEDS_OWN_PROOF,
+        response_novelty.ResponseNovelty.UNCHANGED,
+    )
+    with domain_database(database_url) as connection_info:
+        database = CollectorDatabase(connection_info)
+        first = _handoff(
+            occurrence_key="first", response_hash="a" * 64,
+            player_id=_player(connection_info), content_fingerprint="f" * 64,
+        )
+
+        def poll(key: str, digest: str, minutes: int, fields: str = "f") -> ResponseHandoff:
+            return replace(
+                first, occurrence_key=key, response_hash=digest * 64,
+                spool_key=f"sha256/{digest * 2}/{digest * 64}", content_fingerprint=fields * 64,
+                response_completed_at=NOW + timedelta(minutes=minutes),
+            )
+
+        def novelty(handoff: ResponseHandoff, work_kind: str | None = None) -> object:
+            with psycopg.connect(connection_info) as connection:
+                saved = response_novelty.lock_saved_response(connection, handoff)
+                return response_novelty.response_novelty(connection, handoff, saved, work_kind)
+
+        def observations() -> int:
+            with psycopg.connect(connection_info) as connection:
+                return connection.execute("SELECT count(*) FROM collector_observations").fetchone()[0]
+
+        try:
+            assert novelty(first) is new
+            assert database.record_response(first).changed and observations() == 1
+            same = poll("same", "b", 1)
+            assert novelty(same) is unchanged
+            # Reset evidence stands on its own even when nothing changed.
+            assert novelty(same, "reset_baseline") is own_proof
+            assert novelty(same, "reset_settlement") is own_proof
+            assert database.record_response(same).changed is False
+            assert database.record_unchanged_response(poll("skipped", "c", 2))
+            assert observations() == 1 and _sightings(connection_info)[0] == 3
+            changed = poll("changed", "d", 3, fields="e")
+            assert novelty(changed) is new
+            assert database.record_response(changed).changed and observations() == 2
+            # Once the saved observation is pruned, the same fields are new again.
+            with psycopg.connect(connection_info) as connection:
+                connection.execute("UPDATE collector_response_state SET last_observation_id = NULL")
+            assert novelty(poll("after-prune", "e", 4, fields="e")) is new
+            assert database.record_unchanged_response(poll("not-skipped", "e", 5, fields="e")) is False
         finally:
             database.close()

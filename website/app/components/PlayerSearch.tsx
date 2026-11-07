@@ -27,16 +27,7 @@ export function usePlayerSuggestions(initialQuery = "") {
     [],
   );
 
-  const normalizedQuery = query.trim().toLocaleLowerCase();
-  const requestMatchesInput =
-    requestedQuery.toLocaleLowerCase() === normalizedQuery && normalizedQuery !== "";
-  const data =
-    requestMatchesInput && fetcher.data?.query.toLocaleLowerCase() === normalizedQuery
-      ? fetcher.data
-      : undefined;
-  const open =
-    requestMatchesInput &&
-    (fetcher.state !== "idle" || data?.search != null || !!data?.error);
+  const { state, data } = suggestionsView(query, requestedQuery, fetcher);
 
   function dismiss() {
     if (timer.current !== null) clearTimeout(timer.current);
@@ -68,10 +59,42 @@ export function usePlayerSuggestions(initialQuery = "") {
     setQuery,
     change,
     dismiss,
-    open,
+    open: state !== "closed",
     data,
     loading: fetcher.state !== "idle",
   };
+}
+
+/**
+ * The suggestion list under a search box:
+ *
+ * - `closed`: nothing typed, dismissed, too long, or the typed text is still
+ *   in its 0.18-second pause, so the last request was for other text.
+ * - `searching`: the request for the typed text is running.
+ * - `shown`: its answer is back: results, none found, or Search unavailable.
+ *
+ * Events: typing (which waits out the pause, then sends one request for the
+ * trimmed text), the answer, and dismissing or choosing a result. An answer
+ * for other text never shows. A failed search shows as unavailable until the
+ * text changes. `usePlayerSuggestions` owns the typed and requested text.
+ */
+export type SuggestionsState = "closed" | "searching" | "shown";
+
+export function suggestionsView(
+  query: string,
+  requestedQuery: string,
+  fetcher: { state: string; data?: PlayerSearchLoaderData },
+): { state: SuggestionsState; data: PlayerSearchLoaderData | undefined } {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  if (requestedQuery.toLocaleLowerCase() !== normalizedQuery || normalizedQuery === "") {
+    return { state: "closed", data: undefined };
+  }
+  const data =
+    fetcher.data?.query.toLocaleLowerCase() === normalizedQuery
+      ? fetcher.data
+      : undefined;
+  if (fetcher.state !== "idle") return { state: "searching", data };
+  return { state: data?.search != null || !!data?.error ? "shown" : "closed", data };
 }
 
 export function SearchSuggestions({

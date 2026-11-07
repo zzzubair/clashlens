@@ -19,7 +19,7 @@ from test_discord_alerts import DARK, LIGHT, background
 from bot import discord_app, replies
 from bot.__main__ import ConfigError, command_payload, main, read_token
 from bot.commands import Commands
-from bot.discord_app import DiscordApp
+from bot.discord_app import DiscordApp, MenuState
 from bot.replies import GOLD, PLAYER_COLOURS, Site
 from clashlens.api_db import AccountContext, _screen_daily_log_with_events
 from clashlens.domain import ranked_day_for
@@ -640,3 +640,34 @@ def test_run_stops_at_startup_without_a_website_address(tmp_path, monkeypatch, c
     monkeypatch.setenv("CLASHLENS_DATABASE_URL_FILE", str(tmp_path / "database-url"))
     assert main(["run"]) == 2
     assert capsys.readouterr().err == "bot: missing settings: CLASHLENS_PUBLIC_ORIGIN\n"
+
+
+def test_a_menu_closes_after_one_pick_or_when_its_timer_runs_out(store) -> None:
+    store.connect(ME, [card("#2PP", "Drift", 5842), card("#8QQ", "Lens", 5100)])
+    store.no_default.add(1)
+    store.pages["#8QQ"] = page("#8QQ", "Lens", [])
+    message = run_command(store, "stats", FakeInteraction(), player=None)
+    menu = message["view"]
+    assert menu.state is MenuState.OPEN
+    first = FakeInteraction()
+    pick(message, first, "#8QQ")
+    assert menu.state is MenuState.CLOSED
+    # The new reply has only link buttons, which never expire.
+    assert first.last["view"].state is MenuState.LINKS_ONLY
+    # A second pick on the replaced menu changes nothing.
+    second = FakeInteraction()
+    pick(message, second, "#2PP")
+    assert second.messages == []
+
+    started = FakeInteraction()
+    timed = run_command(store, "stats", started, player=None)
+    menu = timed["view"]
+    shown_links = links(timed)
+    menu.stop()  # what discord.py does when the timer runs out
+    asyncio.run(menu.on_timeout())
+    assert menu.state is MenuState.CLOSED
+    assert started.last["edited"] is True
+    assert not any(
+        isinstance(item, discord.ui.Select) for item in started.last["view"].walk_children()
+    )
+    assert links(started.last) == shown_links

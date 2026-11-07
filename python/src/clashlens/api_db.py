@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import json
-import time
 from collections import OrderedDict
-from collections.abc import Callable, Hashable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from threading import BoundedSemaphore, Lock, Thread
+from enum import StrEnum
+from threading import BoundedSemaphore, Lock
 from typing import Any
 
 from psycopg.types.json import Jsonb
@@ -45,13 +44,6 @@ API_LOCK_TIMEOUT = "2s"
 # well after that is cancelled so it stops holding one of the pool's
 # connections. Army reads keep their own shorter transaction limit.
 API_STATEMENT_TIMEOUT = "10s"
-# After a shared copy's background read fails, the next waits as long as the
-# copy's own refresh interval, then twice as long after each further failure,
-# never longer than this, and no wait once a read succeeds. Each failed read
-# can hold a pool connection for the full statement timeout, so at this cap a
-# read that keeps failing costs at most 10 of every 300 seconds of one
-# connection instead of starting again as soon as the last one fails.
-SHARED_COPY_RETRY_CAP_SECONDS = 300
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,6 +221,64 @@ class ApiDatabase:
             return None if row is None else _text(row[0])
 
 
+class RequestPhase(StrEnum):
+    """Where one private API request ID stands (``private_api_requests``).
+
+    The stored ``state`` is ``in_progress`` or ``complete``; these phases add
+    what it does not say:
+
+    - ``CONFLICT``: the ID is saved for a different caller, account,
+      operation, target or body. Answer 409 ``request_id_conflict`` and
+      change nothing.
+    - ``IN_PROGRESS``: another attempt holds it. Answer 202 ``in_progress``.
+    - ``DEADLINE_PASSED``: an in-progress player verification whose
+      45-second reservation ran out (its attempt crashed or got stuck). The
+      retry records the verification unavailable and saves that answer.
+    - ``COMPLETE``: replay the saved response.
+
+    Events: ``_reserve_request`` saves a new ID as ``in_progress``; the
+    operation then saves its response with ``_complete_request`` in the same
+    transaction, so a failure or crash before that rolls both back and a
+    retry starts afresh. Only verification commits its reservation before
+    calling the game, which is why only it can reach ``DEADLINE_PASSED``.
+    """
+
+    CONFLICT = "conflict"
+    IN_PROGRESS = "in_progress"
+    DEADLINE_PASSED = "deadline_passed"
+    COMPLETE = "complete"
+
+
+# The saved request's identity, state and deadline, in _request_phase order.
+_REQUEST_COLUMNS = """caller, provider, provider_subject, account_id, operation,
+               method, request_target, identity_json, state, in_progress_until"""
+
+
+def _request_phase(
+    row: Any, binding: RequestBinding, clock: Callable[[], datetime] | None = None
+) -> RequestPhase:
+    """The one place a saved request's phase is decided. ``clock`` reads the
+    database time and is given only when a passed deadline may be recovered."""
+    expected = (
+        binding.caller,
+        binding.provider,
+        binding.provider_subject,
+        binding.account_id,
+        binding.operation,
+        binding.method,
+        binding.request_target,
+        binding.identity,
+    )
+    if tuple(_text(value) for value in row[:8]) != expected:
+        return RequestPhase.CONFLICT
+    state = _text(row[8])
+    if state == "complete":
+        return RequestPhase.COMPLETE
+    if clock is not None and state == "in_progress" and row[9] is not None and row[9] <= clock():
+        return RequestPhase.DEADLINE_PASSED
+    return RequestPhase.IN_PROGRESS
+
+
 def _reserve_request(
     database: ApiDatabase,
     connection: Any,
@@ -236,6 +286,8 @@ def _reserve_request(
     *,
     recover_expired_verification: bool = False,
 ) -> OperationResult | None:
+    """Save a new request ID and return None, or return the answer for one
+    already saved (see ``RequestPhase``)."""
     inserted = connection.execute(
         """
         INSERT INTO private_api_requests (
@@ -265,10 +317,8 @@ def _reserve_request(
     if inserted is not None:
         return None
     row = connection.execute(
-        """
-        SELECT caller, provider, provider_subject, account_id, operation,
-               method, request_target, identity_json, state,
-               response_status, response_json, in_progress_until
+        f"""
+        SELECT {_REQUEST_COLUMNS}, response_status, response_json
         FROM private_api_requests
         WHERE request_id = %s
         FOR UPDATE
@@ -276,70 +326,50 @@ def _reserve_request(
         (binding.request_id,),
     ).fetchone()
     assert row is not None
-    expected = (
-        binding.caller,
-        binding.provider,
-        binding.provider_subject,
-        binding.account_id,
-        binding.operation,
-        binding.method,
-        binding.request_target,
-        binding.identity,
-    )
-    actual = tuple(_text(value) for value in row[:8])
-    if actual != expected:
+
+    def database_time() -> datetime:
+        return connection.execute("SELECT clock_timestamp()").fetchone()[0]
+
+    phase = _request_phase(row, binding, database_time if recover_expired_verification else None)
+    if phase is RequestPhase.CONFLICT:
         return OperationResult(409, {"error": "request_id_conflict"}, replayed=True)
-    if _text(row[8]) != "complete":
-        if (
-            recover_expired_verification
-            and _text(row[8]) == "in_progress"
-            and row[11] is not None
-            and row[11]
-            <= connection.execute("SELECT clock_timestamp()").fetchone()[0]
-        ):
-            tag_row = connection.execute(
+    if phase is RequestPhase.COMPLETE:
+        return OperationResult(int(row[10]), dict(row[11]), replayed=True)
+    if phase is RequestPhase.DEADLINE_PASSED:
+        tag_row = connection.execute(
+            """
+            SELECT player.normalized_tag
+            FROM player_link_verification_audits AS audit
+            JOIN players AS player ON player.id = audit.player_id
+            WHERE audit.request_id = %s AND audit.outcome = 'pending'
+            FOR UPDATE OF audit
+            """,
+            (binding.request_id,),
+        ).fetchone()
+        if tag_row is not None:
+            result = OperationResult(
+                503,
+                {"status": "verification_unavailable", "tag": _text(tag_row[0])},
+            )
+            updated = connection.execute(
                 """
-                SELECT player.normalized_tag
-                FROM player_link_verification_audits AS audit
-                JOIN players AS player ON player.id = audit.player_id
-                WHERE audit.request_id = %s AND audit.outcome = 'pending'
-                FOR UPDATE OF audit
+                UPDATE player_link_verification_audits
+                SET outcome = 'verification_unavailable',
+                    completed_at = clock_timestamp()
+                WHERE request_id = %s AND outcome = 'pending'
                 """,
                 (binding.request_id,),
-            ).fetchone()
-            if tag_row is not None:
-                result = OperationResult(
-                    503,
-                    {
-                        "status": "verification_unavailable",
-                        "tag": _text(tag_row[0]),
-                    },
-                )
-                updated = connection.execute(
-                    """
-                    UPDATE player_link_verification_audits
-                    SET outcome = 'verification_unavailable',
-                        completed_at = clock_timestamp()
-                    WHERE request_id = %s AND outcome = 'pending'
-                    """,
-                    (binding.request_id,),
-                )
-                if updated.rowcount == 1:
-                    _complete_request(connection, binding.request_id, result)
-                    return result
-        return OperationResult(202, {"status": "in_progress"}, replayed=True)
-    return OperationResult(
-        int(row[9]),
-        dict(row[10]),
-        replayed=True,
-    )
+            )
+            if updated.rowcount == 1:
+                _complete_request(connection, binding.request_id, result)
+                return result
+    return OperationResult(202, {"status": "in_progress"}, replayed=True)
 
 
 def _assert_request_binding(connection: Any, binding: RequestBinding) -> None:
     row = connection.execute(
-        """
-        SELECT caller, provider, provider_subject, account_id, operation,
-               method, request_target, identity_json, state
+        f"""
+        SELECT {_REQUEST_COLUMNS}
         FROM private_api_requests
         WHERE request_id = %s
         FOR UPDATE
@@ -348,18 +378,7 @@ def _assert_request_binding(connection: Any, binding: RequestBinding) -> None:
     ).fetchone()
     if row is None:
         raise RuntimeError("private API request reservation is missing")
-    expected = (
-        binding.caller,
-        binding.provider,
-        binding.provider_subject,
-        binding.account_id,
-        binding.operation,
-        binding.method,
-        binding.request_target,
-        binding.identity,
-    )
-    actual = tuple(_text(value) for value in row[:8])
-    if actual != expected or _text(row[8]) != "in_progress":
+    if _request_phase(row, binding) is not RequestPhase.IN_PROGRESS:
         raise RuntimeError("private API request binding is not active")
 
 
@@ -433,123 +452,6 @@ def _account_context(row: Any) -> AccountContext:
         username=_text(row[2]),
         display_name=_text(row[3]),
     )
-
-
-def _start_thread(work: Callable[[], None]) -> None:
-    Thread(target=work, name="clashlens-shared-copy", daemon=True).start()
-
-
-class SharedCopy[Copy]:
-    """One answer every request shares, read with ``read(database, now)``.
-
-    Younger than ``seconds`` it is served as is. Until ``longest`` it is still
-    served while one background read replaces it, so no visitor waits for
-    that read. With no copy yet, a copy for another ``key(now)`` (a Legend
-    day or Season it was not read for), or one older than ``longest`` because
-    its background reads keep failing or running late, the request reads it
-    itself and its failure reaches the visitor; requests arriving meanwhile
-    wait for that one read. After a background read fails, the next one waits
-    (see ``SHARED_COPY_RETRY_CAP_SECONDS``) while the copy is still served."""
-
-    def __init__(
-        self,
-        read: Callable[[Any, datetime], Copy],
-        *,
-        key: Callable[[datetime], Hashable],
-        seconds: float,
-        longest: float,
-        name: str,
-        clock: Callable[[], float] = time.monotonic,
-        start: Callable[[Callable[[], None]], None] = _start_thread,
-    ) -> None:
-        if not 0 < seconds <= longest:
-            raise ValueError("a shared copy must refresh before it expires")
-        self._read = read
-        self._key = key
-        self._seconds = seconds
-        self._longest = longest
-        self._name = name
-        self._clock = clock
-        self._start = start
-        self._lock = Lock()
-        # Held for every read, so one runs at a time.
-        self._reading = Lock()
-        # (key, clock reading when its read started, copy)
-        self._copy: tuple[Hashable, float, Copy] | None = None
-        self._refreshing = False
-        # No background read starts before this clock reading, which is
-        # ``_retry_delay`` seconds after the last one failed.
-        self._retry_at = float("-inf")
-        self._retry_delay = 0.0
-
-    def _usable(self, key: Hashable, age_limit: float) -> Copy | None:
-        copy = self._copy
-        if copy is None or copy[0] != key or self._clock() - copy[1] >= age_limit:
-            return None
-        return copy[2]
-
-    def current(self, database: Any, now: datetime) -> Copy:
-        key = self._key(now)
-        with self._lock:
-            fresh = self._usable(key, self._seconds)
-            if fresh is not None:
-                return fresh
-            served = self._usable(key, self._longest)
-            refresh = (
-                served is not None
-                and not self._refreshing
-                and self._clock() >= self._retry_at
-            )
-            self._refreshing = self._refreshing or refresh
-        if refresh:
-            self._start(lambda: self._refresh(database, now, key))
-        if served is not None:
-            return served
-        with self._reading:
-            with self._lock:
-                # Read by another request while this one waited.
-                fresh = self._usable(key, self._seconds)
-            return fresh if fresh is not None else self._read_copy(database, now, key)
-
-    def _read_copy(self, database: Any, now: datetime, key: Hashable) -> Copy:
-        started = self._clock()
-        copy = self._read(database, now)
-        with self._lock:
-            self._copy = (key, started, copy)
-            self._retry_at = float("-inf")
-            self._retry_delay = 0.0
-        return copy
-
-    def _refresh(self, database: Any, now: datetime, key: Hashable) -> None:
-        try:
-            with self._reading:
-                with self._lock:
-                    # A request may already have read one for a later Legend day.
-                    current = self._copy is not None and self._copy[0] == key
-                if current:
-                    self._read_copy(database, now, key)
-        except Exception as error:  # noqa: BLE001 - a later request tries again
-            with self._lock:
-                self._retry_delay = min(
-                    2 * self._retry_delay or self._seconds,
-                    SHARED_COPY_RETRY_CAP_SECONDS,
-                )
-                self._retry_at = self._clock() + self._retry_delay
-                retry_in = self._retry_delay
-            print(
-                json.dumps(
-                    {
-                        "event": self._name,
-                        "status": "refresh_failed",
-                        "error": type(error).__name__,
-                        "retry_in_seconds": retry_in,
-                    }
-                ),
-                flush=True,
-            )
-        finally:
-            with self._lock:
-                self._refreshing = False
 
 
 def _text(value: Any) -> Any:

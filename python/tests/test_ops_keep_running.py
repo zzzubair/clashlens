@@ -45,7 +45,7 @@ source "$1" help >/dev/null
 MODE=production PREFIX=clashlens
 RELEASE=([COLLECTOR_IMAGE]=$NEW_COLLECTOR [POSTGRES_IMAGE]=$POSTGRES)
 RESTART_COLLECTOR=$RESTART KEEP_COLLECTOR=$KEEP
-UP_IN_PROGRESS=$FAILS
+[[ "$FAILS" != true ]] || UP_PHASE=changing
 render_units() { printf 'rendered collector=%s\n' "${RELEASE[COLLECTOR_IMAGE]}"; }
 keep_running_plan
 stop_units

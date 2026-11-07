@@ -6,9 +6,12 @@ from threading import Event, Semaphore
 
 import pytest
 
+from clashlens import worker
+from clashlens.maintenance_permit import MaintenancePermit, PermitState
 from clashlens.stage_metrics import StageMetrics
 from clashlens.worker import (
     ProcessResult,
+    PublicationTurn,
     TimedMaintenance,
     lane_work_types,
     process_until_stopped,
@@ -229,6 +232,42 @@ def test_heavy_maintenance_skips_its_tick_without_a_derived_turn() -> None:
 
     assert sweep.started.is_set()
     assert turns.acquire(blocking=False), "the turn was not given back"
+
+
+def test_each_tick_names_what_it_does_with_the_publication_checks(monkeypatch) -> None:
+    maintenance, sweep, _database = _held_maintenance()
+    sweep.release.set()
+    clock, leading = [100.0], [True]
+    monkeypatch.setattr(worker, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(maintenance, "leads", lambda: leading[0])
+    turns = Semaphore(0)
+
+    assert maintenance.run_due(turns) is PublicationTurn.WAITING_FOR_LANE
+    turns.release()
+    assert maintenance.run_due(turns) is PublicationTurn.RUN
+    assert turns.acquire(blocking=False), "the turn was not given back"
+    turns.release()
+    clock[0] += 9.9
+    assert maintenance.run_due(turns) is PublicationTurn.NOT_DUE
+    # Another process took the permit: this one looks again 10 seconds later.
+    leading[0] = False
+    clock[0] += 0.1
+    assert maintenance.run_due(turns) is PublicationTurn.STANDBY
+    leading[0] = True  # that process stopped
+    clock[0] += 9.9
+    assert maintenance.run_due(turns) is PublicationTurn.NOT_DUE
+    clock[0] += 0.1
+    assert maintenance.run_due(turns) is PublicationTurn.RUN
+
+
+def test_a_permit_that_cannot_connect_stays_disconnected_and_tries_again() -> None:
+    permit = MaintenancePermit("postgresql://nobody@127.0.0.1:1/none?connect_timeout=1")
+    assert permit.state is PermitState.DISCONNECTED
+    assert not permit.acquire()
+    assert (permit.state, permit.connection) == (PermitState.DISCONNECTED, None)
+    assert not permit.acquire()
+    permit.close()
+    assert permit.state is PermitState.DISCONNECTED
 
 
 @pytest.mark.parametrize(

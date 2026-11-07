@@ -4,28 +4,37 @@ However many worker processes run, one population build runs at a time:
 its transaction holds a permit lock, and a build claimed but not yet started
 holds a live lease, so claims skip builds while either is true.
 
-A past Reset is also paced in how often it rebuilds after corrections.
+Corrections are also paced in how often a Reset rebuilds (``CorrectionPace``).
 
 Each correction generation rebuilds a Reset's whole leaderboard and army
-records and freezes new manifests, so corrections to Resets before the
-newest one wait and start together. A waiting correction stays queued, and
-the worker's publication re-check starts it once the Reset may rebuild; no
-correction is dropped. No build for a past Reset starts in the quiet
-window, so one not yet started waits until it ends; builds already running
-finish and publish. The newest swept Reset waits only for its own, shorter
-interval (owner decision, 12 Oct 2026), and not at all for a correction that
-adds a member published without a day result, whose day has saved since: it
-appears in the board within seconds. A correction the Season repair's boards
-step queued or found waiting (``REPAIR_CORRECTION``) waits for neither
-interval, on any Reset, outside the quiet window: the repair otherwise waited
-up to 6 hours a board (owner decision, 14 Oct 2026). It changes nothing else:
-in the quiet window, and for the operator's own window, it waits as any other.
+records and freezes new manifests, so corrections arriving between rebuilds
+wait and start together. A waiting correction stays queued, and the
+worker's publication re-check starts it once the Reset may rebuild; no
+correction is dropped. The rule, counted from the Reset's newest generation
+(its first board, before any rebuild):
+
+- the newest swept Reset rebuilds at most once an hour (owner decision,
+  12 Oct 2026, confirmed 6 Nov 2026), except at once for a correction that
+  adds a member published without a day result whose day has saved since:
+  that member appears in the board within seconds. The quiet window does
+  not apply to it.
+- a Reset older than the newest rebuilds at most once every 6 hours, and
+  never starts a rebuild from 04:30 to 07:00 UTC.
+- a correction the Season repair's boards step queued or found waiting
+  (``REPAIR_CORRECTION``) waits for neither interval, on any Reset, outside
+  the quiet window: the repair otherwise waited up to 6 hours a board (owner
+  decision, 14 Oct 2026). It changes nothing else: in the quiet window, and
+  for the operator's own window, it waits as any other.
+
+No build for a past Reset starts in the quiet window, so one not yet started
+waits until it ends; builds already running finish and publish.
 """
 
 from __future__ import annotations
 
 from collections.abc import Collection
 from datetime import UTC, datetime, time, timedelta
+from enum import StrEnum
 from typing import Any
 
 from psycopg.types.json import Jsonb
@@ -115,19 +124,36 @@ def past_reset_build_hold(connection: Any) -> str | None:
     return latest_reset.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def correction_waits(connection: Any, boundary_at: datetime, arrival: bool = False) -> bool:
-    """Whether a correction to this Reset must wait before it starts;
-    ``arrival`` when the change waiting to start is one."""
-    latest_reset = _latest_reset(connection)
-    if latest_reset is None:
-        return False
-    now = _now(connection)
+class CorrectionPace(StrEnum):
+    """How soon a correction to a Reset may start, by the rule above.
+
+    QUIET_WINDOW: a past Reset from 04:30 to 07:00 UTC: waits until 07:00.
+    EVERY_SIX_HOURS: a past Reset: 6 hours after its newest generation.
+    HOURLY: the newest Reset: an hour after its newest generation.
+    AT_ONCE: the newest Reset, when this change or a waiting correction adds
+    a member published without a day result whose day has saved since; or,
+    outside the quiet window, any Reset with a waiting Season repair
+    correction (``REPAIR_CORRECTION``).
+    """
+
+    QUIET_WINDOW = "quiet_window"
+    EVERY_SIX_HOURS = "every_six_hours"
+    HOURLY = "hourly"
+    AT_ONCE = "at_once"
+
+
+def correction_pace(
+    connection: Any, boundary_at: datetime, *, latest_reset: datetime, now: datetime,
+    arrival: bool,
+) -> CorrectionPace:
+    """The pace of a correction to this Reset at ``now``; ``arrival`` when
+    the change waiting to start is one."""
     past = boundary_at < latest_reset
     quiet = _in_quiet_window(now)
     if past and quiet:
-        return True
+        return CorrectionPace.QUIET_WINDOW
     if arrival and not past:
-        return False
+        return CorrectionPace.AT_ONCE
     # Waiting inputs that skip the interval: on the newest Reset an arrival,
     # and outside the quiet window a Season repair's correction.
     markers = ([] if past else [ARRIVAL]) + ([] if quiet else [REPAIR_CORRECTION])
@@ -140,8 +166,29 @@ def correction_waits(connection: Any, boundary_at: datetime, arrival: bool = Fal
         """,
         (boundary_at, [Jsonb([marker]) for marker in markers]),
     ).fetchone()[0]:
+        return CorrectionPace.AT_ONCE
+    return CorrectionPace.EVERY_SIX_HOURS if past else CorrectionPace.HOURLY
+
+
+def correction_waits(connection: Any, boundary_at: datetime, arrival: bool = False) -> bool:
+    """Whether a correction to this Reset must wait before it starts;
+    ``arrival`` when the change waiting to start is one."""
+    latest_reset = _latest_reset(connection)
+    if latest_reset is None:
         return False
-    interval = PAST_RESET_CORRECTION_INTERVAL if past else NEWEST_RESET_CORRECTION_INTERVAL
+    now = _now(connection)
+    pace = correction_pace(
+        connection, boundary_at, latest_reset=latest_reset, now=now, arrival=arrival
+    )
+    if pace is CorrectionPace.QUIET_WINDOW:
+        return True
+    if pace is CorrectionPace.AT_ONCE:
+        return False
+    interval = (
+        NEWEST_RESET_CORRECTION_INTERVAL
+        if pace is CorrectionPace.HOURLY
+        else PAST_RESET_CORRECTION_INTERVAL
+    )
     last_generation_at = connection.execute(
         "SELECT max(created_at) FROM boundary_publication_generations WHERE boundary_at = %s",
         (boundary_at,),

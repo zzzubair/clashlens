@@ -475,7 +475,7 @@ def test_spool_capacity_pause_can_recover_without_restart() -> None:
         "capacity_paused",
     ]
     assert client.fetch_count == 0
-    collector._spool_probe_after = 0.0
+    collector.spool_health._next_probe_at = 0.0
     assert asyncio.run(collector.collect_player(work, lane="ordinary")) == [
         "recorded",
         "recorded",
@@ -526,7 +526,7 @@ def test_rankings_first_spool_io_failure_latches_before_fetch() -> None:
     collector = _collector(spool, _Store(spool), client)
 
     assert asyncio.run(collector.collect_rankings()) == "capacity_paused"
-    assert collector._spool_io_failed is True
+    assert collector.spool_health.io_failed is True
     assert client.fetch_count == 0
 
 
@@ -549,7 +549,7 @@ def test_rankings_release_io_failure_latches_after_recording() -> None:
     collector = _collector(spool, _Store(spool), client)
 
     assert asyncio.run(collector.collect_rankings()) == "recorded"
-    assert collector._spool_io_failed is True
+    assert collector.spool_health.io_failed is True
     assert client.fetch_count == 1
 
 
@@ -955,10 +955,10 @@ def test_background_cleanup_spool_io_failure_pauses_without_stopping() -> None:
     async def run_uploader() -> None:
         task = asyncio.create_task(collector._upload_loop(stop, 0.01))
         for _attempt in range(100):
-            if collector._spool_io_failed:
+            if collector.spool_health.io_failed:
                 break
             await asyncio.sleep(0.01)
-        assert collector._spool_io_failed is True
+        assert collector.spool_health.io_failed is True
         assert task.done() is False
         stop.set()
         await asyncio.wait_for(task, timeout=2)

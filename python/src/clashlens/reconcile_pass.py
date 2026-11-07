@@ -61,6 +61,7 @@ import json
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, time, timedelta
+from enum import StrEnum
 from typing import Any
 
 from psycopg.types.json import Jsonb
@@ -276,6 +277,49 @@ class Finding:
 Judgment = tuple[list[Finding], set[tuple[int, str]], set[int]]
 
 
+class FindingState(StrEnum):
+    """Where one ``reconcile_findings`` row is, derived by ``finding_state``.
+
+    - ``open``: found, no recalculation queued. A ``recount`` or
+      ``missing_day`` finding has one queued by the next read that sees it
+      while the pass has room and no Season repair is recalculating days;
+      the other checks stay open, listed only.
+    - ``fix_queued``: its recalculation is queued (``fix_queued_at``) and
+      not yet saved, or it failed: a failed one leaves it here, never
+      escalated.
+    - ``fix_saved``: its recalculation saved its result (``fix_done_at``,
+      set by ``note_fix_done``) and a read that saw that mark still found
+      it: that read escalates it.
+    - ``escalated``: still wrong after its recalculation; never queued again.
+    - ``resolved``: a read judged its player and check and did not find it,
+      or a newer board replaced the board it was about. Kept; the same
+      problem found again opens a new row.
+
+    ``record`` owns every move, in the step's write transaction, and a read
+    older than the one that last saw or resolved a finding leaves it as it
+    was, so a retried or restarted step cannot move it back.
+    """
+
+    OPEN = "open"
+    FIX_QUEUED = "fix_queued"
+    FIX_SAVED = "fix_saved"
+    ESCALATED = "escalated"
+    RESOLVED = "resolved"
+
+
+def finding_state(fix_queued_at: datetime | None, escalated_at: datetime | None,
+                  *, fix_saved: bool, resolved: bool = False) -> FindingState:
+    """A finding's state from its saved times; ``fix_saved`` is whether the
+    read judging it saw its recalculation's result saved."""
+    if resolved:
+        return FindingState.RESOLVED
+    if fix_queued_at is None:
+        return FindingState.OPEN
+    if escalated_at is not None:
+        return FindingState.ESCALATED
+    return FindingState.FIX_SAVED if fix_saved else FindingState.FIX_QUEUED
+
+
 def _params(day: datetime, players: list[int]) -> dict[str, Any]:
     params = {"players": players, "day": day, "reset": day + domain.RANKED_DAY_DURATION}
     params["window_start"], params["window_end"] = domain.battle_window(day)
@@ -400,7 +444,8 @@ def record(connection: Any, day: datetime, judgment: Judgment, *, read_at: datet
             continue
         finding_id, found_at, fix_queued_at, escalated_at = row
         counts["found" if found_at > read_at else "open"] += 1
-        if fix_queued_at is None:
+        state = finding_state(fix_queued_at, escalated_at, fix_saved=finding_id in fixed)
+        if state is FindingState.OPEN:
             if fix and finding.check in FIXED_CHECKS and counts["queued"] < fix_room:
                 # Due now at backfill priority; once, under the finding's own key.
                 first_battle_log._queue(
@@ -411,7 +456,7 @@ def record(connection: Any, day: datetime, judgment: Judgment, *, read_at: datet
                     "UPDATE reconcile_findings SET fix_queued_at = clock_timestamp()"
                     " WHERE id = %s", (finding_id,))
                 counts["queued"] += 1
-        elif escalated_at is None and finding_id in fixed:
+        elif state is FindingState.FIX_SAVED:
             connection.execute(
                 "UPDATE reconcile_findings SET escalated_at = clock_timestamp() WHERE id = %s",
                 (finding_id,))
@@ -461,9 +506,48 @@ def _newest_day(slot: str) -> domain.RankedDay:
     return domain.ranked_day_for(reset - timedelta(days=1))
 
 
-def _queue_step(connection: Any, slot: str, day: datetime, after: int, queued: int) -> bool:
+@dataclass(frozen=True)
+class PassStep:
+    """One step of a slot's pass: judge ``day``'s next ``BATCH_DAYS``
+    players after ``after_player_id``. Saved as its job's ``input_json``,
+    with ``queued``, the recalculations the pass has queued so far.
+
+    A pass moves only by its steps' jobs (``run_step``):
+    queued (``queue_pass``, the Season's first day from player 0) → a step
+    reads a batch → saves findings and queues fixes → ``next`` → the next
+    batch of the day, or the next day from player 0, or finished at the
+    newest ended day. From 03:50 UTC no step starts, and one not saved by
+    03:58 keeps nothing: the pass is stopped, and the next slot starts a
+    new one. A step that fails is retried by the worker as its job; one
+    whose lease is lost is run again by whoever claims it. Each step is
+    queued once under its own key, so a retry never queues a second.
+    """
+
+    slot: str
+    day: datetime
+    after_player_id: int = 0
+    queued: int = 0
+
+    @classmethod
+    def from_input(cls, step: dict[str, Any]) -> PassStep:
+        return cls(str(step["slot"]), datetime.strptime(
+            str(step["ranked_day_start"]), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC),
+            int(step["after_player_id"]), int(step["queued"]))
+
+    def next(self, players: list[int], newest: datetime, queued: int) -> PassStep | None:
+        """The step after this one judged ``players``, with the pass's
+        ``queued`` total; None once the newest ended day is judged."""
+        if len(players) == BATCH_DAYS:
+            return PassStep(self.slot, self.day, players[-1], queued)
+        if self.day < newest:
+            return PassStep(self.slot, self.day + domain.RANKED_DAY_DURATION, 0, queued)
+        return None
+
+
+def _queue_step(connection: Any, step: PassStep) -> bool:
     """Queue a pass step, once; whether it was new."""
-    day_text = day.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    slot, after, queued = step.slot, step.after_player_id, step.queued
+    day_text = step.day.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     return connection.execute(
         """
         INSERT INTO python_processing_jobs_worker (
@@ -489,15 +573,13 @@ def queue_pass(database: db.Database, slot: str) -> bool:
     if _quiet(_now(), STEPS_STOP):
         return False
     with database.pool.connection() as connection, connection.transaction():
-        return _queue_step(connection, slot, _newest_day(slot).season_start, 0, 0)
+        return _queue_step(connection, PassStep(slot, _newest_day(slot).season_start))
 
 
 def run_step(database: db.Database, claim: db.Claim) -> str:
     """Run the claimed pass step and queue the next one; its outcome."""
-    step = claim.input_json
-    slot, after, queued = str(step["slot"]), int(step["after_player_id"]), int(step["queued"])
-    day = datetime.strptime(str(step["ranked_day_start"]), "%Y-%m-%dT%H:%M:%SZ").replace(
-        tzinfo=UTC)
+    step = PassStep.from_input(claim.input_json)
+    slot, day, after, queued = step.slot, step.day, step.after_player_id, step.queued
     newest = _newest_day(slot)
     detail: dict[str, Any] = {}
     stopped = False
@@ -529,10 +611,9 @@ def run_step(database: db.Database, claim: db.Claim) -> str:
                     total = queued + counts.pop("queued", 0)
                     done = {**counts, "days": len(players), "repairing": repairing,
                             **Counter(f"seen:{finding.check}" for finding in judgment[0])}
-                    if len(players) == BATCH_DAYS:
-                        _queue_step(connection, slot, day, players[-1], total)
-                    elif day < newest.start:
-                        _queue_step(connection, slot, day + domain.RANKED_DAY_DURATION, 0, total)
+                    following = step.next(players, newest.start, total)
+                    if following is not None:
+                        _queue_step(connection, following)
                     else:
                         done["finished"] = True
                     database._finish_claim(connection, claim, job, state="complete",

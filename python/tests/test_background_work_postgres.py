@@ -22,6 +22,8 @@ from clashlens.background_pacing import (
     BACKGROUND_JOB_LIMIT,
     DAY_RECHECK_PRIORITY,
     LIVE_LAG_MIN_JOBS,
+    BackgroundMode,
+    pacing_mode,
 )
 from clashlens.db import (
     ANALYTICS_RULE_VERSION,
@@ -247,6 +249,72 @@ def _finish(connection_info: str, job_id: int) -> None:
             " lease_token = NULL, lease_expires_at = NULL WHERE id = %s",
             (job_id,),
         )
+
+
+def test_the_mode_pauses_before_it_reduces_and_scales_with_waiting_live_work() -> None:
+    def mode(late: int = 0, strained: int = 0, lock_wait: bool = False, waiting: int = 0):
+        return pacing_mode(late=late, strained=strained, lock_wait=lock_wait, waiting=waiting)
+
+    assert mode(late=4, strained=4, waiting=4) is BackgroundMode.NORMAL
+    assert mode(strained=5, waiting=5) is BackgroundMode.REDUCED
+    assert mode(lock_wait=True) is BackgroundMode.REDUCED
+    assert mode(late=5, strained=5, lock_wait=True, waiting=5) is BackgroundMode.PAUSED
+    # Among 200 waiting live jobs, 5 late ones are under 1 in 20.
+    assert mode(late=5, strained=5, waiting=200) is BackgroundMode.NORMAL
+    assert mode(late=10, strained=10, waiting=200) is BackgroundMode.PAUSED
+
+
+def test_the_reset_first_window_asks_nothing_of_the_queue() -> None:
+    def no_claim(*_args, **_kwargs):
+        raise AssertionError("no background work starts in the Reset-first window")
+
+    assert background_pacing.claim_background(
+        None, "python_processing_jobs", [], 4, no_claim, held=True, planned=False,
+        work_types=["redecode_army"], reset_first=True, contract=(True, True, True),
+    ) == []
+
+
+def test_each_claim_derives_its_background_mode_and_capacity_comes_back(
+    database_url: str, monkeypatch
+) -> None:
+    modes: list[BackgroundMode] = []
+    allowance = background_pacing.background_allowance
+
+    def recorded(*args, **kwargs):
+        result = allowance(*args, **kwargs)
+        modes.append(result.mode)
+        return result
+
+    monkeypatch.setattr(background_pacing, "background_allowance", recorded)
+    with domain_database(database_url) as connection_info:
+        _queue_redecodes(connection_info, [[1], [2], [3], [4]])
+        now = datetime.now(UTC)
+        database = Database(connection_info)
+        lane = {"owner": "lane", "work_types": ["redecode_army"]}
+
+        def finish_live() -> None:
+            with psycopg.connect(connection_info) as connection:
+                connection.execute("UPDATE python_processing_jobs SET status = 'complete'"
+                                   " WHERE work_type = 'reconcile_ranked_day'")
+
+        try:
+            claimed = [len(database.claim_jobs(**lane))]
+            _queue_live(connection_info, "strain", now - timedelta(seconds=60))
+            claimed.append(len(database.claim_jobs(**lane)))  # halved to 1, one runs
+            _queue_live(connection_info, "late", now - timedelta(minutes=3))
+            claimed.append(len(database.claim_jobs(**lane)))
+            finish_live()
+            claimed.append(len(database.claim_jobs(**lane)))
+            with psycopg.connect(connection_info) as holder:
+                holder.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                               (background_pacing.BACKGROUND_PERMIT_KEY,))
+                claimed.append(len(database.claim_jobs(**lane)))
+        finally:
+            database.close()
+
+    assert modes == [BackgroundMode.NORMAL, BackgroundMode.REDUCED, BackgroundMode.PAUSED,
+                     BackgroundMode.NORMAL, BackgroundMode.PERMIT_BUSY]
+    assert claimed == [1, 0, 0, 1, 0]
 
 
 def test_day_rechecks_run_four_at_a_time_beside_two_other_background_jobs(

@@ -72,12 +72,99 @@ interface SuccessRedirect {
 export type CallbackOutcome = CallbackErrorView | SuccessRedirect;
 
 /**
+ * One provider sign-in transaction, from the authorize route to its callback.
+ *
+ * `startProviderAuthorization` begins it: a signed transaction cookie
+ * (ten minutes, bound to one provider, with the intent and, for link or
+ * unlink, the fingerprint of the login that started it) and a redirect to
+ * Google or Discord. When the provider sends the browser back,
+ * `readReturnedTransaction` decides which of these it is:
+ *
+ * - `rejected`: bad callback parameters; a missing, expired, forged or
+ *   other-provider transaction; or a link or unlink whose starting login is
+ *   gone, different, logged out, or could not be checked.
+ * - `signingIn`: a login or signup.
+ * - `changingConnection`: a link or unlink by the same still-valid login.
+ *
+ * The provider's identity is then validated and the callback finishes with
+ * exactly one `CallbackOutcome`: a login cookie, an account setup or "no
+ * account" redirect, a linked or unlinked connection, or a refusal. Every
+ * outcome clears the transaction cookie, so a transaction is used once and
+ * any failure needs a fresh start. Nothing else stores the transaction.
+ */
+type ReturnedTransaction =
+  | { kind: "rejected"; outcome: CallbackErrorView }
+  | { kind: "signingIn"; transaction: OAuthTransaction }
+  | {
+      kind: "changingConnection";
+      transaction: OAuthTransaction;
+      session: LoginSession;
+      rawLoginCookie: string;
+    };
+
+async function readReturnedTransaction(
+  cookiesMap: Map<string, string>,
+  provider: "google" | "discord",
+  config: WebsiteConfig,
+  clearTransactionCookie: string,
+): Promise<ReturnedTransaction> {
+  const rejected = (outcome: CallbackErrorView): ReturnedTransaction => ({
+    kind: "rejected",
+    outcome,
+  });
+  const rawTransaction = cookiesMap.get(OAUTH_COOKIE_NAME);
+  if (rawTransaction === undefined) {
+    return rejected(errorView(400, "invalid_callback", clearTransactionCookie));
+  }
+  const transaction = parseOAuthTransactionCookieValue(
+    rawTransaction,
+    config.loginSecret,
+    Math.floor(Date.now() / 1000),
+  );
+  if (transaction === null || transaction.provider !== provider) {
+    return rejected(errorView(400, "invalid_callback", clearTransactionCookie));
+  }
+  if (transaction.intent === "login" || transaction.intent === "signup") {
+    return { kind: "signingIn", transaction };
+  }
+
+  const loginRequired = rejected({
+    kind: "error",
+    status: 400,
+    code: "login_required",
+    message: "Sign in to your Clash Lens account before changing sign-in connections.",
+    clearTransactionCookie,
+  });
+  const rawLoginCookie = cookiesMap.get(LOGIN_COOKIE_NAME);
+  const session = parseLoginCookieValue(
+    rawLoginCookie,
+    config.loginSecret,
+    Math.floor(Date.now() / 1000),
+  );
+  if (
+    session === null ||
+    rawLoginCookie === undefined ||
+    transaction.sessionBinding === undefined ||
+    !constantTimeEqual(
+      transaction.sessionBinding,
+      createLoginSessionBinding(rawLoginCookie),
+    )
+  ) {
+    return loginRequired;
+  }
+  // The same login started this change, but it may have logged out since.
+  try {
+    if (await isLoginRevoked(session, rawLoginCookie)) return loginRequired;
+  } catch {
+    return rejected(unavailable(clearTransactionCookie));
+  }
+  return { kind: "changingConnection", transaction, session, rawLoginCookie };
+}
+
+/**
  * Complete one provider callback. `validate` runs the provider-specific token
  * exchange and identity validation; everything else (transaction cookie
- * handling, intents, account dispatch) is shared. The signed transaction is
- * bound to this route's provider: a transaction minted by the other
- * authorize route is rejected, and every outcome clears the transaction
- * cookie.
+ * handling, intents, account dispatch) is shared. See `ReturnedTransaction`.
  */
 export async function completeProviderCallback(
   request: Request,
@@ -102,51 +189,14 @@ export async function completeProviderCallback(
   if (params === null) {
     return errorView(400, "invalid_callback", clearTransactionCookie);
   }
-  const cookiesMap = parseCookieHeader(request.headers.get("cookie"));
-  const rawTransaction = cookiesMap.get(OAUTH_COOKIE_NAME);
-  if (rawTransaction === undefined) {
-    return errorView(400, "invalid_callback", clearTransactionCookie);
-  }
-  const transaction = parseOAuthTransactionCookieValue(
-    rawTransaction,
-    config.loginSecret,
-    Math.floor(Date.now() / 1000),
+  const returned = await readReturnedTransaction(
+    parseCookieHeader(request.headers.get("cookie")),
+    provider,
+    config,
+    clearTransactionCookie,
   );
-  if (transaction === null || transaction.provider !== provider) {
-    return errorView(400, "invalid_callback", clearTransactionCookie);
-  }
-
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  let session: LoginSession | null = null;
-  const rawLoginCookie = cookiesMap.get(LOGIN_COOKIE_NAME);
-  const signingIn = transaction.intent === "login" || transaction.intent === "signup";
-  if (!signingIn) {
-    const loginRequired: CallbackErrorView = {
-      kind: "error",
-      status: 400,
-      code: "login_required",
-      message: "Sign in to your Clash Lens account before changing sign-in connections.",
-      clearTransactionCookie,
-    };
-    session = parseLoginCookieValue(rawLoginCookie, config.loginSecret, nowSeconds);
-    if (
-      session === null ||
-      rawLoginCookie === undefined ||
-      transaction.sessionBinding === undefined ||
-      !constantTimeEqual(
-        transaction.sessionBinding,
-        createLoginSessionBinding(rawLoginCookie),
-      )
-    ) {
-      return loginRequired;
-    }
-    // The same login started this change, but it may have logged out since.
-    try {
-      if (await isLoginRevoked(session, rawLoginCookie)) return loginRequired;
-    } catch {
-      return unavailable(clearTransactionCookie);
-    }
-  }
+  if (returned.kind === "rejected") return returned.outcome;
+  const { transaction } = returned;
 
   let validated: LoginProviderIdentity;
   try {
@@ -162,7 +212,7 @@ export async function completeProviderCallback(
     return errorView(400, "invalid_callback", clearTransactionCookie);
   }
 
-  if (signingIn) {
+  if (returned.kind === "signingIn") {
     const loginCookie = buildSetCookieHeader(
       LOGIN_COOKIE_NAME,
       createLoginCookieValue(validated, config.loginSecret, Date.now()),
@@ -204,8 +254,7 @@ export async function completeProviderCallback(
     };
   }
 
-  // The non-login branch above establishes this before provider validation.
-  if (session === null) return errorView(400, "login_required", clearTransactionCookie);
+  const { session, rawLoginCookie } = returned;
   const python = await import("../services/python.server");
   const client = python.createPythonClient(session);
   let currentProviders: string[];
@@ -269,7 +318,7 @@ export async function completeProviderCallback(
   // Removing the provider that created this login also ends the login in the
   // same API transaction, so a copied cookie cannot come back if that
   // provider is linked again later.
-  const endsLogin = session.provider === provider && rawLoginCookie !== undefined;
+  const endsLogin = session.provider === provider;
   try {
     await client.unlinkProvider(
       provider,

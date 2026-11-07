@@ -27,6 +27,7 @@ from clashlens import (
     battle_ingestion,
     boundary,
     ingestion,
+    season_anchors,
 )
 from clashlens.api_db import ApiDatabase
 from clashlens.response_fields import content_fingerprint
@@ -504,13 +505,13 @@ def test_concurrent_profiles_for_one_player_complete_without_retry(
                 )
                 jobs.append(job)
             barrier = Barrier(2)
-            original_anchor = ingestion._record_season_anchor
+            original_anchor = season_anchors.record
 
             def record_anchor(connection, profile_version_id, profile):
                 barrier.wait(timeout=10)
                 return original_anchor(connection, profile_version_id, profile)
 
-            with patch.object(ingestion, "_record_season_anchor", record_anchor):
+            with patch.object(season_anchors, "record", record_anchor):
                 with ThreadPoolExecutor(max_workers=2) as executor:
                     futures = [
                         executor.submit(processor.process_job, job, owner=f"profile-{job}")

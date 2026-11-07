@@ -1,6 +1,7 @@
-import { useRef, useState } from "react";
+import { useReducer, useRef, useState } from "react";
 
 import type { ArmiesData } from "../lib/dashboard-cards";
+import { armyDaysShown, armyDaysStart, armyDaysStep } from "../lib/detail-reads";
 import type {
   ArmyDays,
   ArmyLens,
@@ -49,38 +50,25 @@ export function armiesPath(tag: string, lens: ArmyLens, days: ArmyDays): string 
 
 /** The numbers for the chosen days: the page's first read, then the card's own. */
 function useArmies(lens: ArmyLens, { tag, armies: initial }: ArmiesData) {
-  // The chosen days and their numbers: null when they could not be read,
-  // undefined while they load.
-  const [chosen, setChosen] = useState<{ days: ArmyDays; armies?: PlayerArmies | null }>({
-    days: initial.days,
-    armies: initial,
-  });
-  // What was on screen when the chosen days were asked for.
-  const [shown, setShown] = useState<PlayerArmies | null>(initial);
+  const [read, dispatch] = useReducer(armyDaysStep, initial, armyDaysStart);
+  // Numbers each ask, so only the newest one's answer lands.
   const asked = useRef(0);
-  const loading = chosen.armies === undefined;
   return {
-    days: chosen.days,
+    days: read.days,
     // While the chosen days load, the numbers already shown stay, faded.
-    armies: loading ? shown : (chosen.armies ?? null),
-    loading,
+    armies: armyDaysShown(read),
+    loading: read.phase === "loading",
     choose(days: ArmyDays) {
       const ask = ++asked.current;
-      if (!loading) setShown(chosen.armies ?? null);
-      if (days === initial.days) {
-        setChosen({ days, armies: initial });
-        return;
-      }
-      setChosen({ days });
+      dispatch({ type: "choose", ask, days, initial });
+      if (days === initial.days) return;
       // Not a router fetcher: its failed read, a dropped connection or a 502
       // from the server in front, would replace the whole page with an error.
       void fetch(armiesPath(tag, lens, days), { headers: { Accept: "application/json" } })
         .then((response) => response.json() as Promise<ArmiesResponse>)
         .then(({ armies }) => armies ?? null)
         .catch(() => null)
-        .then((armies) => {
-          if (ask === asked.current) setChosen({ days, armies });
-        });
+        .then((armies) => dispatch({ type: "answered", ask, days, armies }));
     },
   };
 }

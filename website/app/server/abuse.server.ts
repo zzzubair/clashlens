@@ -1,41 +1,79 @@
 const WINDOW_MS = 60_000;
-const MAX_REQUESTS_PER_WINDOW = 6;
-const MAX_AUTOMATIC_REQUESTS_PER_WINDOW = 3;
-const MAX_VERIFICATIONS_PER_WINDOW = 6;
-const MAX_LIVE_CLAN_REQUESTS_PER_WINDOW = 6;
-// Enough for typing in the header search box.
-const MAX_SEARCHES_PER_WINDOW = 60;
 const MAX_TRACKED_IDENTITIES = 10_000;
 
-const attempts = new Map<string, { count: number; resetAt: number }>();
-const automaticAttempts = new Map<string, { count: number; resetAt: number }>();
-const verificationAttempts = new Map<string, { count: number; resetAt: number }>();
-const liveClanAttempts = new Map<string, { count: number; resetAt: number }>();
-const searchAttempts = new Map<string, { count: number; resetAt: number }>();
+/** The kinds of public request each visitor may make a limited number of per minute. */
+type RateLimitedRequest =
+  "refresh" | "automaticRefresh" | "verification" | "liveClan" | "search";
+
+const LIMITS: Record<RateLimitedRequest, number> = {
+  refresh: 6,
+  automaticRefresh: 3,
+  verification: 6,
+  liveClan: 6,
+  // Enough for typing in the header search box.
+  search: 60,
+};
+
+/**
+ * One visitor's allowance for one kind of request.
+ *
+ * - `none`: no window, or its reset time has passed, so the allowance is
+ *   renewed.
+ * - `counting`: fewer requests than the limit so far; the next is allowed
+ *   and counted.
+ * - `exhausted`: the limit is reached; requests are refused, uncounted,
+ *   until the reset time.
+ *
+ * Events: a request in `none` opens a 60-second window counting 1; a
+ * request while `counting` adds 1; the reset time passing returns it to
+ * `none`. `rateWindowState` is the only place the state is decided and
+ * `admit` the only place it moves. Windows live in this process's memory
+ * only: a restart forgets them all. Expired windows are dropped on every
+ * request, and when 10,000 visitors are tracked, opening a window forgets
+ * the longest-tracked visitor's window for that kind.
+ */
+export type RateWindowState = "none" | "counting" | "exhausted";
+
+interface RateWindow {
+  count: number;
+  resetAt: number;
+}
+
+const windows: Record<RateLimitedRequest, Map<string, RateWindow>> = {
+  refresh: new Map(),
+  automaticRefresh: new Map(),
+  verification: new Map(),
+  liveClan: new Map(),
+  search: new Map(),
+};
+
+export function rateWindowState(
+  window: RateWindow | undefined,
+  limit: number,
+  now: number,
+): RateWindowState {
+  if (window === undefined || window.resetAt <= now) return "none";
+  return window.count >= limit ? "exhausted" : "counting";
+}
 
 export function allowPublicRefresh(identity: string, now = Date.now()): boolean {
-  return allowRefresh(attempts, MAX_REQUESTS_PER_WINDOW, identity, now);
+  return admit("refresh", identity, now);
 }
 
 export function allowAutomaticRefresh(identity: string, now = Date.now()): boolean {
-  return allowRefresh(
-    automaticAttempts,
-    MAX_AUTOMATIC_REQUESTS_PER_WINDOW,
-    identity,
-    now,
-  );
+  return admit("automaticRefresh", identity, now);
 }
 
 export function allowVerification(identity: string, now = Date.now()): boolean {
-  return allowRefresh(verificationAttempts, MAX_VERIFICATIONS_PER_WINDOW, identity, now);
+  return admit("verification", identity, now);
 }
 
 export function allowLiveClanRead(identity: string, now = Date.now()): boolean {
-  return allowRefresh(liveClanAttempts, MAX_LIVE_CLAN_REQUESTS_PER_WINDOW, identity, now);
+  return admit("liveClan", identity, now);
 }
 
 export function allowSearch(identity: string, now = Date.now()): boolean {
-  return allowRefresh(searchAttempts, MAX_SEARCHES_PER_WINDOW, identity, now);
+  return admit("search", identity, now);
 }
 
 /** Why this visitor may not go on, or null; an unknown address never does. */
@@ -50,34 +88,28 @@ export function visitorRefusal(
   return null;
 }
 
-function allowRefresh(
-  attempts: Map<string, { count: number; resetAt: number }>,
-  limit: number,
-  identity: string,
-  now: number,
-): boolean {
-  for (const [key, value] of attempts) {
-    if (value.resetAt <= now) attempts.delete(key);
+/** Count one request of this kind, or refuse it; true when it may go on. */
+function admit(kind: RateLimitedRequest, identity: string, now: number): boolean {
+  const tracked = windows[kind];
+  for (const [key, window] of tracked) {
+    if (rateWindowState(window, LIMITS[kind], now) === "none") tracked.delete(key);
   }
 
-  const current = attempts.get(identity);
-  if (!current || current.resetAt <= now) {
-    if (attempts.size >= MAX_TRACKED_IDENTITIES) {
-      const oldest = attempts.keys().next().value;
-      if (oldest !== undefined) attempts.delete(oldest);
-    }
-    attempts.set(identity, { count: 1, resetAt: now + WINDOW_MS });
+  const current = tracked.get(identity);
+  const state = rateWindowState(current, LIMITS[kind], now);
+  if (state === "exhausted") return false;
+  if (state === "counting" && current !== undefined) {
+    current.count += 1;
     return true;
   }
-  if (current.count >= limit) return false;
-  current.count += 1;
+  if (tracked.size >= MAX_TRACKED_IDENTITIES) {
+    const oldest = tracked.keys().next().value;
+    if (oldest !== undefined) tracked.delete(oldest);
+  }
+  tracked.set(identity, { count: 1, resetAt: now + WINDOW_MS });
   return true;
 }
 
 export function clearPublicRefreshLimits(): void {
-  attempts.clear();
-  automaticAttempts.clear();
-  verificationAttempts.clear();
-  liveClanAttempts.clear();
-  searchAttempts.clear();
+  for (const tracked of Object.values(windows)) tracked.clear();
 }

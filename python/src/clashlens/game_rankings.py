@@ -24,6 +24,7 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from .collector_http import FetchedResponse, ProviderFailure
@@ -131,6 +132,54 @@ def _reset_pull(pulls: list[Pull]) -> Pull | None:
     if early is not None and early.body is not None and holds_reset_ranks(read_rows(early.body)):
         return early
     return _latest(pulls, "global_reset")
+
+
+class RankingStep(StrEnum):
+    """What a Reset R's ranking check does now, from R's saved pulls
+    (``ranking_step``):
+
+    - ``early``: before R+5 min with no early global list saved: pull it
+      from R+30 s, again a minute after a failed try.
+    - ``polling``: the early list saved, R's list not yet seen, before R+1 h:
+      from R+3 min pull the global list every 3 minutes until a poll's
+      ``previousRank`` has switched from the early list's (saved as
+      ``global_reset``), or the early list already holds R's ranks.
+    - ``countries``: R's list seen, before R+2 h: pull the countries (at
+      most weekly) and each country's list, a failed one again after 2
+      minutes; a country list's untracked Legend I players go to discovery.
+    - ``missed``: before R+2 h, R's list never seen and its window passed:
+      nothing more is pulled.
+    - ``scoring``: from R+2 h each newly published Daily board version of R
+      is scored once against the pulls (``score_day``), ``unknown`` with
+      its reasons whenever a pull failed or is missing; a later version is
+      scored again.
+
+    ``pull_due`` moves through the pulling steps on the collector's 15 s
+    tick and ``run`` scores every 10 minutes. Pulls are saved rows, so a
+    restarted collector carries on from them; a failed tick logs ``failed``
+    and the next tick tries again.
+    """
+
+    EARLY = "early"
+    POLLING = "polling"
+    COUNTRIES = "countries"
+    MISSED = "missed"
+    SCORING = "scoring"
+
+
+def ranking_step(boundary: datetime, now: datetime, pulls: list[Pull]) -> RankingStep:
+    """The step Reset ``boundary``'s check is in at ``now``, given its pulls."""
+    since = now - boundary
+    early = _latest(pulls, "global_early")
+    if early is None and since < EARLY_UNTIL:
+        return RankingStep.EARLY
+    if since >= SCORE_FROM:
+        return RankingStep.SCORING
+    if _reset_pull(pulls) is not None:
+        return RankingStep.COUNTRIES
+    if early is not None and since < POLL_UNTIL:
+        return RankingStep.POLLING
+    return RankingStep.MISSED
 
 
 def _utc(moment: datetime) -> str:
@@ -522,20 +571,20 @@ async def pull_due(collector: Collector, puller: _Puller) -> Counter[str]:
         last = _last_try(pulls, purpose, location_id)
         return _latest(pulls, purpose, location_id) is None and (last is None or now - last >= gap)
 
-    if boundary + EARLY_AT <= now < boundary + EARLY_UNTIL and due(
-        "global_early", None, EARLY_RETRY_AFTER
+    if (
+        ranking_step(boundary, now, pulls) is RankingStep.EARLY
+        and now >= boundary + EARLY_AT
+        and due("global_early", None, EARLY_RETRY_AFTER)
     ):
         await pull("global_early", None)
-    early = _latest(pulls, "global_early")
     if (
-        early is not None
-        and _reset_pull(pulls) is None
-        and boundary + POLL_FROM <= now < boundary + POLL_UNTIL
+        ranking_step(boundary, now, pulls) is RankingStep.POLLING
+        and now >= boundary + POLL_FROM
         and now - (_last_try(pulls, "global_poll") or boundary) >= POLL_EVERY
     ):
-        reference = read_rows(early.body)
+        reference = read_rows(_latest(pulls, "global_early").body)
         await pull("global_poll", None, judge=lambda rows: switched(rows, reference))
-    if _reset_pull(pulls) is None or now >= boundary + SCORE_FROM:
+    if ranking_step(boundary, now, pulls) is not RankingStep.COUNTRIES:
         return counts
     locations = _latest(pulls, "locations")
     last = _last_try(pulls, "locations")

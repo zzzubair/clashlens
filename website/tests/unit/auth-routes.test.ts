@@ -878,6 +878,22 @@ describe("auth.google.callback loader", () => {
     expect(mocks.createPythonClient).not.toHaveBeenCalled();
   });
 
+  it("rejects a connection change whose login cannot be checked, clearing the transaction", async () => {
+    const login = createLoginCookieValue(
+      IDENTITY,
+      config.loginSecret,
+      (now() - 10) * 1000,
+    );
+    mocks.isLoginRevoked.mockRejectedValueOnce(new Error("API down"));
+    const result = await callbackLoader({ request: unlinkGoogleRequest(login) } as never);
+    const { data, status, headers } = dataOf<{ error: { code: string } | null }>(result);
+    expect(status).toBe(503);
+    expect(data.error?.code).toBe("unavailable");
+    expect(headers["Set-Cookie"]).toContain(`${OAUTH_COOKIE_NAME}=; Max-Age=0`);
+    expect(service.validateCallback).not.toHaveBeenCalled();
+    expect(mocks.createPythonClient).not.toHaveBeenCalled();
+  });
+
   function unlinkGoogleRequest(login: string): Request {
     const transaction = createOAuthTransaction(
       "/account/providers",

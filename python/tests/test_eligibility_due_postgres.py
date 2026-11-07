@@ -18,6 +18,7 @@ from test_domain_processing_postgres import _processor
 from clashlens import league_week, population, promotion_candidates
 from clashlens.collector_db import CollectorDatabase
 from clashlens.db import Database, enqueue_discovered_players
+from clashlens.weekly_eligibility import Eligibility, eligibility
 
 PROFILE = json.loads(
     (Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json").read_bytes()
@@ -69,6 +70,11 @@ def _due(connection_info: str, player_id: int) -> tuple[datetime | None, int]:
             "SELECT eligibility_due_at, eligibility_attempts FROM players WHERE id = %s",
             (player_id,),
         ).fetchone()
+
+
+def _eligibility(connection_info: str, player_id: int, at: datetime) -> Eligibility:
+    with psycopg.connect(connection_info) as connection:
+        return eligibility(connection, player_id, at)
 
 
 def _waiting(connection_info: str) -> int:
@@ -140,9 +146,11 @@ def test_a_failed_check_is_retried_with_backoff_until_answered(database_url: str
         (player,) = _players(connection_info, 1)
         _discover(connection_info, [player])
         now = _clear_of_the_weekly_reset(timedelta(minutes=36))
+        assert _eligibility(connection_info, player, now) is Eligibility.DUE
         _admit(connection_info, now)
         assert _checks(connection_info, player) == [("week", "pending")]
         assert _due(connection_info, player) == (now + timedelta(minutes=5), 1)
+        assert _eligibility(connection_info, player, now) is Eligibility.CHECK_WAITING
 
         def fail() -> None:
             with psycopg.connect(connection_info) as connection:
@@ -156,6 +164,9 @@ def test_a_failed_check_is_retried_with_backoff_until_answered(database_url: str
         # Nothing names the player again; the saved due time brings the retry.
         _admit(connection_info, now + timedelta(minutes=4))
         assert _checks(connection_info, player) == [("week", "failed")]
+        assert _eligibility(connection_info, player, now + timedelta(minutes=4)) is (
+            Eligibility.BACKING_OFF
+        )
         _discover(connection_info, [player])
         assert _due(connection_info, player) == (now + timedelta(minutes=5), 1)
         retry_at = now + timedelta(minutes=6)
@@ -183,8 +194,11 @@ def test_a_failed_check_is_retried_with_backoff_until_answered(database_url: str
                 """,
                 (retry_at, retry_at, player),
             )
-        _admit(connection_info, retry_at + timedelta(minutes=30))
+        answered_at = retry_at + timedelta(minutes=30)
+        assert _eligibility(connection_info, player, answered_at) is Eligibility.ANSWERED
+        _admit(connection_info, answered_at)
         assert _due(connection_info, player) == (None, 0)
+        assert _eligibility(connection_info, player, answered_at) is Eligibility.NOT_DUE
         assert len(_checks(connection_info, player)) == 2
 
 

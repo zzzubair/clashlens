@@ -444,3 +444,22 @@ def test_the_bot_sends_the_owner_the_alerts_and_summary_the_linked_account_gets(
     assert by_user[OWNER_DISCORD].text == by_user[OTHER_DISCORD].text
     assert by_user[OWNER_DISCORD].text.splitlines()[0].endswith("−30")
     assert [card.colour for card in by_user[OWNER_DISCORD].cards] == [GOLD]
+
+
+def test_the_owner_turning_a_follow_twice_lands_where_one_turn_does(site) -> None:
+    client, connection_info, _, accounts = site
+    owner = accounts["owner"]
+    followed = _player(connection_info, FOLLOWED)
+    _record_owner(connection_info, owner)
+    before = _rows(connection_info)
+
+    def follow(alert: str, on: bool):
+        return _post(client, OWNER, "/v1/account/view-as/follow",
+                     {"tag": FOLLOWED, "alert": alert, "on": on}).json()
+
+    for on in (True, True, False, False, True):
+        for alert in ("attack", "day_summary"):
+            assert follow(alert, on) == {"tag": FOLLOWED, "alert": alert, "on": on}
+        rows = _rows(connection_info)
+        for table in ("discord_attack_alerts", "discord_day_summary_on"):
+            assert rows[table] == before[table] | ({(owner, followed)} if on else set())

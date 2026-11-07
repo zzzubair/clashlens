@@ -9,12 +9,13 @@ from types import SimpleNamespace
 import pytest
 from psycopg_pool import PoolTimeout
 
-from clashlens import cli, reconciliation_db
+from clashlens import cli, reconciliation_db, worker_claims
 from clashlens.db import (
     DOMAIN_RULE_VERSION,
     POPULATION_BUILD_WORK_TYPES,
     PROCESSING_VERSION,
     RESPONSE_WORK_TYPES,
+    LeaseLost,
 )
 from clashlens.worker import (
     DERIVED_WITHOUT_BUILDS,
@@ -28,6 +29,7 @@ from clashlens.worker import (
     run_processes,
     worker_process_commands,
 )
+from clashlens.worker_claims import ClaimLedger, ClaimStage
 
 
 class RecordingProcessor:
@@ -871,3 +873,59 @@ def test_the_build_lane_takes_a_waiting_batched_claim_before_a_build() -> None:
                 thread.join(10)
     assert running == [0, 1, 2]
     assert queue.builds == 1
+
+
+def test_a_batched_claim_is_buffered_until_a_lane_runs_it_and_given_back_on_stop() -> None:
+    ledger = ClaimLedger((RESPONSE_WORK_TYPES,))
+    ledger.lanes[RESPONSE_WORK_TYPES] = 3
+    jobs = [SimpleNamespace(job_id=job_id) for job_id in range(3)]
+
+    def no_renewal(_claim) -> None:
+        raise AssertionError("no claim waited half its lease")
+
+    def take():
+        return ledger.take(RESPONSE_WORK_TYPES, lease_seconds=60,
+                           fill=lambda: list(jobs), renew=no_renewal)
+
+    def held() -> tuple[int, int]:
+        stages = ledger.held(RESPONSE_WORK_TYPES)
+        return stages[ClaimStage.BUFFERED], stages[ClaimStage.RUNNING]
+
+    assert held() == (0, 0)
+    assert take().job_id == 0  # one batch of three: one runs, two wait
+    assert held() == (2, 1)
+    assert ledger.free_lanes(RESPONSE_WORK_TYPES) == 2
+    # A claim made on its own waits until the buffered ones have started.
+    assert not ledger.start_alone(RESPONSE_WORK_TYPES)
+    assert take().job_id == 1
+    ledger.finish(RESPONSE_WORK_TYPES)  # its outcome is in the database
+    assert held() == (1, 1)
+    # Stopping gives back what no lane started, and nothing that runs.
+    assert [claim.job_id for claim in ledger.release()] == [2]
+    assert held() == (0, 1)
+    assert ledger.start_alone(RESPONSE_WORK_TYPES)
+    assert held() == (0, 2)
+
+
+def test_a_buffered_claim_whose_lease_was_lost_is_dropped(monkeypatch) -> None:
+    clock = [0.0]
+    monkeypatch.setattr(worker_claims, "monotonic", lambda: clock[0])
+    ledger = ClaimLedger((DERIVED_WITHOUT_BUILDS,))
+    renewed = []
+
+    def renew(claim) -> None:
+        if claim.job_id == 1:
+            raise LeaseLost("queue maintenance took it")
+        renewed.append(claim.job_id)
+
+    def take():
+        return ledger.take(DERIVED_WITHOUT_BUILDS, lease_seconds=60, renew=renew,
+                           fill=lambda: [SimpleNamespace(job_id=job_id) for job_id in range(3)])
+
+    assert take().job_id == 0
+    clock[0] = 30.0  # the others waited half their lease
+    # Job 1's lease was lost while it waited: another owner has it now.
+    assert take().job_id == 2
+    assert renewed == [2]
+    assert ledger.held(DERIVED_WITHOUT_BUILDS) == {ClaimStage.BUFFERED: 0, ClaimStage.RUNNING: 2}
+    assert ledger.release() == []

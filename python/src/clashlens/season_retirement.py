@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .archive_retention import RECOVERY_WINDOW_DAYS
-from .season_finalization_guard import close_blockers
+from .season_finalization_guard import SeasonClosure, close_blockers, season_closure
 
 RETIREMENT_VERSION = "season-detail-retirement-v1"
 SEASON_DETAIL_RETIRED = "season_detail_retired"
@@ -125,14 +125,7 @@ def is_season_detail_retired(connection: Any, season_id: str) -> bool:
     """
     if not _table_exists(connection, "season_detail_retirements"):
         return False
-    row = connection.execute(
-        """
-        SELECT 1 FROM season_detail_retirements
-        WHERE official_season_id = %s AND status IN ('finalized', 'retired')
-        """,
-        (season_id,),
-    ).fetchone()
-    return row is not None
+    return season_closure(connection, season_id) is not SeasonClosure.OPEN
 
 
 def retired_day_ranges(connection: Any) -> list[tuple[Any, Any]]:

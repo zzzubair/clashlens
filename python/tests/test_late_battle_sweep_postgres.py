@@ -30,7 +30,7 @@ from clashlens.db import (
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
 )
-from clashlens.late_battle_sweep import LateBattleSweep, sweep_late_battles
+from clashlens.late_battle_sweep import LateBattleSweep, SweepState, sweep_late_battles
 from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
 from clashlens.reconciliation import RECONCILIATION_RULE_VERSION
 
@@ -515,6 +515,18 @@ def test_worker_loop_checks_every_ten_minutes_and_corrects_once_per_reset(
             database.close()
 
 
+def _recorded_sweeps(connection_info: str) -> list:
+    with psycopg.connect(connection_info) as connection:
+        return [row[0] for row in connection.execute(
+            "SELECT boundary_at FROM late_battle_sweeps ORDER BY boundary_at")]
+
+
+def test_a_sweep_result_names_its_state() -> None:
+    assert SweepState.after(None) is SweepState.WAITING
+    assert SweepState.after((3, 0)) is SweepState.COMPLETE
+    assert SweepState.after((2, 1)) is SweepState.RETRYING
+
+
 def test_failed_player_is_rolled_back_logged_and_retried_next_run(
     database_url: str, archive_server, monkeypatch, capsys
 ) -> None:
@@ -548,6 +560,8 @@ def test_failed_player_is_rolled_back_logged_and_retried_next_run(
             lines = _sweep_lines(capsys)
             assert [line["status"] for line in lines] == ["player_failed", "retrying"]
             assert "next day failed" in lines[0]["error"]
+            # Retrying is not saved: only a complete sweep is.
+            assert _recorded_sweeps(connection_info) == []
 
             monkeypatch.setattr(
                 reconciliation_db, "recalculate_ranked_day", recalculate
@@ -555,6 +569,7 @@ def test_failed_player_is_rolled_back_logged_and_retried_next_run(
             clock[0] += 600
             sweep.run_when_due(now=boundary + timedelta(minutes=41))
             assert [line["status"] for line in _sweep_lines(capsys)] == ["complete"]
+            assert _recorded_sweeps(connection_info) == [boundary]
             after = _published(connection_info, DAY)
             assert after is not None
             assert after[0] == [("#2PP", 0, 0), ("#QPP", 3, -40)]

@@ -72,7 +72,9 @@ import json
 import os
 import random
 from collections.abc import Callable, Collection
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from threading import Lock
 from typing import Any
 
@@ -106,6 +108,80 @@ RESET_FIRST_CAP = timedelta(minutes=45)
 # The Reset whose window this process last saw open, to log when it ends.
 _open_window: list[datetime] = []
 _window_lock = Lock()
+
+
+class BackgroundMode(StrEnum):
+    """How much background work one claim may start.
+
+    ``RESET_FIRST``: the newest Reset was swept and its Daily board has not
+    published, for at most ``RESET_FIRST_CAP``: none starts. ``NORMAL``:
+    live work keeps up: each background priority fills up to its limit.
+    ``REDUCED``: live work strains: each limit halves, rounded up.
+    ``PAUSED``: live work is behind: none starts but the floor, one daily
+    result of a background priority with none running (``background_floor``).
+    ``PERMIT_BUSY``: another claim held the background permit past the
+    wait: this claim starts none.
+
+    Nothing stores it. ``claim_background`` derives it inside each claim's
+    transaction from the newest Reset's publication, the clock, queue ages,
+    lock waits and leased-job counts (``pacing_mode``), so the next claim
+    after live work catches up is ``NORMAL`` again, and a restart changes
+    nothing. A claim that fails rolls back, giving back the permit with it.
+    """
+
+    RESET_FIRST = "reset_first"
+    NORMAL = "normal"
+    REDUCED = "reduced"
+    PAUSED = "paused"
+    PERMIT_BUSY = "permit_busy"
+
+
+@dataclass(frozen=True, slots=True)
+class Allowance:
+    mode: BackgroundMode
+    # Each background priority with room, and how many more jobs it may
+    # lease, in the order to fill them; only ``NORMAL`` or ``REDUCED`` has any.
+    lanes: tuple[tuple[int, int], ...] = ()
+
+
+def pacing_mode(*, late: int, strained: int, lock_wait: bool, waiting: int) -> BackgroundMode:
+    """``PAUSED``, ``REDUCED`` or ``NORMAL`` from the live jobs waiting
+    ``LIVE_LAG_PAUSE_SECONDS`` (``late``), ``LIVE_STRAIN_SECONDS``
+    (``strained``) and at all (``waiting``), and a long lock wait."""
+    threshold = max(LIVE_LAG_MIN_JOBS, LIVE_LAG_SHARE * waiting)
+    if late >= threshold:
+        return BackgroundMode.PAUSED
+    if strained >= threshold or lock_wait:
+        return BackgroundMode.REDUCED
+    return BackgroundMode.NORMAL
+
+
+def claim_background(
+    connection: Any, jobs_relation: str, rows: list[Any], limit: int,
+    claim: Callable[..., list[Any]], *, held: bool, planned: bool,
+    work_types: Collection[str] | None, reset_first: bool | None,
+    contract: tuple[bool, bool, bool],
+) -> list[Any]:
+    """``rows``, the claim's live work, with the background work its mode allows.
+
+    A claim of planned jobs, or one live work filled with no floor to
+    apply, asks for none. ``held`` and ``reset_first`` are
+    ``reset_first_claim``'s; ``contract`` is the claim's denormalized,
+    coordinator and dependency support.
+    """
+    from .db import SUPPORTED_WORK_TYPES
+
+    # Only a claim that may take daily results, off a Reset turn, has a floor.
+    floor = not reset_first and "reconcile_ranked_day" in (work_types or SUPPORTED_WORK_TYPES)
+    if planned or (len(rows) >= limit and not floor):
+        return rows
+    allowance = (Allowance(BackgroundMode.RESET_FIRST) if held else background_allowance(
+        connection, jobs_relation, *contract, wait=not rows))
+    if allowance.mode is BackgroundMode.PAUSED:
+        return background_floor(connection, jobs_relation, rows, limit, claim) if floor else rows
+    for priority, room in allowance.lanes:
+        rows += claim(min(room, limit - len(rows)), backfill=(priority,))
+    return rows
 
 
 def _now() -> datetime:
@@ -189,15 +265,14 @@ def background_floor(
     return ahead + rows[:limit - len(ahead)]
 
 
-def background_lanes(
+def background_allowance(
     connection: Any, jobs_relation: str, denormalized_contract: bool,
     supports_coordinator: bool, supports_dependency: bool, *, wait: bool = False,
-) -> list[tuple[int, int]] | None:
-    """Each background priority with room, and how many more jobs it may
-    lease, the one using less of its limit first, ties at random in proportion
-    to the limits, or None while late live work pauses them; with any, or
-    None, this claim holds the permit. With ``wait`` it waits up to
-    ``PERMIT_WAIT`` for the permit.
+) -> Allowance:
+    """This claim's mode and, unless ``PAUSED``, each background priority
+    with room, the one using less of its limit first, ties at random in
+    proportion to the limits; but for ``PERMIT_BUSY``, this claim holds the
+    permit. With ``wait`` it waits up to ``PERMIT_WAIT`` for the permit.
 
     Only live work this worker can claim counts, so a newer contract's never
     pauses background work for good. Late live work counts while it waits,
@@ -235,7 +310,7 @@ def background_lanes(
             "job.state = 'leased'",
         ))
     if not _take_permit(connection, wait):
-        return []
+        return Allowance(BackgroundMode.PERMIT_BUSY)
     # Only the worker's own sessions show what they wait on. The lock table,
     # which says when each wait began, is read only once one of them has run
     # that long and is waiting on a lock.
@@ -275,14 +350,15 @@ def background_lanes(
             "live_work_types": list(LIVE_WORK_TYPES),
         },
     )).fetchone()
-    threshold = max(LIVE_LAG_MIN_JOBS, LIVE_LAG_SHARE * waiting)
-    strained = strained >= threshold or lock_wait
+    mode = pacing_mode(late=late, strained=strained, lock_wait=lock_wait, waiting=waiting)
+    if mode is BackgroundMode.PAUSED:
+        return Allowance(mode)
     lanes = sorted((leased / cap, -random.random() ** (1 / cap), priority, cap - leased)
                    for priority, leased, limit in (
         (PYTHON_BACKFILL_PRIORITY, bulk, BACKGROUND_JOB_LIMIT),
         (DAY_RECHECK_PRIORITY, rechecks, DAY_RECHECK_JOB_LIMIT),
-    ) for cap in [(limit + 1) // 2 if strained else limit] if leased < cap)
-    return None if late >= threshold else [(priority, room) for *_, priority, room in lanes]
+    ) for cap in [(limit + 1) // 2 if mode is BackgroundMode.REDUCED else limit] if leased < cap)
+    return Allowance(mode, tuple((priority, room) for *_, priority, room in lanes))
 
 
 def _take_permit(connection: Any, wait: bool) -> bool:

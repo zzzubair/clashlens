@@ -163,13 +163,13 @@ def test_startup_that_never_finishes_fails_after_twenty_minutes() -> None:
 
 def test_states_only_a_restart_clears_still_fail_the_container_check() -> None:
     collector = _running_collector()
-    collector._spool_io_failed = True
+    collector.spool_health.record_io_failure()
     assert asyncio.run(collector.health_response("/livez"))[2] == (
         b"spool_io_failure\n"
     )
 
     collector = _running_collector()
-    collector._handoff_recovery_required = True
+    collector.spool_health.require_recovery()
     assert asyncio.run(collector.health_response("/livez"))[2] == (
         b"handoff_recovery_required\n"
     )

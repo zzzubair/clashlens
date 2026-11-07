@@ -20,6 +20,7 @@ import argparse
 import json
 import os
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
 from time import monotonic, sleep
 from typing import Any
@@ -37,6 +38,62 @@ PLAYERS_PER_BATCH = 25
 BATCH_TIMEOUT = "5s"
 PAUSE_SECONDS = 1.0
 RUN_SECONDS = 120.0
+
+
+class DayPass(StrEnum):
+    """Where one ended Legend day's cleanup is, in ``ranked_day_compactions``.
+
+    - ``waiting``: the day has a copy newer than ``compacted_through_id``
+      and no pass has begun.
+    - ``in_pass``: a pass froze ``pass_through_id``, the newest copy when it
+      began, and checks players in id order after ``after_player_id``, one
+      batch per transaction.
+    - ``compacted``: no copy is newer than ``compacted_through_id``. A newer
+      copy, as a late correction saves, makes the day ``waiting`` again,
+      and its next pass checks every player again.
+
+    Only ``clashlens_compact_ranked_days`` (migration 0124) moves it, and
+    only for days whose Reset is ready (``ready_through``), the day that
+    waited longest first. A batch that cannot lock a player-day or runs past
+    ``BATCH_TIMEOUT`` rolls back with its cursor, so the next run retries
+    it as it was.
+    """
+
+    WAITING = "waiting"
+    IN_PASS = "in_pass"
+    COMPACTED = "compacted"
+
+
+class RunStatus(StrEnum):
+    """How one ``compact`` run ended; each is followed by the next run.
+
+    ``paused``: out of time. ``busy``: a live recalculation held a
+    player-day. ``timed_out``: a batch ran past ``BATCH_TIMEOUT`` and was
+    rolled back. ``idle``: no ready day has copies left to check.
+    """
+
+    PAUSED = "paused"
+    BUSY = "busy"
+    TIMED_OUT = "timed_out"
+    IDLE = "idle"
+
+
+def day_pass(connection: Any, day_start: datetime) -> DayPass:
+    """Where the cleanup of the Legend day starting at ``day_start`` is."""
+    in_pass, newer = connection.execute(
+        """
+        SELECT done.pass_through_id IS NOT NULL,
+               coalesce((SELECT max(version.id) FROM ranked_day_versions AS version
+                         WHERE version.ranked_day_end = %(day)s + interval '24 hours'), 0)
+               > coalesce(done.compacted_through_id, 0)
+        FROM (SELECT) AS one
+        LEFT JOIN ranked_day_compactions AS done ON done.ranked_day_start = %(day)s
+        """,
+        {"day": day_start},
+    ).fetchone()
+    if in_pass:
+        return DayPass.IN_PASS
+    return DayPass.WAITING if newer else DayPass.COMPACTED
 
 
 def ready_through(connection: Any, now: datetime) -> datetime:
@@ -63,7 +120,7 @@ def compact(
         through = ready_through(connection, now or datetime.now(UTC))
     while True:
         if monotonic() >= deadline:
-            return {**totals, "finished_days": finished_days, "status": "paused"}
+            return {**totals, "finished_days": finished_days, "status": RunStatus.PAUSED}
         try:
             with connection.transaction():
                 # The function's own lock_timeout limits only its waits.
@@ -74,20 +131,20 @@ def compact(
                 ).fetchone()
         except psycopg.errors.LockNotAvailable:
             # A live recalculation held a player-day; the next run retries the batch.
-            return {**totals, "finished_days": finished_days, "status": "busy"}
+            return {**totals, "finished_days": finished_days, "status": RunStatus.BUSY}
         except psycopg.errors.QueryCanceled:
             # The batch ran out of time and rolled back, progress included;
             # the next run retries it.
-            return {**totals, "finished_days": finished_days, "status": "timed_out"}
+            return {**totals, "finished_days": finished_days, "status": RunStatus.TIMED_OUT}
         if row is None:
-            return {**totals, "finished_days": finished_days, "status": "idle"}
+            return {**totals, "finished_days": finished_days, "status": RunStatus.IDLE}
         totals["batches"] += 1
         totals["deleted_versions"] += int(row[2])
         totals["deleted_logs"] += int(row[3])
         if row[4]:
             finished_days.append(row[0].astimezone(UTC).isoformat())
         if monotonic() + pause_seconds >= deadline:
-            return {**totals, "finished_days": finished_days, "status": "paused"}
+            return {**totals, "finished_days": finished_days, "status": RunStatus.PAUSED}
         sleep(pause_seconds)
 
 

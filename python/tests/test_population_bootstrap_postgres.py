@@ -18,7 +18,10 @@ from domain_test_support import domain_database
 
 from clashlens.bootstrap import (
     BootstrapError,
+    BootstrapRun,
+    _run_row,
     bootstrap_population,
+    bootstrap_run,
     parse_manifest,
 )
 from clashlens.cli import main
@@ -328,8 +331,16 @@ def test_partial_batch_resume_converges(
                    VALUES (%s, false, 'unknown')""",
                 (tags[0],),
             )
+        manifest = parse_manifest(
+            _manifest_bytes(tags), expected_sha256=settings["expected_sha256"],
+            expected_count=len(tags))
+        with psycopg.connect(connection_info) as connection:
+            before = bootstrap_run(_run_row(connection, RUN_ID), manifest)
         assert main(_cli_arguments(settings)) == 0
         with psycopg.connect(connection_info) as connection:
+            assert (before, bootstrap_run(_run_row(connection, RUN_ID), manifest)) == (
+                BootstrapRun.STARTED, BootstrapRun.COMPLETE)
+            assert bootstrap_run(_run_row(connection, "not-run"), manifest) is BootstrapRun.NEW
             assert (
                 connection.execute("SELECT count(*) FROM players").fetchone()[0]
                 == 3
@@ -368,6 +379,10 @@ def test_bootstrap_run_collision_fails_closed(
         assert _counts(connection_info) == (0, 0, 1, 0)
         # The same run-id with a different manifest is also a collision.
         other = _setup(tmp_path / "other", connection_info, tags, run_id="other-run")
+        with psycopg.connect(connection_info) as connection:
+            assert bootstrap_run(_run_row(connection, "other-run"), parse_manifest(
+                _manifest_bytes(tags), expected_sha256=other["expected_sha256"],
+                expected_count=len(tags))) is BootstrapRun.COLLIDING
         with pytest.raises(BootstrapError):
             _direct(other)
 

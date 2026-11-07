@@ -191,8 +191,36 @@ keep_running_record() {
   mv -f "$temporary" "$KEEP_RECORD"
 }
 
-# What the alert check should make of the stack: stopped while ./ops stops or
-# starts it on purpose, running once up succeeds, failed when up left it stopped.
+# Where the managed stack stands, in two parts, each moved only by up_phase,
+# down and deploy_failed_alert, one ./ops change at a time (acquire_mutation_lock).
+#
+# UP_PHASE, this run of ./ops up, in memory only:
+#   none      not running up
+#   checking  host, settings, kept-service, migration-trial and staged-unit
+#             checks; a failure stops up with the old release running unchanged
+#   changing  services stopped while the new release is installed, migrated,
+#             started, checked healthy and enabled; a failure or a signal stops
+#             every unit and records failed (finish)
+#   running   healthy, enabled after reboot, and the active release
+#
+# The alert intent file, which outlives ./ops and is read by the alert check:
+#   stopped   ./ops is stopping or starting the stack on purpose, or down
+#             disabled it; the alert check stays silent
+#   running   the last up succeeded; everything is checked
+#   failed    an up stopped partway; a failed deploy is reported until an up
+#             succeeds
+# up writes stopped on entering changing and running on reaching running; a
+# failure in changing writes failed. An up killed outright in changing leaves
+# the stack partly stopped with the intent stopped, so the alert check stays
+# silent until the next up.
+up_phase() {
+  case "$1" in
+    changing) write_alert_intent stopped ;;
+    running) write_alert_intent running ;;
+  esac
+  UP_PHASE=$1
+}
+
 write_alert_intent() {
   local temporary
   temporary=$(mktemp "$STATE_DIR/alert-intent.XXXXXX")

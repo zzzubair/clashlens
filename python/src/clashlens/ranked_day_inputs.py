@@ -7,6 +7,7 @@ from itertools import combinations, pairwise
 from typing import Any
 
 from . import battle, domain, reading_rule
+from .day_result import shield_run_length
 from .db import PROCESSING_VERSION, Database, _text_value
 from .domain import CHAIN_BREAK_REASONS, MAX_DAILY_DEFENSES, RankedDay
 from .reconciliation import (
@@ -377,11 +378,8 @@ def load_previous_day(
             complete=state == "Complete" and bool(previous_row[5]),
             observed_defense_count=int(previous_row[3]),
             observed_defense_loss=int(previous_row[4]),
-            shield_run_length=(
-                int(previous_row[7] or 0)
-                if _text_value(previous_row[6]) == "inferred_shielded"
-                else 0
-            ),
+            shield_run_length=shield_run_length(
+                _text_value(previous_row[6]), previous_row[7]),
             coverage_complete=bool(previous_row[5]),
             shield_state=_text_value(previous_row[6]),
             version_id=int(previous_row[0]),

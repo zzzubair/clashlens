@@ -1,11 +1,16 @@
-"""Run one durable collector work row: Reset, settlement, interactive, ranking, discovery or league-history refresh."""
+"""Run one durable collector work row: Reset, settlement, interactive, ranking, discovery or league-history refresh.
+
+Which requests a Reset pair or settlement check makes follows its proof
+(``collector_handover.PairProof``), read from its saved answers each time it
+is picked.
+"""
 
 from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import psycopg
 
@@ -13,6 +18,18 @@ from .collector_db import CollectorIntent, CollectorWork
 
 if TYPE_CHECKING:
     from .collector import Collector
+
+# How one run of a work row ended. capacity_paused: the spool or keys paused
+# it, and window_closed: a settlement check reached 04:55 the next day; both
+# leave the row as it was. retrying: a request failed and the row waits to
+# retry. failed: it will not retry. profile_saved: a Reset pair's profile pass
+# is done and its battle log waits for its own pass. complete: every required
+# answer is saved and the row finished. incomplete: the row did not finish:
+# an answer is still missing, it finished elsewhere, or the collector stopped.
+IntentRun = Literal[
+    "capacity_paused", "window_closed", "retrying", "failed",
+    "profile_saved", "complete", "incomplete",
+]
 
 # Player work kept for retry when every failure was transient.
 _RETRIED_INTENTS = frozenset({
@@ -24,7 +41,7 @@ _RETRIED_INTENTS = frozenset({
 _RETRIES_WHILE_ANSWERING = 3
 
 
-async def collect_intent(collector: Collector, intent: CollectorIntent) -> str:
+async def collect_intent(collector: Collector, intent: CollectorIntent) -> IntentRun:
     if intent.work_id is None:
         raise ValueError("collector intent has no durable work row")
     if intent.kind == "global_player_rankings":

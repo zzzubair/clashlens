@@ -28,6 +28,12 @@ from test_reconciliation_postgres import DAY_END, _battle_log, _processor, _prof
 from clashlens import collector_http, collector_reset, late_battle_sweep
 from clashlens.collector import Collector
 from clashlens.collector_db import CollectorDatabase, CollectorWork
+from clashlens.collector_handover import (
+    AdmissionPhase,
+    PairProof,
+    admission_phase,
+    pair_proof,
+)
 from clashlens.collector_http import ApiKey, KeyPool, OfficialApiClient, ProviderOutage
 from clashlens.spool import Spool
 
@@ -1011,3 +1017,100 @@ def test_reset_pair_reads_every_profile_before_the_new_day_then_its_battle_log(
                 WHERE work.kind = 'reset_baseline'
                 """
             ).fetchone()[0]
+
+
+def test_regular_checks_hand_over_to_each_reset_and_back(database_url: str) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _players(connection_info, TAG)
+        database = CollectorDatabase(connection_info)
+        reset, next_reset = WEDNESDAY_RESET, WEDNESDAY_RESET + timedelta(days=1)
+
+        def phase(at: datetime) -> AdmissionPhase:
+            with psycopg.connect(connection_info) as connection:
+                return admission_phase(connection, at)
+
+        def claimed(at: datetime) -> list[str]:
+            return [work.normalized_tag for work in database.claim_due_players(10, now=at)]
+
+        assert phase(reset - timedelta(minutes=5, seconds=1)) is AdmissionPhase.OPEN
+        assert phase(reset - timedelta(minutes=5)) is AdmissionPhase.CLOSING
+        assert phase(reset - timedelta(seconds=1)) is AdmissionPhase.CLOSING
+        assert phase(reset) is AdmissionPhase.AWAITING_SWEEP
+        assert claimed(reset) == [] and not database.regular_admission_open(reset)
+        sweep_id = database.begin_reset(reset)
+        assert phase(reset + timedelta(minutes=1)) is AdmissionPhase.RESET_RUNNING
+        # A restarted collector reads the same phase and finds the same sweep.
+        assert CollectorDatabase(connection_info).begin_reset(reset) == sweep_id
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE collector_work SET status = 'waiting_retry' WHERE kind = 'reset_baseline'"
+            )
+        # A pair waiting to retry holds regular checks, even past the next
+        # 04:55, and stops the next Reset's sweep from being written.
+        assert claimed(reset + timedelta(minutes=30)) == []
+        assert phase(next_reset - timedelta(minutes=6)) is AdmissionPhase.RESET_RUNNING
+        assert phase(next_reset) is AdmissionPhase.AWAITING_SWEEP
+        assert database.begin_reset(next_reset) is None
+        _finish_reset_pairs(connection_info)
+        assert phase(reset + timedelta(minutes=30)) is AdmissionPhase.OPEN
+        assert claimed(reset + timedelta(minutes=30)) == [TAG]
+
+
+def test_pair_proof_needs_a_usable_profile_then_a_usable_log_after_it() -> None:
+    assert pair_proof("reset_baseline", None, None, None, None) is PairProof.PROFILE_OWED
+    assert pair_proof("reset_baseline", 503, 200, False, False) is PairProof.PROFILE_OWED
+    assert pair_proof("reset_baseline", 404, None, None, None) is PairProof.LOG_OWED
+    assert pair_proof("reset_baseline", 200, 429, False, False) is PairProof.LOG_OWED
+    # A Reset pair needs its log to finish after the profile; a settlement
+    # check needs it to start after the profile arrived.
+    assert pair_proof("reset_baseline", 200, 200, False, True) is PairProof.PROVEN
+    assert pair_proof("reset_settlement", 200, 200, False, True) is PairProof.LOG_OWED
+    assert pair_proof("reset_baseline", 200, 200, True, True) is PairProof.LOG_OWED
+    assert pair_proof("reset_settlement", 200, 404, False, False) is PairProof.PROVEN
+
+
+def test_reset_pair_fetches_what_its_proof_still_needs(database_url: str) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        (player_id,) = _players(connection_info, TAG)
+        database = CollectorDatabase(connection_info)
+        database.begin_reset(WEDNESDAY_RESET)
+        with psycopg.connect(connection_info) as connection:
+            work_id = connection.execute(
+                "SELECT id FROM collector_work WHERE kind = 'reset_baseline'"
+            ).fetchone()[0]
+        log_pass = WEDNESDAY_RESET + collector_reset.BATTLE_LOG_PASS_FROM
+
+        def needs() -> tuple[bool, bool]:
+            (intent,) = [
+                intent
+                for intent in database.pending_intents(limit=20, now=log_pass, interactive=False)
+                if intent.kind == "reset_baseline"
+            ]
+            return intent.profile_required, intent.battle_log_required
+
+        def save(key: str, endpoint: str, minutes: float, status: int = 200) -> None:
+            database.record_response(
+                _handoff(
+                    occurrence_key=key, response_hash=_hash(key), player_id=player_id,
+                    endpoint=endpoint, http_status=status, collector_work_id=work_id,
+                    completed_at=WEDNESDAY_RESET + timedelta(minutes=minutes),
+                )
+            )
+
+        assert needs() == (True, True)
+        # A failed profile request leaves the profile owed.
+        save("failed-profile", "profile", 4, status=503)
+        assert needs() == (True, True)
+        save("profile", "profile", 4.5)
+        assert needs() == (False, True)
+        # A log that finished before its profile does not cover it.
+        save("early-log", "battle_log", 4.2)
+        assert needs() == (False, True)
+        save("log", "battle_log", 8)
+        assert needs() == (False, False)
+        # The pair keeps its newest profile, which the log must cover again.
+        save("newer-profile", "profile", 9)
+        assert needs() == (False, True)
+        save("newer-log", "battle_log", 10)
+        assert needs() == (False, False)
+        assert database.complete_intent(work_id) is True

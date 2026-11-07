@@ -28,14 +28,9 @@ export function LinkedBattle({
   const [battleId, setBattleId] = useState<string | null>(null);
   const [checksLeft, setChecksLeft] = useState(CHECKS);
   useEffect(() => setBattleId(linkedBattleId(location.hash)), [location.hash]);
-  const holds = (saved: RankedDaySummary) =>
-    [...saved.offenseEvents, ...saved.defenseEvents].some(
-      (event) => event.battleId === battleId,
-    );
-  const shownIn =
-    battleId === null ? null : day && holds(day) ? "day" : log.some(holds) ? "log" : null;
-  const shown = shownIn !== null;
-  const waiting = battleId !== null && !shown && checksLeft > 0;
+  const arrival = linkedBattleArrival(battleId, day, log, checksLeft);
+  const shownIn = arrival.kind === "shown" ? arrival.in : null;
+  const waiting = arrival.kind === "waiting";
 
   useEffect(() => {
     if (!waiting) return;
@@ -85,7 +80,7 @@ export function LinkedBattle({
     };
   }, [battleId, shownIn, location.key]);
 
-  if (battleId === null || shown) return null;
+  if (arrival.kind === "none" || arrival.kind === "shown") return null;
   return (
     <aside className="notice" role="status">
       {waiting ? (
@@ -108,6 +103,44 @@ export function LinkedBattle({
       )}
     </aside>
   );
+}
+
+/**
+ * Where a linked battle stands on the page:
+ *
+ * - `none`: the address names no battle.
+ * - `shown`: the battle is in the linked `day` or in the Legend log, and is
+ *   highlighted for two seconds each time the page is shown.
+ * - `waiting`: not on the page yet; the player is read again every five
+ *   seconds, one read at a time, while checks are left.
+ * - `givenUp`: the two minutes of checks ran out; Check again starts another
+ *   two minutes.
+ *
+ * Events: the address's #battle- part, each page read (which can show the
+ * battle, or move it between the day and the log at Reset), each check and
+ * Check again. `linkedBattleArrival` decides it from those alone; the checks
+ * left live in `LinkedBattle`, and a reload starts the two minutes again.
+ */
+export type LinkedBattleArrival =
+  | { kind: "none" }
+  | { kind: "shown"; in: "day" | "log" }
+  | { kind: "waiting" }
+  | { kind: "givenUp" };
+
+export function linkedBattleArrival(
+  battleId: string | null,
+  day: RankedDaySummary | undefined,
+  log: RankedDaySummary[],
+  checksLeft: number,
+): LinkedBattleArrival {
+  if (battleId === null) return { kind: "none" };
+  const holds = (saved: RankedDaySummary) =>
+    [...saved.offenseEvents, ...saved.defenseEvents].some(
+      (event) => event.battleId === battleId,
+    );
+  if (day && holds(day)) return { kind: "shown", in: "day" };
+  if (log.some(holds)) return { kind: "shown", in: "log" };
+  return checksLeft > 0 ? { kind: "waiting" } : { kind: "givenUp" };
 }
 
 export function linkedBattleId(hash: string): string | null {

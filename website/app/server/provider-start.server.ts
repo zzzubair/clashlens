@@ -1,7 +1,11 @@
 import type { WebsiteConfig } from "./config.server";
 import type { OAuthIntent } from "./google-oidc.server";
 
-/** Start one provider transaction after the route has authorized its intent. */
+/**
+ * Start one provider transaction after the route has authorized its intent.
+ * Its stages and how it finishes are on `ReturnedTransaction` in
+ * provider-callback.server.
+ */
 export async function startProviderAuthorization(
   config: WebsiteConfig,
   provider: "google" | "discord",

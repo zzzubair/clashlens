@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from time import monotonic
 from typing import Any
 
@@ -75,25 +76,60 @@ _WORKER_JOBS = ("python_processing_jobs_worker", "state")
 _COLLECTOR_JOBS = ("python_processing_jobs", "status")
 
 
+class WaitingRecheck(StrEnum):
+    """What new evidence for a player's ended day finds in the day recheck
+    lane, and what it does there. ``_queue_day`` decides it in one
+    statement, the only place evidence queues a recheck:
+
+    - ``absorbing``: a recheck of the day pending and due, not being
+      started (``_ABSORBING``). It reads the newest evidence when it runs,
+      so the evidence adds nothing; one from the twice-daily pass (trigger
+      ``recheck``) takes the evidence's trigger, so it goes first as
+      evidence does. It stays locked until the evidence's transaction ends,
+      so no worker starts it before the evidence is saved.
+    - ``not_due``: one pending but due later, as the twice-daily pass
+      spreads its rechecks over ``RECHECK_SPREAD``: the evidence queues its
+      own, due now; both run.
+    - ``calculating``: a worker has claimed it or is claiming it (its row
+      locked), or it failed and waits to retry: it may have read too early,
+      so the evidence queues one more.
+    - ``none``: the evidence queues one.
+
+    A recheck moves on as any job does: claimed, then complete, or failed
+    and retried by the worker. Two saves committing at once can each queue
+    one; both run. The twice-daily pass (``queue_recheck``) skips a day
+    with a recheck pending or waiting to retry.
+    """
+
+    ABSORBING = "absorbing"
+    NOT_DUE = "not_due"
+    CALCULATING = "calculating"
+    NONE = "none"
+
+
+# The ``absorbing`` recheck of %(player)s's day %(day)s, as ``job``; the
+# caller adds ``FOR UPDATE SKIP LOCKED``, so one a worker is starting is
+# ``calculating``.
+_ABSORBING = f"""
+job.work_type = 'reconcile_ranked_day' AND job.{{state}} = 'pending'
+AND job.priority = {DAY_RECHECK_PRIORITY}
+AND job.due_at <= clock_timestamp()
+AND job.input_json ->> 'player_id' = %(player)s
+AND job.input_json ->> 'ranked_day_start' = %(day)s
+"""
+
+
 def _queue_day(connection: Any, player_id: int, day_start: datetime, key: str,
                trigger: str = "evidence", only_if: str = "TRUE",
                jobs: tuple[str, str] = _WORKER_JOBS, **params: Any) -> None:
-    """Queue a recheck of ``day_start`` unless one has not started. That one
-    stays locked until this transaction ends, so no worker starts it before
-    this evidence is saved, and one from the twice-daily pass takes this
-    evidence's trigger, so it goes first as evidence does; one a worker is
-    starting is skipped, so this evidence queues the next. Two saves
-    committing at once can each queue one; both run."""
+    """Queue a recheck of ``day_start`` unless one is ``absorbing``; see
+    ``WaitingRecheck``."""
     day, (relation, state) = _day_text(day_start), jobs
     connection.execute(
         f"""
         WITH waiting AS MATERIALIZED (
             SELECT job.id FROM {relation} AS job
-            WHERE job.work_type = 'reconcile_ranked_day' AND job.{state} = 'pending'
-              AND job.priority = {DAY_RECHECK_PRIORITY}
-              AND job.due_at <= clock_timestamp()
-              AND job.input_json ->> 'player_id' = %(player)s
-              AND job.input_json ->> 'ranked_day_start' = %(day)s
+            WHERE {_ABSORBING.format(state=state)}
             LIMIT 1 FOR UPDATE SKIP LOCKED),
         upgraded AS (
             UPDATE {relation} AS job

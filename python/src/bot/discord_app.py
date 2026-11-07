@@ -18,6 +18,7 @@ import io
 import logging
 import time
 from collections.abc import Callable
+from enum import StrEnum
 from typing import Any, TypeVar
 
 import discord
@@ -263,7 +264,7 @@ class DiscordApp:
             await interaction.response.defer()
             # One click at a time, and none on a menu already replaced or used.
             async with view.lock:
-                if view.is_finished():
+                if view.state is not MenuState.OPEN:
                     outcome = "already_used"
                     return
                 # This click may edit the message for 15 minutes more, the
@@ -382,12 +383,44 @@ class DiscordApp:
             )
 
 
+class MenuState(StrEnum):
+    """Where a reply's buttons stand, from discord.py's view alone (`state`).
+
+    LINKS_ONLY  no dropdown: link buttons that never expire, so no timer
+    OPEN        the dropdown works for VIEW_SECONDS; only the person who ran
+                the command may pick (`interaction_check` answers anyone
+                else privately and changes nothing)
+    CLOSED      for good: a pick replaced the message with a new reply and
+                its own view (`DiscordApp.deliver` stops this one), or the
+                timer ran out and the dropdown was taken off, keeping the
+                link buttons (`ReplyView.on_timeout`)
+
+    Owner: `DiscordApp.on_component`, one pick at a time under the view's
+    lock. A pick waiting on the lock checks the state again and does nothing
+    once CLOSED. A pick that is refused, fails or is too slow answers the
+    clicker privately and leaves the menu OPEN; it becomes the interaction
+    allowed to edit the message (`origin`), as Discord lets each one do so
+    for 15 minutes. Views live in the bot's memory only: a restart leaves
+    old menus answering "interaction failed" until Discord drops them.
+    """
+
+    LINKS_ONLY = "links_only"
+    OPEN = "open"
+    CLOSED = "closed"
+
+
 class _OwnedView(discord.ui.LayoutView):
     """Buttons only the person who ran the command can use."""
 
     def __init__(self, *, timeout: float | None) -> None:
         super().__init__(timeout=timeout)
         self.lock = asyncio.Lock()
+
+    @property
+    def state(self) -> MenuState:
+        if self.timeout is None:
+            return MenuState.LINKS_ONLY
+        return MenuState.CLOSED if self.is_finished() else MenuState.OPEN
 
     app: DiscordApp
     owner: int
