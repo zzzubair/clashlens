@@ -116,7 +116,8 @@ SELECT DISTINCT ON (log.player_id, log.ranked_day_start)
        log.player_id, log.ranked_day_start, day.id, day.official_season_id,
        day.start_trophies, day.final_trophies_before_reset, day.next_start_trophies,
        day.automatic_defense_loss, day.attack_count, day.attack_gain,
-       day.defense_count, day.observed_defense_loss
+       day.defense_count, day.observed_defense_loss,
+       (day.input_evidence -> 'end_baseline_evidence' ->> 'official_final_trophies')::integer
 FROM api_player_daily_logs AS log
 LEFT JOIN ranked_day_versions AS day ON day.id = log.ranked_day_version_id
 WHERE log.player_id = ANY(%(players)s::bigint[])
@@ -301,8 +302,8 @@ def judge(connection: Any, day: datetime, players: list[int]) -> Judgment:
         if start != day or row[2] is None:
             continue
         (_, _, version, season_id, start_trophies, end, _, automatic,
-         attacks, gain, defenses, loss) = row
-        ends[player] = (version, end, automatic)
+         attacks, gain, defenses, loss, official) = row
+        ends[player] = (version, end, automatic, official)
         judged.add((player, "recount"))
         recount = recounts.get(player, (0, 0, 0, 0))
         if recount != (attacks, gain, defenses, loss):
@@ -339,12 +340,15 @@ def judge(connection: Any, day: datetime, players: list[int]) -> Judgment:
                 if ends.get(int(row[0]), (None, None))[1] is not None]
     after_reset = dict(connection.execute(
         _AFTER_RESET, {"versions": versions}).fetchall()) if versions else {}
-    # A Season's last board shows the EOD itself (``boundary_manifest.reset_trophies``).
+    # A Season's last board shows the official total, else the EOD itself
+    # (``boundary_manifest.reset_trophies``).
     season_end = ranked_day.season_end == params["reset"]
     for player, board, trophies in rows:
-        version, end, automatic = ends.get(int(player), (None, None, None))
-        expected = None if end is None else end if season_end else (
-            end + (automatic or 0) - after_reset.get(version, 0))
+        version, end, automatic, official = ends.get(int(player), (None,) * 4)
+        expected = (
+            official if season_end and official is not None
+            else None if end is None else end if season_end
+            else end + (automatic or 0) - after_reset.get(version, 0))
         if expected != trophies:
             findings.append(Finding("board", int(player), int(board), version,
                                     {"trophies": expected}, {"trophies": trophies}))

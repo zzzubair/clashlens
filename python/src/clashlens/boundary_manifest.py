@@ -912,10 +912,10 @@ def reset_trophies(
     Complete EODs and other readings matched that total for 10,144 of the
     11,970 players with one, the totals before the loss for 9,282; the EOD
     matched for 30 of the 35 Complete days with a battle ending after the
-    Reset, and less those battles for none. The EOD is proven when the
-    official total it was checked against is the same, or as the total
-    before the loss is.
-    """
+    Reset, and less those battles for none. A day saved with that official
+    total shows it, proven, whatever its state: on 2 November 2026, 17 not
+    Complete kept readings 1 to 168 above it. Otherwise the EOD is proven as
+    the total before the loss is."""
     if not readings:
         return {}
     season_end = ranked_day_for(boundary_at - RANKED_DAY_DURATION).season_end == boundary_at
@@ -1065,10 +1065,12 @@ def _reset_total(
     ) = day
     battles_proven = battles_usable and not ambiguous
     total = reading + int(after_reading) if battles_proven or later else None
+    if season_end and official is not None:
+        return int(official), True
     if _text_value(state) == "Complete" and final is not None:
         settled = int(final) + int(automatic_loss or 0)
         if season_end:
-            return int(final), official == int(final) or total == settled and (
+            return int(final), total == settled and (
                 _text_value(confidence) == "exact" or bool(read_clean)
             )
         # The game resets trophies at a Season's end, and raises a total at

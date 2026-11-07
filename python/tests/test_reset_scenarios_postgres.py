@@ -844,16 +844,17 @@ def test_season_end_reset_and_its_first_day(
     # The Season's last board shows a Complete day's EOD, after its automatic
     # loss, as the official total does: END_LOSS at 5,240, not 5,420. On
     # 5 October 2026, 1,976 of 11,961 board values were higher by exactly
-    # that loss. DISAGREES's day is not Complete, so its reading stays.
+    # that loss. DISAGREES's day is not Complete, so its reading stays until
+    # the official total arrives, which then shows instead.
     season_end_totals = {
         END_LOSS: 5240, LATE_RESET: 5400, SHIELDED: 5400, OFFICIAL: 5320,
         NO_DEFENSE: 5320, DAY_1_LOSS: 5320, DISAGREES: 5320, DROPPED: 5320,
     }
     assert _ranked(published_board) == season_end_totals
-    assert _ranked(season_end_board) == season_end_totals
+    assert _ranked(season_end_board) == {**season_end_totals, DISAGREES: 5290}
     # The official total proves it, and the re-check agrees.
-    assert {entry["tag"]: entry["confidence"] for entry in season_end_board["entries"]
-            }[END_LOSS] == "confirmed"
+    confidence = {entry["tag"]: entry["confidence"] for entry in season_end_board["entries"]}
+    assert confidence[END_LOSS] == confidence[DISAGREES] == "confirmed"
     assert board_checks == []
     # Day 1 starts at 5,000 by the Season rule, whatever its Reset read.
     day_1_played = {
