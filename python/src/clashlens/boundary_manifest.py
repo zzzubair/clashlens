@@ -81,8 +81,7 @@ def freeze_boundary_manifest(
     generation_id: int,
     artifact_kind: str,
 ) -> tuple[int, str] | None:
-    """Freeze one sorted coordinator input before creating its job, as a
-    ``publication_states.ManifestStage`` says.
+    """Freeze one sorted coordinator input before creating its job (``ManifestStage``).
 
     The row and digest are persisted together. Once inserted, the manifest
     trigger makes both the population and its selected inputs immutable;
@@ -1473,9 +1472,7 @@ def _season_inputs(connection: Any, members: list[Any]) -> dict[str, Any] | None
     }
 
 
-def _moved_side_arrays(
-    moved: dict[tuple[int, str], int],
-) -> tuple[list[int], list[str]]:
+def _moved_side_arrays(moved: dict[tuple[int, str], int]) -> tuple[list[int], list[str]]:
     return (
         list(moved.values()),
         ["attacker" if lens == "offense" else "defender" for _id, lens in moved],
