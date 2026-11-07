@@ -66,6 +66,14 @@ class PlayerProfileV1(BaseModel):
     best_trophies: int | None = Field(default=None, alias="bestTrophies")
 
 
+class LowerLeagueProfileV1(PlayerProfileV1):
+    """A profile naming a recognized tier below Legend I whose only fault is a
+    negative trophy count, as one Legend II profile reported -179. The raw
+    count is kept; it is never a Legend I score."""
+
+    trophies: int
+
+
 @dataclass(frozen=True, slots=True)
 class ParsedProfile:
     normalized_tag: str
@@ -122,9 +130,11 @@ def parse_profile(
     try:
         profile = PlayerProfileV1.model_validate(payload)
     except ValidationError as error:
-        raise ProfileParseError(
-            "unsupported_profile_schema", "profile does not match profile-schema-v1"
-        ) from error
+        if not _negative_lower_league_trophies(payload, error):
+            raise ProfileParseError(
+                "unsupported_profile_schema", "profile does not match profile-schema-v1"
+            ) from error
+        profile = LowerLeagueProfileV1.model_validate(payload)
 
     expected_normalized = normalize_player_tag(expected_tag)
     try:
@@ -200,6 +210,17 @@ def parse_profile(
         parser_version=parser_version,
         profile_json=payload,
     )
+
+
+def _negative_lower_league_trophies(
+    payload: dict[str, Any], error: ValidationError
+) -> bool:
+    """Whether a negative trophy count, on a recognized tier below Legend I,
+    is the profile's only fault."""
+    return all(
+        detail["type"] == "greater_than_equal" and detail["loc"] == ("trophies",)
+        for detail in error.errors()
+    ) and _classify_league_tier(payload.get("leagueTier"))[3] == "confirmed_non_legend_i"
 
 
 def _classify_league_tier(value: Any) -> tuple[int, str, str, str, str]:

@@ -193,7 +193,8 @@ async def _ask(collector: Collector, tag: str) -> Answer | None:
     if profile.league_tier_id == LEGEND_I_TIER_ID:
         return (tag, "promoted", None, profile.trophies, at)
     if profile.league_tier_id in CANDIDATE_TIER_IDS:
-        return (tag, "listed", profile.league_tier_id, profile.trophies, at)
+        trophies = profile.trophies if profile.trophies >= 0 else None
+        return (tag, "listed", profile.league_tier_id, trophies, at)
     return (tag, "removed", None, None, at)
 
 
