@@ -540,10 +540,14 @@ def get_player_page(
                     "confidence": (
                         "uncertain" if not_found_at else public_confidence
                     ),
+                    # Coverage is complete, partial, missing or unknown; an
+                    # uncertain day is not complete, and says why itself.
                     "coverage": (
-                        current_day["completeness"]["state"]
-                        if current_day is not None
-                        else "missing"
+                        "missing"
+                        if current_day is None
+                        else "partial"
+                        if current_day["completeness"]["state"] == "uncertain"
+                        else current_day["completeness"]["state"]
                     ),
                     "version": PLAYER_SCREEN_READY_VERSION,
                 },
