@@ -47,6 +47,14 @@ _PLAYER_ENDPOINTS = {"profile", "battle_log", "league_history"}
 # are retried later instead of holding collection behind it.
 _WORKER_LOCK_WAIT = "SET LOCAL lock_timeout = '3s'"
 _SPOOL_DELETE_THREADS = 16
+# Whether processing not finished yet still reads an upload's bytes.
+_STILL_PROCESSING = """EXISTS (
+    SELECT 1 FROM python_processing_jobs AS job
+    JOIN collector_observations AS observation ON observation.id = job.observation_id
+    WHERE job.work_type = 'process_observation' AND job.status <> 'complete'
+      AND observation.response_hash = upload.response_hash)"""
+# Cleanup's walk starts here: before every kept upload.
+_CLEANUP_START = (datetime.min.replace(tzinfo=UTC), datetime.min.replace(tzinfo=UTC), "")
 # Spool bytes still needed. Two single-table reads, no join, so stale
 # statistics leave the planner no join to get wrong. After the 7 October 2026
 # Reset the planner expected 1 kept upload, found 4,287, and rescanned every
@@ -156,6 +164,7 @@ class CollectorDatabase:
         if not 1 <= max_size <= 64:
             raise ValueError("collector database pool size must be between 1 and 64")
         self.database_url = database_url
+        self._cleanup_after = _CLEANUP_START
         self.pool = ConnectionPool(
             conninfo=database_url,
             min_size=1,
@@ -1422,31 +1431,30 @@ class CollectorDatabase:
         return {str(row[0]) for row in rows}
 
     def deletable_hashes(self, *, limit: int = 100) -> list[str]:
+        """The deletable of the next ``limit`` kept uploads by last use, after
+        the last call's, wrapping at the end: on 6 November 2026 checking all a
+        Reset's unprocessed ones took 7.6 s, and again 30 s later."""
         if limit < 1:
             raise ValueError("cleanup limit must be positive")
         with self._connection() as connection:
             rows = connection.execute(
-                """
-                SELECT upload.response_hash
-                FROM collector_response_uploads AS upload
-                WHERE upload.state = 'complete'
-                  AND upload.local_deleted_at IS NULL
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM python_processing_jobs AS job
-                      JOIN collector_observations AS observation
-                        ON observation.id = job.observation_id
-                      WHERE job.work_type = 'process_observation'
-                        AND observation.response_hash = upload.response_hash
-                        AND job.status <> 'complete'
-                  )
-                ORDER BY upload.latest_sighting_at, upload.completed_at,
-                         upload.response_hash
-                LIMIT %s
+                f"""
+                SELECT upload.*, NOT {_STILL_PROCESSING}
+                FROM (SELECT response_hash, latest_sighting_at, completed_at
+                      FROM collector_response_uploads
+                      WHERE state = 'complete' AND local_deleted_at IS NULL
+                        AND (latest_sighting_at, completed_at, response_hash) > (%s, %s, %s)
+                      ORDER BY latest_sighting_at, completed_at, response_hash
+                      LIMIT %s) AS upload
+                ORDER BY upload.latest_sighting_at, upload.completed_at, upload.response_hash
                 """,
-                (limit,),
+                (*self._cleanup_after, limit),
             ).fetchall()
-        return [str(row[0]) for row in rows]
+        self._cleanup_after = (
+            (rows[-1][1], rows[-1][2], str(rows[-1][0])) if len(rows) == limit
+            else _CLEANUP_START
+        )
+        return [str(row[0]) for row in rows if row[3]]
 
     def delete_spool_if_deletable(
         self, response_hashes: list[str], delete: Callable[[str], bool]
@@ -1464,21 +1472,13 @@ class CollectorDatabase:
                     (hashes,),
                 )
                 eligible = connection.execute(
-                    """
+                    f"""
                     SELECT upload.response_hash
                     FROM collector_response_uploads AS upload
                     WHERE upload.response_hash = ANY(%s)
                       AND upload.state = 'complete'
                       AND upload.local_deleted_at IS NULL
-                      AND NOT EXISTS (
-                          SELECT 1
-                          FROM python_processing_jobs AS job
-                          JOIN collector_observations AS observation
-                            ON observation.id = job.observation_id
-                          WHERE job.work_type = 'process_observation'
-                            AND observation.response_hash = upload.response_hash
-                            AND job.status <> 'complete'
-                      )
+                      AND NOT {_STILL_PROCESSING}
                     FOR UPDATE
                     """,
                     (hashes,),

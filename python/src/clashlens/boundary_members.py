@@ -56,18 +56,27 @@ def board_members(
         swept = [only] if only in swept else []
     if day < league_days.RECORDED_FROM:
         return sorted(set(swept))
+    # A swept Legend I player is a member by the first half, so the second
+    # reads the day and profile history only of the unswept, filtered first:
+    # on the copy of 14 October 2026 that history was 78% of the 21,190 pages
+    # read cold, under the Reset's full publication lock.
     return [int(row[0]) for row in connection.execute(
         """
+        WITH unswept AS MATERIALIZED (
+            SELECT week.player_id FROM player_league_weeks AS week
+            WHERE week.week_start = %(week)s AND week.league = 'legend_i'
+              {only}
+              AND NOT EXISTS (
+                  SELECT 1 FROM unnest(%(swept)s::bigint[]) AS member (player_id)
+                  WHERE member.player_id = week.player_id))
         SELECT member.player_id FROM unnest(%(swept)s::bigint[]) AS member (player_id)
         LEFT JOIN player_league_weeks AS week
           ON week.player_id = member.player_id AND week.week_start = %(week)s
         WHERE week.league IS NULL OR week.league = 'legend_i'
         UNION
-        SELECT week.player_id FROM player_league_weeks AS week
+        SELECT week.player_id FROM unswept AS week
         JOIN players AS player ON player.id = week.player_id
-        WHERE week.week_start = %(week)s AND week.league = 'legend_i'
-          {only}
-          AND EXISTS (
+        WHERE EXISTS (
               SELECT 1 FROM api_player_daily_logs AS day
               WHERE day.player_id = week.player_id AND day.ranked_day_start = %(day)s
                 AND day.state <> 'Live')
