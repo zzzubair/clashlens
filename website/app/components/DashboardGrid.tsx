@@ -43,6 +43,7 @@ import {
   OffenseConsistencyCard,
   RecentFormCard,
   SeasonGraphCard,
+  SeasonOverviewCard,
 } from "./SeasonCards";
 
 interface ViewContext {
@@ -85,6 +86,7 @@ const CARD_VIEWS: {
   goal: (data) => <GoalCard data={data} />,
   "rivals-watch": (data) => <RivalsCard data={data} />,
   "heat-map": (data) => <HeatMapCard data={data} />,
+  "season-overview": (data) => <SeasonOverviewCard data={data} />,
   cutoffs: (data) => <CutoffsCard data={data} />,
   "season-graph": (data) => <SeasonGraphCard data={data} />,
   "recent-form": (data) => <RecentFormCard data={data} />,

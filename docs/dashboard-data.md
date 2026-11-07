@@ -26,6 +26,7 @@ What each card in the [dashboard design](dashboard.md) needs, checked on **2026-
 | Rivals watch | Live board around you; each shown player's today and Season summary | Exists | `/v1/leaderboards/live?focus_tag=`, then `/v1/players/{tag}` for the 7 players: today's battles (hit rate, offense, defense), their rank at the last Reset (for ▲▼) and this Season's finished days (for Season averages). 8 reads per refresh. Bundle them later only if it proves slow. |
 | | Season: the board around you at the last Reset | Exists | `/v1/leaderboards/frozen` for that day has no focus option, so read the 1–2 pages around your rank at the last Reset, plus the same 7 player reads. |
 | Season heat map | Each finished day's net, offense and defense totals, attack and defense counts, trophies at the end | Exists | Same daily results as Season graph. |
+| Season overview | Each finished day's trophies and rank at the Reset that ended it, and its net | Exists | Same daily results as Season graph. |
 | Cutoffs | Trophies at each Top line, live and on the last Reset board | Exists | |
 | Season graph | Trophies and rank at each Reset this Season; best rank; last Season's official finish | Exists | Use the official finish, never a tracked-only rank. |
 | Recent form | Each finished day's net, offense and defense, triples and held defenses | Exists | |

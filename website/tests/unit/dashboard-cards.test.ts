@@ -834,12 +834,12 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     vi.unstubAllGlobals();
   });
 
-  it("draws all 13 cards with the numbers worked out from the saved days", async () => {
+  it("draws all 14 cards with the numbers worked out from the saved days", async () => {
     const data = await load();
     const html = await render(data);
     const cards = cardsIn(html);
     expect(Object.keys(cards)).toEqual(ALL_CARDS);
-    expect(ALL_CARDS).toHaveLength(13);
+    expect(ALL_CARDS).toHaveLength(14);
     for (const card of ALL_CARDS)
       expect(cards[card]).not.toContain("could not be loaded");
 

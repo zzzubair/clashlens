@@ -321,6 +321,40 @@ export function offenseConsistency(
   };
 }
 
+/** One finished day on the Season overview card. */
+export interface OverviewRow {
+  day: number;
+  endTrophies: number | null;
+  rank: number | null;
+  /** Places climbed since the day before's rank (a fall is negative); null when either rank is unknown. */
+  moved: number | null;
+  net: number | null;
+}
+
+/**
+ * Every finished day of the Season, newest first. A day with nothing saved
+ * still has its row, all unknown, so no day silently drops out of the list.
+ */
+export function seasonOverview(
+  season: Pick<SeasonData, "today" | "days">,
+): OverviewRow[] {
+  const byDay = new Map(season.days.map((day) => [day.day, day]));
+  const finished = Math.min(SEASON_DAYS, Math.max(0, (season.today ?? 1) - 1));
+  return Array.from({ length: finished }, (_, index) => {
+    const number = finished - index;
+    const day = byDay.get(number);
+    const rank = day?.rank ?? null;
+    const before = byDay.get(number - 1)?.rank ?? null;
+    return {
+      day: number,
+      endTrophies: day?.endTrophies ?? null,
+      rank,
+      moved: rank === null || before === null ? null : before - rank,
+      net: day?.net ?? null,
+    };
+  });
+}
+
 export type HeatMode = "net" | "offense" | "defense";
 
 export function heatValue(day: SeasonDay, mode: HeatMode): number | null {
@@ -483,6 +517,7 @@ export interface CardDataMap {
   goal: GoalData;
   "rivals-watch": RivalsData;
   "heat-map": SeasonData;
+  "season-overview": SeasonData;
   cutoffs: CutoffsData;
   "season-graph": SeasonGraphData;
   "recent-form": SeasonData;

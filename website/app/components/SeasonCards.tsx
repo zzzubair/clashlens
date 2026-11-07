@@ -15,6 +15,7 @@ import {
   isShieldDay,
   offenseConsistency,
   recentForm,
+  seasonOverview,
   sideAverages,
 } from "../lib/dashboard-cards";
 import { Stars } from "./GameIcons";
@@ -29,6 +30,8 @@ import {
   signedOr,
   tone,
 } from "./DashboardParts";
+
+import "../season-overview.css";
 
 const DAYS_OPTIONS = [
   ["3", "3 days"],
@@ -214,6 +217,83 @@ function SeasonNumbers({ data, mode }: { data: SeasonData; mode: HeatMode }) {
       {played.length > 1 && <Pair label="Worst" value={at(worst)} className={side} />}
       <Pair label="Shield days" value={String(shields)} />
     </>
+  );
+}
+
+/** The Season overview shows this many days until Show all. */
+const OVERVIEW_DAYS = 7;
+
+/** Card: each finished day's trophies and rank at its Reset, newest first. */
+export function SeasonOverviewCard({ data }: { data: SeasonData }) {
+  const [all, setAll] = useState(false);
+  const rows = seasonOverview(data);
+  const shown = all ? rows : rows.slice(0, OVERVIEW_DAYS);
+  return (
+    <>
+      <CardHead title="Season overview" />
+      {rows.length === 0 ? (
+        <CardNote>{FIRST_DAY_NOTE}</CardNote>
+      ) : (
+        <>
+          <table className="overview-table">
+            <thead>
+              <tr>
+                <th scope="col">Day</th>
+                <th scope="col">Trophies</th>
+                <th scope="col">Rank</th>
+                <th scope="col">Net</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr className="overview-today">
+                <th scope="row">{data.today}</th>
+                <td colSpan={3}>Today · ends at Reset</td>
+              </tr>
+              {shown.map((row) => (
+                <tr key={row.day}>
+                  <th scope="row">{row.day}</th>
+                  <td>{count(row.endTrophies)}</td>
+                  <td>
+                    {row.rank === null ? (
+                      "–"
+                    ) : (
+                      <b className="rank-mark">#{count(row.rank)}</b>
+                    )}
+                    <RankMoved moved={row.moved} />
+                  </td>
+                  <td className={tone(row.net)}>{signedOr(row.net)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {rows.length > OVERVIEW_DAYS ? (
+            <button
+              type="button"
+              className="show-all"
+              aria-expanded={all}
+              onClick={() => setAll(!all)}
+            >
+              {all ? `Show last ${OVERVIEW_DAYS} days` : `Show all ${rows.length} days`}
+            </button>
+          ) : null}
+        </>
+      )}
+    </>
+  );
+}
+
+/** Places climbed (▲) or fallen (▼) since the day before; nothing when level or unknown. */
+function RankMoved({ moved }: { moved: number | null }) {
+  if (!moved) return null;
+  const places = count(Math.abs(moved));
+  return (
+    <span className={`rival-moved ${tone(moved)}`}>
+      <span aria-hidden="true">
+        <span className="rank-move-arrow">{moved > 0 ? "▲" : "▼"}</span>
+        {places}
+      </span>
+      <span className="sr-only">{`, ${moved > 0 ? "up" : "down"} ${places} since the day before`}</span>
+    </span>
   );
 }
 
