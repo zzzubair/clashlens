@@ -48,18 +48,6 @@ class ArtifactState(StrEnum):
     FAILED = "failed"
 
 
-# The moves the code makes; a supersession may come from any state.
-ARTIFACT_MOVES: dict[ArtifactState, frozenset[ArtifactState]] = {
-    ArtifactState.PENDING: frozenset({ArtifactState.READY, ArtifactState.SUPERSEDED}),
-    ArtifactState.READY: frozenset({
-        ArtifactState.BUILDING, ArtifactState.PUBLISHED, ArtifactState.SUPERSEDED}),
-    ArtifactState.BUILDING: frozenset({ArtifactState.PUBLISHED, ArtifactState.SUPERSEDED}),
-    ArtifactState.PUBLISHED: frozenset({ArtifactState.SUPERSEDED}),
-    ArtifactState.SUPERSEDED: frozenset(),
-    ArtifactState.FAILED: frozenset(),
-}
-
-
 class MemberStatus(StrEnum):
     """A board member's ``snapshot_status`` or ``army_status``.
 

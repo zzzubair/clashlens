@@ -108,9 +108,9 @@ def get_attack_alerts(database: ApiDatabase, account_id: int) -> dict[str, Any]:
 class Switch(StrEnum):
     """A per-player Discord switch, named by the table that holds it.
 
-    States: OFF, no row for the account and player; ON, a row. An ATTACK
-    row also holds enabled_at, after which saved defenses are sent, and
-    confirm_requested_at, the confirmation the bot owes for it.
+    States (`SwitchState`): OFF, no row for the account and player; ON, a
+    row. An ATTACK row also holds enabled_at, after which saved defenses are
+    sent, and confirm_requested_at, the confirmation the bot owes for it.
 
     Events; `flip` and `ask_to_confirm_again` are the only writers outside
     the database's triggers:
@@ -141,9 +141,23 @@ class Switch(StrEnum):
     DAY_SUMMARY = "discord_day_summary_on"
 
 
-def flip(connection: Any, switch: Switch, account_id: int, player_id: int, *, on: bool) -> None:
-    """Turn `switch` on or off for the account and player."""
-    if on:
+class SwitchState(StrEnum):
+    """Whether one `Switch` is on for one account and player (see `Switch`)."""
+
+    OFF = "off"
+    ON = "on"
+
+    @classmethod
+    def of(cls, on: bool) -> SwitchState:
+        """The state a request's `on` asks for."""
+        return cls.ON if on else cls.OFF
+
+
+def flip(
+    connection: Any, switch: Switch, account_id: int, player_id: int, state: SwitchState
+) -> None:
+    """Move `switch` to `state` for the account and player."""
+    if state is SwitchState.ON:
         connection.execute(
             f"INSERT INTO {switch} (account_id, player_id) VALUES (%s, %s)"
             " ON CONFLICT (account_id, player_id) DO NOTHING",
@@ -211,7 +225,7 @@ def _set_own_switch(
             if link is None or int(link[1]) != binding.account_id:
                 result = OperationResult(404, {"error": "player_not_verified"})
             else:
-                flip(connection, switch, int(link[1]), int(link[0]), on=on)
+                flip(connection, switch, int(link[1]), int(link[0]), SwitchState.of(on))
                 result = OperationResult(200, {"tag": normalized_tag, answer: on})
             api_db._complete_request(connection, binding.request_id, result)
             return result

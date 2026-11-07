@@ -750,24 +750,27 @@ class CampaignRefused(ValueError):
 
 
 class CampaignState(StrEnum):
-    """The states a campaign really takes, as ``domain_repair_campaigns.state``.
+    """The states of ``domain_repair_campaigns.state``.
 
     - ``registered``: ``register`` saved its list; it holds nothing, and
       registering again replaces the list with what is still outstanding.
     - ``active``: ``activate`` moved it on; it holds each listed Reset until
       that Reset's item is done. Registering again is refused.
+    - ``paused`` and ``complete``: allowed by the database, never written by
+      the current code; items ``done`` and ``failed`` likewise.
+      ``boundary_held`` still counts a ``paused`` campaign as holding, as the
+      schema intends.
 
     ``activate`` is the only transition, and it refuses until every stage
     in ``REQUIRED_STAGES`` has a handler. None does yet, so no campaign
-    becomes active on this code. The schema also declares ``paused`` and
-    ``complete``, and items ``done`` and ``failed``: nothing moves a
-    campaign or item there. ``boundary_held`` still counts a ``paused``
-    campaign as holding, as the schema intends. A refused or failed
-    command writes nothing (one transaction); run it again.
+    becomes active on this code. A refused or failed command writes nothing
+    (one transaction); run it again.
     """
 
     REGISTERED = "registered"
     ACTIVE = "active"
+    PAUSED = "paused"
+    COMPLETE = "complete"
 
 
 def campaign_window(season_start: datetime) -> tuple[datetime, datetime]:

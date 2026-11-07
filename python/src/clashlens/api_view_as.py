@@ -29,7 +29,7 @@ from pydantic import Field
 from . import api_db, api_discord_alerts, api_players
 from .api import StrictBody, _authorize, _binding, _operation_response
 from .api_db import ApiDatabase, OperationResult, RequestBinding, _text
-from .api_discord_alerts import Switch
+from .api_discord_alerts import Switch, SwitchState
 from .profile import normalize_player_tag
 
 # What any account but the owner gets from a pin or follow, whatever it sent.
@@ -172,7 +172,8 @@ def set_follow(
             else:
                 assert binding.account_id is not None
                 api_discord_alerts.flip(
-                    connection, FOLLOW_TABLES[alert], binding.account_id, player[0], on=on
+                    connection, FOLLOW_TABLES[alert], binding.account_id, player[0],
+                    SwitchState.of(on),
                 )
                 result = OperationResult(200, {"tag": player[1], "alert": alert, "on": on})
             api_db._complete_request(connection, binding.request_id, result)

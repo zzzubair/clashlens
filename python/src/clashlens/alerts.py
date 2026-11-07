@@ -703,14 +703,16 @@ class Incident(StrEnum):
     ALERT_PENDING; False (clear) takes ALERTED to CLEARING, and CLEARING to
     RECOVERY_PENDING once clear for RECOVERY_HOLD seconds after the alert
     went out (`hold_recoveries`); True again in CLEARING goes back to
-    ALERTED. None (a check that could not run) moves nothing, so an unknown
-    check never recovers an incident. Delivering to Discord (`deliver`)
-    takes ALERT_PENDING to ALERTED and RECOVERY_PENDING to HEALTHY.
+    ALERTED. None (a check that could not run) never recovers an incident:
+    it drops "clear_since", so CLEARING goes back to ALERTED and the clear
+    time starts over. Delivering to Discord (`deliver`) takes ALERT_PENDING
+    to ALERTED and RECOVERY_PENDING to HEALTHY.
 
     Owner: `run`, one at a time under alerts.lock. Every move is saved to
     alerts.json before Discord is called, so a failed delivery or a crash
-    retries the saved one on the next run, and nothing is sent twice for one
-    move. Time while ./ops had the stack stopped ("resumed_at") never counts
+    retries the saved one on the next run. The delivered move is saved only
+    after Discord answers, so a crash between the post and that save sends
+    the same message again on the next run. Time while ./ops had the stack stopped ("resumed_at") never counts
     as clear time.
     """
 

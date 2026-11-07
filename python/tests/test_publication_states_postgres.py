@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
@@ -10,6 +11,7 @@ import psycopg
 import pytest
 from domain_test_support import domain_database
 
+from bot.alerts import Logged
 from clashlens.army_decoder import DecodedArmy, DecodeFailure
 from clashlens.board_deadline import (
     BOARD_DEADLINE,
@@ -18,6 +20,10 @@ from clashlens.board_deadline import (
     DeadlineStage,
     deadline_stage,
 )
+from clashlens.crew_states import CrewRole
+from clashlens.day_result import Confidence, DayState, ShieldState
+from clashlens.domain_repair import CampaignState
+from clashlens.loss_rule import LossEvidence
 from clashlens.past_reset_pacing import CorrectionPace, correction_pace
 from clashlens.publication_states import (
     ArtifactState,
@@ -28,6 +34,7 @@ from clashlens.publication_states import (
     decode_verdict,
 )
 from clashlens.reset_acceptance import Milestone, reached, settled
+from clashlens.season_anchors import AnchorOutcome
 
 RESET = datetime(2026, 10, 12, 5, tzinfo=UTC)
 
@@ -41,16 +48,27 @@ RESET = datetime(2026, 10, 12, 5, tzinfo=UTC)
         ("boundary_publication_generation_members", "army_status", MemberStatus),
         ("boundary_publication_corrections", "state", CorrectionState),
         ("battle_army_decodes", "status", DecodeStatus),
+        ("ranked_day_versions", "state", DayState),
+        # The day's confidence is listed only where the website reads it.
+        ("api_player_daily_logs", "confidence", Confidence),
+        ("ranked_day_versions", "shield_state", ShieldState),
+        ("ranked_day_versions", "automatic_defense_evidence_state", LossEvidence),
+        ("season_anchor_evidence", "outcome", AnchorOutcome),
+        ("domain_repair_campaigns", "state", CampaignState),
+        ("crew_accounts", "role", CrewRole),
+        ("discord_day_summary_deliveries", "state", Logged),
+        # Only a summary can be skipped.
+        ("discord_attack_alert_deliveries", "state", set(Logged) - {Logged.SKIPPED}),
     ],
 )
 def test_each_named_state_list_matches_the_database(
-    database_url: str, table: str, column: str, states: type[StrEnum]
+    database_url: str, table: str, column: str, states: Iterable[StrEnum]
 ) -> None:
     with domain_database(database_url) as connection_info, psycopg.connect(
         connection_info
     ) as connection:
-        checks = [
-            definition
+        lists = [
+            listed
             for (definition,) in connection.execute(
                 """
                 SELECT pg_get_constraintdef(oid) FROM pg_constraint
@@ -58,11 +76,12 @@ def test_each_named_state_list_matches_the_database(
                 """,
                 (table,),
             )
-            # The constraint listing every value the column may hold.
-            if re.match(rf"CHECK \(\({column} = ANY \(ARRAY\[", definition)
+            # Each list of values the column may hold, alone or inside a
+            # larger check; a narrower rule elsewhere repeats some of them.
+            for listed in re.findall(rf"\b{column} = ANY \(ARRAY\[([^\]]*)\]", definition)
         ]
-    assert len(checks) == 1, checks
-    allowed = set(re.findall(r"'([a-z_]+)'::text", checks[0]))
+    assert lists, table
+    allowed = {value for listed in lists for value in re.findall(r"'([A-Za-z_]+)'::text", listed)}
     assert allowed == {state.value for state in states}
 
 

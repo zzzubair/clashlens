@@ -306,10 +306,23 @@ const SAVE_STATUS: Record<SaveStatus, { text: string; ok: boolean }> = {
 };
 
 /**
+ * Where the automatic save stands, behind the `saving` line above:
+ *
+ * - `idle`: no save is sending; `saved` is the last choices Clash Lens took.
+ * - `sending`: one save loop is running; it sends the newest choices until
+ *   `saved` matches them, and a change meanwhile waits for it instead of
+ *   starting a second loop.
+ *
+ * A failed save goes back to `idle` with `saved` unchanged, so the next change
+ * sends again. `OverlaySetup`'s save effect is its only writer.
+ */
+type Autosave = { phase: "idle" | "sending"; saved: string };
+
+/**
  * One press on the preview's box, held until the pointer lifts: a move, or
  * with `dir` (the grabbed edge or corner) a resize. `k` is the preview's
- * scale when it began. `drag` holds it for the pointer's moves and `dragging`
- * mirrors it for drawing; both clear together.
+ * scale when it began. `OverlaySetup`'s `drag` is it, or null with no press;
+ * a pointer down sets it and a pointer up or cancel clears it.
  */
 type PointerDrag = {
   sx: number;
@@ -335,25 +348,24 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
     h: null,
   });
   const [scale, setScale] = useState(0);
-  const [dragging, setDragging] = useState(false);
+  const [drag, setDrag] = useState<PointerDrag | null>(null);
   const wrap = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
-  const drag = useRef<PointerDrag | null>(null);
   const [initialQuery] = useState(() =>
     new URLSearchParams(overlayQuery(form, place)).toString(),
   );
   const query = new URLSearchParams(overlayQuery(form, place)).toString();
   const settings = savedSettings(form, place);
   const savedJson = JSON.stringify({ tag: form.tag, settings });
-  const lastSaved = useRef(
-    JSON.stringify({
+  const autosave = useRef<Autosave>({
+    phase: "idle",
+    saved: JSON.stringify({
       tag: overlay.tag,
       settings: savedSettings(initial.current.form, initial.current.place),
     }),
-  );
+  });
   const latest = useRef({ json: savedJson, tag: form.tag, settings });
   latest.current = { json: savedJson, tag: form.tag, settings };
-  const saving = useRef(false);
   const address = `${origin}/o/${link}`;
   const screen = form.fit === "screen";
   const [w, h] = screen
@@ -414,12 +426,12 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
   // Saved on Clash Lens against the private link, 0.3 seconds after the last
   // change, one save at a time: the newest choices go once the one sending lands.
   useEffect(() => {
-    if (savedJson === lastSaved.current) return;
+    if (savedJson === autosave.current.saved) return;
     const timer = setTimeout(async () => {
-      if (saving.current) return;
-      saving.current = true;
+      if (autosave.current.phase === "sending") return;
+      autosave.current = { ...autosave.current, phase: "sending" };
       try {
-        while (latest.current.json !== lastSaved.current) {
+        while (latest.current.json !== autosave.current.saved) {
           const next = latest.current;
           setSaveStatus("saving");
           await post<{ version: number }>({
@@ -427,13 +439,13 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
             tag: next.tag ?? "",
             settings: JSON.stringify(next.settings),
           });
-          lastSaved.current = next.json;
+          autosave.current = { phase: "sending", saved: next.json };
         }
         setSaveStatus("saved");
       } catch {
         setSaveStatus("notSaved");
       } finally {
-        saving.current = false;
+        autosave.current = { ...autosave.current, phase: "idle" };
       }
     }, 300);
     return () => clearTimeout(timer);
@@ -446,19 +458,18 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
   function onPointerDown(event: PointerEvent<HTMLDivElement>) {
     event.currentTarget.setPointerCapture(event.pointerId);
     const dir = (event.target as HTMLElement).dataset.dir ?? null;
-    drag.current = {
+    setDrag({
       sx: event.clientX,
       sy: event.clientY,
       start: { ...place, anchor: null },
       dir,
       k: scale,
-    };
+    });
     setPlace((current) => ({ ...current, anchor: null }));
-    setDragging(true);
   }
 
   function onPointerMove(event: PointerEvent<HTMLDivElement>) {
-    const d = drag.current;
+    const d = drag;
     if (!d) return;
     const dx = (event.clientX - d.sx) / d.k;
     const dy = (event.clientY - d.sy) / d.k;
@@ -519,8 +530,7 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
   }
 
   function endDrag() {
-    drag.current = null;
-    setDragging(false);
+    setDrag(null);
     setGuides({ v: null, h: null });
   }
 
@@ -765,7 +775,7 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
               <div className="obs-guide h" style={{ top: guides.h }} />
             ) : null}
             <div
-              className={`obs-handle${dragging ? " dragging" : ""}`}
+              className={`obs-handle${drag ? " dragging" : ""}`}
               style={box}
               role="group"
               tabIndex={0}
