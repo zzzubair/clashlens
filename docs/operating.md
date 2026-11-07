@@ -472,6 +472,12 @@ A long `database_wait` or `claim` points at the database, a long
 `archive_write` at the archive or the home connection, and a high
 `clashlens_collector_api_requests_in_flight` beside it at shared bandwidth.
 
+While the archive's identity marker cannot be checked, uploads pause without
+claiming anything, so `clashlens_collector_archive_health` shows `state="degraded"`,
+pending uploads grow and no failure counts rise. The `uploader_health` line's
+`archive_failure` names the step that failed (`marker_request` when the
+archive never answered), the error type and the HTTP status.
+
 **Fix or escalate:** repair the reported cause through an approved change.
 Never delete saved responses or upload rows to shrink the wait.
 

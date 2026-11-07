@@ -880,6 +880,19 @@ never archived. Attempts that write nothing name
 that write in their failure detail (`write attempt N may yet land: ...`), so
 failures before a write never shorten its wait. A spool read
 failure in the uploads process pauses collection, as one in the collector does.
+
+Before claiming an upload, the process checks the archive's identity marker. A
+passed check is reused for five minutes. While a check fails in a way that may
+pass, nothing is claimed: every upload waits, and one shared check runs again 15
+seconds after the failed one answered. Uploads resume once it passes; the
+collector keeps saving responses to the spool meanwhile. Before 7 November 2026
+one failed check was reused for five minutes while all 16 uploads kept claiming
+responses and failing them, each due again five seconds later. Three short
+interruptions on 4–5 November added 24,650 `archive_unavailable` failures, and
+their original errors were not kept. The
+`archive_failure` field of the `uploader_health` line keeps the latest archive
+failure: its step, category, the type of the error underneath, and the archive's
+HTTP status and S3 error code when it answered, never the error's message.
 [Upload waits](operating.md#uploads-waiting) shows how to read its step times.
 
 A local spool file is deletable only after its processing and upload both
