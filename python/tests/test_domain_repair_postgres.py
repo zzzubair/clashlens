@@ -358,6 +358,9 @@ def test_campaign_registration_drops_finished_work_until_activated(
         with _owner(connection_info) as connection:
             second = _report(connection, player, opponent, START + DAY, destruction=56, code="u1x0-2x1")
         domain_repair.register(worker, SEASON, now=NOW)
+        # No repair stage has a handler yet, so nothing can activate a campaign.
+        with pytest.raises(domain_repair.CampaignRefused, match="stages not installed"):
+            domain_repair.activate(worker, SEASON, now=NOW)
         monkeypatch.setattr(domain_repair, "HANDLERS", dict.fromkeys(domain_repair.REQUIRED_STAGES))
         domain_repair.activate(worker, SEASON, now=NOW)
         _decoded(connection_info, second)
@@ -677,6 +680,8 @@ def test_season_repair_recalculates_days_then_rebuilds_boards_with_a_receipt(
                 database, NEXT_SEASON, "queue", max_jobs=100
             )
             with database.pool.connection() as connection:
+                in_days = domain_repair.recalculating_days(connection, NEXT_SEASON)
+            with database.pool.connection() as connection:
                 connection.execute(
                     "UPDATE python_processing_jobs SET status = 'failed',"
                     " failure_category = 'invalid_work_input'"
@@ -695,6 +700,8 @@ def test_season_repair_recalculates_days_then_rebuilds_boards_with_a_receipt(
             boards = domain_repair.season_repair(
                 database, NEXT_SEASON, "queue", max_jobs=100
             )
+            with database.pool.connection() as connection:
+                after_days = domain_repair.recalculating_days(connection, NEXT_SEASON)
             receipt = domain_repair.season_repair(
                 database, NEXT_SEASON, "receipt", max_jobs=100
             )
@@ -739,6 +746,9 @@ def test_season_repair_recalculates_days_then_rebuilds_boards_with_a_receipt(
     ]
     assert (boards["phase"], boards["boards_rebuilding"]) == ("boards", 1)
     assert [board["correction"] for board in boards["boards"]] == ["queued"]
+    # The receipt is in its days step, holding reconcile-pass fixes, from
+    # the first day job queued until the boards step begins.
+    assert (in_days, after_days) == (True, False)
     assert receipt["boards_queued_at"] is not None
     assert receipt["days"]["before"] == {day: {"states": {"Complete": 1}, "reasons": {}}}
     assert receipt["days"]["now"] == receipt["days"]["before"]

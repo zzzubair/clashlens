@@ -14,7 +14,7 @@ from test_reconciliation_postgres import _profile
 from test_reset_reading_before_loss_postgres import DAY_B, DAY_C, DAY_D
 from test_reset_settlement_state_postgres import TAG, _process, _reset_work
 
-from clashlens import queue_refresh, reconciliation_db
+from clashlens import job_outcomes, queue_refresh, reconciliation_db
 from clashlens.background_pacing import DAY_RECHECK_PRIORITY
 from clashlens.collector_db import CollectorDatabase
 from clashlens.db import Database
@@ -750,3 +750,55 @@ def test_evidence_for_a_day_merges_into_its_waiting_recheck(database_url: str) -
     assert [claim.input_json["ranked_day_start"] for claim in (running, follow_up)] == [
         f"{day.start:%Y-%m-%dT%H:%M:%SZ}"
     ] * 2
+
+
+def test_evidence_for_a_day_whose_recheck_failed_queues_another(database_url: str) -> None:
+    # A recheck that failed and waits to retry may have read too early, as one
+    # running may: evidence queues one more. The twice-daily pass skips the
+    # day while either waits.
+    day = ranked_day_for(datetime(2026, 10, 8, 5, tzinfo=UTC))
+    read_at = day.end + timedelta(hours=1)
+    with domain_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("SET LOCAL session_replication_role = replica")
+            player = connection.execute(
+                "INSERT INTO players (normalized_tag, active) VALUES ('#2PP', true) RETURNING id"
+            ).fetchone()[0]
+            connection.execute(
+                """
+                INSERT INTO ranked_day_versions (
+                    player_id, ranked_day_start, ranked_day_end, official_season_id,
+                    season_day_number, season_anchor_rule_version,
+                    reconciliation_rule_version, input_hash, result_hash, version,
+                    state, confidence
+                ) VALUES (%s, %s, %s, %s, %s, 'test', %s, repeat('a', 64),
+                          repeat('b', 64), 1, 'Complete', 'exact')
+                """,
+                (player, day.start, day.end, day.official_season_id, day.day_number,
+                 RECONCILIATION_RULE_VERSION),
+            )
+
+        def rechecks() -> list[str]:
+            with psycopg.connect(connection_info) as connection:
+                return sorted(str(row[0]) for row in connection.execute(
+                    "SELECT status FROM python_processing_jobs"
+                    " WHERE work_type = 'reconcile_ranked_day'"
+                ))
+
+        database = Database(connection_info)
+        try:
+            with psycopg.connect(connection_info) as connection:
+                queue_refresh.queue_for_reading(connection, player, "log:1", read_at)
+            [claim] = database.claim_jobs(owner="worker")
+            assert job_outcomes.fail_claim(
+                database, claim, category="calculation_error", detail="test",
+                retryable=True) == "waiting_retry"
+            with psycopg.connect(connection_info) as connection:
+                queue_refresh.queue_for_reading(connection, player, "log:2", read_at)
+            after_failure = rechecks()
+            passed = queue_refresh.queue_recheck(database, "night", day.end)
+        finally:
+            database.close()
+
+    assert after_failure == ["pending", "waiting_retry"]
+    assert passed == 0

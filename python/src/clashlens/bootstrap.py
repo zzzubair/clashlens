@@ -15,6 +15,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 
 from .db import CONTRACT_VERSION
 from .profile import ProfileParseError, normalize_player_tag
@@ -141,6 +142,49 @@ def read_secret_file(path: str) -> str:
     return decoded
 
 
+class BootstrapRun(StrEnum):
+    """Where a bootstrap run is, from its ``population_bootstrap_runs`` row
+    (``bootstrap_run``) against the manifest being run.
+
+    - ``new``: no row for the run id. It starts (saves ``started``) only if
+      no other run exists and the database has no active players, player
+      work or ranking work; otherwise it is refused.
+    - ``started``: saved with this manifest. Its batches register players
+      and discovery work again; each batch is idempotent, so a run cut
+      short converges when run again with the same run id.
+    - ``complete``: saved with its counts once every batch is in. Running
+      it again registers nothing and writes the receipt file from the saved
+      counts, so a crash between the database and the file loses nothing.
+    - ``colliding``: the run id was saved with a different manifest or
+      batch size: refused, nothing written.
+
+    ``bootstrap_population`` is the only writer, deciding under an advisory
+    lock so two runs cannot both start. The receipt file is always a new
+    file; an existing one refuses the command before any write.
+    """
+
+    NEW = "new"
+    STARTED = "started"
+    COMPLETE = "complete"
+    COLLIDING = "colliding"
+
+
+def bootstrap_run(existing: dict | None, manifest: Manifest) -> BootstrapRun:
+    """The state of the run whose saved row is ``existing`` (``_run_row``)."""
+    if existing is None:
+        return BootstrapRun.NEW
+    if (
+        existing["manifest_sha256"] != manifest.raw_sha256
+        or existing["manifest_count"] != len(manifest.tags)
+        or existing["normalized_set_sha256"] != manifest.normalized_set_sha256
+        or existing["batch_size"] != BOOTSTRAP_BATCH_SIZE
+    ):
+        return BootstrapRun.COLLIDING
+    if existing["status"] == "complete":
+        return BootstrapRun.COMPLETE
+    return BootstrapRun.STARTED
+
+
 def _run_row(connection: object, run_id: str) -> dict | None:
     row = connection.execute(  # type: ignore[union-attr]
         """SELECT run_id, manifest_sha256, manifest_count,
@@ -226,30 +270,21 @@ def bootstrap_population(
                 "'population_bootstrap', 0))"
             )
             existing = _run_row(connection, run_id)
-            if existing is not None:
-                if (
-                    existing["manifest_sha256"] != manifest.raw_sha256
-                    or existing["manifest_count"] != len(tags)
-                    or existing["normalized_set_sha256"]
-                    != manifest.normalized_set_sha256
-                    or existing["batch_size"] != BOOTSTRAP_BATCH_SIZE
-                ):
-                    raise BootstrapError("bootstrap_run_collision")
-                if existing["status"] == "complete":
-                    report = _report(
-                        run_id,
-                        manifest,
-                        batch_size=BOOTSTRAP_BATCH_SIZE,
-                        players_registered=existing["players_registered"],
-                        discovery_jobs_created=existing[
-                            "discovery_jobs_created"
-                        ],
-                    )
-                    _write_result_file(result_file, report)
-                    return report
-                # Same run-id, still started: replay every batch below. Each
-                # batch is idempotent, so a partial run simply converges.
-            else:
+            state = bootstrap_run(existing, manifest)
+            if state is BootstrapRun.COLLIDING:
+                raise BootstrapError("bootstrap_run_collision")
+            if state is BootstrapRun.COMPLETE:
+                report = _report(
+                    run_id,
+                    manifest,
+                    batch_size=BOOTSTRAP_BATCH_SIZE,
+                    players_registered=existing["players_registered"],
+                    discovery_jobs_created=existing["discovery_jobs_created"],
+                )
+                _write_result_file(result_file, report)
+                return report
+            # A started run replays every batch below and converges.
+            if state is BootstrapRun.NEW:
                 other_runs = connection.execute(
                     "SELECT count(*) FROM population_bootstrap_runs"
                 ).fetchone()[0]

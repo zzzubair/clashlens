@@ -48,7 +48,7 @@ from clashlens import ranked_day_compaction, reconciliation_db
 from clashlens.api_db import ApiDatabase
 from clashlens.domain import ranked_day_for
 from clashlens.late_battle_sweep import sweep_late_battles
-from clashlens.ranked_day_compaction import compact
+from clashlens.ranked_day_compaction import DayPass, compact, day_pass
 
 
 def _copies(connection: psycopg.Connection, tag: str, day) -> list[tuple]:
@@ -706,3 +706,31 @@ def test_a_cleanup_run_finishes_every_batch_of_production_sized_days(
                 ]
         finally:
             database.close()
+
+
+def test_a_days_cleanup_waits_then_passes_its_players_then_reopens_for_a_newer_copy(
+    database_url: str, archive_server
+) -> None:
+    """A day with extra copies waits; a pass holds its place batch by batch
+    until every player is checked; a copy saved since makes it wait again."""
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _ended_day_with_copies(connection_info, archive_server, database, processor)
+            with psycopg.connect(connection_info, autocommit=True) as connection:
+                states = [day_pass(connection, DAY_START)]
+                for _ in range(100):
+                    connection.execute(
+                        "SELECT * FROM clashlens_compact_ranked_days(%s, 1)", (DAY_END,))
+                    if (state := day_pass(connection, DAY_START)) != states[-1]:
+                        states.append(state)
+                    if state is DayPass.COMPACTED:
+                        break
+                newest = _copies(connection, "#2PP", DAY_START)[-1][0]
+                _late_copy(connection, newest, DAY_START)
+                reopened = day_pass(connection, DAY_START)
+        finally:
+            database.close()
+
+    assert states == [DayPass.WAITING, DayPass.IN_PASS, DayPass.COMPACTED]
+    assert reopened is DayPass.WAITING

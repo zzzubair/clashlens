@@ -22,7 +22,11 @@ from test_season_detail_retirement_postgres import (
 
 from clashlens import season_finalization_guard
 from clashlens.api_db import ApiDatabase
-from clashlens.season_finalization_guard import close_blockers
+from clashlens.season_finalization_guard import (
+    SeasonClosure,
+    close_blockers,
+    season_closure,
+)
 from clashlens.season_retirement import finalize_season_detail, retire_season_detail
 
 ELIGIBLE = SEASON_END + timedelta(days=7)
@@ -544,6 +548,39 @@ def test_retirement_rechecks_work_after_finalization(database_url: str, archive_
                 assert _counts(connection) == before
         finally:
             database.close()
+
+
+def test_a_season_closes_open_then_finalized_then_retiring_then_retired(
+    database_url: str, monkeypatch
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                _ended_season(connection)
+                states = [season_closure(connection, SEASON)]
+                # The promised history cannot be proven yet: nothing closes.
+                held = finalize_season_detail(connection, SEASON, ELIGIBLE, apply=True)
+                connection.commit()
+                states.append(season_closure(connection, SEASON))
+                monkeypatch.setattr(season_finalization_guard, "promised_history_gap", lambda *_: None)
+                finalized = finalize_season_detail(connection, SEASON, ELIGIBLE, apply=True)
+                connection.commit()
+                states.append(season_closure(connection, SEASON))
+                for _ in range(60):
+                    batch = retire_season_detail(connection, SEASON, max_rows=1, apply=True, now=ELIGIBLE)
+                    connection.commit()
+                    if (state := season_closure(connection, SEASON)) != states[-1]:
+                        states.append(state)
+                    if batch["status"] == "retired":
+                        break
+        finally:
+            database.close()
+
+    assert (held["status"], held["blocking_work"]) == ("blocked", HISTORY_ONLY)
+    assert finalized["status"] == "finalized"
+    assert states == [SeasonClosure.OPEN, SeasonClosure.OPEN, SeasonClosure.FINALIZED,
+                      SeasonClosure.RETIRING, SeasonClosure.RETIRED]
 
 
 def test_settlement_check_holds_its_two_days_until_finished_and_processed(

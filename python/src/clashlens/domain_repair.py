@@ -82,7 +82,9 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import Any
 
 from psycopg.types.json import Jsonb
@@ -109,6 +111,87 @@ REPAIR_SCOPES = ("day-1-or-unplayed",)
 _UNFINISHED_JOB_STATES = ("pending", "waiting_retry", "waiting_dependency", "leased")
 
 
+class RepairPhase(StrEnum):
+    """The step a Season repair's ``queue`` run stopped at, reported as ``phase``.
+
+    No column stores it. Each run works out the first unfinished step from
+    the repair's receipt (``RepairReceipt``) and the jobs it queued, does
+    that step's next bit of work, and reports it:
+
+    - ``league``: weeks of the Season not yet decided, or public days saved
+      before their weeks were decided still being settled;
+    - ``inputs``: repairs of saved evidence (moved battle days, partial
+      Reset pairs) queued now, unfinished or failed;
+    - ``days``: players' day recalculations being queued, through
+      ``days_queued_through``, or still unfinished or failed;
+    - ``boards``: board corrections requested by ``boards_queued_at``
+      still unfinished;
+    - ``summaries``: saved Season summaries being stored again, through
+      ``summaries_through``, then any that differ from their days;
+    - ``done``.
+
+    The operator moves it on by running ``queue`` again; jobs finishing let
+    the next run pass a step. A failed job holds its step until it is
+    retried by hand. Every step is safe to repeat, so a run cut short by a
+    crash or restart is simply run again.
+    """
+
+    LEAGUE = "league"
+    INPUTS = "inputs"
+    DAYS = "days"
+    BOARDS = "boards"
+    SUMMARIES = "summaries"
+    DONE = "done"
+
+
+@dataclass(frozen=True)
+class RepairReceipt:
+    """A Season repair's saved progress: one ``season_repairs`` row, saved
+    by its first ``queue`` run with the Season as it was before.
+
+    ``days_queued_through`` is the last player whose day job is queued, 0
+    before any; ``boards_queued_at`` is when the ``boards`` step began;
+    ``summaries_through`` is the last player whose summary was stored
+    again; ``players`` is a scoped repair's players, kept from its first
+    run. Only ``season_repair`` writes it.
+    """
+
+    before_days: dict[str, Any]
+    before_boards: dict[str, Any]
+    days_queued_through: int
+    boards_queued_at: datetime | None
+    summaries_through: int
+    players: list[int] | None
+
+    @property
+    def recalculating_days(self) -> bool:
+        """Whether the repair is in its ``days`` step: day jobs queued and
+        the boards step not begun."""
+        return self.days_queued_through > 0 and self.boards_queued_at is None
+
+
+def _receipts(
+    connection: Any, season_id: str, revision: str | None = None
+) -> list[RepairReceipt]:
+    """The Season's repair receipts, or the one of ``revision``."""
+    return [
+        RepairReceipt(
+            row[0], row[1], int(row[2]), row[3], int(row[4]),
+            None if row[5] is None else [int(player) for player in row[5]],
+        )
+        for row in connection.execute(
+            """
+            SELECT before_days, before_boards, queued_through_player_id,
+                   boards_queued_at, summaries_through_player_id, players
+            FROM season_repairs
+            WHERE official_season_id = %s
+              AND (%s::text IS NULL OR rule_revision = %s)
+            """,
+            (season_id, revision, revision),
+        ).fetchall()
+    ]
+
+
 def season_repair(
     database: Database, season_id: str, action: str, *, max_jobs: int,
     scope: str | None = None,
@@ -129,17 +212,10 @@ def season_repair(
         ).fetchone():
             # Its days can no longer be recalculated.
             return {"season": season_id, "refused": f"season {season_id} is finalized"}
-        receipt = connection.execute(
-            """
-            SELECT before_days, before_boards, queued_through_player_id,
-                   boards_queued_at, summaries_through_player_id, players
-            FROM season_repairs
-            WHERE official_season_id = %s AND rule_revision = %s
-            """,
-            (season_id, revision),
-        ).fetchone()
+        receipt = next(iter(_receipts(connection, season_id, revision)), None)
         if scope and receipt is not None:
-            players = [int(player) for player in receipt[5]]
+            # A scoped repair's first run saves its players with the receipt.
+            players = list(receipt.players or ())
         elif scope:
             players = _scoped_players(connection, start)
         else:
@@ -158,7 +234,7 @@ def season_repair(
                      "recorded": max(start, league_days.RECORDED_FROM)},
                 ).fetchall()
             ]
-        through = int(receipt[2]) if receipt is not None else 0
+        through = receipt.days_queued_through if receipt is not None else 0
         report = {
             "season": season_id, "rule_revision": revision, "scope": scope,
             "players": len(players),
@@ -179,9 +255,11 @@ def season_repair(
             return {
                 **report,
                 "inputs": inputs,
-                "boards_queued_at": receipt[3].isoformat() if receipt[3] else None,
-                "days": {"before": receipt[0], "now": _day_counts(connection, start)},
-                "boards": {"before": receipt[1], "now": _board_counts(connection, start)},
+                "boards_queued_at": receipt.boards_queued_at.isoformat()
+                if receipt.boards_queued_at else None,
+                "days": {"before": receipt.before_days, "now": _day_counts(connection, start)},
+                "boards": {"before": receipt.before_boards,
+                           "now": _board_counts(connection, start)},
                 # Checks that every published view now agrees with the days.
                 "boards_disagreeing": [
                     board for board in boundary.queue_board_rebuilds(
@@ -230,21 +308,21 @@ def season_repair(
     if undecided or settled["players_settled"]:
         # Days are recalculated by the decided weeks: a week not Legend I
         # keeps no public day.
-        return {**report, "phase": "league", "undecided_weeks": int(undecided), **settled}
+        return {**report, "phase": RepairPhase.LEAGUE, "undecided_weeks": int(undecided), **settled}
     inputs = _repair_inputs(database, season_id, start, max_jobs)
     if inputs["queued"] or inputs["unfinished"] or inputs["failed"]:
         # Days wait for every repair of their evidence; a failed one holds
         # them until it is investigated and retried by hand.
-        return {**report, "phase": "inputs", **inputs}
+        return {**report, "phase": RepairPhase.INPUTS, **inputs}
     if report["left_to_queue"]:
         batch = [player for player in players if player > through][:max_jobs]
         _queue_days(database, season_id, revision, start, batch)
-        return {**report, "phase": "days", "queued": len(batch),
+        return {**report, "phase": RepairPhase.DAYS, "queued": len(batch),
                 "left_to_queue": report["left_to_queue"] - len(batch)}
     if report["unfinished"] or report["failed"]:
         # A failed recalculation is not retried; it holds every board and
         # summary until it is investigated and retried by hand.
-        return {**report, "phase": "days", "queued": 0}
+        return {**report, "phase": RepairPhase.DAYS, "queued": 0}
     boards = boundary.queue_board_rebuilds(
         database, season_id, queue=True, repair=True)["boards"]
     with database.pool.connection() as connection, connection.transaction():
@@ -274,14 +352,14 @@ def season_repair(
             (start, start + SEASON_DURATION, season_id, revision),
         ).fetchone()[0]
     if rebuilding:
-        return {**report, "phase": "boards", "boards": boards,
+        return {**report, "phase": RepairPhase.BOARDS, "boards": boards,
                 "boards_rebuilding": int(rebuilding)}
     summaries = _refresh_summaries(
         database, season_id, revision,
-        int(receipt[4]) if receipt is not None else 0, max_jobs,
+        receipt.summaries_through if receipt is not None else 0, max_jobs,
         None if scope is None else players,
     )
-    return {**report, "phase": "summaries" if summaries else "done",
+    return {**report, "phase": RepairPhase.SUMMARIES if summaries else RepairPhase.DONE,
             "summaries_refreshed": summaries}
 
 
@@ -587,14 +665,7 @@ def recalculating_days(connection: Any, season_id: str) -> bool:
     Season's guard ``_queue_days`` takes until the caller's transaction ends,
     so no repair starts queueing days before then."""
     _guard_days(connection, season_id)
-    return any(
-        through > 0 and boards is None
-        for through, boards in connection.execute(
-            "SELECT queued_through_player_id, boards_queued_at FROM season_repairs"
-            " WHERE official_season_id = %s",
-            (season_id,),
-        )
-    )
+    return any(receipt.recalculating_days for receipt in _receipts(connection, season_id))
 
 
 def _guard_days(connection: Any, season_id: str) -> None:
@@ -678,6 +749,27 @@ class CampaignRefused(ValueError):
     """The campaign write is not allowed now."""
 
 
+class CampaignState(StrEnum):
+    """The states a campaign really takes, as ``domain_repair_campaigns.state``.
+
+    - ``registered``: ``register`` saved its list; it holds nothing, and
+      registering again replaces the list with what is still outstanding.
+    - ``active``: ``activate`` moved it on; it holds each listed Reset until
+      that Reset's item is done. Registering again is refused.
+
+    ``activate`` is the only transition, and it refuses until every stage
+    in ``REQUIRED_STAGES`` has a handler. None does yet, so no campaign
+    becomes active on this code. The schema also declares ``paused`` and
+    ``complete``, and items ``done`` and ``failed``: nothing moves a
+    campaign or item there. ``boundary_held`` still counts a ``paused``
+    campaign as holding, as the schema intends. A refused or failed
+    command writes nothing (one transaction); run it again.
+    """
+
+    REGISTERED = "registered"
+    ACTIVE = "active"
+
+
 def campaign_window(season_start: datetime) -> tuple[datetime, datetime]:
     """The Season's end and the moment its correction window closes."""
     end = season_start + SEASON_DURATION
@@ -704,6 +796,7 @@ def boundary_held(connection: Any, boundary_at: datetime) -> bool:
             JOIN domain_repair_campaigns AS campaign ON campaign.id = item.campaign_id
             WHERE item.kind = 'publication' AND item.boundary_at = %s
               AND item.state IN ('pending', 'failed')
+              -- 'paused' is declared by the schema; nothing enters it yet.
               AND campaign.state IN ('active', 'paused')
         )
         """,
@@ -1001,7 +1094,7 @@ def register(database: Database, season_id: str, *, now: datetime | None = None)
             " WHERE official_season_id = %s FOR UPDATE",
             (season_id,),
         ).fetchone()
-        if _text_value(state) != "registered":
+        if _text_value(state) != CampaignState.REGISTERED:
             raise CampaignRefused(f"season {season_id} campaign is {_text_value(state)}")
         connection.execute(
             "DELETE FROM domain_repair_items WHERE campaign_id = %s", (campaign_id,)
@@ -1039,14 +1132,14 @@ def activate(database: Database, season_id: str, *, now: datetime | None = None)
             " WHERE official_season_id = %s FOR UPDATE",
             (season_id,),
         ).fetchone()
-        if row is None or _text_value(row[1]) != "registered":
+        if row is None or _text_value(row[1]) != CampaignState.REGISTERED:
             raise CampaignRefused(f"season {season_id} has no registered campaign")
         if row[2] != target_versions():
             raise CampaignRefused("pinned versions changed; register again")
         connection.execute(
-            "UPDATE domain_repair_campaigns SET state = 'active',"
+            "UPDATE domain_repair_campaigns SET state = %s,"
             " updated_at = clock_timestamp() WHERE id = %s",
-            (row[0],),
+            (CampaignState.ACTIVE.value, row[0]),
         )
         _still_open(connection, season_id, deadline, now)
         return {"action": "activate", "season": season_id, "campaign_id": row[0]}

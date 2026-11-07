@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 import sys
+from enum import StrEnum
 from typing import Any
 
 RECOVERY_WINDOW_DAYS = 7
@@ -38,6 +39,55 @@ _RELEASED = "c.availability = 'retiring' AND c.retiring_since <= statement_times
 
 def _text(value: Any) -> str:
     return value.decode() if isinstance(value, bytes) else value
+
+
+class ArchiveCopy(StrEnum):
+    """Where one archived raw response is (``archive_copy``); the catalogue
+    names only ``verified``, ``retiring`` and ``expired``.
+
+    - ``kept``: verified and not yet due; a new sighting of the same bytes
+      moves its due time later.
+    - ``protected``: verified and due, but an unfinished upload of the same
+      bytes or unfinished processing or replay uses it (``_ACTIVE``); left
+      as it is until that work finishes.
+    - ``due``: verified, due and unused: the next run marks it retiring.
+    - ``held``: retiring, inside ``RECOVERY_HOLD``. New use is refused
+      (``clashlens_lock_archive_reference_work``) and its bytes are kept.
+    - ``released``: retiring with the hold over: the next run deletes its
+      bytes and marks it expired.
+    - ``expired``: bytes deleted.
+
+    Only ``retire_archive_objects``, the operator's command, moves it,
+    marking before deleting. A failed or unknown delete stays ``released``
+    and the next run retries it. The same bytes collected again after
+    retirement began are archived at a new location with its own
+    generation, never at the retiring one, so they start ``kept``.
+    """
+
+    KEPT = "kept"
+    PROTECTED = "protected"
+    DUE = "due"
+    HELD = "held"
+    RELEASED = "released"
+    EXPIRED = "expired"
+
+
+def archive_copy(connection: Any, reference: str) -> ArchiveCopy | None:
+    """Where the response archived at ``reference`` is; None if unknown."""
+    row = connection.execute(
+        f"""
+        SELECT CASE
+            WHEN c.availability = 'expired' THEN 'expired'
+            WHEN {_RELEASED} THEN 'released'
+            WHEN c.availability = 'retiring' THEN 'held'
+            WHEN NOT ({_DUE}) THEN 'kept'
+            WHEN {_ACTIVE} THEN 'protected'
+            ELSE 'due'
+        END
+        FROM archive_catalogue AS c WHERE c.archive_reference = %s
+        """, (RECOVERY_HOLD, reference),
+    ).fetchone()
+    return None if row is None else ArchiveCopy(_text(row[0]))
 
 
 def retire_archive_objects(
