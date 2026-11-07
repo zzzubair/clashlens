@@ -476,6 +476,61 @@ def test_player_screen_ready_current_day_preserves_partial_inferred_evidence(
             database.close()
 
 
+def test_player_page_sends_partial_coverage_for_an_uncertain_current_day(
+    database_url: str,
+) -> None:
+    # The website reads provenance coverage as complete, partial, missing or
+    # unknown and rejects the whole page for any other value.
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            seed_profile(database, "#2UU", 6000)
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE api_player_daily_logs
+                    SET ranked_day_end = %s,
+                        official_season_id = '1783918800',
+                        season_day_number = 25,
+                        confidence = 'uncertain'
+                    WHERE player_id = (
+                        SELECT id FROM players WHERE normalized_tag = '#2UU'
+                    )
+                    """,
+                    (datetime(2026, 8, 7, 5, 0, tzinfo=UTC),),
+                )
+                connection.execute(
+                    """
+                    UPDATE player_profile_versions
+                    SET current_league_season_id = '1783918800',
+                        previous_league_season_id = '1783314000',
+                        profile_json = '{"currentLeagueSeasonId": 1783918800,
+                                         "previousLeagueSeasonId": 1783314000}'::jsonb
+                    WHERE player_id = (
+                        SELECT id FROM players WHERE normalized_tag = '#2UU'
+                    )
+                    """
+                )
+                connection.commit()
+            seed_league_history(database, "#2UU", "1781499600")
+
+            player = api_players.get_player_page(
+                database, "#2UU", now=NOW, freshness_seconds=900
+            )
+
+            assert player is not None
+            [current_day] = player["screen_ready"]["days"]
+            assert player["screen_ready"]["current_day_start"] == (
+                current_day["ranked_day_start"]
+            )
+            assert current_day["completeness"]["state"] == "uncertain"
+            assert player["screen_ready"]["provenance"]["coverage"] == "partial"
+        finally:
+            database.close()
+
+
 def test_player_page_withholds_season_days_when_official_history_disagrees(
     database_url: str,
 ) -> None:
