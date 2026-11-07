@@ -43,7 +43,7 @@ from bot.commands import Commands
 from bot.discord_app import DiscordMessenger
 from bot.replies import PLAYER_COLOURS, Reply, Site
 from bot.store import Store
-from clashlens import api_accounts, api_discord_alerts
+from clashlens import api_discord_alerts, provider_membership
 from clashlens.api_db import ApiDatabase, RequestBinding
 
 SITE = Site("https://clashlens.test")
@@ -461,7 +461,7 @@ def test_turning_alerts_on_confirms_once_and_reconnecting_tries_again(
             still_on = asyncio.run(loop.tick())
             # Attacked, then Discord connected again before the bot looks.
             _defend(connection_info, player)
-            reconnected = api_accounts.link_provider(
+            reconnected = provider_membership.link_provider(
                 api,
                 RequestBinding(
                     request_id=str(uuid4()),

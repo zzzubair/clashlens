@@ -15,8 +15,9 @@ from test_private_api import NOW_SECONDS, TS_CURRENT, signed_headers
 from clashlens import analytics, api_leaderboard, api_players
 from clashlens.analytics import tie_order_key
 from clashlens.api import create_app
-from clashlens.api_db import ApiDatabase, SharedCopy
+from clashlens.api_db import ApiDatabase
 from clashlens.domain import ranked_day_for
+from clashlens.shared_copy import SharedCopy
 
 
 @pytest.fixture()

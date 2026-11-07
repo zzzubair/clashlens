@@ -26,7 +26,6 @@ from uuid import uuid4
 import uvicorn
 
 from . import (
-    api_accounts,
     api_verification,
     battle_day_repair,
     collector_http,
@@ -34,6 +33,7 @@ from . import (
     league_history_refresh,
     population,
     promotion_candidates,
+    provider_membership,
 )
 from . import db as _db
 from .api import ClashKingClient, create_app
@@ -1427,7 +1427,7 @@ def _run_recover_discord(arguments: argparse.Namespace) -> int:
         if classification.outcome != VerificationOutcome.VERIFIED:
             print(json.dumps({"status": classification.outcome.value}))
             return 1
-        status, detail = api_accounts.support_attach_discord_identity(
+        status, detail = provider_membership.support_attach_discord_identity(
             database,
             account_public_id=arguments.target_account_public_id,
             normalized_player_tag=normalized_tag,
