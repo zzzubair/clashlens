@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import errno
 import hashlib
@@ -9,7 +10,9 @@ import json
 import os
 import threading
 import time
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -397,8 +400,14 @@ def test_archive_failure_after_lost_renewal_does_not_fail_stale_claim(
 
         @staticmethod
         def check_marker_health() -> str:
+            return "ready"
+
+        @staticmethod
+        def write_immutable(
+            _body: bytes, _digest: str, *, generation: str | None = None
+        ) -> str:
             assert lease_lost.wait(timeout=1)
-            return "degraded"
+            raise ArchiveReadError("archive_unavailable", "write timed out", retryable=True)
 
     uploader = _uploader(spool, store, Archive())
 
@@ -998,9 +1007,12 @@ class _UploadArchive(_FixtureS3Handler):
         self.end_headers()
 
 
-def test_the_uploads_process_archives_saved_responses(
-    database_url: str, tmp_path: Path
-) -> None:
+@contextmanager
+def _saved_responses(
+    database_url: str, tmp_path: Path, handler: type[_UploadArchive]
+) -> Iterator[tuple[str, argparse.Namespace, list[str]]]:
+    """Saved responses waiting for upload, and the collector's settings for an
+    archive served by ``handler`` that holds the archive's marker."""
     import psycopg
     from domain_test_support import domain_database
     from test_spool_full_recovery_postgres import TAGS, _save
@@ -1011,11 +1023,7 @@ def test_the_uploads_process_archives_saved_responses(
 
     marker = b'{"instance":"fixture-instance"}'
     marker_hash = hashlib.sha256(marker).hexdigest()
-    handler = type(
-        "UploadArchive",
-        (_UploadArchive,),
-        {"objects": {"clashlens/archive-instance.json": marker}, "get_count": 0},
-    )
+    handler.objects = {"clashlens/archive-instance.json": marker}
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(
         target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
@@ -1055,27 +1063,45 @@ def test_the_uploads_process_archives_saved_responses(
                     f"--archive-max-body-bytes={64 << 10}",
                 ]
             )
-            process = UploaderProcess(arguments)
-            spool_store = _Spool()
-            collector = _collector(spool_store, _Store(spool_store), _Client(spool_store))
-
-            def uploaded() -> bool:
-                return process.report.get("outcomes", {}).get("uploaded") == len(TAGS)
-
-            asyncio.run(_run_until(process, collector, uploaded))
-            with psycopg.connect(connection_info) as connection:
-                rows = connection.execute(
-                    "SELECT response_hash, state, archive_reference"
-                    " FROM collector_response_uploads ORDER BY response_hash"
-                ).fetchall()
+            yield connection_info, arguments, digests
     finally:
         server.shutdown()
         thread.join(timeout=2)
         server.server_close()
 
+
+def _uploads(connection_info: str) -> list[tuple[str, str, int, str | None]]:
+    import psycopg
+
+    with psycopg.connect(connection_info) as connection:
+        return connection.execute(
+            "SELECT response_hash, state, attempt_count, archive_reference"
+            " FROM collector_response_uploads ORDER BY response_hash"
+        ).fetchall()
+
+
+def test_the_uploads_process_archives_saved_responses(
+    database_url: str, tmp_path: Path
+) -> None:
+    handler = type("UploadArchive", (_UploadArchive,), {"get_count": 0})
+    with _saved_responses(database_url, tmp_path, handler) as (
+        connection_info,
+        arguments,
+        digests,
+    ):
+        process = UploaderProcess(arguments)
+        spool_store = _Spool()
+        collector = _collector(spool_store, _Store(spool_store), _Client(spool_store))
+
+        def uploaded() -> bool:
+            return process.report.get("outcomes", {}).get("uploaded") == len(digests)
+
+        asyncio.run(_run_until(process, collector, uploaded))
+        rows = _uploads(connection_info)
+
     locations = {digest: f"sha256/{digest[:2]}/{digest}" for digest in digests}
     assert rows == [
-        (digest, "complete", f"s3://evidence/{locations[digest]}")
+        (digest, "complete", 1, f"s3://evidence/{locations[digest]}")
         for digest in sorted(digests)
     ]
     assert {key for key in handler.objects if key.startswith("sha256/")} == set(
@@ -1084,5 +1110,100 @@ def test_the_uploads_process_archives_saved_responses(
     assert collector.archive_health == "ready"
     assert process.restarts == 0
     lines = process.metric_lines()
-    assert f'clashlens_uploader_uploads_total{{outcome="uploaded"}} {len(TAGS)}' in lines
-    assert f'clashlens_uploader_step_seconds_count{{step="archive_write"}} {len(TAGS)}' in lines
+    assert f'clashlens_uploader_uploads_total{{outcome="uploaded"}} {len(digests)}' in lines
+    assert (
+        f'clashlens_uploader_step_seconds_count{{step="archive_write"}} {len(digests)}'
+        in lines
+    )
+
+
+class _MarkerOutage(_UploadArchive):
+    """The test archive, answering 503 for its marker while ``down``."""
+
+    down = True
+    marker_gets = 0
+
+    def do_GET(self) -> None:
+        if self.path.split("?", 1)[0].endswith("/clashlens/archive-instance.json"):
+            type(self).marker_gets += 1
+            if type(self).down:
+                self.send_response(503)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+        super().do_GET()
+
+
+def test_uploads_wait_out_an_archive_outage_without_claiming_responses(
+    database_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # On 4-5 November 2026 the unavailable-archive count rose by 24,650 over
+    # three short interruptions. One failed marker check was reused for five
+    # minutes, and each of 16 uploaders kept claiming saved responses only to
+    # fail them. Now no response is claimed while the marker cannot be
+    # checked, one shared re-check runs every MARKER_RETRY_SECONDS, and
+    # uploads resume once it passes.
+    from clashlens import archive as archive_module
+    from clashlens import cli
+    from clashlens.collector_db import CollectorDatabase
+
+    monkeypatch.setattr(archive_module, "MARKER_RETRY_SECONDS", 0.5)
+    handler = type("MarkerOutage", (_MarkerOutage,), {"get_count": 0})
+    outage_seconds = 3.0
+    with _saved_responses(database_url, tmp_path, handler) as (
+        connection_info,
+        arguments,
+        digests,
+    ):
+        database = CollectorDatabase(
+            connection_info, max_size=uploader_module.DATABASE_CONNECTIONS
+        )
+        reader = cli._archive(
+            arguments,
+            pool_size=uploader_module.UPLOADS_AT_ONCE,
+            validate_archive_instance=False,
+        )
+        uploader = Uploader(
+            database=database,
+            spool=reader.spool,
+            archive=reader.archive,
+            archive_instance_id="fixture-instance",
+        )
+
+        async def scenario() -> tuple[int, list[tuple[str, str, int, str | None]]]:
+            stop = asyncio.Event()
+            task = asyncio.create_task(uploader.run(stop))
+            try:
+                await asyncio.sleep(outage_seconds)
+                during = (handler.marker_gets, await asyncio.to_thread(_uploads, connection_info))
+                handler.down = False
+                async with asyncio.timeout(30):
+                    while uploader.outcomes.get("uploaded", 0) < len(digests):
+                        await asyncio.sleep(0.05)
+            finally:
+                stop.set()
+                await asyncio.wait_for(task, timeout=30)
+            return during
+
+        try:
+            marker_gets, during = asyncio.run(scenario())
+            after = _uploads(connection_info)
+        finally:
+            reader.spool.close()
+            database.close()
+
+    # Not one saved response was claimed or failed during the outage.
+    assert [(row[1], row[2]) for row in during] == [("pending", 0)] * len(digests)
+    # One shared re-check each half second, not one per uploader.
+    assert 2 <= marker_gets <= outage_seconds / 0.5 + 2
+    assert [(row[1], row[2]) for row in after] == [("complete", 1)] * len(digests)
+    assert "archive_unavailable" not in uploader.outcomes
+    failure = uploader.archive_failure
+    assert failure is not None and isinstance(failure.pop("at"), int)
+    assert failure == {
+        "stage": "marker_request",
+        "error_type": "InvalidResponseError",
+        "status": 503,
+        "category": "archive_unavailable",
+    }
+    assert uploader.archive_health == "ready"

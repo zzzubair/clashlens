@@ -33,7 +33,7 @@ import psycopg
 from psycopg_pool import PoolTimeout
 
 from . import collector_uploads
-from .archive import ArchiveReadError, immutable_reference
+from .archive import ArchiveReadError, failure_evidence, immutable_reference
 from .collector import (
     _cancel_task,
     _drain_awaitable,
@@ -88,6 +88,8 @@ class Uploader:
         self.outcomes: dict[str, int] = {}
         self.archive_health = "unconfigured" if archive is None else "unknown"
         self.spool_io_failed = False
+        # The latest archive failure's failure_evidence, kept after recovery.
+        self.archive_failure: dict[str, Any] | None = None
         self._archive_terminal = False
         self._archive_identity_validated = False
         self._next_release = 0.0
@@ -97,6 +99,7 @@ class Uploader:
         return {
             "archive_health": self.archive_health,
             "spool_io_failed": self.spool_io_failed,
+            "archive_failure": self.archive_failure,
             "outcomes": dict(self.outcomes),
             "stages": self.stages.snapshot(),
         }
@@ -149,6 +152,18 @@ class Uploader:
             await self._database_call(
                 "release", collector_uploads.release_expired_uploads, self.database
             )
+        # While the archive's marker cannot be checked nothing is claimed. Each
+        # owner waits for the one shared re-check instead of claiming saved
+        # responses only to fail them: one failed check used to fail every
+        # claim for five minutes, each failed response due again five seconds
+        # later.
+        marker_health = await self._timed(
+            "marker_check", self.archive.check_marker_health
+        )
+        if marker_health == "degraded":
+            self.archive_health = "degraded"
+            self.archive_failure = getattr(self.archive, "marker_failure", None)
+            return False
         claimed_at = time.monotonic()
         claim = await self._database_call(
             "claim",
@@ -170,27 +185,22 @@ class Uploader:
                 if not await self._database_call(
                     "validate", self.database.validate_archive_instance, config
                 ):
-                    raise ArchiveReadError(
+                    error = ArchiveReadError(
                         "archive_configuration_error",
                         "archive configuration contradicts PostgreSQL",
                         retryable=False,
                     )
+                    error.stage = "validate"
+                    raise error
                 self._archive_identity_validated = True
-            marker_health = await self._timed(
-                "marker_check", self.archive.check_marker_health
-            )
             if marker_health == "terminal":
-                raise ArchiveReadError(
+                error = ArchiveReadError(
                     "archive_configuration_error",
                     "archive marker validation failed",
                     retryable=False,
                 )
-            if marker_health == "degraded":
-                raise ArchiveReadError(
-                    "archive_unavailable",
-                    "archive marker could not be checked",
-                    retryable=True,
-                )
+                error.stage = "marker_check"
+                raise error
             try:
                 body = await self._timed(
                     "spool_read", self.spool.verify, claim.response_hash, claim.byte_size
@@ -252,6 +262,7 @@ class Uploader:
                 self._count("upload_lease_lost")
                 return True
             self._count(error.category)
+            self.archive_failure = failure_evidence(error.stage or "upload", error)
             self._archive_terminal = error.category in _GLOBAL_ARCHIVE_FAILURES
             self.archive_health = "terminal" if self._archive_terminal else "degraded"
         except collector_uploads.UploadLeaseLost:
@@ -285,11 +296,13 @@ class Uploader:
                 and claim.unresolved_write is None
                 and claim.attempt_count > 1
             ):
-                raise ArchiveReadError(
+                missing = ArchiveReadError(
                     "spool_missing",
                     "pending upload has no local raw response and no archived copy",
                     retryable=False,
-                ) from error
+                )
+                missing.stage = error.stage
+                raise missing from error
             raise
         self._count("archived_copy_found")
         return reference
@@ -360,6 +373,9 @@ class Uploader:
         started = time.monotonic()
         try:
             return await _drain_to_thread(operation, *args, **kwargs)
+        except ArchiveReadError as error:
+            error.stage = error.stage or step
+            raise
         finally:
             self.stages.record(f"upload_{step}", time.monotonic() - started)
 

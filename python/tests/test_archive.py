@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from typing import ClassVar
 
 import pytest
-from minio.error import S3Error
+from minio.error import S3Error, ServerError
 
 from clashlens import archive as archive_module
 from clashlens.archive import (
@@ -555,3 +555,92 @@ def test_the_first_marker_check_fetches_the_marker_just_after_boot(
 
     assert reader.check_marker_health() == "terminal"
     assert fetched == ["markers/instance"]
+
+
+def test_a_failed_marker_check_is_tried_again_soon_and_keeps_what_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # One failed check was reused for five minutes. A check that may pass is
+    # now asked again after MARKER_RETRY_SECONDS; a passed one is still reused
+    # for MARKER_CHECK_SECONDS.
+    clock = [1_000.0]
+    monkeypatch.setattr(archive_module.time, "monotonic", lambda: clock[0])
+    marker = b"this archive's marker"
+    reader = S3ArchiveReader(
+        endpoint="127.0.0.1:9",
+        bucket="evidence",
+        access_key="test",
+        secret_key="test",
+        secure=False,
+        allow_insecure_test_origin=True,
+        instance_id="fixture-instance",
+        marker_key="markers/instance",
+        marker_hash=hashlib.sha256(marker).hexdigest(),
+        marker_payload_version="1",
+    )
+    answers: list[Exception | None] = [
+        ServerError("server failed at http://secret.example/evidence?key=x", 503),
+        None,
+    ]
+
+    class Response:
+        def read(self, _limit: int) -> bytes:
+            return marker
+
+        def close(self) -> None:
+            pass
+
+        def release_conn(self) -> None:
+            pass
+
+    class Client:
+        def get_object(self, _bucket: str, _key: str) -> Response:
+            answer = answers.pop(0)
+            if answer is not None:
+                # A failure that takes longer than the retry wait to arrive.
+                clock[0] += archive_module.MARKER_RETRY_SECONDS + 5
+                raise answer
+            return Response()
+
+    reader.client = Client()
+
+    assert reader.check_marker_health() == "degraded"
+    # Callers that waited out the slow check use its answer.
+    assert reader.check_marker_health() == "degraded"
+    clock[0] += archive_module.MARKER_RETRY_SECONDS - 0.5
+    assert reader.check_marker_health() == "degraded"
+    assert reader.remote_attempts["marker"] == 1
+    clock[0] += 1
+    assert reader.check_marker_health() == "ready"
+    clock[0] += archive_module.MARKER_CHECK_SECONDS - 1
+    assert reader.check_marker_health() == "ready"
+    assert reader.remote_attempts["marker"] == 2
+    failure = reader.marker_failure
+    assert failure is not None and isinstance(failure.pop("at"), int)
+    # The error's type, step and status, never its message.
+    assert failure == {
+        "stage": "marker_request",
+        "error_type": "ServerError",
+        "status": 503,
+        "category": "archive_unavailable",
+    }
+
+
+def test_failure_evidence_keeps_the_answer_under_an_archive_error() -> None:
+    response = SimpleNamespace(status=403, headers={}, data=b"")
+    denied = S3Error(
+        response, "AccessDenied", "denied for secret-key", "/evidence/x", "r", "h"
+    )
+    error = ArchiveReadError("archive_unavailable", "write failed", retryable=True)
+    error.__cause__ = denied
+
+    evidence = archive_module.failure_evidence("archive_write", error)
+
+    del evidence["at"]
+    assert evidence == {
+        "stage": "archive_write",
+        "category": "archive_unavailable",
+        "error_type": "S3Error",
+        "code": "AccessDenied",
+        "status": 403,
+    }

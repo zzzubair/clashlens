@@ -14,12 +14,18 @@ from urllib.parse import urlsplit
 import certifi
 import urllib3
 from minio import Minio
-from minio.error import S3Error
+from minio.error import InvalidResponseError, S3Error, ServerError
 
 from .spool import Spool, SpoolError
 
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _GENERATION_RE = re.compile(r"^[0-9a-f]{32}$")
+_S3_CODE_RE = re.compile(r"^[A-Za-z0-9.]{1,64}$")
+# A marker check's result is reused this long.
+MARKER_CHECK_SECONDS = 300.0
+# A marker check that failed for a reason that may pass is tried again this
+# soon: one caller asks the archive while the others wait for its answer.
+MARKER_RETRY_SECONDS = 15.0
 DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024
 DEFAULT_CONNECT_TIMEOUT_SECONDS = 5.0
 DEFAULT_READ_TIMEOUT_SECONDS = 15.0
@@ -102,6 +108,40 @@ class ArchiveReadError(RuntimeError):
         super().__init__(f"{category}: {message}")
         self.category = category
         self.retryable = retryable
+        # The step that was running, when the caller knows it.
+        self.stage: str | None = None
+
+
+def failure_evidence(stage: str, error: BaseException) -> dict[str, Any]:
+    """What failed and where, without messages that can hold URLs or keys.
+
+    Keeps the step, the failure category, the type of the error underneath
+    (and of its reason, for a failed connection), and the archive's HTTP
+    status and S3 error code when it answered.
+    """
+    evidence: dict[str, Any] = {"stage": stage, "at": int(time.time())}
+    cause: BaseException = error
+    if isinstance(error, ArchiveReadError):
+        evidence["category"] = error.category
+    while isinstance(cause, ArchiveReadError) and cause.__cause__ is not None:
+        cause = cause.__cause__
+    evidence["error_type"] = type(cause).__name__
+    reason = getattr(cause, "reason", None)
+    if isinstance(reason, BaseException):
+        evidence["reason_type"] = type(reason).__name__
+    status = None
+    if isinstance(cause, S3Error):
+        status = getattr(cause.response, "status", None)
+        code = cause.code
+        if isinstance(code, str):
+            evidence["code"] = code if _S3_CODE_RE.fullmatch(code) else "unrecognized"
+    elif isinstance(cause, ServerError):
+        status = cause.status_code
+    elif isinstance(cause, InvalidResponseError):
+        status = getattr(cause, "_code", None)
+    if isinstance(status, int):
+        evidence["status"] = status
+    return evidence
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +247,8 @@ class S3ArchiveReader:
         # Held while a check runs, so no caller reads its result unfinished.
         self._marker_lock = threading.Lock()
         self._marker_error: ArchiveReadError | None = None
+        # The latest failed marker check's failure_evidence, kept after recovery.
+        self.marker_failure: dict[str, Any] | None = None
         self.remote_attempts = {"get": 0, "bucket": 0, "marker": 0}
         self.secure = secure
         self.max_body_bytes = max_body_bytes
@@ -280,25 +322,34 @@ class S3ArchiveReader:
             return "unconfigured"
         with self._marker_lock:
             now = time.monotonic()
-            if now - self._marker_checked_at < 300:
+            failed = self._marker_error
+            reuse_for = MARKER_RETRY_SECONDS if failed and failed.retryable else MARKER_CHECK_SECONDS
+            if now - self._marker_checked_at < reuse_for:
                 return "terminal" if self._marker_error and not self._marker_error.retryable else ("degraded" if self._marker_error else "ready")
-            self._marker_checked_at = now
+            stage = "marker_request"
             try:
                 self.remote_attempts["marker"] += 1
                 response = self.client.get_object(self.bucket, config.marker_key)
+                stage = "marker_body"
                 try:
                     body = response.read(1_048_577)
                 finally:
                     response.close()
                     response.release_conn()
+                stage = "marker_hash"
                 if len(body) > 1_048_576 or hashlib.sha256(body).hexdigest() != config.marker_hash:
                     raise ArchiveReadError("archive_marker_mismatch", "archive marker does not match its configured hash", retryable=False)
                 self._marker_error = None
             except ArchiveReadError as error:
                 self._marker_error = error
+                self.marker_failure = failure_evidence(stage, error)
             except Exception as error:  # noqa: BLE001 - marker health never gates local duplicates
                 self._marker_error = ArchiveReadError("archive_unavailable", "archive marker request failed", retryable=True)
+                self.marker_failure = {**failure_evidence(stage, error), "category": "archive_unavailable"}
                 del error
+            # Counted from the answer: a failure that took a whole timeout is
+            # still reused before the callers waiting on the lock ask again.
+            self._marker_checked_at = time.monotonic()
             return "terminal" if self._marker_error and not self._marker_error.retryable else ("degraded" if self._marker_error else "ready")
 
     def read_verified(
