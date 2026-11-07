@@ -7,6 +7,7 @@ from domain_test_support import domain_database
 from clashlens import boundary, boundary_publication, past_reset_pacing
 from clashlens.collector_metrics import health_metrics
 from clashlens.db import Database
+from clashlens.domain import ranked_day_for
 
 PAST = datetime(2026, 8, 4, 5, tzinfo=UTC)
 LIVE = PAST + timedelta(days=1)
@@ -245,6 +246,86 @@ def test_past_reset_correction_waits_out_the_quiet_window(
                     (PAST,),
                 ).fetchone()[0]
                 assert sorted(affected) == ["army", "snapshot"]
+        finally:
+            database.close()
+
+
+def _queue_boards(database, repair: bool) -> dict[str, str]:
+    """Each board's correction, as ``--boards queue`` or the Season repair's
+    boards step queues it; the fixture's boards order ties by an old rule."""
+    season_id = str(int(ranked_day_for(PAST).season_start.timestamp()))
+    report = boundary.queue_board_rebuilds(database, season_id, queue=True, repair=repair)
+    return {board["boundary_at"]: board["correction"] for board in report["boards"]}
+
+
+def test_season_repair_correction_skips_the_six_hours_and_only_it(
+    database_url: str, monkeypatch
+) -> None:
+    """A past board rebuilt at noon is listed at 13:00. ``--boards queue``
+    leaves its correction waiting; the Season repair's boards step, finding
+    it, starts it at once. A correction after that rebuild waits 6 hours."""
+    clock = Clock(monkeypatch, NOON + timedelta(hours=1))
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = Database(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = _published_resets(database, connection)
+                _created(connection, PAST, NOON)
+                connection.commit()
+                assert _queue_boards(database, repair=False)[PAST.isoformat()] == "queued"
+                boundary_publication.reevaluate_boundary_publications(database)
+                assert _latest(connection, PAST)[1] == 1
+
+                assert _queue_boards(database, repair=True)[PAST.isoformat()] == "already_queued"
+                boundary_publication.reevaluate_boundary_publications(database)
+                rebuilt_id, rebuilt, _version_id = _latest(connection, PAST)
+                assert rebuilt == 2
+
+                _publish(database, connection, rebuilt_id, PAST)
+                _created(connection, PAST, NOON + timedelta(hours=1))
+                clock.now = NOON + timedelta(hours=2)
+                latest_version = _record(database, connection, player_id, PAST, 2)
+                connection.commit()
+                boundary_publication.reevaluate_boundary_publications(database)
+                assert _latest(connection, PAST)[1] == 2
+
+                clock.now = NOON + timedelta(hours=7)
+                boundary_publication.reevaluate_boundary_publications(database)
+                assert _latest(connection, PAST)[1:] == (3, latest_version)
+        finally:
+            database.close()
+
+
+def test_season_repair_correction_still_keeps_the_quiet_window(
+    database_url: str, monkeypatch
+) -> None:
+    """Marked at 05:30, a past board rebuilt at 03:00 starts at 07:00, not at
+    09:00; the newest board, rebuilt at 05:20, waits its hour as any
+    correction does in the window, to 06:20."""
+    clock = Clock(monkeypatch, datetime(2026, 8, 11, 5, 30, tzinfo=UTC))
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = Database(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                _published_resets(database, connection)
+                _created(connection, PAST, datetime(2026, 8, 11, 3, tzinfo=UTC))
+                _created(connection, LIVE, datetime(2026, 8, 11, 5, 20, tzinfo=UTC))
+                connection.commit()
+                assert set(_queue_boards(database, repair=True).values()) == {"queued"}
+                boundary_publication.reevaluate_boundary_publications(database)
+                assert (_latest(connection, PAST)[1], _latest(connection, LIVE)[1]) == (1, 1)
+
+                clock.now = datetime(2026, 8, 11, 6, 19, tzinfo=UTC)
+                boundary_publication.reevaluate_boundary_publications(database)
+                assert (_latest(connection, PAST)[1], _latest(connection, LIVE)[1]) == (1, 1)
+
+                clock.now = datetime(2026, 8, 11, 6, 20, tzinfo=UTC)
+                boundary_publication.reevaluate_boundary_publications(database)
+                assert (_latest(connection, PAST)[1], _latest(connection, LIVE)[1]) == (1, 2)
+
+                clock.now = datetime(2026, 8, 11, 7, tzinfo=UTC)
+                boundary_publication.reevaluate_boundary_publications(database)
+                assert _latest(connection, PAST)[1] == 2
         finally:
             database.close()
 

@@ -21,7 +21,8 @@ how a saved day or board comes out, then run it once:
   before now ends;
   then, once every such job has finished and none has failed, every Reset
   board of the Season whose
-  entries the rules now change (``boundary.queue_board_rebuilds``); then,
+  entries the rules now change (``boundary.queue_board_rebuilds``), started
+  without the wait between a board's rebuilds outside the quiet window; then,
   once every board correction of the Season requested by the time that step
   began has finished, every saved Season summary stored again from its
   days. Run it again until it reports ``phase`` ``done``.
@@ -244,7 +245,8 @@ def season_repair(
         # A failed recalculation is not retried; it holds every board and
         # summary until it is investigated and retried by hand.
         return {**report, "phase": "days", "queued": 0}
-    boards = boundary.queue_board_rebuilds(database, season_id, queue=True)["boards"]
+    boards = boundary.queue_board_rebuilds(
+        database, season_id, queue=True, repair=True)["boards"]
     with database.pool.connection() as connection, connection.transaction():
         connection.execute(
             """

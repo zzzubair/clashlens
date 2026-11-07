@@ -803,7 +803,12 @@ every such board in one run, at most one per Reset (28 per Season), at the
 normal publication priority, not backfill, until every board correction of
 the Season requested by the time this step began has finished
 (`boards_rebuilding`; one requested since, as late battles reach a Live board
-or pacing reaches a past one, runs as ordinary work and is not waited for);
+or pacing reaches a past one, runs as ordinary work and is not waited for).
+Each correction this step queues, or finds already waiting for a listed
+board, starts at the worker's next check without the 6 hours (1 hour on the
+newest Reset) a board otherwise waits after its last rebuild, but never
+04:30–07:00 UTC, when it waits as any other; every other correction keeps
+its waits;
 then `summaries`, storing each saved Season summary
 again from its days, since a summary's final rank reads the Season's last
 board, then each one that still differs from its days, as when a board
