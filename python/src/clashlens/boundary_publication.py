@@ -32,6 +32,7 @@ from .past_reset_pacing import (
     correction_waits,
     operator_correction_waits,
 )
+from .publication_states import CorrectionState, move_correction, pending_inputs_settled
 
 
 def _positive_int_input(values: dict[str, Any], name: str) -> int:
@@ -354,40 +355,10 @@ def _maybe_emit_boundary_signal(
             ).fetchone()
             assert source is not None
             pending_inputs = queued[2] if isinstance(queued[2], list) else []
-            pending_ready = True
-            for pending in pending_inputs:
-                pending_version = (
-                    pending.get("ranked_day_version_id")
-                    if isinstance(pending, dict)
-                    else None
-                )
-                if pending_version is None:
-                    continue
-                pending_state = connection.execute(
-                    "SELECT state FROM ranked_day_versions WHERE id = %s",
-                    (pending_version,),
-                ).fetchone()
-                if pending_state is None or _text_value(pending_state[0]) not in {
-                    "Complete",
-                    "Partial",
-                    "Failed",
-                    "Missing",
-                    "Unavailable",
-                    "Inconsistent",
-                    "Malformed",
-                }:
-                    pending_ready = False
-                    break
-            if not pending_ready:
-                connection.execute(
-                    "UPDATE boundary_publication_corrections SET state = 'pending_inputs' WHERE id = %s",
-                    (queued[0],),
-                )
+            if not pending_inputs_settled(connection, pending_inputs):
+                move_correction(connection, queued[0], CorrectionState.PENDING_INPUTS)
                 return
-            connection.execute(
-                "UPDATE boundary_publication_corrections SET state = 'activation' WHERE id = %s",
-                (queued[0],),
-            )
+            move_correction(connection, queued[0], CorrectionState.ACTIVATION)
             affected = [_text_value(value) for value in (queued[1] or [])]
             new = connection.execute(
                 """
@@ -421,10 +392,7 @@ def _maybe_emit_boundary_signal(
             ).fetchone()
             assert new is not None
             new_id = int(new[0])
-            connection.execute(
-                "UPDATE boundary_publication_corrections SET state = 'inheritance' WHERE id = %s",
-                (queued[0],),
-            )
+            move_correction(connection, queued[0], CorrectionState.INHERITANCE)
             boundary_members.copy_members(database, connection, new_id, generation_id, row[0])
             for pending in pending_inputs:
                 pending_version = (

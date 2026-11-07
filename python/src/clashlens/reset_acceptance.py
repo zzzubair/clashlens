@@ -18,9 +18,40 @@ archive. Rows are never deleted: one a day, under 1 KB each.
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
 
 from psycopg.types.json import Jsonb
+
+
+class Milestone(StrEnum):
+    """A stage a Reset's record notes, by the column holding when it was
+    first seen. MEMBERSHIP_CAPTURED: the sweep's members were saved.
+    COLLECTION_FINISHED: every member's Reset reading was collected or gave
+    up. PROOF_PROCESSED: every response those readings saved was processed.
+    INPUTS_FROZEN: the first board's inputs froze. PUBLISHED: that board was
+    saved as published. READABLE: the website first showed a board of it.
+
+    They are independent facts, not one path: a board can publish while
+    readings still wait for the archive. Each is set once and never cleared
+    (``_refresh_one``); a record is checked again until it is ``settled``.
+    """
+
+    MEMBERSHIP_CAPTURED = "membership_captured_at"
+    COLLECTION_FINISHED = "collection_finished_at"
+    PROOF_PROCESSED = "proof_processed_at"
+    INPUTS_FROZEN = "inputs_frozen_at"
+    PUBLISHED = "published_at"
+    READABLE = "readable_at"
+
+
+def reached(record: dict[str, Any]) -> frozenset[Milestone]:
+    return frozenset(milestone for milestone in Milestone if record[milestone] is not None)
+
+
+def settled(record: dict[str, Any]) -> bool:
+    """Whether nothing the record still checks for can change."""
+    return {Milestone.PROOF_PROCESSED, Milestone.READABLE} <= reached(record)
 
 
 def refresh(
@@ -95,9 +126,9 @@ def _refresh_one(
         if record[column] != value:
             changes[column] = value
     collection_done = total > 0 and collected + not_collected == total
-    if record["collection_finished_at"] is None and collection_done:
-        changes["collection_finished_at"] = finished_at
-    if record["proof_processed_at"] is None and collection_done:
+    if collection_done:
+        _first_seen(record, changes, Milestone.COLLECTION_FINISHED, finished_at)
+    if record[Milestone.PROOF_PROCESSED] is None and collection_done:
         # Every response a Reset item saved counts, even when a later request
         # of that item failed or a newer response replaced it. Unchanged
         # readings reuse a response saved before the Reset, whose finished job
@@ -133,8 +164,8 @@ def _refresh_one(
             """,
             (boundary_at, sweep_id),
         ).fetchone()
-        if pending == 0 and gone == 0 and processed_at is not None:
-            changes["proof_processed_at"] = processed_at
+        if pending == 0 and gone == 0:
+            _first_seen(record, changes, Milestone.PROOF_PROCESSED, processed_at)
     frozen_at, published_at, manifest_id = connection.execute(
         """
         SELECT manifest.frozen_at, snapshot.published_at, manifest.id
@@ -149,12 +180,9 @@ def _refresh_one(
         """,
         (boundary_at,),
     ).fetchone() or (None, None, None)
-    if record["inputs_frozen_at"] is None and frozen_at is not None:
-        changes["inputs_frozen_at"] = frozen_at
-    if record["published_at"] is None and published_at is not None:
-        changes["published_at"] = published_at
-    if record["readable_at"] is None and readable_at is not None:
-        changes["readable_at"] = readable_at
+    _first_seen(record, changes, Milestone.INPUTS_FROZEN, frozen_at)
+    _first_seen(record, changes, Milestone.PUBLISHED, published_at)
+    _first_seen(record, changes, Milestone.READABLE, readable_at)
     if record["board_inputs"] is None and manifest_id is not None:
         changes["board_inputs"] = Jsonb(
             _counts(
@@ -179,6 +207,13 @@ def _refresh_one(
         (*changes.values(), boundary_at),
     )
     return _record(connection, boundary_at)
+
+
+def _first_seen(
+    record: dict[str, Any], changes: dict[str, Any], milestone: Milestone, at: datetime | None
+) -> None:
+    if record[milestone] is None and at is not None:
+        changes[milestone.value] = at
 
 
 def _record(connection: Any, boundary_at: datetime) -> dict[str, Any]:

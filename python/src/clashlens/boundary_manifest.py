@@ -44,6 +44,7 @@ from .domain import (
 )
 from .league_week import week_start
 from .newest_profiles import ACCEPTED_VERSIONS, ANY_VERSIONS, NEWEST_PROFILES_SQL
+from .publication_states import ManifestStage
 from .reconciliation import DISPUTED_BATTLE_REASONS
 
 _STATUS_CLASSIFICATIONS = {
@@ -80,7 +81,8 @@ def freeze_boundary_manifest(
     generation_id: int,
     artifact_kind: str,
 ) -> tuple[int, str] | None:
-    """Freeze one sorted coordinator input before creating its job.
+    """Freeze one sorted coordinator input before creating its job, as a
+    ``publication_states.ManifestStage`` says.
 
     The row and digest are persisted together. Once inserted, the manifest
     trigger makes both the population and its selected inputs immutable;
@@ -96,7 +98,7 @@ def freeze_boundary_manifest(
         """,
         (generation_id, artifact_kind),
     ).fetchone()
-    if existing is not None:
+    if existing is not None:  # ManifestStage.REUSED
         return int(existing[0]), _text_value(existing[1])
     generation = connection.execute(
         """
@@ -128,7 +130,7 @@ def freeze_boundary_manifest(
         """,
         failed,
     ).fetchone()
-    if waits:
+    if waits:  # ManifestStage.BACKING_OFF
         return None
     # How long each stage took, saved with the freeze's event, and which
     # stage ran out of time when one does.
@@ -138,7 +140,7 @@ def freeze_boundary_manifest(
         with connection.transaction():
             return _freeze(connection, generation_id, artifact_kind, generation, timing)
     except QueryCanceled:
-        print(json.dumps({"event": "boundary_manifest_frozen", "outcome": "timed_out",
+        print(json.dumps({"event": "boundary_manifest_frozen", "outcome": ManifestStage.TIMED_OUT.value,
                           "artifact_kind": artifact_kind, **_timing(timing),
                           "stage": timing["stages"][-1][0]}), flush=True)
         connection.execute(
@@ -279,7 +281,7 @@ def _freeze(
         json.dumps(
             {
                 "event": "boundary_manifest_frozen",
-                "outcome": "frozen",
+                "outcome": ManifestStage.FROZEN.value,
                 "manifest_id": manifest_id,
                 "artifact_kind": artifact_kind,
                 **_timing(timing),
