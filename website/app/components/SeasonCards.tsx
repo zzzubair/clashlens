@@ -231,7 +231,7 @@ export function SeasonOverviewCard({ data }: { data: SeasonData }) {
   return (
     <>
       <CardHead title="Season overview" />
-      {rows.length === 0 ? (
+      {data.today === null ? (
         <CardNote>{FIRST_DAY_NOTE}</CardNote>
       ) : (
         <>
@@ -266,6 +266,7 @@ export function SeasonOverviewCard({ data }: { data: SeasonData }) {
               ))}
             </tbody>
           </table>
+          {rows.length === 0 ? <CardNote>{FIRST_DAY_NOTE}</CardNote> : null}
           {rows.length > OVERVIEW_DAYS ? (
             <button
               type="button"

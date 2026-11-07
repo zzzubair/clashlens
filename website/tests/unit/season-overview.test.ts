@@ -105,11 +105,16 @@ describe("Season overview card", () => {
     expect(shown).not.toContain("since the day before");
   });
 
-  it("says results start after the first Reset on Day 1", () => {
-    const shown = text(
-      renderToStaticMarkup(createElement(SeasonOverviewCard, { data: season([], 1) })),
-    );
-    expect(shown).toContain("Results start after the Season");
-    expect(shown).not.toContain("Today · ends at Reset");
+  it("shows today on Day 1, saying results start after the first Reset", () => {
+    const render = (today: number | null) =>
+      text(
+        renderToStaticMarkup(
+          createElement(SeasonOverviewCard, { data: season([], today) }),
+        ),
+      );
+    expect(render(1)).toContain("1 Today · ends at Reset Results start after the Season");
+    // With no Season known there is no today to show.
+    expect(render(null)).not.toContain("Today · ends at Reset");
+    expect(render(null)).toContain("Results start after the Season");
   });
 });
