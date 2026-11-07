@@ -10,6 +10,7 @@ import {
 import {
   dragTo,
   previewMessage,
+  releaseDrag,
   runAutosave,
   startDrag,
   type Autosave,
@@ -43,26 +44,36 @@ afterEach(() => {
 it("moves the box with the pointer at the preview's scale and frees its corner", () => {
   const drag = startDrag(PLACE, 10, 10, null, 0.5);
   expect(drag.start.anchor).toBeNull();
-  const moved = dragTo(drag, 20, 15, false);
+  const moved = dragTo(drag, 20, 15, false)!;
   expect(moved.place).toMatchObject({ x: 120, y: 110, w: 400, h: 200, anchor: null });
   expect(moved.guides).toEqual({ v: null, h: null });
 });
 
 it("snaps to the middle with Shift and keeps the box on the stream", () => {
   const drag = startDrag(PLACE, 0, 0, null, 1);
-  const middle = dragTo(drag, (1920 - 400) / 2 - 100 + 5, 0, true);
+  const middle = dragTo(drag, (1920 - 400) / 2 - 100 + 5, 0, true)!;
   expect(middle.place.x).toBe(760);
   expect(middle.guides).toEqual({ v: 960, h: null });
-  expect(dragTo(drag, -500, 5000, false).place).toMatchObject({ x: 0, y: 880 });
+  expect(dragTo(drag, -500, 5000, false)!.place).toMatchObject({ x: 0, y: 880 });
 });
 
 it("resizes from the grabbed edge, keeps the opposite one and leaves the guides", () => {
   const drag = startDrag(PLACE, 0, 0, "w", 1);
-  const resized = dragTo(drag, 50, 0, true);
+  const resized = dragTo(drag, 50, 0, true)!;
   expect(resized.place).toMatchObject({ x: 150, w: 350, y: 100, h: 200 });
   expect(resized.place.x + resized.place.w).toBe(PLACE.x + PLACE.w);
   expect(resized.guides).toBeNull();
-  expect(dragTo(drag, 1000, 0, false).place.w).toBe(160);
+  expect(dragTo(drag, 1000, 0, false)!.place.w).toBe(160);
+});
+
+it("ends a drag on pointer up or cancel: no press, no guides, and moves do nothing", () => {
+  const drag = startDrag(PLACE, 0, 0, null, 1);
+  expect(dragTo(drag, 5, 0, true)!.guides).toEqual({ v: null, h: null });
+  const snapped = dragTo(drag, 665, 0, true)!;
+  expect(snapped.guides).toEqual({ v: 960, h: null });
+  const ended = releaseDrag();
+  expect(ended).toEqual({ drag: null, guides: { v: null, h: null } });
+  expect(dragTo(ended.drag, 900, 900, true)).toBeNull();
 });
 
 it("saves the newest choices once the one sending lands, one run at a time", async () => {

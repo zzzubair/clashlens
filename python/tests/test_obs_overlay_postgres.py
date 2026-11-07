@@ -242,3 +242,25 @@ def test_viewer_presence_moves_with_reads_the_clock_and_new_links(database_url: 
             owner.close()
             api.close()
             collector.close()
+
+
+def test_a_link_is_absent_then_current_then_retired_for_good(database_url: str) -> None:
+    """With no overlay there is no link to replace; replacing the current one
+    bumps the version once, and a retired one changes nothing."""
+    with domain_database(database_url) as connection_info:
+        owner = ApiDatabase(connection_info)
+        api = ApiDatabase(as_api_role(connection_info))
+        try:
+            mine = _account(owner, "discord", DISCORD_ID, "drift")
+            with pytest.raises(ApiError) as absent:
+                api_overlays.new_link(api, mine, replaces="A" * 22)
+            assert absent.value.status_code == 404
+            current = api_overlays.get_overlay(api, mine)
+            replaced = api_overlays.new_link(api, mine, replaces=current["link"])
+            assert replaced["version"] == current["version"] + 1
+            for retired in (current["link"], "B" * 22):
+                assert api_overlays.new_link(api, mine, replaces=retired) == replaced
+                assert api_overlays.read_link(api, retired) is None
+        finally:
+            owner.close()
+            api.close()

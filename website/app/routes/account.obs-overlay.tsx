@@ -381,13 +381,15 @@ export function startDrag(
  * Where the box goes with the pointer at (`px`, `py`): a resize keeps the
  * opposite edge and leaves the guides as they are (`guides` null); a move
  * stays where it is dropped, or with `shift` snaps to the edges and middle.
+ * With no press (`d` null) nothing moves: null.
  */
 export function dragTo(
-  d: PointerDrag,
+  d: PointerDrag | null,
   px: number,
   py: number,
   shift: boolean,
-): { place: Place; guides: Guides | null } {
+): { place: Place; guides: Guides | null } | null {
+  if (!d) return null;
   const dx = (px - d.sx) / d.k;
   const dy = (py - d.sy) / d.k;
   const { cw, ch } = d.start;
@@ -442,6 +444,11 @@ export function dragTo(
     }
   }
   return { place: clamp({ ...d.start, x, y }), guides: { v, h: hz } };
+}
+
+/** A pointer up or cancel: no press, and no snap lines. */
+export function releaseDrag(): { drag: null; guides: Guides } {
+  return { drag: null, guides: { v: null, h: null } };
 }
 
 /**
@@ -592,15 +599,16 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
   }
 
   function onPointerMove(event: PointerEvent<HTMLDivElement>) {
-    if (!drag) return;
     const moved = dragTo(drag, event.clientX, event.clientY, event.shiftKey);
+    if (!moved) return;
     if (moved.guides) setGuides(moved.guides);
     setPlace(moved.place);
   }
 
   function endDrag() {
-    setDrag(null);
-    setGuides({ v: null, h: null });
+    const ended = releaseDrag();
+    setDrag(ended.drag);
+    setGuides(ended.guides);
   }
 
   // Arrow keys nudge it 1 pixel (10 with Shift) for an exact gap.

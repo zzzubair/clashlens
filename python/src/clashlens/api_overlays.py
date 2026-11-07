@@ -8,20 +8,15 @@ replaces the old one in place, so the old one shows nothing from then on.
 Each read through the link marks the overlay open, at most once a minute,
 and the collector then checks its player first (collector_overlays.py).
 
-The overlay's states: none until the first `get_overlay`, which makes it
-with a link; then its one current link, which `read_link` answers; any other
-link id, replaced, never made or malformed, answers nothing for good, since
-links are random and never reused. `new_link` is the only move from one
-link to the next: given the current link it makes a new one, bumps the
-version and clears the viewer presence; given any other, such as a repeat
-of a request that already replaced it, it changes nothing. Whether OBS is
-watching is `ViewerPresence`.
+Where a link stands is `LinkState`; whether OBS is watching is
+`ViewerPresence`.
 """
 
 from __future__ import annotations
 
 import re
 import secrets
+from enum import StrEnum
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -49,6 +44,29 @@ _NUMBERS = {"w", "h", "x", "y", "cw", "ch"}
 _PARTS = {"trophies", "rank", "attacks", "defenses", "net", "day", "updated"}
 DEFAULTS = {"w": "366", "h": "222", "x": "40", "y": "40", "fit": "screen",
             "cw": "1920", "ch": "1080", "text": "light", "bg": "card", "snap": "tl"}
+
+
+class LinkState(StrEnum):
+    """Where one link id stands against an account's overlay.
+
+    ABSENT: the account has no overlay yet, so no link; the first
+    `get_overlay` makes it with its first link, CURRENT. CURRENT: the
+    overlay's one link, which `read_link` answers. RETIRED: any other id,
+    replaced, never made or malformed; it answers nothing for good, since
+    links are random and never reused.
+
+    `new_link` is the only move: given the CURRENT link it makes a new one
+    CURRENT and the given one RETIRED, bumping the version and clearing the
+    viewer presence; given a RETIRED one, such as a repeat of a request that
+    already replaced it, it changes nothing and answers the overlay as it is;
+    with ABSENT it answers overlay_not_found. Each move is one statement on
+    the overlay row, so a failure leaves it as it was and a retry or restart
+    reads the row again; nothing is held in memory.
+    """
+
+    ABSENT = "absent"
+    CURRENT = "current"
+    RETIRED = "retired"
 
 
 class OverlayBody(StrictBody):
@@ -133,20 +151,26 @@ def save_overlay(
 
 
 def new_link(database: ApiDatabase, account_id: int, *, replaces: str) -> dict[str, Any]:
-    """Replace the account's link, when it is still `replaces`, and make the
-    overlay CLOSED (`ViewerPresence`) until OBS reads the new one."""
+    """Replace the account's link, when `replaces` is CURRENT (`LinkState`),
+    and make the overlay CLOSED (`ViewerPresence`) until OBS reads the new
+    one; a RETIRED `replaces` changes nothing."""
     with database.pool.connection() as connection:
-        connection.execute(
+        moved = connection.execute(
             """
             UPDATE obs_overlays SET link_id = %s, version = version + 1,
                 updated_at = clock_timestamp(), last_seen_at = NULL
             WHERE account_id = %s AND link_id = %s
             """,
             (secrets.token_urlsafe(16), account_id, replaces),
-        )
+        ).rowcount
         row = connection.execute(_OVERLAY_SQL + " WHERE overlay.account_id = %s",
                                  (account_id,)).fetchone()
-    if row is None:
+    was = (
+        LinkState.ABSENT if row is None
+        else LinkState.CURRENT if moved
+        else LinkState.RETIRED
+    )
+    if was is LinkState.ABSENT:
         raise ApiError(404, "overlay_not_found")
     return {"kind": "obs-overlay", **_overlay(row)}
 
@@ -157,6 +181,7 @@ def read_link(database: ApiDatabase, link_id: str) -> dict[str, Any] | None:
     with database.pool.connection() as connection:
         row = connection.execute(_OVERLAY_SQL + " WHERE overlay.link_id = %s",
                                  (link_id,)).fetchone()
+        # Found by its id, so CURRENT; no row is a RETIRED link.
         if row is None:
             return None
         # Seen now, while a player is chosen: one write a minute per link at
