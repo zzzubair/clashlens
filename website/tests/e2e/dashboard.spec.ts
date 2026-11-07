@@ -24,6 +24,7 @@ const ALL_CARDS = [
   "Season heat map",
   "Goal",
   "Armies on defense",
+  "Season overview",
   "Cutoffs",
   "Season graph",
   "Recent form",

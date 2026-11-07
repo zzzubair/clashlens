@@ -55,6 +55,7 @@ const CARD_ICONS: Record<string, IconName> = {
   "Armies on offense": "target",
   "Rivals watch": "users",
   "Season heat map": "grid",
+  "Season overview": "book",
   Cutoffs: "trophy",
   "Season graph": "chart",
   "Recent form": "bars",
