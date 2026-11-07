@@ -7,7 +7,11 @@ from psycopg.errors import LockNotAvailable
 from psycopg.types.json import Jsonb
 
 from . import battle_day_repair, board_deadline, boundary_members
-from .analytics import SNAPSHOT_ORDERING_RULE_VERSION
+from .analytics import (
+    SNAPSHOT_ORDERING_RULE_VERSION,
+    follow_official_ties,
+    season_end_placements,
+)
 from .army_decoder import CURRENT_DECODES, DECODER_VERSION
 from .boundary_manifest import (
     _moved_decode_ids,
@@ -1017,8 +1021,10 @@ def queue_board_rebuilds(
     whose frozen input still ranks a reading taken before the player's
     profile answered "player not found", whose saved entries differ from
     the trophies at the Reset ``reset_trophies`` now gives, or its mark,
-    that an older ordering rule ordered, or whose members the weekly league
-    record now changes (``boundary_members``). On 5
+    that an older ordering rule ordered, that is a Season's last board
+    ranking a tie out of the game's final order (``official_order``), or
+    whose members the weekly league record now changes
+    (``boundary_members``). On 5
     to 7 October 2026 that was 24 players on Day 1 and 34 on Day 2, two of
     them first and second on Day 2, and 290 Day 2 entries missing battles
     after their readings; on 8 October, 3 Day 3 entries marked proven but
@@ -1116,6 +1122,7 @@ def queue_board_rebuilds(
                     SELECT player_id, trophies, confidence
                     FROM leaderboard_snapshot_entries
                     WHERE snapshot_id = %s
+                    ORDER BY position
                     """,
                     (snapshot_id,),
                 ).fetchall()
@@ -1124,6 +1131,14 @@ def queue_board_rebuilds(
                     != expected.get(int(player_id))
                     for player_id, trophies, confidence in entries
                 )
+                # Players a Season's last board ranks out of the game's order
+                # inside a tie (analytics.follow_official_ties).
+                saved = [{"player_id": int(row[0]), "trophies": int(row[1])} for row in entries]
+                official_order = sum(entry is not kept for entry, kept in zip(
+                    follow_official_ties(saved, season_end_placements(
+                        connection, boundary_at,
+                        {entry["player_id"]: entry["trophies"] for entry in saved},
+                    )), saved, strict=True))
                 # A board ordered by an older rule, such as equal trophies
                 # by tag hash alone before the shared tie order.
                 rule = connection.execute(
@@ -1171,7 +1186,7 @@ def queue_board_rebuilds(
                     ).fetchone()[0] or []],
                 )))
                 if not (not_found or late_battles or reordered or unplayed or late
-                        or moved_members):
+                        or moved_members or official_order):
                     continue
                 queued = connection.execute(
                     """
@@ -1213,6 +1228,7 @@ def queue_board_rebuilds(
                         "late_battles": late_battles,
                         "reordered": reordered,
                         "members_changed": moved_members,
+                        "official_order": official_order,
                         "correction": (
                             "already_queued" if queued is not None
                             else "queued" if queue
