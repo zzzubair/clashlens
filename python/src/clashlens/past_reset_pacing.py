@@ -15,7 +15,11 @@ window, so one not yet started waits until it ends; builds already running
 finish and publish. The newest swept Reset waits only for its own, shorter
 interval (owner decision, 12 Oct 2026), and not at all for a correction that
 adds a member published without a day result, whose day has saved since: it
-appears in the board within seconds.
+appears in the board within seconds. A correction the Season repair's boards
+step queued or found waiting (``REPAIR_CORRECTION``) waits for neither
+interval, on any Reset, outside the quiet window: the repair otherwise waited
+up to 6 hours a board (owner decision, 14 Oct 2026). It changes nothing else:
+in the quiet window, and for the operator's own window, it waits as any other.
 """
 
 from __future__ import annotations
@@ -43,6 +47,9 @@ PAST_RESET_QUIET_END = time(7, 0)
 # background priority.
 OPERATOR_CORRECTION = {"kind": "operator"}
 OPERATOR_QUIET_START = time(4, 0)
+# A correction the Season repair's boards step queued or found waiting
+# (boundary.queue_board_rebuilds with ``repair``), marked by this input.
+REPAIR_CORRECTION = {"kind": "repair"}
 
 
 def _now(connection: Any) -> datetime:
@@ -115,22 +122,26 @@ def correction_waits(connection: Any, boundary_at: datetime, arrival: bool = Fal
     if latest_reset is None:
         return False
     now = _now(connection)
-    interval = PAST_RESET_CORRECTION_INTERVAL
-    if boundary_at < latest_reset:
-        if _in_quiet_window(now):
-            return True
-    elif arrival or connection.execute(
+    past = boundary_at < latest_reset
+    quiet = _in_quiet_window(now)
+    if past and quiet:
+        return True
+    if arrival and not past:
+        return False
+    # Waiting inputs that skip the interval: on the newest Reset an arrival,
+    # and outside the quiet window a Season repair's correction.
+    markers = ([] if past else [ARRIVAL]) + ([] if quiet else [REPAIR_CORRECTION])
+    if markers and connection.execute(
         """
         SELECT EXISTS (
             SELECT FROM boundary_publication_corrections AS correction
             WHERE boundary_at = %s AND state IN ('queued', 'pending_inputs')
-              AND clashlens_correction_inputs(correction) @> %s::jsonb)
+              AND clashlens_correction_inputs(correction) @> ANY(%s::jsonb[]))
         """,
-        (boundary_at, Jsonb([ARRIVAL])),
+        (boundary_at, [Jsonb([marker]) for marker in markers]),
     ).fetchone()[0]:
         return False
-    else:
-        interval = NEWEST_RESET_CORRECTION_INTERVAL
+    interval = PAST_RESET_CORRECTION_INTERVAL if past else NEWEST_RESET_CORRECTION_INTERVAL
     last_generation_at = connection.execute(
         "SELECT max(created_at) FROM boundary_publication_generations WHERE boundary_at = %s",
         (boundary_at,),

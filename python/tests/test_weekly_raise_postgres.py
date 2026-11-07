@@ -188,6 +188,45 @@ def _instant_raise(judge):
     return judged
 
 
+def _saved_before_the_fix(connection_info: str, archive_server, monkeypatch):
+    """LATE_RAISE's and LOSS_TOO's Saturday to Tuesday Resets, their Sunday
+    and Monday saved as on 12 October 2026, before the fix: Sunday
+    Inconsistent, Monday from the unraised Reset reading, and the Monday
+    board uncertain. The Tuesday board is the newest. Call ``story.fixed()``
+    to calculate by the fixed rules again."""
+    season = PREVIOUS_SEASON
+    saturday, sunday, monday, tuesday = (day(number, season) for number in (20, 21, 22, 23))
+    players = (LATE_RAISE, LOSS_TOO)
+    story = _story(connection_info, archive_server, monkeypatch, *players)
+    monkeypatch.setattr(scenarios, "READ_AFTER", timedelta(minutes=13))
+    # Before the fix the raise counted as landed at the Reset, and Monday
+    # started from its Reset reading: the rule starting it at 5,000
+    # leaves a Season's first day alone.
+    judge, settled_start = reading_rule.judge, reconciliation._settled_start
+    monkeypatch.setattr(reading_rule, "judge", _instant_raise(judge))
+    monkeypatch.setattr(reconciliation, "_settled_start",
+                        lambda data: settled_start(replace(data, season_first_day=True)))
+    for tag, sunday_defenses in ((LATE_RAISE, 8), (LOSS_TOO, 7)):
+        story.players[tag].battles = (
+            _saturday(saturday) + attacks(sunday, 40) + defenses(sunday, *[30] * sunday_defenses)
+            + attacks(monday, 40) + defenses(monday, *[30] * 8))
+    story.reset(saturday, dict.fromkeys(players, (5300, season)))
+    story.reset(sunday, dict.fromkeys(players, (5140, season)))
+    story.reads(monday - timedelta(minutes=10), {LATE_RAISE: 4940, LOSS_TOO: 4970}, season)
+    story.reset(monday, {LATE_RAISE: (4940, season), LOSS_TOO: (4970, season)})
+    story.reads(monday + timedelta(minutes=20), dict.fromkeys(players, 5000), season)
+    story.wait(timedelta(hours=1))
+    story.reads(tuesday - timedelta(minutes=10), dict.fromkeys(players, 4800), season)
+    story.reset(tuesday, dict.fromkeys(players, (4800, season)))
+
+    def fixed() -> None:
+        monkeypatch.setattr(reading_rule, "judge", judge)
+        monkeypatch.setattr(reconciliation, "_settled_start", settled_start)
+
+    story.fixed = fixed
+    return story
+
+
 def test_season_repair_mends_a_sunday_and_monday_saved_before_the_fix(
     database_url: str, archive_server, monkeypatch
 ) -> None:
@@ -199,37 +238,16 @@ def test_season_repair_mends_a_sunday_and_monday_saved_before_the_fix(
     board's totals at 05:00:00 confirmed. LOSS_TOO's automatic loss stays
     calculated: the 5,000 readings cannot confirm it."""
     season = PREVIOUS_SEASON
-    saturday, sunday, monday, tuesday = (day(number, season) for number in (20, 21, 22, 23))
+    sunday, monday = day(21, season), day(22, season)
     players = (LATE_RAISE, LOSS_TOO)
     with domain_database(database_url, include_coordinator=True) as connection_info:
-        story = _story(connection_info, archive_server, monkeypatch, *players)
-        monkeypatch.setattr(scenarios, "READ_AFTER", timedelta(minutes=13))
-        # Before the fix the raise counted as landed at the Reset, and Monday
-        # started from its Reset reading: the rule starting it at 5,000
-        # leaves a Season's first day alone.
-        judge, settled_start = reading_rule.judge, reconciliation._settled_start
-        monkeypatch.setattr(reading_rule, "judge", _instant_raise(judge))
-        monkeypatch.setattr(reconciliation, "_settled_start",
-                            lambda data: settled_start(replace(data, season_first_day=True)))
-        for tag, sunday_defenses in ((LATE_RAISE, 8), (LOSS_TOO, 7)):
-            story.players[tag].battles = (
-                _saturday(saturday) + attacks(sunday, 40) + defenses(sunday, *[30] * sunday_defenses)
-                + attacks(monday, 40) + defenses(monday, *[30] * 8))
-        story.reset(saturday, dict.fromkeys(players, (5300, season)))
-        story.reset(sunday, dict.fromkeys(players, (5140, season)))
-        story.reads(monday - timedelta(minutes=10), {LATE_RAISE: 4940, LOSS_TOO: 4970}, season)
-        story.reset(monday, {LATE_RAISE: (4940, season), LOSS_TOO: (4970, season)})
-        story.reads(monday + timedelta(minutes=20), dict.fromkeys(players, 5000), season)
-        story.wait(timedelta(hours=1))
-        story.reads(tuesday - timedelta(minutes=10), dict.fromkeys(players, 4800), season)
-        story.reset(tuesday, dict.fromkeys(players, (4800, season)))
+        story = _saved_before_the_fix(connection_info, archive_server, monkeypatch)
         before = {tag: (story.saved_day(tag, sunday)["state"], story.saved_day(tag, monday)["start"])
                   for tag in players}
         before_labels = {entry["tag"]: entry["confidence"]
                          for entry in story.served_board(monday)["entries"]}
 
-        monkeypatch.setattr(reading_rule, "judge", judge)
-        monkeypatch.setattr(reconciliation, "_settled_start", settled_start)
+        story.fixed()
         database = Database(connection_info)
         try:
             def repair(action: str) -> dict:
@@ -272,3 +290,72 @@ def test_season_repair_mends_a_sunday_and_monday_saved_before_the_fix(
     assert {entry["tag"]: entry["confidence"] for entry in board["entries"]} == {
         LATE_RAISE: "confirmed", LOSS_TOO: "confirmed"}
     assert receipt["boards_disagreeing"] == []
+
+
+def _waiting_corrections(connection_info: str, boundary_at) -> list[tuple[str, bool]]:
+    """Each correction of this Reset not yet started: its state, and whether
+    the Season repair marked it."""
+    with psycopg.connect(connection_info) as connection:
+        return [
+            (text(state), bool(marked)) for state, marked in connection.execute(
+                """
+                SELECT state, clashlens_correction_inputs(correction) @> '[{"kind": "repair"}]'
+                FROM boundary_publication_corrections AS correction
+                WHERE boundary_at = %s AND state IN ('queued', 'pending_inputs')
+                ORDER BY id
+                """,
+                (boundary_at,),
+            ).fetchall()
+        ]
+
+
+def test_season_repair_rebuilds_its_boards_within_minutes_and_no_other(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """The same two players. The Sunday board, now an older one, has an
+    ordinary correction waiting since the Monday readings changed their
+    Saturdays; the Monday board was rebuilt minutes before the repair. Its
+    steps run 10 minutes apart: the Monday board, which it corrects, is
+    rebuilt with both players confirmed within the half hour, while the
+    Sunday correction keeps its 6 hours and the repair waits for it. On 14
+    October 2026 each board the repair corrected waited up to 6 hours after
+    its last rebuild, the 6 October one from 07:38 to 13:04."""
+    season = PREVIOUS_SEASON
+    sunday, monday = day(21, season), day(22, season)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        story = _saved_before_the_fix(connection_info, archive_server, monkeypatch)
+        story.fixed()
+        sunday_waiting = _waiting_corrections(connection_info, sunday)
+        database = Database(connection_info)
+        try:
+            def repair() -> str:
+                return season_repair(
+                    database, str(int(season.timestamp())), "queue", max_jobs=100)["phase"]
+
+            phases = [repair()]
+            for _ in range(3):
+                story.wait(timedelta(minutes=10))
+                phases.append(repair())
+            board = story.served_board(monday)
+            monday_waiting = _waiting_corrections(connection_info, monday)
+            sunday_still = _waiting_corrections(connection_info, sunday)
+            story.wait(timedelta(hours=6))
+            later = [repair()]
+            while later[-1] != "done" and len(later) < 4:
+                story.wait(timedelta(minutes=10))
+                later.append(repair())
+        finally:
+            database.close()
+        unfinished = story.unfinished_jobs()
+
+    assert sunday_waiting == [("queued", False)]
+    # Before the fix the Monday board was still uncertain, its correction
+    # waiting: [("queued", False)].
+    assert (phases[0], phases[-1]) == ("days", "boards")
+    assert monday_waiting == []
+    assert _ranked(board) == {LATE_RAISE: 4940, LOSS_TOO: 4970}
+    assert {entry["tag"]: entry["confidence"] for entry in board["entries"]} == {
+        LATE_RAISE: "confirmed", LOSS_TOO: "confirmed"}
+    assert sunday_still == [("queued", False)]
+    assert later[-1] == "done"
+    assert unfinished == []

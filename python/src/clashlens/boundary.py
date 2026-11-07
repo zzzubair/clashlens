@@ -40,6 +40,7 @@ from .domain_repair import boundary_held
 from .past_reset_pacing import (
     ARRIVAL,
     OPERATOR_CORRECTION,
+    REPAIR_CORRECTION,
     correction_waits,
     operator_correction_waits,
     operator_generation,
@@ -1015,7 +1016,7 @@ def _record_boundary_generation(
 
 
 def queue_board_rebuilds(
-    database: Database, season_id: str, *, queue: bool
+    database: Database, season_id: str, *, queue: bool, repair: bool = False
 ) -> dict[str, Any]:
     """Find, and with ``queue`` rebuild, each of the Season's Reset boards
     whose frozen input still ranks a reading taken before the player's
@@ -1032,7 +1033,10 @@ def queue_board_rebuilds(
 
     Each board gets one queued correction of both its leaderboard and army
     records, started as any other: once its build is published, outside a
-    repair campaign and past-Reset pacing. Each Reset's newest board is read
+    repair campaign and past-Reset pacing. With ``repair``, as the Season
+    repair's boards step calls it, that correction, or the one already
+    waiting, is marked ``REPAIR_CORRECTION`` and skips the interval between
+    rebuilds outside the quiet window. Each Reset's newest board is read
     under its publication lock, so a correction is never queued against a
     board a worker has already replaced. A rebuilt board ranks no such
     reading and saves the battles after each one, so a later run lists
@@ -1210,15 +1214,29 @@ def queue_board_rebuilds(
                         """,
                         (queued[0],),
                     )
+                    if repair:
+                        connection.execute(
+                            """
+                            INSERT INTO boundary_publication_correction_inputs
+                                (correction_id, input)
+                            SELECT correction.id, %s
+                            FROM boundary_publication_corrections AS correction
+                            WHERE correction.id = %s
+                              AND NOT clashlens_correction_inputs(correction) @> %s::jsonb
+                            """,
+                            (Jsonb(REPAIR_CORRECTION), queued[0],
+                             Jsonb([REPAIR_CORRECTION])),
+                        )
                 elif queue:
                     connection.execute(
                         """
                         INSERT INTO boundary_publication_corrections
                             (boundary_at, source_generation_id,
                              affected_artifacts, pending_inputs)
-                        VALUES (%s, %s, ARRAY['snapshot', 'army'], '[]'::jsonb)
+                        VALUES (%s, %s, ARRAY['snapshot', 'army'], %s)
                         """,
-                        (boundary_at, generation_id),
+                        (boundary_at, generation_id,
+                         Jsonb([REPAIR_CORRECTION] if repair else [])),
                     )
                 boards.append(
                     {
