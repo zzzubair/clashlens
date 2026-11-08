@@ -3,9 +3,26 @@ import { useFetcher } from "react-router";
 
 import { battles, formatRate, starRate, type ArmyRow } from "../lib/army-stats";
 import type { ArmyVariantExamples } from "../lib/contracts";
-import { variantExamplesRead } from "../lib/detail-reads";
 import type { VariantExamplesResponse } from "../routes/army-variant-examples";
 import { ArmyPortraits } from "./ArmyPortraits";
+
+/**
+ * A variant's example armies, loaded again each time the variant opens;
+ * closing it drops what loaded. `loading` until the answer, then `ready`, or
+ * `failed`, which says to close and open the variant to try again.
+ */
+export type VariantExamplesRead =
+  | { phase: "loading" }
+  | { phase: "failed" }
+  | { phase: "ready"; examples: ArmyVariantExamples };
+
+export function variantExamplesRead(
+  answer: { examples: ArmyVariantExamples | null } | undefined,
+): VariantExamplesRead {
+  const examples = answer?.examples;
+  if (examples === undefined) return { phase: "loading" };
+  return examples === null ? { phase: "failed" } : { phase: "ready", examples };
+}
 
 /**
  * An opened army on the Armies page: a sheet over the list (from the bottom

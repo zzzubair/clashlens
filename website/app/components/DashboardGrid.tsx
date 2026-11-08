@@ -1,5 +1,6 @@
 import {
   Suspense,
+  useCallback,
   useEffect,
   useReducer,
   useRef,
@@ -43,6 +44,7 @@ import {
   cardRefreshStep,
   dashboardEditStep,
   outdatedCards,
+  type DashboardEditEvent,
 } from "./DashboardState";
 import { CardHead, CardNote, cardIcon, updatedAgo } from "./DashboardParts";
 import { LegendDayCard, dayReadAt } from "./LegendDayCard";
@@ -687,7 +689,13 @@ export function Dashboard({
   const { stale } = cardData;
   // The cards' load and the settings they now follow.
   const readWith = useRef({ data, settings });
-  const [edit, dispatch] = useReducer(dashboardEditStep, DASHBOARD_VIEWING);
+  // A functional update rather than useReducer, so an event that changes
+  // nothing, as most drag moves do, skips the render.
+  const [edit, setEdit] = useState(DASHBOARD_VIEWING);
+  const dispatch = useCallback(
+    (event: DashboardEditEvent) => setEdit((state) => dashboardEditStep(state, event)),
+    [],
+  );
   const editing = edit.mode === "editing";
   const draft = editing ? edit.draft : null;
   const sheet = editing ? edit.sheet : null;

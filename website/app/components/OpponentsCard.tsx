@@ -8,12 +8,36 @@ import {
   trophiesGivenUp,
 } from "../lib/dashboard";
 import type { PastBases } from "../lib/dashboard-cards";
-import { basesDayRead } from "../lib/detail-reads";
 import { addToGroupPath, canonicalPlayerPath } from "../lib/player-tag";
 import { CardHead, CardNote, InfoTip } from "./DashboardParts";
 import { DashboardIcon } from "./DashboardIcon";
 import { ShieldIcon, Star, Stars, TrophyIcon } from "./GameIcons";
 import { signed, timeFormatter } from "./LegendClock";
+
+/**
+ * One earlier Legend day on Bases you attacked:
+ *
+ * - `today`: no earlier day is picked; the card's own data shows.
+ * - `unread`: not read yet; it is read once clicking pauses for 0.4 seconds.
+ * - `asking`: its read is on its way; a day has one read at a time.
+ * - `read`: its bases are kept while the account's tab shows.
+ * - `failed`: it could not be read; picking it again asks again.
+ *
+ * Events: picking a day, the pause ending, and the read's answer. The
+ * dashboard owns the days, as its follow-up reads build the card again.
+ */
+export type BasesDayRead = "today" | "unread" | "asking" | "read" | "failed";
+
+export function basesDayRead<Bases>(
+  day: number | null,
+  read: ReadonlyMap<number, Bases | null>,
+  asking: ReadonlySet<number>,
+): BasesDayRead {
+  if (day === null) return "today";
+  if (read.get(day)) return "read";
+  if (asking.has(day)) return "asking";
+  return read.has(day) ? "failed" : "unread";
+}
 
 const STRENGTH_LABELS: Record<BaseStrength, string> = {
   hard: "Hard",

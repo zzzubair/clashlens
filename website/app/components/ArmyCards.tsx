@@ -1,7 +1,6 @@
 import { useReducer, useRef, useState } from "react";
 
 import type { ArmiesData } from "../lib/dashboard-cards";
-import { armyDaysShown, armyDaysStart, armyDaysStep } from "../lib/detail-reads";
 import type {
   ArmyDays,
   ArmyLens,
@@ -20,6 +19,49 @@ import { UnitArt } from "./ArmyPortraits";
 import { CardHead, CardNote, InfoTip, Name, Switch } from "./DashboardParts";
 import { TrophyIcon } from "./GameIcons";
 import { signed } from "./LegendClock";
+
+/**
+ * The days chosen on an Armies card and their numbers:
+ *
+ * - `ready`: the chosen days' numbers; null when they could not be read.
+ * - `loading`: the chosen days are being read; the numbers on screen when
+ *   they were asked for stay, faded.
+ *
+ * Events: `choose` (the page's own days come back at once, with no read) and
+ * `answered`. Each choice is a new ask; only the newest ask's answer lands.
+ * A failed read shows as could not be read; choosing again retries. The card
+ * owns it, and drops it when the page goes.
+ */
+export type ArmyDaysRead =
+  | { phase: "ready"; ask: number; days: ArmyDays; armies: PlayerArmies | null }
+  | { phase: "loading"; ask: number; days: ArmyDays; shown: PlayerArmies | null };
+
+export type ArmyDaysEvent =
+  | { type: "choose"; ask: number; days: ArmyDays; initial: PlayerArmies }
+  | { type: "answered"; ask: number; days: ArmyDays; armies: PlayerArmies | null };
+
+export function armyDaysStart(initial: PlayerArmies): ArmyDaysRead {
+  return { phase: "ready", ask: 0, days: initial.days, armies: initial };
+}
+
+/** The only place an Armies card's days move; see `ArmyDaysRead`. */
+export function armyDaysStep(state: ArmyDaysRead, event: ArmyDaysEvent): ArmyDaysRead {
+  if (event.type === "answered") {
+    return event.ask === state.ask
+      ? { phase: "ready", ask: event.ask, days: event.days, armies: event.armies }
+      : state;
+  }
+  if (event.days === event.initial.days) {
+    return { phase: "ready", ask: event.ask, days: event.days, armies: event.initial };
+  }
+  const shown = state.phase === "ready" ? state.armies : state.shown;
+  return { phase: "loading", ask: event.ask, days: event.days, shown };
+}
+
+/** The numbers an Armies card shows: while loading, the ones already shown. */
+export function armyDaysShown(state: ArmyDaysRead): PlayerArmies | null {
+  return state.phase === "ready" ? state.armies : state.shown;
+}
 
 /** Armies on defense lists this many army types. */
 const DEFENSE_ROWS = 5;

@@ -6,10 +6,10 @@ import {
   armyDaysShown,
   armyDaysStart,
   armyDaysStep,
-  basesDayRead,
-  variantExamplesRead,
   type ArmyDaysEvent,
-} from "../../app/lib/detail-reads";
+} from "../../app/components/ArmyCards";
+import { basesDayRead } from "../../app/components/OpponentsCard";
+import { variantExamplesRead } from "../../app/components/VariantExamples";
 
 const armies = (days: number | "season") => ({ days }) as unknown as PlayerArmies;
 const PAGE = armies(3);
