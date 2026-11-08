@@ -571,20 +571,24 @@ async def pull_due(collector: Collector, puller: _Puller) -> Counter[str]:
         last = _last_try(pulls, purpose, location_id)
         return _latest(pulls, purpose, location_id) is None and (last is None or now - last >= gap)
 
+    # Worked out again only after a pull: each reading parses the early list.
+    step = ranking_step(boundary, now, pulls)
     if (
-        ranking_step(boundary, now, pulls) is RankingStep.EARLY
+        step is RankingStep.EARLY
         and now >= boundary + EARLY_AT
         and due("global_early", None, EARLY_RETRY_AFTER)
     ):
         await pull("global_early", None)
+        step = ranking_step(boundary, now, pulls)
     if (
-        ranking_step(boundary, now, pulls) is RankingStep.POLLING
+        step is RankingStep.POLLING
         and now >= boundary + POLL_FROM
         and now - (_last_try(pulls, "global_poll") or boundary) >= POLL_EVERY
     ):
         reference = read_rows(_latest(pulls, "global_early").body)
         await pull("global_poll", None, judge=lambda rows: switched(rows, reference))
-    if ranking_step(boundary, now, pulls) is not RankingStep.COUNTRIES:
+        step = ranking_step(boundary, now, pulls)
+    if step is not RankingStep.COUNTRIES:
         return counts
     locations = _latest(pulls, "locations")
     last = _last_try(pulls, "locations")
