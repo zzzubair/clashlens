@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import socket
 import threading
 from concurrent.futures import ThreadPoolExecutor, wait
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -360,26 +361,15 @@ def test_s3_archive_reader_rejects_unbounded_resource_settings() -> None:
 
 
 
-class _FlakyArchive:
-    """Archive stub that fails with a retryable error N times, then succeeds."""
-
-    max_body_bytes = 1024
-
-    max_retries = 2
-    retry_backoff_seconds = 0.01
-
+class _FlakyArchive(S3ArchiveReader):
     def __init__(self, body: bytes, transient_failures: int) -> None:
+        super().__init__(endpoint="archive.example.test", bucket="bucket",
+                         access_key="test", secret_key="test", max_retries=2,
+                         retry_backoff_seconds=0.01)
         self.body = body
         self.remaining = transient_failures
-        self.heartbeats = 0
-        self.bucket = "bucket"
 
-    def set_pool_acquire_observer(self, observer):
-        pass
-
-    def read_verified(self, reference, expected_hash, *, heartbeat=None):
-        if heartbeat is not None:
-            heartbeat()  # renewal before the backoff window
+    def _read_once(self, reference, bucket, object_key, expected_hash):
         if self.remaining > 0:
             self.remaining -= 1
             raise ArchiveReadError("archive_unavailable", "transient outage", retryable=True)
@@ -644,3 +634,44 @@ def test_failure_evidence_keeps_the_answer_under_an_archive_error() -> None:
         "code": "AccessDenied",
         "status": 403,
     }
+
+
+@pytest.mark.parametrize("max_retries", [0, 1, 5])
+@pytest.mark.parametrize("recovers", [False, True])
+def test_spool_fallback_has_one_remote_retry_budget(
+    archive_server, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    max_retries: int, recovers: bool,
+) -> None:
+    endpoint, reference, digest, handler = archive_server
+    successful_get = handler.do_GET
+    requests = []
+
+    def get(request):
+        requests.append(request.path)
+        if recovers and len(requests) == max_retries + 1:
+            return successful_get(request)
+        request.close_connection = True
+        request.connection.shutdown(socket.SHUT_RDWR)
+        request.connection.close()
+
+    monkeypatch.setattr(handler, "do_GET", get)
+    archive = S3ArchiveReader(
+        endpoint=endpoint, bucket="evidence", access_key="test", secret_key="test",
+        secure=False, allow_insecure_test_origin=True, max_retries=max_retries,
+        retry_backoff_seconds=0,
+    )
+    reader = SpoolFirstReader(archive, spool_root=str(tmp_path / "spool"))
+    renewals = []
+    try:
+        if recovers:
+            result = reader.read_verified(reference, digest, heartbeat=lambda: renewals.append(1))
+            assert reader.spool.verify(digest) == result.body
+        else:
+            with pytest.raises(ArchiveReadError) as failure:
+                reader.read_verified(reference, digest, heartbeat=lambda: renewals.append(1))
+            assert failure.value.retryable
+            assert reader.spool.verify(digest) is None
+        assert len(requests) == max_retries + 1
+        assert len(renewals) >= 2 * max_retries
+    finally:
+        reader.spool.close()

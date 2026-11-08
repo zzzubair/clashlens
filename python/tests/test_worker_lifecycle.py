@@ -508,7 +508,7 @@ def test_run_forever_keeps_reported_results_bounded(monkeypatch, capsys) -> None
         del _arguments, pool_size
         return FakeArchive()
 
-    monkeypatch.setattr(cli, "_archive", fake_archive)
+    monkeypatch.setattr(cli, "open_archive", fake_archive)
     monkeypatch.setattr(cli, "ObservationProcessor", FakeProcessor)
     operating_snapshots: list[dict[str, object]] = []
     monkeypatch.setattr(
@@ -597,7 +597,7 @@ def test_worker_does_not_claim_or_maintain_when_archive_is_unavailable(
         raise AssertionError("archive outage must stop before claiming")
 
     monkeypatch.setattr(cli, "Database", lambda _url, **kwargs: database)
-    monkeypatch.setattr(cli, "_archive", lambda _arguments, **kwargs: archive)
+    monkeypatch.setattr(cli, "open_archive", lambda _arguments, **kwargs: archive)
     monkeypatch.setattr(cli, "ObservationProcessor", NoClaimProcessor)
     monkeypatch.setattr(cli, "process_concurrently", forbidden_concurrent)
 
@@ -658,7 +658,7 @@ def test_run_forever_rechecks_archive_and_resumes_after_outage(
             return [ProcessResult(7, "processed")]
 
     monkeypatch.setattr(cli, "Database", lambda _url, **kwargs: database)
-    monkeypatch.setattr(cli, "_archive", lambda _arguments, **kwargs: archive)
+    monkeypatch.setattr(cli, "open_archive", lambda _arguments, **kwargs: archive)
     monkeypatch.setattr(cli, "ObservationProcessor", ResumingProcessor)
 
     result = cli._run_worker(
@@ -724,7 +724,7 @@ def test_run_forever_keeps_lanes_claiming_and_maintaining_during_a_long_job(
     clock = iter(range(0, 10**9, 5))
     monkeypatch.setattr(worker, "monotonic", lambda: next(clock))
     monkeypatch.setattr(cli, "Database", lambda _url, **_kwargs: FakeDatabase())
-    monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: FakeArchive())
+    monkeypatch.setattr(cli, "open_archive", lambda _arguments, **_kwargs: FakeArchive())
     monkeypatch.setattr(cli, "ObservationProcessor", LongJobProcessor)
     monkeypatch.setattr(cli, "_install_shutdown_handlers", stop.append)
     worker_thread = threading.Thread(
@@ -813,7 +813,7 @@ def test_maintenance_runs_while_every_lane_holds_a_connection(
     clock = iter(range(0, 10**9, 5))
     monkeypatch.setattr(worker, "monotonic", lambda: next(clock))
     monkeypatch.setattr(cli, "Database", PoolModelDatabase)
-    monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: FakeArchive())
+    monkeypatch.setattr(cli, "open_archive", lambda _arguments, **_kwargs: FakeArchive())
     monkeypatch.setattr(cli, "ObservationProcessor", ConnectionHoldingProcessor)
     monkeypatch.setattr(cli, "_install_shutdown_handlers", stop.append)
     arguments = _worker_namespace(run_forever=True, concurrency=3, database_pool_size=3)
@@ -894,7 +894,7 @@ def test_operating_snapshot_refreshes_while_a_batch_is_blocked(
             refreshed.set()
 
     monkeypatch.setattr(cli, "Database", lambda _url, **_kwargs: database)
-    monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: FakeArchive())
+    monkeypatch.setattr(cli, "open_archive", lambda _arguments, **_kwargs: FakeArchive())
     monkeypatch.setattr(cli, "ObservationProcessor", BlockingProcessor)
     monkeypatch.setattr(cli, "write_private_snapshot", capture_snapshot)
     monkeypatch.setattr(cli, "WORKER_SNAPSHOT_INTERVAL_SECONDS", 0.01)
@@ -950,7 +950,7 @@ def test_initial_operating_snapshot_failure_does_not_stop_work(
         return original_snapshot(self, **kwargs)
 
     monkeypatch.setattr(cli, "Database", lambda _url, **_kwargs: FakeDatabase())
-    monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: FakeArchive())
+    monkeypatch.setattr(cli, "open_archive", lambda _arguments, **_kwargs: FakeArchive())
     monkeypatch.setattr(cli, "ObservationProcessor", OneBatchProcessor)
     monkeypatch.setattr(cli.WorkerMetrics, "snapshot", fail_once)
 
@@ -1019,7 +1019,7 @@ def test_run_worker_defaults_preserve_the_single_thread_path(
         return PoolRecordingArchive(pool_size)
 
     monkeypatch.setattr(cli, "Database", fake_database)
-    monkeypatch.setattr(cli, "_archive", fake_archive)
+    monkeypatch.setattr(cli, "open_archive", fake_archive)
     monkeypatch.setattr(cli, "ObservationProcessor", FakeProcessor)
 
     result = cli._run_worker(_worker_namespace())
@@ -1062,7 +1062,7 @@ def test_run_worker_disables_player_discovery_when_flagged(monkeypatch) -> None:
         return PoolRecordingArchive(pool_size)
 
     monkeypatch.setattr(cli, "Database", fake_database)
-    monkeypatch.setattr(cli, "_archive", fake_archive)
+    monkeypatch.setattr(cli, "open_archive", fake_archive)
     monkeypatch.setattr(cli, "ObservationProcessor", FakeProcessor)
 
     result = cli._run_worker(_worker_namespace(disable_player_discovery=True))
@@ -1112,7 +1112,7 @@ def test_run_worker_concurrent_path_uses_explicit_pool_sizes(monkeypatch) -> Non
         return []
 
     monkeypatch.setattr(cli, "Database", fake_database)
-    monkeypatch.setattr(cli, "_archive", fake_archive)
+    monkeypatch.setattr(cli, "open_archive", fake_archive)
     monkeypatch.setattr(cli, "ObservationProcessor", FakeProcessor)
     monkeypatch.setattr(cli, "process_concurrently", fake_concurrent)
 
@@ -1158,7 +1158,7 @@ def test_run_worker_honors_explicit_pool_size_flags(monkeypatch) -> None:
         return []
 
     monkeypatch.setattr(cli, "Database", fake_database)
-    monkeypatch.setattr(cli, "_archive", fake_archive)
+    monkeypatch.setattr(cli, "open_archive", fake_archive)
     monkeypatch.setattr(cli, "ObservationProcessor", FakeProcessor)
     monkeypatch.setattr(cli, "process_concurrently", fake_concurrent)
 
@@ -1227,7 +1227,7 @@ def test_worker_writes_terminal_snapshot_after_quiescence(
 
     monkeypatch.setattr(cli, "Database", lambda _url, **kwargs: FakeDatabase(_url))
     monkeypatch.setattr(
-        cli, "_archive", lambda _args, **kwargs: FakeArchive()
+        cli, "open_archive", lambda _args, **kwargs: FakeArchive()
     )
     monkeypatch.setattr(cli, "ObservationProcessor", FakeProcessor)
     result = cli._run_worker(_terminal_namespace(tmp_path))
@@ -1282,7 +1282,7 @@ def test_worker_terminal_write_failure_stays_incomplete(
 
     monkeypatch.setattr(cli, "Database", lambda _url, **kwargs: FakeDatabase(_url))
     monkeypatch.setattr(
-        cli, "_archive", lambda _args, **kwargs: FakeArchive()
+        cli, "open_archive", lambda _args, **kwargs: FakeArchive()
     )
     monkeypatch.setattr(cli, "ObservationProcessor", FakeProcessor)
     result = cli._run_worker(
@@ -1346,7 +1346,7 @@ def test_worker_terminal_refused_when_heartbeat_stuck(
 
     monkeypatch.setattr(cli, "Database", lambda _url, **kwargs: FakeDatabase(_url))
     monkeypatch.setattr(
-        cli, "_archive", lambda _args, **kwargs: FakeArchive()
+        cli, "open_archive", lambda _args, **kwargs: FakeArchive()
     )
     monkeypatch.setattr(cli, "ObservationProcessor", FakeProcessor)
     monkeypatch.setattr(cli, "WORKER_SNAPSHOT_INTERVAL_SECONDS", 0.01)

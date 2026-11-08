@@ -49,7 +49,7 @@ from .profile import (
     ProfileParseError,
     parse_profile,
 )
-from .promotion_candidates import CANDIDATE_TIER_IDS
+from .promotion_candidates import CANDIDATE_TIER_IDS, CANDIDATE_TIERS_IN_ORDER
 
 if TYPE_CHECKING:
     from .collector import Collector
@@ -60,8 +60,6 @@ IN_FLIGHT = 2
 IDLE_SECONDS = 60.0
 # How long a reading of the database's spare-time checks is reused.
 GUARD_SECONDS = 1.0
-LEGEND_II_TIER_ID = 105000035
-LEGEND_III_TIER_ID = 105000034
 _WEEK = timedelta(days=7)
 _WEEK_ANCHOR = datetime(2000, 1, 3, 5, tzinfo=UTC)  # a Monday Reset
 
@@ -126,9 +124,9 @@ def has_spare_time(database: CollectorDatabase, now: datetime) -> bool:
     """06:00 has passed, collection has time to spare and settlement checks are done."""
     if now < week_start(now) + START_DELAY:
         return False
-    with database._connection() as connection, connection.transaction():
+    with database.connection() as connection, connection.transaction():
         return weekly_eligibility.has_time_to_spare(
-            database, connection, now
+            connection, now
         ) and not connection.execute(
             """
             SELECT 1 FROM collector_work
@@ -149,8 +147,8 @@ def due_tags(database: CollectorDatabase, now: datetime, skip: list[str]) -> lis
     Legend III players come only once no Legend II player is due; while only
     skipped Legend II players are due, nothing is returned.
     """
-    with database._connection() as connection:
-        for tier in (LEGEND_II_TIER_ID, LEGEND_III_TIER_ID):
+    with database.connection() as connection:
+        for tier in CANDIDATE_TIERS_IN_ORDER:
             due = connection.execute(
                 """
                 SELECT normalized_tag, normalized_tag = ANY(%s::text[])
@@ -173,7 +171,7 @@ def record_answers(database: CollectorDatabase, answers: list[Answer]) -> set[st
     check newer than this answer; one another job holds is left out, keeps
     its old row, stays due and is asked again later.
     """
-    with database._connection() as connection, connection.transaction():
+    with database.connection() as connection, connection.transaction():
         steps: list[tuple[Answer, Step]] = []
         for answer in answers:
             handed = answer.outcome is not Outcome.PROMOTED or bool(connection.execute(
@@ -264,10 +262,10 @@ class Admission:
 
     async def open(self) -> bool:
         """Whether collection has time to spare, read at most once a GUARD_SECONDS."""
-        if self._collector._stopping.is_set():
+        if self._collector.stopping.is_set():
             return False
         if time.monotonic() >= self._recheck_at:
-            self._spare = await self._collector._database_call(
+            self._spare = await self._collector.database_call(
                 has_spare_time, self._collector.database, self.clock()
             )
             self._recheck_at = time.monotonic() + GUARD_SECONDS
@@ -280,7 +278,7 @@ class Admission:
 
     async def __call__(self) -> bool:
         """Wait for this request's start slot; False when it must not start now."""
-        stopping = self._collector._stopping
+        stopping = self._collector.stopping
         if stopping.is_set():
             return False
         start = max(self._next_start, time.monotonic())
@@ -304,7 +302,7 @@ async def check_batch(
     if not await admit.open():
         return None
     now = admit.clock()
-    tags = await collector._database_call(due_tags, collector.database, now, sorted(attempted))
+    tags = await collector.database_call(due_tags, collector.database, now, sorted(attempted))
     if not tags:
         attempted.clear()
         return None
@@ -330,7 +328,7 @@ async def check_batch(
     asked = len(tags) - len(refused)
     if not asked:
         return None
-    left_due = await collector._database_call(record_answers, collector.database, found)
+    left_due = await collector.database_call(record_answers, collector.database, found)
     attempted.update(left_due)
     attempted.update(
         tag

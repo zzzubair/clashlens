@@ -1033,25 +1033,18 @@ class OfficialApiClient:
         endpoint: str,
         start_before: datetime | None = None,
     ) -> FetchedResponse:
-        if endpoint == "profile":
-            suffix = f"/v1/players/{quote(normalized_tag, safe='')}"
-        elif endpoint == "battle_log":
-            suffix = f"/v1/players/{quote(normalized_tag, safe='')}/battlelog"
-        elif endpoint == "league_history":
-            suffix = f"/v1/players/{quote(normalized_tag, safe='')}/leaguehistory"
-        else:
+        if endpoint == "global_player_rankings":
             raise ValueError("unknown player endpoint")
-        return await self._fetch(pool, endpoint, self.origin + suffix, start_before)
+        path, _query = endpoint_target(endpoint, normalized_tag)
+        return await self._fetch(pool, endpoint, self.origin + path, start_before)
 
     async def fetch_rankings(
         self, pool: KeyPool, location: str = "global"
     ) -> FetchedResponse:
         """One location's top 200 players: ``global`` or a game location ID."""
-        return await self._fetch(
-            pool,
-            "global_player_rankings" if location == "global" else "location_player_rankings",
-            self.origin + f"/v1/locations/{quote(location, safe='')}/rankings/players?limit=200",
-        )
+        endpoint = "global_player_rankings" if location == "global" else "location_player_rankings"
+        path, query = endpoint_target(endpoint, location)
+        return await self._fetch(pool, endpoint, self.origin + path + "?" + query)
 
     async def fetch_locations(self, pool: KeyPool) -> FetchedResponse:
         return await self._fetch(pool, "locations", self.origin + "/v1/locations?limit=1000")
@@ -1343,3 +1336,16 @@ def retry_after_seconds(value: str | None) -> float:
         except (TypeError, ValueError):
             return 5.0
         return min(300.0, max(1.0, (target - datetime.now(UTC)).total_seconds()))
+
+
+def endpoint_target(endpoint: str, identity: str | None) -> tuple[str, str]:
+    """The request path and query used both on the wire and in saved evidence."""
+    if endpoint in {"global_player_rankings", "location_player_rankings"}:
+        location = "global" if endpoint == "global_player_rankings" else identity
+        if location is None:
+            raise ValueError("ranking location is required")
+        return f"/v1/locations/{quote(location, safe='')}/rankings/players", "limit=200"
+    suffixes = {"profile": "", "battle_log": "/battlelog", "league_history": "/leaguehistory"}
+    if endpoint not in suffixes or identity is None:
+        raise ValueError("unknown player endpoint")
+    return f"/v1/players/{quote(identity, safe='')}{suffixes[endpoint]}", ""

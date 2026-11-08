@@ -669,26 +669,12 @@ class SpoolFirstReader:
             self._counters["local_hits"] += 1
             return ArchiveReadResult(body=local, reference=reference, sha256=expected_hash)
         self._counters["local_misses"] += 1
-        # Bounded remote fallback with lease-aware pacing: each transient
-        # provider failure is followed by a heartbeat renewal so the retry
-        # wall time stays inside the worker's renewed lease window.
-        max_attempts = getattr(self.archive, "max_retries", 0) + 1
-        backoff = getattr(self.archive, "retry_backoff_seconds", 0.0)
-        for attempt in range(max_attempts):
-            try:
-                remote = self.archive.read_verified(reference, expected_hash, heartbeat=heartbeat)
-                break
-            except ArchiveReadError as error:
-                if not error.retryable or attempt == max_attempts - 1:
-                    if error.retryable:
-                        self._counters["provider_errors"] += 1
-                    raise
-                if heartbeat is not None:
-                    heartbeat()
-                if backoff:
-                    time.sleep(backoff)
-                if heartbeat is not None:
-                    heartbeat()
+        try:
+            remote = self.archive.read_verified(reference, expected_hash, heartbeat=heartbeat)
+        except ArchiveReadError as error:
+            if error.retryable:
+                self._counters["provider_errors"] += 1
+            raise
         try:
             repair_started = time.monotonic()
             self.spool.publish(remote.body, expected_hash)

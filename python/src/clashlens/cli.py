@@ -37,7 +37,7 @@ from . import (
 from . import db as _db
 from .api import ClashKingClient, create_app
 from .api_db import ApiDatabase
-from .archive import MAX_ARCHIVE_POOL_SIZE, S3ArchiveReader, SpoolFirstReader
+from .archive import MAX_ARCHIVE_POOL_SIZE, SpoolFirstReader
 from .collector import Collector
 from .collector_db import CollectorDatabase
 from .collector_http import ApiKey, KeyPool, OfficialApiClient, ProviderFailure
@@ -49,6 +49,7 @@ from .operating import (
     write_private_snapshot,
 )
 from .profile import normalize_player_tag
+from .runtime import database_url, open_archive
 from .stage_metrics import StageMetrics
 from .uploader import UploaderProcess
 from .verification import (
@@ -462,7 +463,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.command == "ready":
             return _run_ready(arguments)
         if arguments.command == "queue-status":
-            database = Database(_database_url(arguments))
+            database = Database(database_url(arguments))
             try:
                 print(json.dumps(database.queue_health(), sort_keys=True))
             finally:
@@ -471,7 +472,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.command == "failed-items":
             from .operator_recovery import failed_items_command
 
-            report = failed_items_command(arguments, _database_url(arguments))
+            report = failed_items_command(arguments, database_url(arguments))
             print(json.dumps(report, sort_keys=True, default=str))
             return 1 if report.get("outcome") == "refused" else 0
         if arguments.command == "prune-archive":
@@ -479,16 +480,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             from .archive_retention import retire_archive_objects
 
-            database = Database(_database_url(arguments))
+            database = Database(database_url(arguments))
             archive = None
             try:
-                archive = _archive(arguments, database=database)
+                archive = open_archive(arguments, database=database)
                 if not isinstance(archive, SpoolFirstReader):
                     raise TypeError(
                         "archive retirement requires the collector's exact shared spool"
                     )
                 with psycopg.connect(
-                    _database_url(arguments), autocommit=True
+                    database_url(arguments), autocommit=True
                 ) as connection:
                     report = retire_archive_objects(
                         connection,
@@ -510,7 +511,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             from .history import prune_completed_history
 
-            with psycopg.connect(_database_url(arguments)) as connection:
+            with psycopg.connect(database_url(arguments)) as connection:
                 report = prune_completed_history(
                     connection,
                     retention_hours=arguments.retention_hours,
@@ -541,21 +542,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps(report, sort_keys=True))
             return 0
         if arguments.command == "republish-current-season":
-            return republish.run_republish_command(_database_url(arguments), arguments)
+            return republish.run_republish_command(database_url(arguments), arguments)
         if arguments.command == "refresh-league-history":
-            return league_history_refresh.run_command(_database_url(arguments))
+            return league_history_refresh.run_command(database_url(arguments))
         if arguments.command == "load-promotion-candidates":
-            return promotion_candidates.run_command(_database_url(arguments))
+            return promotion_candidates.run_command(database_url(arguments))
         if arguments.command == "population-status":
-            return population.run_command(_database_url(arguments), repair=arguments.repair)
+            return population.run_command(database_url(arguments), repair=arguments.repair)
         if arguments.command == "game-ranking-score":
-            return game_rankings.run_command(_database_url(arguments), days=arguments.days)
+            return game_rankings.run_command(database_url(arguments), days=arguments.days)
         if arguments.command == "materialize-season-summaries":
             import psycopg
 
             from .season_summaries import materialize_completed_seasons
 
-            with psycopg.connect(_database_url(arguments)) as connection:
+            with psycopg.connect(database_url(arguments)) as connection:
                 report = materialize_completed_seasons(
                     connection,
                     season_id=arguments.season_id,
@@ -576,7 +577,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             from .army_season_summaries import materialize_completed_army_season
 
-            with psycopg.connect(_database_url(arguments)) as connection:
+            with psycopg.connect(database_url(arguments)) as connection:
                 report = materialize_completed_army_season(
                     connection,
                     season_id=arguments.season_id,
@@ -595,7 +596,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             from .season_retirement import finalize_season_detail
 
-            with psycopg.connect(_database_url(arguments)) as connection:
+            with psycopg.connect(database_url(arguments)) as connection:
                 report = finalize_season_detail(
                     connection,
                     arguments.season_id,
@@ -614,7 +615,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             from .season_retirement import retire_season_detail
 
-            with psycopg.connect(_database_url(arguments)) as connection:
+            with psycopg.connect(database_url(arguments)) as connection:
                 report = retire_season_detail(
                     connection,
                     arguments.season_id,
@@ -633,7 +634,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             from .season_retirement import measure_season_storage, project_six_months
 
-            with psycopg.connect(_database_url(arguments)) as connection:
+            with psycopg.connect(database_url(arguments)) as connection:
                 measurement = measure_season_storage(
                     connection, arguments.season_id or None
                 )
@@ -722,7 +723,7 @@ def _run_collector(arguments: argparse.Namespace) -> int:
     if not 1 <= port <= 65535:
         raise ValueError("collector health port must be between 1 and 65535")
 
-    database = CollectorDatabase(_database_url(arguments))
+    database = CollectorDatabase(database_url(arguments))
     try:
         interactive_secret = interactive_keys[0].value.encode("ascii")
     except UnicodeEncodeError as error:
@@ -749,7 +750,7 @@ def _run_collector(arguments: argparse.Namespace) -> int:
                 raise ProviderFailure(permit.reason, retryable=False)
             await asyncio.sleep(0.01)
 
-    archive_reader = _archive(arguments, database=database, validate_archive_instance=False)
+    archive_reader = open_archive(arguments, database=database, validate_archive_instance=False)
     if not isinstance(archive_reader, SpoolFirstReader):
         raise TypeError("collector requires a local spool root")
     concurrency = arguments.concurrency_per_key
@@ -832,7 +833,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
 
     def open_database(max_size: int) -> Database:
         return Database(
-            _database_url(arguments),
+            database_url(arguments),
             max_size=max_size,
             player_discovery_enabled=not getattr(
                 arguments, "disable_player_discovery", False
@@ -847,7 +848,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
     try:
         stage_metrics = StageMetrics()
         worker_metrics = WorkerMetrics()
-        archive = _archive(arguments, pool_size=archive_pool_size, database=database)
+        archive = open_archive(arguments, pool_size=archive_pool_size, database=database)
         set_archive_pool_observer = getattr(archive, "set_pool_acquire_observer", None)
         if callable(set_archive_pool_observer):
             set_archive_pool_observer(
@@ -1075,7 +1076,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
 
 def _run_ready(arguments: argparse.Namespace) -> int:
     payload = worker_readiness(
-        arguments, lambda: Database(_database_url(arguments)), _archive
+        arguments, lambda: Database(database_url(arguments)), open_archive
     )
     print(json.dumps(payload))
     return 0 if payload["status"] == "ready" else 1
@@ -1199,88 +1200,6 @@ def _archive_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _archive(
-    arguments: argparse.Namespace,
-    *,
-    pool_size: int = 4,
-    database: Any | None = None,
-    validate_archive_instance: bool = True,
-) -> S3ArchiveReader | SpoolFirstReader:
-    if not arguments.archive_endpoint:
-        raise ValueError("archive endpoint is required")
-    access_key = _file_value(
-        arguments.archive_access_key_file,
-        arguments.archive_access_key,
-        "archive access key",
-    )
-    secret_key = _file_value(
-        arguments.archive_secret_key_file,
-        arguments.archive_secret_key,
-        "archive secret key",
-    )
-    if not access_key or not secret_key:
-        raise ValueError("archive access and secret key are required")
-    archive = S3ArchiveReader(
-        endpoint=arguments.archive_endpoint,
-        bucket=arguments.archive_bucket,
-        region=arguments.archive_region,
-        access_key=access_key,
-        secret_key=secret_key,
-        secure=not arguments.archive_insecure_test_only,
-        allow_insecure_test_origin=arguments.archive_insecure_test_only,
-        max_body_bytes=arguments.archive_max_body_bytes,
-        connect_timeout_seconds=arguments.archive_connect_timeout_seconds,
-        read_timeout_seconds=arguments.archive_read_timeout_seconds,
-        max_retries=arguments.archive_max_retries,
-        retry_backoff_seconds=arguments.archive_retry_backoff_seconds,
-        pool_size=pool_size,
-        instance_id=arguments.archive_instance_id,
-        marker_key=arguments.archive_marker_key,
-        marker_hash=arguments.archive_marker_hash,
-        marker_payload_version=arguments.archive_marker_payload_version,
-    )
-    if arguments.spool_root:
-        return SpoolFirstReader(
-            archive,
-            spool_root=arguments.spool_root,
-            max_body_bytes=arguments.archive_max_body_bytes,
-            max_bytes=arguments.spool_max_bytes,
-            max_objects=arguments.spool_max_objects,
-            free_space_floor=arguments.spool_free_space_floor,
-            free_inode_floor=arguments.spool_free_inode_floor,
-            database=database,
-            validate_database=validate_archive_instance,
-        )
-    return archive
-
-
-def _database_url(arguments: argparse.Namespace) -> str:
-    value = _file_value(
-        arguments.database_url_file, arguments.database_url, "database URL"
-    )
-    if not value:
-        raise ValueError("database URL is required")
-    return value
-
-
-def _file_value(path: str, inline_value: str, label: str) -> str:
-    if path:
-        try:
-            value = Path(path).read_bytes()
-        except OSError as error:
-            raise ValueError(f"{label} file could not be read") from error
-        if value.endswith(b"\n"):
-            value = value[:-1]
-        try:
-            decoded = value.decode("utf-8")
-        except UnicodeDecodeError as error:
-            raise ValueError(f"{label} file must contain UTF-8 text") from error
-        if not decoded or "\n" in decoded or "\r" in decoded:
-            raise ValueError(f"{label} file contains invalid line endings")
-        return decoded
-    return inline_value
-
-
 def _load_hmac_keys(arguments: argparse.Namespace) -> dict[tuple[str, str], bytes]:
     if not arguments.caller or not arguments.key_id:
         raise ValueError("HMAC caller and key ID are required")
@@ -1321,7 +1240,7 @@ def _serve_app(arguments: argparse.Namespace) -> tuple[Any, ApiDatabase]:
         and arguments.official_origin == "https://api.clashofclans.com"
     ):
         raise ValueError("fixed-egress proxy URL is required")
-    api_database = ApiDatabase(_database_url(arguments))
+    api_database = ApiDatabase(database_url(arguments))
     try:
         fingerprint = _official_credential_fingerprint(official_key)
         api_verification.register_official_credential(api_database, fingerprint)
@@ -1392,7 +1311,7 @@ def _run_recover_discord(arguments: argparse.Namespace) -> int:
     if not 1 <= len(player_token) <= 512:
         print(json.dumps({"status": "invalid_token"}))
         return 1
-    database = ApiDatabase(_database_url(arguments))
+    database = ApiDatabase(database_url(arguments))
     try:
         try:
             fingerprint = _official_credential_fingerprint(official_key)

@@ -18,12 +18,13 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 
+import psycopg
 import pytest
 from conftest import _FixtureS3Handler
 from test_collector import _Client, _collector, _Spool, _Store
 
 import clashlens.uploader as uploader_module
-from clashlens import collector_liveness
+from clashlens import async_runtime, collector_liveness
 from clashlens.archive import ArchiveReadError
 from clashlens.collector_uploads import UploadClaim, WriteMayLand
 from clashlens.uploader import Uploader, UploaderProcess, UploaderProcessState
@@ -1211,7 +1212,7 @@ def test_uploads_wait_out_an_archive_outage_without_claiming_responses(
         database = CollectorDatabase(
             connection_info, max_size=uploader_module.DATABASE_CONNECTIONS
         )
-        reader = cli._archive(
+        reader = cli.open_archive(
             arguments,
             pool_size=uploader_module.UPLOADS_AT_ONCE,
             validate_archive_instance=False,
@@ -1260,3 +1261,36 @@ def test_uploads_wait_out_an_archive_outage_without_claiming_responses(
         "category": "archive_unavailable",
     }
     assert uploader.archive_health == "ready"
+
+
+@pytest.mark.parametrize("caller", ["collector", "uploader"])
+@pytest.mark.parametrize("failures, locked", [(0, False), (2, False), (3, False), (1, True)])
+def test_collection_and_upload_database_retries_are_bounded(
+    monkeypatch: pytest.MonkeyPatch, caller: str, failures: int, locked: bool,
+) -> None:
+    calls = []
+    error = psycopg.errors.LockNotAvailable if locked else psycopg.OperationalError
+
+    def database_operation(*_args, **_kwargs):
+        calls.append(1)
+        if len(calls) <= failures:
+            raise error("database unavailable")
+
+    monkeypatch.setattr(async_runtime, "retry_delay", lambda _attempt: 0)
+    spool = _Spool()
+    store = _Store(spool)
+    if caller == "collector":
+        owner = _collector(spool, store, _Client(spool))
+        operation = owner.database_call(database_operation)
+    else:
+        monkeypatch.setattr(uploader_module.collector_uploads, "release_expired_uploads", database_operation)
+        monkeypatch.setattr(uploader_module.collector_uploads, "claim_upload", lambda *_args, **_kwargs: None)
+        owner = _uploader(spool, store, SimpleNamespace(check_marker_health=lambda: "ready"))
+        operation = owner.upload_once(owner="uploader")
+    if locked or failures == 3:
+        with pytest.raises(error):
+            asyncio.run(operation)
+    else:
+        asyncio.run(operation)
+    assert len(calls) == (1 if locked else min(failures + 1, 3))
+    assert owner.outcomes.get("database_failure", 0) == (0 if locked else failures)

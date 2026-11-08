@@ -11,7 +11,7 @@ class RawBodyStage(StrEnum):
     - ``HANDED_OFF``: a sidecar in ``.handoff/`` names it, so the database has
       not committed it yet. Nothing deletes it. After a crash, restart
       recovery commits every sidecar in the order received before collection
-      resumes (``Collector.recover_handoffs``).
+      resumes (``collector_commits.SavedResponses.recover``).
     - ``RECORDED``: the database needs it (``RECORDED_SQL``): an upload not yet
       deleted locally, or an observation with no archived copy. Processing and
       the archive upload finish independently, in either order.

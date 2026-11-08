@@ -93,7 +93,7 @@ def _livez_during_a_slow_call(collector, loop: str, set_up) -> bytes:
 
     async def loop_turn() -> None:
         collector_liveness.mark(collector, loop)
-        await collector._database_call(slow_statement)
+        await collector.database_call(slow_statement)
 
     async def scenario() -> bytes:
         call = asyncio.create_task(loop_turn())
@@ -199,7 +199,7 @@ def test_health_port_answers_while_startup_recovery_is_slow() -> None:
             collector.loop_passes[name] = time.monotonic()
             await asyncio.sleep(0.01)
 
-    collector.recover_handoffs = slow_recovery  # type: ignore[method-assign]
+    collector.commits.sweep_unreferenced = slow_recovery  # type: ignore[method-assign]
     collector._regular_loop = (  # type: ignore[method-assign]
         lambda stop, _idle: busy_loop("regular", stop)
     )

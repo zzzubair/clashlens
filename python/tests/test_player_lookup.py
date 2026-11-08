@@ -88,7 +88,7 @@ def test_initial_collection_uses_interactive_key_for_profile_battles_and_history
     client = _Client(spool)
     collector = _collector(spool, store, client)
     result = asyncio.run(
-        collector.collect_intent(
+        collector.intents.collect(
             CollectorIntent(
                 "initial_collection",
                 datetime.now(UTC),

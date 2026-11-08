@@ -30,18 +30,15 @@ from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
-import psycopg
-from psycopg_pool import PoolTimeout
-
 from . import collector_uploads
 from .archive import ArchiveReadError, failure_evidence, immutable_reference
-from .collector import (
-    _cancel_task,
-    _drain_awaitable,
-    _drain_to_thread,
-    _retry_delay,
-    _stop_task,
-    _wait_or_stop,
+from .async_runtime import (
+    cancel_task,
+    drain_awaitable,
+    drain_to_thread,
+    retry_database,
+    stop_task,
+    wait_or_stop,
 )
 from .collector_db import CollectorDatabase
 from .spool import SpoolError
@@ -194,7 +191,7 @@ class Uploader:
                         owner_tasks[owner] = asyncio.create_task(
                             self._owner_loop(owner, stop_requested, idle_seconds)
                         )
-                await _wait_or_stop(stop_requested, max(1.0, idle_seconds))
+                await wait_or_stop(stop_requested, max(1.0, idle_seconds))
             await asyncio.gather(*owner_tasks.values())
             graceful = True
         finally:
@@ -202,7 +199,7 @@ class Uploader:
                 for task in owner_tasks.values():
                     if not task.done():
                         task.cancel()
-            await _drain_awaitable(
+            await drain_awaitable(
                 asyncio.gather(*owner_tasks.values(), return_exceptions=True)
             )
 
@@ -211,10 +208,10 @@ class Uploader:
     ) -> None:
         while not stop_requested.is_set():
             if self.gate() is UploadGate.SPOOL_FAILED:
-                await _wait_or_stop(stop_requested, max(1.0, idle_seconds))
+                await wait_or_stop(stop_requested, max(1.0, idle_seconds))
                 continue
             if not await self.upload_once(owner=owner):
-                await _wait_or_stop(stop_requested, max(1.0, idle_seconds))
+                await wait_or_stop(stop_requested, max(1.0, idle_seconds))
 
     async def upload_once(self, *, owner: str) -> bool:
         if self.gate() in {UploadGate.NO_ARCHIVE, UploadGate.ARCHIVE_STOPPED}:
@@ -297,8 +294,8 @@ class Uploader:
                     generation=claim.generation or None,
                 )
             await self._keep_lease(renewal, claim, lease)
-            await _stop_task(renewal_stop, renewal)
-            await _drain_awaitable(
+            await stop_task(renewal_stop, renewal)
+            await drain_awaitable(
                 self._database_call(
                     "complete",
                     collector_uploads.complete_upload,
@@ -317,8 +314,8 @@ class Uploader:
                 detail = claim.unresolved_write.failure_detail(detail)
             try:
                 await self._keep_lease(renewal, claim, lease)
-                await _stop_task(renewal_stop, renewal)
-                await _drain_awaitable(
+                await stop_task(renewal_stop, renewal)
+                await drain_awaitable(
                     self._database_call(
                         "fail",
                         collector_uploads.fail_upload,
@@ -341,7 +338,7 @@ class Uploader:
             self._count("upload_lease_lost")
         finally:
             renewal_stop.set()
-            await _cancel_task(renewal)
+            await cancel_task(renewal)
         return True
 
     async def _archived_copy(self, claim: collector_uploads.UploadClaim) -> str:
@@ -416,29 +413,16 @@ class Uploader:
         try:
             async with self._database_slots:
                 self.stages.record("upload_database_wait", time.monotonic() - started)
-                return await _drain_awaitable(
-                    self._retrying(operation, *args, **kwargs)
+                return await drain_awaitable(
+                    retry_database(operation, *args, on_failure=self._count, **kwargs)
                 )
         finally:
             self.stages.record(f"upload_{step}", time.monotonic() - started)
 
-    async def _retrying(self, operation: Any, *args: Any, **kwargs: Any) -> Any:
-        for attempt in range(3):
-            try:
-                return await asyncio.to_thread(operation, *args, **kwargs)
-            except psycopg.errors.LockNotAvailable:
-                raise
-            except (psycopg.Error, PoolTimeout):
-                self._count("database_failure")
-                if attempt == 2:
-                    raise
-                await asyncio.sleep(_retry_delay(attempt))
-        raise AssertionError("unreachable database retry loop")
-
     async def _timed(self, step: str, operation: Any, *args: Any, **kwargs: Any) -> Any:
         started = time.monotonic()
         try:
-            return await _drain_to_thread(operation, *args, **kwargs)
+            return await drain_to_thread(operation, *args, **kwargs)
         except ArchiveReadError as error:
             error.stage = error.stage or step
             raise
@@ -502,7 +486,7 @@ class UploaderProcess:
                 delay = restart_delay(delay, time.monotonic() - started)
                 print(json.dumps({**event, "wait_seconds": delay}), flush=True)
                 self.state = UploaderProcessState.RESTART_WAIT
-                await _wait_or_stop(stop_requested, delay)
+                await wait_or_stop(stop_requested, delay)
         finally:
             self.state = UploaderProcessState.STOPPED
 
@@ -608,12 +592,12 @@ class UploaderProcess:
 
 def run_process(arguments: Any, sender: Any) -> None:
     """The uploads process: run until stopped or the collector goes away."""
-    from .cli import _archive, _database_url
+    from .runtime import database_url, open_archive
 
-    database = CollectorDatabase(_database_url(arguments), max_size=DATABASE_CONNECTIONS)
+    database = CollectorDatabase(database_url(arguments), max_size=DATABASE_CONNECTIONS)
     reader = None
     try:
-        reader = _archive(
+        reader = open_archive(
             arguments, pool_size=UPLOADS_AT_ONCE, validate_archive_instance=False
         )
         uploader = Uploader(
@@ -675,7 +659,7 @@ async def _report(
             next_log = time.monotonic() + LOG_SECONDS
         if stop_requested.is_set():
             return
-        await _wait_or_stop(stop_requested, REPORT_SECONDS)
+        await wait_or_stop(stop_requested, REPORT_SECONDS)
 
 
 def _send_reports(reports: queue.Queue[bytes], sender: Any) -> None:

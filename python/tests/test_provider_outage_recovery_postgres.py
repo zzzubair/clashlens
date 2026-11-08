@@ -128,7 +128,7 @@ def _reset_intents(database: CollectorDatabase) -> list:
 
 def _collect_reset(collector: Collector, database: CollectorDatabase) -> str:
     (intent,) = _reset_intents(database)
-    return asyncio.run(collector.collect_intent(intent))
+    return asyncio.run(collector.intents.collect(intent))
 
 
 def _work(connection_info: str) -> tuple[str, int | None, int | None]:
@@ -244,9 +244,9 @@ def test_reset_recovery_reaches_later_work_past_rows_waiting_on_processing(
         # processing has not finished, for example because their file cannot
         # be read yet; the later work got no response at all. Both then fail.
         _Provider.mode = "battle_log_unavailable"
-        assert asyncio.run(collector.collect_intent(first)) == "retrying"
+        assert asyncio.run(collector.intents.collect(first)) == "retrying"
         _Provider.mode = "drop"
-        assert asyncio.run(collector.collect_intent(later)) == "retrying"
+        assert asyncio.run(collector.intents.collect(later)) == "retrying"
         for intent in (first, later):
             assert (
                 database.fail_intent(intent.work_id, category="provider_failure")
@@ -370,7 +370,7 @@ def test_interrupted_reset_retry_fetches_the_battle_log_again_after_restart(
         assert not resumed.profile_required and resumed.battle_log_required
         assert (
             asyncio.run(
-                _collector(origin, database, collector.spool).collect_intent(resumed)
+                _collector(origin, database, collector.spool).intents.collect(resumed)
             )
             == "complete"
         )
@@ -497,7 +497,7 @@ def test_reset_failing_while_the_api_answers_settles_after_three_retries(
 
         async def collect() -> str:
             (intent,) = _reset_intents(database)
-            return await collector.collect_intent(intent)
+            return await collector.intents.collect(intent)
 
         async def run() -> None:
             # During a provider-outage pause, retries are not counted.

@@ -574,8 +574,8 @@ def test_a_failing_request_stops_the_rest_of_its_batch_first() -> None:
 
     async def scenario() -> None:
         collector = SimpleNamespace(
-            _database_call=database_call,
-            _stopping=asyncio.Event(),
+            database_call=database_call,
+            stopping=asyncio.Event(),
             database=None,
             regular_keys=KeyPool(
                 [ApiKey("regular-1", "secret")], starts_per_second=25, concurrency_per_key=2
@@ -610,8 +610,8 @@ def test_stopping_mid_batch_at_a_slow_rate_ends_the_batch_quickly() -> None:
     async def scenario() -> None:
         stopping = asyncio.Event()
         collector = SimpleNamespace(
-            _database_call=database_call,
-            _stopping=stopping,
+            database_call=database_call,
+            stopping=stopping,
             database=None,
             regular_keys=KeyPool(
                 [ApiKey("regular-1", "secret")], starts_per_second=25, concurrency_per_key=2

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, NamedTuple
 from uuid import UUID, uuid4
 
 from .archive import immutable_reference
@@ -235,26 +235,46 @@ def renew_upload(
     return renewed[0]
 
 
-def _claim_matches(row: tuple[Any, ...], claim: UploadClaim) -> bool:
+class UploadRecord(NamedTuple):
+    response_hash: str
+    spool_key: str
+    byte_size: int
+    state: str
+    lease_owner: str | None
+    lease_token: str | None
+    lease_expires_at: datetime | None
+    attempt_count: int
+    upload_generation: str
+    latest_sighting_at: datetime
+    settled_lease_token: UUID | None
+    archive_reference: str | None
+    archive_instance_id: str | None
+    completed_at: datetime | None
+    last_error_category: str | None
+    last_error_detail: str | None
+    last_error_retryable: bool | None
+
+
+def _claim_matches(row: UploadRecord, claim: UploadClaim) -> bool:
     return (
-        str(row[0]) == claim.response_hash
-        and str(row[1]) == claim.spool_key
-        and int(row[2]) == claim.byte_size
-        and int(row[7]) == claim.attempt_count
-        and str(row[8]) == claim.generation
+        str(row.response_hash) == claim.response_hash
+        and str(row.spool_key) == claim.spool_key
+        and int(row.byte_size) == claim.byte_size
+        and int(row.attempt_count) == claim.attempt_count
+        and str(row.upload_generation) == claim.generation
     )
 
 
-def _settled_by_claim(row: tuple[Any, ...], claim: UploadClaim) -> bool:
+def _settled_by_claim(row: UploadRecord, claim: UploadClaim) -> bool:
     try:
         token = UUID(claim.token)
     except ValueError:
         return False
-    return row[10] is not None and row[10] == token
+    return row.settled_lease_token is not None and row.settled_lease_token == token
 
 
-def _lock_upload(connection: Any, response_hash: str) -> tuple[Any, ...] | None:
-    return connection.execute(
+def _lock_upload(connection: Any, response_hash: str) -> UploadRecord | None:
+    row = connection.execute(
         """
         SELECT response_hash, spool_key, byte_size, state, lease_owner,
                lease_token, lease_expires_at, attempt_count,
@@ -269,22 +289,23 @@ def _lock_upload(connection: Any, response_hash: str) -> tuple[Any, ...] | None:
         """,
         (response_hash,),
     ).fetchone()
+    return None if row is None else UploadRecord(*row)
 
 
 def _require_live(
-    row: tuple[Any, ...] | None,
+    row: UploadRecord | None,
     claim: UploadClaim,
     *,
     owner: str,
     now: datetime,
-) -> tuple[Any, ...]:
+) -> UploadRecord:
     if (
         row is None
         or not _claim_matches(row, claim)
-        or row[3] != "leased"
-        or row[4] != owner
-        or row[5] != claim.token
-        or row[6] <= now
+        or row.state != "leased"
+        or row.lease_owner != owner
+        or row.lease_token != claim.token
+        or row.lease_expires_at <= now
     ):
         raise UploadLeaseLost("upload lease lost")
     return row
@@ -310,11 +331,11 @@ def complete_upload(
             if (
                 row is not None
                 and _claim_matches(row, claim)
-                and row[3] == "complete"
+                and row.state == "complete"
                 and _settled_by_claim(row, claim)
-                and row[11] == archive_reference
-                and row[12] == archive_instance_id
-                and row[13] is not None
+                and row.archive_reference == archive_reference
+                and row.archive_instance_id == archive_instance_id
+                and row.completed_at is not None
             ):
                 return
             row = _require_live(
@@ -359,7 +380,7 @@ def complete_upload(
                     WHERE archive_reference = %s
                       AND retire_after < clashlens_season_retire_after(%s)
                     """,
-                    (row[9], archive_reference, row[9]),
+                    (row.latest_sighting_at, archive_reference, row.latest_sighting_at),
                 )
             else:
                 connection.execute(
@@ -378,7 +399,7 @@ def complete_upload(
                         claim.byte_size,
                         archive_instance_id,
                         complete_time,
-                        row[9],
+                        row.latest_sighting_at,
                     ),
                 )
             connection.execute(
@@ -439,11 +460,11 @@ def fail_upload(
             if (
                 row is not None
                 and _claim_matches(row, claim)
-                and row[3] == "failed"
+                and row.state == "failed"
                 and _settled_by_claim(row, claim)
-                and row[14] == stored_category
-                and row[15] == stored_detail
-                and row[16] == retryable
+                and row.last_error_category == stored_category
+                and row.last_error_detail == stored_detail
+                and row.last_error_retryable == retryable
             ):
                 return
             _require_live(row, claim, owner=owner or claim.owner, now=fail_time)

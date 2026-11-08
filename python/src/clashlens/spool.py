@@ -467,9 +467,8 @@ class Spool:
                     fcntl.flock(self._capacity, fcntl.LOCK_UN)
 
     @contextmanager
-    def lock(self, digest: str, *, exclusive: bool = False) -> Iterator[None]:
-        """Preserve the old locking seam while using the single spool lock."""
-        self._final(digest)
+    def storage_lock(self) -> Iterator[None]:
+        """Exclude publications and retirement while storage is checked."""
         with self._capacity_lock():
             yield
 

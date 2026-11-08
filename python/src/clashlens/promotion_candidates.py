@@ -23,7 +23,8 @@ from typing import Any
 
 from .profile import normalize_player_tag
 
-CANDIDATE_TIER_IDS = frozenset({105000034, 105000035})  # Legend III, Legend II
+CANDIDATE_TIERS_IN_ORDER = (105000035, 105000034)  # Legend II, then Legend III
+CANDIDATE_TIER_IDS = frozenset(CANDIDATE_TIERS_IN_ORDER)
 COLUMNS = ["tag", "league_tier_id", "trophies", "checked_at"]
 _CHUNK = 10_000
 

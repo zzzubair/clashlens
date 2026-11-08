@@ -96,7 +96,7 @@ def test_sunday_check_does_not_satisfy_monday_but_repeats_reuse_it(database_url,
             spool = _Spool()
             client = _Client(spool)
             collector = _fake_collector(spool, database, client)
-            assert asyncio.run(collector.collect_intent(remaining)) == "complete"
+            assert asyncio.run(collector.intents.collect(remaining)) == "complete"
             assert client.fetch_count == 1
             assert "fetch:league_history" in spool.events and "fetch:profile" not in spool.events
             assert next_check(database, MONDAY + timedelta(minutes=1), schedule=True) is None
@@ -259,7 +259,7 @@ def test_discovery_admission_reuses_external_profile_and_finishes_history(
                 spool = _Spool()
                 client = _Client(spool)
                 collector = _fake_collector(spool, database, client)
-                assert asyncio.run(collector.collect_intent(admitted)) == "complete"
+                assert asyncio.run(collector.intents.collect(admitted)) == "complete"
                 assert client.fetch_count == 1
                 assert "fetch:league_history" in spool.events
                 assert "fetch:profile" not in spool.events
@@ -311,7 +311,7 @@ def test_discovery_restart_fetches_only_unfinished_endpoints(database_url, weekl
             spool = _Spool()
             client = _Client(spool)
             collector = _fake_collector(spool, database, client)
-            assert asyncio.run(collector.collect_intent(resumed)) == "complete"
+            assert asyncio.run(collector.intents.collect(resumed)) == "complete"
             assert client.fetch_count == (0 if history_recorded else 1)
             assert "fetch:profile" not in spool.events
         finally:
@@ -380,7 +380,7 @@ def test_processed_eligible_profile_preserves_history_across_restart(
             spool = _Spool()
             client = _Client(spool)
             collector = _fake_collector(spool, database, client)
-            assert asyncio.run(collector.collect_intent(resumed)) == "complete"
+            assert asyncio.run(collector.intents.collect(resumed)) == "complete"
             assert client.fetch_count == 1
             assert "fetch:league_history" in spool.events and "fetch:profile" not in spool.events
             with psycopg.connect(info) as connection:
@@ -438,7 +438,7 @@ def test_promotion_reuses_identity_and_starts_regular_battle_collection(database
             spool = _Spool()
             client = _Client(spool)
             collector = _fake_collector(spool, database, client)
-            assert asyncio.run(collector.collect_intent(remaining)) == "complete"
+            assert asyncio.run(collector.intents.collect(remaining)) == "complete"
             assert client.fetch_count == 1
             assert "fetch:league_history" in spool.events and "fetch:profile" not in spool.events
             assert next_check(database, monday + timedelta(minutes=1), schedule=True) is None
@@ -990,12 +990,12 @@ def test_temporary_failure_retries_the_same_weeks_work_until_the_api_answers(
             client = _EndpointClient(spool, {"league_history": 503})
             collector = _fake_collector(spool, database, client)
             first = admitted()
-            assert asyncio.run(collector.collect_intent(first)) == "retrying"
+            assert asyncio.run(collector.intents.collect(first)) == "retrying"
             client.statuses = {}
             retry = admitted()
             assert retry.work_id == first.work_id
             assert not retry.profile_required and retry.league_history_required
-            assert asyncio.run(collector.collect_intent(retry)) == "complete"
+            assert asyncio.run(collector.intents.collect(retry)) == "complete"
             assert spool.events.count("fetch:profile") == 1
             assert spool.events.count("fetch:league_history") == 2
             with psycopg.connect(info) as connection:
@@ -1039,7 +1039,7 @@ def test_failed_check_retries_only_temporary_failures_and_a_bounded_number_of_ti
                           next(iter(database.pending_intents(limit=1, now=now, interactive=False)), None))
                 if intent is None:
                     break
-                outcomes.append(asyncio.run(collector.collect_intent(intent)))
+                outcomes.append(asyncio.run(collector.intents.collect(intent)))
             # One request per run: the first, then three retries while the API answers.
             assert outcomes == ["retrying"] * (runs - 1) + ["failed"]
             assert client.fetch_count == runs
@@ -1121,7 +1121,7 @@ def test_recognized_profile_keeps_retrying_failed_league_history(
             spool = _Spool()
             client = _Client(spool)
             collector = _fake_collector(spool, database, client)
-            assert asyncio.run(collector.collect_intent(retry)) == "complete"
+            assert asyncio.run(collector.intents.collect(retry)) == "complete"
             assert spool.events.count("fetch:league_history") == 1
             assert "fetch:profile" not in spool.events
         finally:
