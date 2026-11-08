@@ -73,7 +73,11 @@ def test_one_read_of_each_log_keeps_coverage_for_current_and_saved_row_formats(
         )
         _process(connection_info, archive_server, direct_job)
         members, members_job = _store(
-            connection_info, archive_server, "members", [REAL, BROKEN | {"destructionPercentage": 13}, REAL], 180
+            connection_info,
+            archive_server,
+            "members",
+            [REAL, BROKEN | {"destructionPercentage": 13}, REAL],
+            180,
         )
         _process(connection_info, archive_server, members_job)
         listed, listed_job = _store(
@@ -111,6 +115,34 @@ def test_one_read_of_each_log_keeps_coverage_for_current_and_saved_row_formats(
                     """,
                     (members,),
                 )
+                # The oldest saved logs, from before saved content was
+                # shared, own their rows directly and have no payload.
+                connection.execute(
+                    """
+                    WITH log AS (
+                        SELECT id, parsed_payload_id, player_id
+                        FROM battle_log_observations WHERE observation_id = %s
+                    ), moved AS (
+                        DELETE FROM battle_payload_row_lists AS list
+                        USING log
+                        WHERE list.parsed_payload_id = log.parsed_payload_id
+                          AND list.reporting_player_id = log.player_id
+                        RETURNING list.source_row_ids
+                    ), owned AS (
+                        UPDATE battle_source_rows AS source
+                        SET battle_log_observation_id = (SELECT id FROM log),
+                            source_row_index = (member.position - 1)::integer
+                        FROM moved CROSS JOIN LATERAL unnest(moved.source_row_ids)
+                            WITH ORDINALITY AS member (source_row_id, position)
+                        WHERE source.id = member.source_row_id
+                        RETURNING source.id
+                    )
+                    UPDATE battle_log_observations SET parsed_payload_id = NULL
+                    WHERE id = (SELECT id FROM log)
+                      AND (SELECT count(*) FROM owned) > 0
+                    """,
+                    (direct,),
+                )
                 # Older parsers saved rows they could not classify.
                 connection.execute(
                     """
@@ -133,7 +165,7 @@ def test_one_read_of_each_log_keeps_coverage_for_current_and_saved_row_formats(
                         (SELECT count(*) FROM battle_payload_row_lists)
                     """
                 ).fetchone()
-                assert layouts[0] == 0 and all(layouts[1:]), layouts
+                assert layouts == (2, 3, 1), layouts
 
                 before = _raw(database, connection, player_id)
                 assert len(before) == 4
