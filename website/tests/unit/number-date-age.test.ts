@@ -20,6 +20,8 @@ it("keeps the different signs, missing-value words and precision used by each vi
   expect(signedNumber(-1234)).toBe("−1,234");
   expect(signedNumber(0)).toBe("0");
   expect(signedNumber(0, { zero: "±0" })).toBe("±0");
+  expect(signedNumber(Number.NaN)).toBe("0");
+  expect(signedNumber(Number.NaN, { zero: "±0" })).toBe("±0");
   expect(signedNumber(-0.04, { digits: 1 })).toBe("−0.0");
   expect(signedOr(-0.04, 1)).toBe("0.0");
   expect(signedOr(null)).toBe("–");

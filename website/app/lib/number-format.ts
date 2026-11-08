@@ -17,10 +17,8 @@ export function signedNumber(
     ? `+${text}`
     : value < 0
       ? `−${text}`
-      : value === 0
-        ? digits === undefined
-          ? zero
-          : text
+      : digits === undefined
+        ? zero
         : text;
 }
 
