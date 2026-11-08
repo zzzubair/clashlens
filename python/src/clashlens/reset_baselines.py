@@ -767,8 +767,13 @@ def _record_boundary_baseline(
             generation=1,
             supersedes_id=None,
         )
-        generation = (generation_id, "pending", "pending")
-    if (
+        generation = (generation_id, "pending", "pending", "none", None, None)
+    # A frozen board keeps the member as it froze them; their day, saved
+    # later, corrects it. On 8 November 2026 two Reset logs that waited in
+    # the worker past the freeze put their players back to waiting on the
+    # published board, and its army results then waited for them for good,
+    # holding back the correction with their days.
+    if generation[4] is not None or generation[5] is not None or (
         _text_value(generation[1]) == "superseded"
         and _text_value(generation[2]) == "superseded"
     ):
