@@ -342,6 +342,41 @@ def test_older_first_log_processed_after_a_newer_one_recalculates_day_1(
     assert from_older[4] is True and from_older[6] == "season_rule"
 
 
+def test_only_the_earliest_saved_log_queues_its_earlier_days(
+    database_url: str, archive_server
+) -> None:
+    found_at = DAY_2 + timedelta(hours=9)  # 14:00 UTC on Day 2
+    battles = [(DAY_1 + timedelta(hours=13), True), (DAY_2 + timedelta(hours=5), True)]
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        logs = {}
+        for hours in (1, 0, 2):
+            at = found_at + timedelta(hours=hours)
+            logs[at] = store_observation(
+                connection_info, archive_server, occurrence_key=f"#2YY-log-{at}",
+                endpoint="battle_log", observed_at=at, normalized_tag="#2YY",
+                body=_log(*battles, filler=[
+                    DAY_1 - timedelta(hours=9 - i / 10, minutes=hours) for i in range(48)
+                ]),
+            )
+        queued = []
+        # Saved in time order 2, 1, 3: the first is the earliest when the
+        # worker reaches it, then the second, which is older; the third never.
+        for at in logs:
+            _process(connection_info, archive_server, [logs[at][1]])
+            with psycopg.connect(connection_info) as connection:
+                queued.append(sorted(row[0] for row in connection.execute(
+                    "SELECT deduplication_key FROM python_processing_jobs"
+                    " WHERE deduplication_key LIKE 'reconcile:first-log:%'"
+                )))
+
+    day_1 = DAY_1.strftime("%Y-%m-%dT%H:%M:%SZ")
+    first, older, _newest = (logs[at][0] for at in logs)
+    both = sorted([f"{day_1}:{first}", f"{day_1}:{older}"])
+    assert [[key.split(":", 3)[3] for key in keys] for keys in queued] == [
+        [f"{day_1}:{first}"], both, both,
+    ]
+
+
 def test_day_1_saved_with_the_previous_season_average_is_recalculated_once(
     database_url: str, archive_server, monkeypatch
 ) -> None:

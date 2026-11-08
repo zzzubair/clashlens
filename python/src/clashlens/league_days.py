@@ -262,27 +262,31 @@ def track(connection: Any, player_id: int, now: datetime) -> None:
         """,
         (player_id, [week - WEEK, week]),
     ).fetchall()}
-    newest = connection.execute(
-        """
-        SELECT version.eligibility_state
-        FROM players AS player
-        JOIN player_profile_versions AS version
-          ON version.normalized_tag = player.normalized_tag
-        LEFT JOIN LATERAL (
-            SELECT max(seen.observed_at) AS read_at FROM player_profile_effects AS seen
-            WHERE seen.profile_version_id = version.id
-        ) AS seen ON true
-        WHERE player.id = %s AND version.eligibility_state IN ('eligible', 'ineligible')
-        ORDER BY GREATEST(version.observed_at, seen.read_at) DESC, version.id DESC
-        LIMIT 1
-        """,
-        (player_id,),
-    ).fetchone()
-    state = tracking(
-        *weeks.get(week, (League.UNKNOWN.value, Strength.NONE)),
-        weeks.get(week - WEEK, (None,))[0],
-        None if newest is None else newest[0],
-    )
+    record = weeks.get(week, (League.UNKNOWN.value, Strength.NONE))
+    last_week = weeks.get(week - WEEK, (None,))[0]
+    state = tracking(*record, last_week, None)
+    if not state.tracked:
+        # Every saved profile of the player, so asked only when the record
+        # does not settle it: on 8 November 2026 this read was 19% of the
+        # database's disk reads, about 400 pages a call, nearly all for
+        # Legend I players.
+        newest = connection.execute(
+            """
+            SELECT version.eligibility_state
+            FROM players AS player
+            JOIN player_profile_versions AS version
+              ON version.normalized_tag = player.normalized_tag
+            LEFT JOIN LATERAL (
+                SELECT max(seen.observed_at) AS read_at FROM player_profile_effects AS seen
+                WHERE seen.profile_version_id = version.id
+            ) AS seen ON true
+            WHERE player.id = %s AND version.eligibility_state IN ('eligible', 'ineligible')
+            ORDER BY GREATEST(version.observed_at, seen.read_at) DESC, version.id DESC
+            LIMIT 1
+            """,
+            (player_id,),
+        ).fetchone()
+        state = tracking(*record, last_week, None if newest is None else newest[0])
     connection.execute(
         """
         UPDATE players
