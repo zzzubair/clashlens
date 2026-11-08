@@ -1,3 +1,4 @@
+import type { DashboardLoaderData, DashboardActionData } from "../lib/dashboard-data";
 import { useEffect, useRef, useState } from "react";
 import type { ShouldRevalidateFunctionArgs } from "react-router";
 import {
@@ -17,13 +18,9 @@ import { getPublicUser } from "../services/public-user.server";
 import { Dashboard } from "../components/DashboardGrid";
 import { DashboardIcon } from "../components/DashboardIcon";
 import { ErrorNotice } from "../components/ErrorNotice";
-import {
-  FRONT_PAGE_PLAYERS,
-  FrontPage,
-  type FrontPageData,
-} from "../components/FrontPage";
+import { FRONT_PAGE_PLAYERS, FrontPage } from "../components/FrontPage";
 import { SeasonStory } from "../components/SeasonStory";
-import { ViewAsBar, ViewAsForm, type OwnerChoices } from "../components/ViewAs";
+import { ViewAsBar, ViewAsForm } from "../components/ViewAs";
 import type { LinkedPlayerCard } from "../lib/account-contracts";
 import { publicPageMeta } from "../lib/blog";
 import type { PlayerPage, WebsiteErrorResponse } from "../lib/contracts";
@@ -59,41 +56,6 @@ import "../view-as.css";
 const NO_STORE = { "Cache-Control": "private, no-store" };
 // Cards read within this go out with the page; slower ones stream in.
 const CARD_WAIT_MS = 250;
-
-export type DashboardLoaderData =
-  | ({ kind: "signed-out" } & FrontPageData)
-  | { kind: "error"; error: WebsiteErrorResponse }
-  | {
-      kind: "signed-in";
-      players: LinkedPlayerCard[];
-      playersUnavailable: boolean;
-      selectedTag: string | null;
-      settings: DashboardSettings;
-      /** Each card's read, sent on as it finishes. */
-      cards: CardReads;
-      /** The Reset that ends the Legend day the cards were read for. */
-      dayEndsMs: number;
-      /** The selected account's player page, when it left Legend I this Season. */
-      leftPlayer: PlayerPage | null;
-      idempotencyKey: string;
-      /** The signed-in account is the site owner, who may View as any player. */
-      canViewAs?: boolean;
-      /**
-       * The player the owner views the dashboard as, read only, which is then
-       * `players`' only one; "not-found" when no player has the tag asked for.
-       */
-      viewAs?: { tag: string; name: string | null } | "not-found" | null;
-      /** The owner's own pin and Discord switches; null for anyone else. */
-      ownerChoices?: OwnerChoices | null;
-    };
-
-export interface DashboardActionData {
-  saved: boolean;
-  error: string | null;
-  idempotencyKey: string;
-  /** The settings as saved, which the page shows without reading itself again. */
-  settings: DashboardSettings | null;
-}
 
 export function meta({ loaderData, matches }: Route.MetaArgs) {
   return loaderData?.kind === "signed-out"

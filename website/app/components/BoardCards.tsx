@@ -1,3 +1,4 @@
+import { CARDS } from "../lib/dashboard";
 import { type ReactNode, useRef, useState } from "react";
 import { Link } from "react-router";
 
@@ -11,17 +12,10 @@ import type {
 } from "../lib/dashboard-cards";
 import { around, goalPlan } from "../lib/dashboard-cards";
 import { canonicalPlayerPath } from "../lib/player-tag";
-import {
-  CardHead,
-  CardNote,
-  Name,
-  Switch,
-  count,
-  percent,
-  signedOr,
-  tone,
-} from "./DashboardParts";
-import { LegendClock, zoneName } from "./LegendClock";
+import { CardHead, CardNote, Name, Switch, count, percent, tone } from "./DashboardParts";
+import { signedOr } from "../lib/number-format";
+import { zoneName } from "../lib/clock-format";
+import { LegendClock } from "./LegendClock";
 
 /** Card: the Legend clock, in the device's time zone. */
 export function ClockCard({
@@ -37,6 +31,7 @@ export function ClockCard({
   return (
     <>
       <CardHead
+        icon={CARDS["legend-clock"].icon}
         title="Legend clock"
         meta={<span title="Times on the dial">{zoneName(timeZone)}</span>}
       />
@@ -57,6 +52,7 @@ export function GoalCard({ data }: { data: GoalData }) {
   // The plan's menu, once there is a plan, at the header's end.
   const head = (meta?: ReactNode) => (
     <CardHead
+      icon={CARDS["goal"].icon}
       title={
         <>
           {"Goal "}
@@ -478,6 +474,7 @@ export function CutoffsCard({ data }: { data: CutoffsData }) {
   return (
     <>
       <CardHead
+        icon={CARDS["cutoffs"].icon}
         title="Cutoffs"
         meta={
           <Switch
@@ -596,6 +593,7 @@ export function RivalsCard({ data }: { data: RivalsData }) {
       {/* When the numbers start, said once: today's battles and places moved
           since Reset, or the board as it stood at the last Reset. */}
       <CardHead
+        icon={CARDS["rivals-watch"].icon}
         title={
           <>
             {"Rivals watch "}
@@ -677,7 +675,7 @@ export function GroupWatchCard({
   if (data.groupId === null) {
     return (
       <>
-        <CardHead title="Watchlist" />
+        <CardHead icon={CARDS["group-watch"].icon} title="Watchlist" />
         <CardNote>
           Make a watchlist first, then this card compares you with its players.
         </CardNote>
@@ -695,7 +693,7 @@ export function GroupWatchCard({
   const first = data.rows.indexOf(shown[0]!);
   return (
     <>
-      <CardHead title="Watchlist" meta={picker} />
+      <CardHead icon={CARDS["group-watch"].icon} title="Watchlist" meta={picker} />
       <p className="dash-muted dash-card-sub">
         {data.window === "7" ? "Last 7 days" : `Whole Season · ${data.days} days`}
       </p>

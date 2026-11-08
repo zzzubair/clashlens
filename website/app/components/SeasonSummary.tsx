@@ -1,3 +1,5 @@
+import { signedSide } from "../lib/number-format";
+import { utcDate } from "../lib/date-format";
 import { Fragment, useState } from "react";
 
 import type { RankedDaySummary } from "../lib/contracts";
@@ -17,15 +19,6 @@ export interface SummarySide {
 
 const count = (value: number | null) =>
   value === null ? "Unknown" : value.toLocaleString("en-GB");
-const signed = (value: number | null, sign: 1 | -1, digits = 0) =>
-  value === null
-    ? "Unavailable"
-    : value === 0
-      ? "0"
-      : `${sign > 0 ? "+" : "−"}${value.toLocaleString("en-GB", {
-          minimumFractionDigits: digits,
-          maximumFractionDigits: digits,
-        })}`;
 // Words such as "Not published yet" take a smaller size than numbers.
 const words = (value: string) => (/[a-z]/i.test(value) ? "summary-words" : undefined);
 export const per = (total: number | null, by: number | null) =>
@@ -220,16 +213,16 @@ export function SeasonSummary({
               [
                 [
                   "Offense per day",
-                  signed(attack.perDay, 1),
+                  signedSide(attack.perDay, 1),
                   "Averaged over the finished Legend days with at least one recorded attack",
                 ],
-                ["Per attack", signed(attack.perBattle, 1, 1)],
+                ["Per attack", signedSide(attack.perBattle, 1, 1)],
                 [
                   "Defense per day",
-                  signed(defense.perDay, -1),
+                  signedSide(defense.perDay, -1),
                   "Averaged over the finished Legend days with at least one recorded defense",
                 ],
-                ["Per defense", signed(defense.perBattle, -1, 1)],
+                ["Per defense", signedSide(defense.perBattle, -1, 1)],
               ] as const
             ).map(([label, value, hint]) => (
               <div key={label}>
@@ -246,10 +239,6 @@ export function SeasonSummary({
 }
 
 const DAY = 86_400_000;
-const shortDate = (time: number) =>
-  new Date(time)
-    .toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" })
-    .replace("Sept", "Sep");
 
 /** Each saved day of the Season as the heat map reads it, by its Season day. */
 export function heatDays(
@@ -304,7 +293,7 @@ export function SeasonHeatMap({
   const cell = cells.find((each) => each.day === (pointed ?? picked)) ?? null;
   const current = cells.find((each) => each.kind === "today") ?? null;
   const say = (each: HeatCell) =>
-    `Day ${each.day} · ${shortDate(seasonStart + (each.day - 1) * DAY)} · ${each.kind === "today" ? "in progress" : each.kind === "played" ? `${heatResult(each)} trophies` : heatResult(each)}`;
+    `Day ${each.day} · ${utcDate(seasonStart + (each.day - 1) * DAY)} · ${each.kind === "today" ? "in progress" : each.kind === "played" ? `${heatResult(each)} trophies` : heatResult(each)}`;
   return (
     <div className="season-heat-map">
       <SeasonHeatGrid

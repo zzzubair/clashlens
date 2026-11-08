@@ -74,7 +74,7 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
   };
 });
 
-import { updatedAgo } from "../../app/components/DashboardParts";
+import { updatedAgo } from "../../app/lib/age-format";
 import { LegendClock, clockMarks } from "../../app/components/LegendClock";
 import { LegendDayCard } from "../../app/components/LegendDayCard";
 import { OpponentsCard } from "../../app/components/OpponentsCard";
@@ -99,12 +99,14 @@ import {
 } from "../../app/lib/dashboard";
 import type { CardDataSet, CardReads } from "../../app/lib/dashboard-cards";
 import App, { loader as rootLoader } from "../../app/root";
+import type {
+  DashboardLoaderData,
+  DashboardActionData,
+} from "../../app/lib/dashboard-data";
 import DashboardRoute, {
   action,
   loader,
   shouldRevalidate,
-  type DashboardActionData,
-  type DashboardLoaderData,
 } from "../../app/routes/dashboard";
 import { loadWebsiteConfig } from "../../app/server/config.server";
 import { getPlayerToday } from "../../app/services/dashboard.server";

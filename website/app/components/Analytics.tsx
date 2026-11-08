@@ -22,7 +22,7 @@ import {
   track,
   type Selection,
 } from "../lib/analytics";
-import type { RootLoaderData } from "../root";
+import type { RootLoaderData } from "../lib/root-data";
 
 function currentRoute(): string {
   return routeOf(window.location.pathname).route;

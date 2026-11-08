@@ -1,8 +1,10 @@
+import { rankMovement } from "../lib/rank-movement";
+import { utcDate, dayRange as compactDayRange } from "../lib/date-format";
+import { dayBar, rowScale } from "../lib/day-bars";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 import type { RecentDay, TrackedPlayerEntry } from "../lib/contracts";
-import { signed } from "./LegendClock";
-import { formatAge } from "./Provenance";
+import { signedNumber as signed } from "../lib/number-format";
 
 /** Finished days a row's chart draws; today has its own column. */
 const RECENT_DAYS = 7;
@@ -25,7 +27,7 @@ export function RankMove({ entry }: { entry: TrackedPlayerEntry }) {
         new<span className="sr-only"> since Reset</span>
       </span>
     );
-  const moved = entry.resetRank - entry.rank;
+  const moved = rankMovement(entry.rank, entry.resetRank);
   if (!moved)
     return (
       <span className="rank-move" data-held="">
@@ -86,42 +88,12 @@ export function hasRecentDays(entries: TrackedPlayerEntry[]): boolean {
   );
 }
 
-/** An update's age as Home and Rankings word it: "4 min", not "4 minutes",
- *  so it fits beside a tag on a phone. */
-export function shortAge(seconds: number) {
-  return seconds < 60 ? "<1 min" : formatAge(seconds).replace(/ minutes?$/, " min");
-}
-
-/** A Legend day by the date it started, such as "Tue 27 Oct", as Season
- *  days are named elsewhere. */
-function dayDate(start: string): string {
-  return new Date(start)
-    .toLocaleDateString("en-GB", {
-      weekday: "short",
-      day: "numeric",
-      month: "short",
-      timeZone: "UTC",
-    })
-    .replace("Sept", "Sep");
-}
-
 /** The finished days the charts draw, named once from the rows' own days:
  *  "22–28 Oct", or "29 Sep – 5 Oct" across a month's end. */
 function dayRange(entries: TrackedPlayerEntry[]): string {
   const days = entries.find((entry) => entry.recentDays.length)?.recentDays ?? [];
   if (!days.length) return "The last 7 finished Legend days";
-  const [first, last] = [days[0], days[days.length - 1]].map(({ start }) => {
-    const date = new Date(start);
-    return {
-      day: date.getUTCDate(),
-      month: date
-        .toLocaleDateString("en-GB", { month: "short", timeZone: "UTC" })
-        .replace("Sept", "Sep"),
-    };
-  });
-  return first.month === last.month
-    ? `${first.day}–${last.day} ${last.month}`
-    : `${first.day} ${first.month} – ${last.day} ${last.month}`;
+  return compactDayRange(days.map(({ start }) => start))!;
 }
 
 /** The chart's column heading, two words; its tooltip names the dates and
@@ -163,12 +135,15 @@ export function RecentDays({ entry }: { entry: TrackedPlayerEntry }) {
   const days = dailyChanges(entry);
   if (days.every((day) => day?.trophyChange == null)) return null;
   // The row's biggest day, won or lost, reaches the top or the bottom.
-  const biggest = Math.max(...days.map((day) => Math.abs(day?.trophyChange ?? 0)));
+  const biggest = rowScale(
+    days.map((day) => day?.trophyChange ?? null),
+    0,
+  );
   const label = days
     .flatMap((day) =>
       day?.trophyChange == null
         ? []
-        : [`${dayDate(day.start)} ${signed(day.trophyChange)}`],
+        : [`${utcDate(day.start, { weekday: true })} ${signed(day.trophyChange)}`],
     )
     .join(", ");
   const dayAt = (target: EventTarget) =>
@@ -216,13 +191,11 @@ export function RecentDays({ entry }: { entry: TrackedPlayerEntry }) {
             className="recent-day"
             data-index={index}
             data-sign={sign}
-            style={
-              size ? ({ "--h": `${(size / biggest) * 50}%` } as CSSProperties) : undefined
-            }
+            style={size ? ({ "--h": dayBar(size, biggest) } as CSSProperties) : undefined}
           >
             {shown === index ? (
               <span className="recent-tip" aria-hidden="true">
-                {`${dayDate(day.start)}: ${
+                {`${utcDate(day.start, { weekday: true })}: ${
                   change === null ? "no saved result" : `${signed(change)} trophies`
                 }`}
               </span>

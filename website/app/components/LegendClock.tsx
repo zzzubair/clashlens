@@ -1,7 +1,9 @@
+import { signedNumber as signed } from "../lib/number-format";
+import { timeFormatter, resetCountdown } from "../lib/clock-format";
 import { useEffect, useRef, useState } from "react";
 
-import type { ClockBattle } from "../lib/dashboard";
 import { nextResetMs } from "../lib/dashboard";
+import type { ClockBattle } from "../lib/dashboard";
 import { Stars } from "./GameIcons";
 
 const DAY_MINUTES = 1440;
@@ -30,43 +32,6 @@ const MARK_GAP = 3;
  * Reset's name and round the sides and foot for the hours named there.
  */
 const FACE = { left: -156, top: -140, width: 312, height: 282 } as const;
-export function timeFormatter(timeZone: string): Intl.DateTimeFormat {
-  return new Intl.DateTimeFormat("en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-    timeZone,
-  });
-}
-
-export function signed(value: number): string {
-  if (value > 0) return `+${value.toLocaleString("en-US")}`;
-  if (value < 0) return `−${Math.abs(value).toLocaleString("en-US")}`;
-  return "0";
-}
-
-/** Whole minutes left in the Legend day, and the "9h 05m" the clocks show for them. */
-export function resetCountdown(nowMs: number): { left: number; text: string } {
-  const left = Math.ceil((nextResetMs(nowMs) - nowMs) / 60_000);
-  return {
-    left,
-    text: `${Math.floor(left / 60)}h ${String(left % 60).padStart(2, "0")}m`,
-  };
-}
-
-/**
- * A time zone as a Clasher says it, with the short name the player page's
- * times use: "Europe/London" is "London time (GMT)", or (BST) in summer.
- */
-export function zoneName(timeZone: string): string {
-  const place = timeZone.split("/").at(-1)?.replaceAll("_", " ");
-  if (!place || timeZone === "UTC") return "UTC time";
-  const short = new Intl.DateTimeFormat("en-GB", { timeZone, timeZoneName: "short" })
-    .formatToParts(Date.now())
-    .find((part) => part.type === "timeZoneName")?.value;
-  return short ? `${place} time (${short})` : `${place} time`;
-}
-
 /** The point on the dial `minutes` after the Reset, which sits on top. */
 function point(minutes: number, radius: number): [number, number] {
   const angle = (minutes / DAY_MINUTES) * 2 * Math.PI;

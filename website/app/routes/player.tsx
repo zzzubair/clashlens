@@ -1,3 +1,4 @@
+import { legendDayDate, validDay } from "../lib/legend-log-data";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import {
   redirect,
@@ -21,14 +22,7 @@ import { usePlayerLookupEvent } from "../components/Analytics";
 import { BattleStatistics } from "../components/BattleStatistics";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { TrophyMark } from "../components/LeaderboardShared";
-import {
-  DayBattles,
-  LegendLog,
-  LogBarsKey,
-  TodaySlots,
-  legendDayDate,
-  validDay,
-} from "../components/LegendLog";
+import { DayBattles, LegendLog, LogBarsKey, TodaySlots } from "../components/LegendLog";
 import { LinkedBattle } from "../components/LinkedBattle";
 import { PastSeasons } from "../components/PastSeasons";
 import { PlayerActions } from "../components/PlayerActions";

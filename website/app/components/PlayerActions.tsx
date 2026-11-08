@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Link, useRouteLoaderData } from "react-router";
 
 import { addToGroupPath } from "../lib/player-tag";
-import type { RootLoaderData } from "../root";
+import type { RootLoaderData } from "../lib/root-data";
 
 // The profile's one action row: the page's own actions, then Add to group for
 // a signed-in Clasher.

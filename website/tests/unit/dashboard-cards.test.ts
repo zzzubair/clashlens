@@ -35,10 +35,8 @@ import {
   type GoalData,
   type SeasonData,
 } from "../../app/lib/dashboard-cards";
-import DashboardRoute, {
-  loader,
-  type DashboardLoaderData,
-} from "../../app/routes/dashboard";
+import type { DashboardLoaderData } from "../../app/lib/dashboard-data";
+import DashboardRoute, { loader } from "../../app/routes/dashboard";
 import { loadWebsiteConfig } from "../../app/server/config.server";
 
 const ORIGIN = "https://clashlens.example";
@@ -717,9 +715,7 @@ function answer(url: URL): [status: number, body: unknown] {
   return [404, { error: "not_found" }];
 }
 
-const ALL_CARDS = Object.keys(CARDS).filter(
-  (card) => CARDS[card as CardId].built,
-) as CardId[];
+const ALL_CARDS = Object.keys(CARDS) as CardId[];
 
 const loaderArgs = (url: string) =>
   ({ request: new Request(url), params: {}, context: {} }) as unknown as Parameters<

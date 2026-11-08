@@ -3,7 +3,7 @@ import { Link } from "react-router";
 
 import type { HeatCell } from "../lib/dashboard-cards";
 import { ShieldIcon, Stars, SwordIcon } from "./GameIcons";
-import { signed } from "./LegendClock";
+import { signedNumber as signed } from "../lib/number-format";
 import { HeatFoot, HeatKey, SeasonHeatGrid } from "./SeasonHeatGrid";
 
 // An example Legend day, drawn small: what a dashboard shows, not anyone's data.

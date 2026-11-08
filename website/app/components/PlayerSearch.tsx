@@ -3,7 +3,7 @@ import { Link, useFetcher, useNavigate } from "react-router";
 
 import { canonicalPlayerPath, noMatchHint, normalizePlayerTag } from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
-import type { PlayerSearchLoaderData } from "../routes/player-search";
+import type { PlayerSearchLoaderData } from "../lib/player-search-data";
 import { moveFocusWithArrows } from "./ArrowKeys";
 import { TrophyMark } from "./LeaderboardShared";
 

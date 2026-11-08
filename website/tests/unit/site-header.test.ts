@@ -8,7 +8,8 @@ import {
 import { expect, it } from "vitest";
 
 import { DISCORD_INVITE_URL } from "../../app/lib/discord";
-import App, { type RootLoaderData } from "../../app/root";
+import type { RootLoaderData } from "../../app/lib/root-data";
+import App from "../../app/root";
 
 const SIGNED_OUT: RootLoaderData = {
   loggedIn: false,

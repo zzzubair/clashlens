@@ -1,3 +1,4 @@
+import { signedNumber } from "../lib/number-format";
 import { type MouseEvent, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import {
@@ -16,7 +17,8 @@ import {
 import { useBackState } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { TrophyIcon } from "../components/GameIcons";
-import { dayBar, dayRange, rowScale } from "../components/DayScale";
+import { dayBar, rowScale } from "../lib/day-bars";
+import { dayRange } from "../lib/date-format";
 import { LastDays } from "../components/LastDays";
 import type { GroupPlayer, ListedGroup } from "../lib/account-contracts";
 import { addedNotice, GROUP_LIMIT, STATE_LABELS } from "../lib/group-text";
@@ -904,7 +906,9 @@ function Members({
                     </span>
                     <DayBars days={player.days} />
                     {player.net == null ? null : (
-                      <span className="sr-only">, last 7 days {signed(player.net)}</span>
+                      <span className="sr-only">
+                        , last 7 days {signedNumber(player.net, { locale: "en" })}
+                      </span>
                     )}
                   </>
                 )}
@@ -951,14 +955,9 @@ function DayBars({ days }: { days: (number | null)[] }) {
 function Signed({ value }: { value: number }) {
   return (
     <span className={value > 0 ? "score-positive" : value < 0 ? "score-negative" : ""}>
-      {signed(value)}
+      {signedNumber(value, { locale: "en" })}
     </span>
   );
-}
-
-function signed(value: number): string {
-  const text = Math.abs(value).toLocaleString("en");
-  return value > 0 ? `+${text}` : value < 0 ? `−${text}` : text;
 }
 
 /** A member's name and trophies, in Edit's list beside their Remove button. */

@@ -1,3 +1,4 @@
+import { signedAverage } from "./number-format";
 /**
  * Response contracts for the private crew API, produced by
  * python/src/clashlens/api_crews.py and api_crew_boards.py, and how the
@@ -278,14 +279,6 @@ export function missingReason(reason: string): string {
   return MISSING_REASONS[reason] ?? "No data here";
 }
 
-function signed(value: number, negative: boolean, digits: number): string {
-  const text = Math.abs(value).toLocaleString("en-US", {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
-  return value === 0 ? text : `${negative ? "−" : "+"}${text}`;
-}
-
 /**
  * An average board's number in whole trophies (a tenth of a trophy is noise
  * here): trophies a Legend day over a longer period, the day's total today.
@@ -297,7 +290,7 @@ export function formatAverage(
   period: CrewPeriod,
 ): string {
   const value = Math.round(period === "today" ? row.total : row.total / row.days);
-  return signed(value, board !== "attackers", 0);
+  return signedAverage(value, board !== "attackers", 0);
 }
 
 export function mapCrewList(value: unknown): CrewList | null {

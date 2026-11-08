@@ -1,3 +1,5 @@
+import { CARDS } from "../lib/dashboard";
+import { utcDate } from "../lib/date-format";
 import { useState } from "react";
 
 import type {
@@ -26,9 +28,9 @@ import {
   count,
   lastDaysLabel,
   percent,
-  signedOr,
   tone,
 } from "./DashboardParts";
+import { signedOr } from "../lib/number-format";
 
 const DAYS_OPTIONS = [
   ["3", "3 days"],
@@ -40,7 +42,6 @@ type OffenseDaysOption = (typeof OFFENSE_DAYS_OPTIONS)[number][0];
 
 const FIRST_DAY_NOTE = "Results start after the Season's first Reset.";
 
-/** Card: every day of the Season as a square, ranked against your own days. */
 export function HeatMapCard({ data }: { data: SeasonData }) {
   const [mode, setMode] = useState<HeatMode>("net");
   const [picked, setPicked] = useState<number | null>(null);
@@ -60,6 +61,7 @@ export function HeatMapCard({ data }: { data: SeasonData }) {
   return (
     <>
       <CardHead
+        icon={CARDS["heat-map"].icon}
         title="Season heat map"
         meta={
           <Switch
@@ -138,9 +140,7 @@ const DAY_MS = 86_400_000;
  */
 function dayDate(day: number, startMs: number | null): string | null {
   if (startMs === null) return null;
-  return new Date(startMs + (day - 1) * DAY_MS)
-    .toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" })
-    .replace("Sept", "Sep");
+  return utcDate(startMs + (day - 1) * DAY_MS);
 }
 
 function Pair({
@@ -219,7 +219,6 @@ function SeasonNumbers({ data, mode }: { data: SeasonData; mode: HeatMode }) {
 
 const GRAPH = { left: 56, right: 730, top: 12, bottom: 190, width: 760, height: 220 };
 
-/** Card: trophies or rank at every Reset this Season. */
 export function SeasonGraphCard({ data }: { data: SeasonGraphData }) {
   const [mode, setMode] = useState<"trophies" | "rank">("trophies");
   const [tip, setTip] = useState<number | null>(null);
@@ -237,6 +236,7 @@ export function SeasonGraphCard({ data }: { data: SeasonGraphData }) {
   return (
     <>
       <CardHead
+        icon={CARDS["season-graph"].icon}
         title="Season graph"
         meta={
           <Switch
@@ -426,7 +426,6 @@ function Trend({
   );
 }
 
-/** Card: your average day over the last 3 or 7 days, against the days before. */
 export function RecentFormCard({ data }: { data: SeasonData }) {
   const [days, setDays] = useState<DaysOption>("7");
   const size = Number(days);
@@ -435,6 +434,7 @@ export function RecentFormCard({ data }: { data: SeasonData }) {
   return (
     <>
       <CardHead
+        icon={CARDS["recent-form"].icon}
         title="Recent form"
         meta={
           <Switch label="Days" value={days} onChange={setDays} options={DAYS_OPTIONS} />
@@ -506,7 +506,6 @@ export function RecentFormCard({ data }: { data: SeasonData }) {
 
 const STAR_CLASSES = ["stars-3", "stars-2", "stars-1", "stars-0"] as const;
 
-/** Card: how often you triple, and what the misses cost. */
 export function OffenseConsistencyCard({ data }: { data: SeasonData }) {
   const [days, setDays] = useState<OffenseDaysOption>("7");
   const season = days === "season";
@@ -515,6 +514,7 @@ export function OffenseConsistencyCard({ data }: { data: SeasonData }) {
   return (
     <>
       <CardHead
+        icon={CARDS["offense-consistency"].icon}
         title="Offense consistency"
         meta={
           <Switch

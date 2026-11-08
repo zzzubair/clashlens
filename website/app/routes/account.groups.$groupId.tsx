@@ -1,3 +1,4 @@
+import { signedNumber } from "../lib/number-format";
 import { useState } from "react";
 import {
   data,
@@ -11,9 +12,10 @@ import {
 import { ErrorNotice } from "../components/ErrorNotice";
 import { GainLines, pointed, type Light } from "../components/GainLines";
 import { ShieldIcon, Stars, SwordIcon } from "../components/GameIcons";
-import { dayBar, dayLabel, dayRange, rowScale } from "../components/DayScale";
+import { dayBar, rowScale } from "../lib/day-bars";
+import { utcDate, dayRange } from "../lib/date-format";
 import { LastDays } from "../components/LastDays";
-import { formatAge } from "../components/Provenance";
+import { formatAge } from "../lib/age-format";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import {
   COMPARISON_DAYS,
@@ -622,7 +624,9 @@ function PlayerRow({
           {player.seasonResetPending || player.today?.net == null ? null : (
             <span className="compare-today-short">
               today{" "}
-              <span className={tone(player.today.net)}>{signed(player.today.net)}</span>
+              <span className={tone(player.today.net)}>
+                {signedNumber(player.today.net, { locale: "en", digits: 0 })}
+              </span>
             </span>
           )}
         </td>
@@ -666,7 +670,7 @@ function PlayerRow({
               ) : null}
               {player.netPerDay !== null ? (
                 <span className="compare-sub compare-sub-day">
-                  {signed(player.netPerDay, 1)} a day
+                  {signedNumber(player.netPerDay, { locale: "en", digits: 1 })} a day
                 </span>
               ) : null}
             </span>
@@ -765,7 +769,9 @@ function PlayerRow({
               <div>
                 <dt>Last {days} days</dt>
                 {player.netPerDay !== null ? (
-                  <dd>{signed(player.netPerDay, 1)} a day</dd>
+                  <dd>
+                    {signedNumber(player.netPerDay, { locale: "en", digits: 1 })} a day
+                  </dd>
                 ) : null}
                 {attack.count + defense.count > 0 ? (
                   <dd>
@@ -777,7 +783,10 @@ function PlayerRow({
                   {player.countedDays} of {days} days
                 </dd>
                 {player.vsGroup !== null ? (
-                  <dd>{signed(player.vsGroup, 1)} vs the watchlist</dd>
+                  <dd>
+                    {signedNumber(player.vsGroup, { locale: "en", digits: 1 })} vs the
+                    watchlist
+                  </dd>
                 ) : null}
               </div>
               <div>
@@ -893,7 +902,7 @@ function Trend({ days, scale }: { days: DayResult[]; scale: number }) {
   const summary = days
     .map(
       (day) =>
-        `${dayLabel(day.start)} ${DAY_LABELS[day.state]}${day.net === null ? "" : ` ${signed(day.net)}`}`,
+        `${utcDate(day.start)} ${DAY_LABELS[day.state]}${day.net === null ? "" : ` ${signedNumber(day.net, { locale: "en", digits: 0 })}`}`,
     )
     .join("; ");
   const shown = active === null ? undefined : days[active];
@@ -935,9 +944,11 @@ function Trend({ days, scale }: { days: DayResult[]; scale: number }) {
             { "--at": `${((active + 0.5) / days.length) * 100}%` } as React.CSSProperties
           }
         >
-          {dayLabel(shown.start)}{" "}
+          {utcDate(shown.start)}{" "}
           <strong className={tone(shown.net ?? 0)}>
-            {shown.net === null ? DAY_LABELS[shown.state] : signed(shown.net)}
+            {shown.net === null
+              ? DAY_LABELS[shown.state]
+              : signedNumber(shown.net, { locale: "en", digits: 0 })}
           </strong>
           {shown.net !== null && shown.state !== "complete"
             ? ` ${DAY_LABELS[shown.state]}`
@@ -958,7 +969,7 @@ function DayChart({ days, scale }: { days: DayResult[]; scale: number }) {
       {days.map((day) => (
         <li key={day.start} className={direction(day)}>
           <span className="day-chart-value" aria-hidden="true">
-            {day.net === null ? "–" : signed(day.net)}
+            {day.net === null ? "–" : signedNumber(day.net, { locale: "en", digits: 0 })}
           </span>
           <span className="trend-day" aria-hidden="true">
             <DayBar day={day} scale={scale} />
@@ -967,8 +978,10 @@ function DayChart({ days, scale }: { days: DayResult[]; scale: number }) {
             {new Date(day.start).getUTCDate()}
           </span>
           <span className="sr-only">
-            {dayLabel(day.start)}: {DAY_LABELS[day.state]}
-            {day.net === null ? "" : `, ${signed(day.net)}`}
+            {utcDate(day.start)}: {DAY_LABELS[day.state]}
+            {day.net === null
+              ? ""
+              : `, ${signedNumber(day.net, { locale: "en", digits: 0 })}`}
           </span>
         </li>
       ))}
@@ -1009,7 +1022,7 @@ function Signed({
       className={`compare-number ${tone(value)}${lead ? " compare-lead" : ""}`}
       title={lead ? LEAD_TITLE : undefined}
     >
-      {signed(value, decimals)}
+      {signedNumber(value, { locale: "en", digits: decimals })}
       <LeadWords lead={lead} />
     </strong>
   );
@@ -1107,14 +1120,6 @@ function leaders(players: ComparedPlayer[], sort: SortKey): Set<string> {
   );
   const top = ranked.filter((entry) => best !== null && byRank(entry.rank, best) === 0);
   return new Set(top.length === ranked.length ? [] : top.map((entry) => entry.tag));
-}
-
-function signed(value: number, decimals = 0): string {
-  const text = Math.abs(value).toLocaleString("en", {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  });
-  return value > 0 ? `+${text}` : value < 0 ? `−${text}` : text;
 }
 
 function plural(count: number, noun: string): string {
