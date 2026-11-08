@@ -201,7 +201,17 @@ def track(connection: Any, player_id: int, now: datetime) -> None:
         """,
         (player_id, [week - WEEK, week]),
     ).fetchall()}
-    newest = connection.execute(
+    this, strength = weeks.get(week, (League.UNKNOWN.value, Strength.NONE))
+    unsettled = this == League.UNKNOWN.value or (
+        this == League.BELOW.value and strength < Strength.ACCEPTED)
+    tracked = (
+        this == League.LEGEND_I.value
+        or unsettled and weeks.get(week - WEEK, (None,))[0] == League.LEGEND_I.value
+    )
+    # Every saved profile of the player, so asked only when the record does
+    # not settle it: on 8 November 2026 this read was 19% of the database's
+    # disk reads, about 400 pages a call, nearly all for Legend I players.
+    newest = None if tracked else connection.execute(
         """
         SELECT version.eligibility_state
         FROM players AS player
@@ -217,14 +227,7 @@ def track(connection: Any, player_id: int, now: datetime) -> None:
         """,
         (player_id,),
     ).fetchone()
-    this, strength = weeks.get(week, (League.UNKNOWN.value, Strength.NONE))
-    unsettled = this == League.UNKNOWN.value or (
-        this == League.BELOW.value and strength < Strength.ACCEPTED)
-    tracked = (
-        this == League.LEGEND_I.value
-        or unsettled and weeks.get(week - WEEK, (None,))[0] == League.LEGEND_I.value
-        or newest is not None and newest[0] == "eligible"
-    )
+    tracked = tracked or newest is not None and newest[0] == "eligible"
     connection.execute(
         """
         UPDATE players
