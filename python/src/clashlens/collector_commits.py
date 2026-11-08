@@ -107,7 +107,7 @@ def serialize_handoff(handoff: ResponseHandoff) -> tuple[str, bytes]:
     ).encode("utf-8")
 
 
-def _deserialize_handoff(payload: bytes) -> tuple[ResponseHandoff, bool]:
+def deserialize_handoff(payload: bytes) -> tuple[ResponseHandoff, bool]:
     value = json.loads(payload)
     protocol = value.pop("handoff_protocol", None)
     if protocol not in {None, _HANDOFF_PROTOCOL}:
@@ -300,7 +300,7 @@ class SavedResponses:
 
     def _recover(self) -> int:
         records = [
-            (name, *_deserialize_handoff(payload))
+            (name, *deserialize_handoff(payload))
             for name, payload in self.spool.iter_handoffs()
         ]
         # Responses already applied go first, then the rest in the order they

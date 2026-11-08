@@ -19,7 +19,6 @@ from . import (
     collector_intents,
     collector_liveness,
     collector_overlays,
-    collector_reset,
     game_rankings,
     promotion_recheck,
     weekly_eligibility,
@@ -33,6 +32,7 @@ from .async_runtime import (
     wait_or_stop,
 )
 from .battle_log_schedule import BattleLogSchedule
+from .collection_rules import COLLECTION_WINDOW
 from .collector_db import (
     REVISIT_INTERVAL,
     CollectorDatabase,
@@ -794,7 +794,7 @@ class Collector:
                         self.database.expire_settlement_checks, now
                     )
                     if expired == 0:
-                        closes = boundary - timedelta(days=1) + collector_reset.COLLECTION_WINDOW
+                        closes = boundary - timedelta(days=1) + COLLECTION_WINDOW
                         next_expiry_at = closes if closes > now else closes + timedelta(days=1)
                 if now >= boundary and boundary != scheduled_boundary:
                     async with self._regular_admission_lock:

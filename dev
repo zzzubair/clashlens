@@ -628,6 +628,7 @@ trial_recovery_tool() {
     --env CLASHLENS_DATABASE_URL="$DATABASE_URL" \
     --volume "$SPOOL_VOLUME:/spool:z" \
     --volume "$STATE_DIR:/state:ro,Z" "$IMAGE_PREFIX-collector" -c '
+import asyncio
 import json
 import os
 import sys
@@ -637,6 +638,7 @@ from pathlib import Path
 import psycopg
 
 from clashlens.collector import Collector
+from clashlens.collector_commits import deserialize_handoff
 from clashlens.collector_db import CollectorDatabase
 from clashlens.spool import Spool
 
@@ -679,7 +681,7 @@ def manifest(connection):
         payload = path.read_bytes()
         if json.loads(payload).get("handoff_protocol") != 2:
             raise RuntimeError("crash proof requires protocol-v2 handoffs")
-        handoff = Collector.deserialize_handoff(payload)
+        handoff, _serialized = deserialize_handoff(payload)
         result.append({
             "name": path.name,
             "occurrence_key": handoff.occurrence_key,
@@ -746,7 +748,7 @@ with psycopg.connect(database_url) as connection:
             max_body_bytes=4 << 20,
         )
         try:
-            recovered = collector.recover_handoffs()
+            recovered = asyncio.run(collector.commits.recover())
             after = database_counts(connection)
             expected = {}
             for item in cut["sidecars"]:
@@ -762,7 +764,7 @@ with psycopg.connect(database_url) as connection:
                     raise RuntimeError("captured sidecar remains after recovery")
                 if not item["applied"] and not is_applied(connection, item["occurrence_key"]):
                     raise RuntimeError("recovered occurrence is not durable")
-            second = collector.recover_handoffs()
+            second = asyncio.run(collector.commits.recover())
             if second != 0 or database_counts(connection) != after:
                 raise RuntimeError("second handoff recovery was not idempotent")
         finally:
