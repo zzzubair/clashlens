@@ -2,21 +2,21 @@ import { useContext, useEffect, useRef, type MouseEvent, type ReactNode } from "
 import { preload, preloadModule } from "react-dom";
 import {
   Link,
-  NavLink,
-  isRouteErrorResponse,
-  useLoaderData,
-  useRouteLoaderData,
-  useLocation,
-  useMatches,
-  useNavigation,
-  type LoaderFunctionArgs,
-  type ShouldRevalidateFunctionArgs,
-  UNSAFE_FrameworkContext,
   Links,
   Meta,
+  NavLink,
   Outlet,
   Scripts,
   ScrollRestoration,
+  UNSAFE_FrameworkContext,
+  isRouteErrorResponse,
+  useLoaderData,
+  useLocation,
+  useMatches,
+  useNavigation,
+  useRouteLoaderData,
+  type LoaderFunctionArgs,
+  type ShouldRevalidateFunctionArgs,
 } from "react-router";
 
 import type { Route } from "./+types/root";
@@ -86,8 +86,8 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<RootLoade
       analytics: loadAnalyticsSettings(),
     }))
     .catch(() => ({ dashboardEnabled: false, crewsEnabled: false, analytics: null }));
-  const origin = import("./server/config.server")
-    .then(({ getWebsiteConfig }) => getWebsiteConfig().publicOrigin.origin)
+  const origin = import("./server/public-origin.server")
+    .then(({ getPublicOrigin }) => getPublicOrigin().origin)
     .catch(() => null);
   try {
     const { loadRootNavigation } = await import("./server/root-navigation.server");

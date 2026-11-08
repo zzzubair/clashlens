@@ -75,3 +75,15 @@ export function mapRecentDays(value: unknown): RecentDay[] | null {
   }
   return days;
 }
+
+export function isSnakeProvenance(value: unknown): value is Record<string, unknown> {
+  return (
+    isRecord(value) &&
+    isString(value.source) &&
+    isUtcTimestamp(value.observed_at) &&
+    isOneOf(value.freshness, ["fresh", "stale", "unknown"] as const) &&
+    isOneOf(value.confidence, ["high", "partial", "uncertain"] as const) &&
+    isOneOf(value.coverage, ["complete", "partial", "missing", "unknown"] as const) &&
+    isString(value.version)
+  );
+}

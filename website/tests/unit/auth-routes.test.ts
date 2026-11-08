@@ -1,4 +1,41 @@
+vi.mock("../../app/services/players.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/players.server")>();
+  return {
+    ...actual,
+    requestRefresh: async (...args: Parameters<typeof actual.requestRefresh>) =>
+      mocks.createPythonClient().requestRefresh(...args),
+  };
+});
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loader as discordStartLoader } from "../../app/routes/auth.discord";
+import { loader as googleStartLoader } from "../../app/routes/auth.google";
+import { loader as callbackLoader } from "../../app/routes/auth.google.callback";
+import { loader as loginLoader } from "../../app/routes/login";
+import { action as logoutAction, loader as logoutLoader } from "../../app/routes/logout";
+import { action as refreshAction } from "../../app/routes/refresh";
+import { loader as signupLoader } from "../../app/routes/signup";
+import { clearPublicRefreshLimits } from "../../app/server/abuse.server";
+import {
+  LOGIN_COOKIE_LIFETIME_SECONDS,
+  LOGIN_COOKIE_NAME,
+  OAUTH_COOKIE_NAME,
+  createLoginCookieValue,
+  createLoginSessionBinding,
+  createOAuthTransactionCookieValue,
+  parseLoginCookieValue,
+  parseOAuthTransactionCookieValue,
+} from "../../app/server/auth-cookies.server";
+import { requireLogin } from "../../app/server/auth-guard.server";
+import {
+  OAUTH_TRANSACTION_LIFETIME_SECONDS,
+  OAuthCallbackError,
+  createOAuthTransaction,
+  type OAuthTransaction,
+} from "../../app/server/auth.server";
+import { createClientAddressContext } from "../../app/server/client-address.server";
+import { loadWebsiteConfig, type WebsiteConfig } from "../../app/server/config.server";
+import { PythonApiError } from "../../app/services/python-response.server";
 
 const mocks = vi.hoisted(() => {
   // Stands in for the private API's record of logged-out login cookies.
@@ -36,35 +73,6 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
     await importOriginal<typeof import("../../app/services/python.server")>();
   return { ...actual, createPythonClient: mocks.createPythonClient };
 });
-
-import {
-  LOGIN_COOKIE_LIFETIME_SECONDS,
-  LOGIN_COOKIE_NAME,
-  OAUTH_COOKIE_NAME,
-  OAUTH_TRANSACTION_LIFETIME_SECONDS,
-  createLoginCookieValue,
-  createLoginSessionBinding,
-  createOAuthTransactionCookieValue,
-  parseLoginCookieValue,
-  parseOAuthTransactionCookieValue,
-} from "../../app/server/auth-cookies.server";
-import { loadWebsiteConfig, type WebsiteConfig } from "../../app/server/config.server";
-import {
-  OAuthCallbackError,
-  createOAuthTransaction,
-  type OAuthTransaction,
-} from "../../app/server/google-oidc.server";
-import { PythonApiError } from "../../app/services/python.server";
-import { loader as callbackLoader } from "../../app/routes/auth.google.callback";
-import { loader as discordStartLoader } from "../../app/routes/auth.discord";
-import { loader as googleStartLoader } from "../../app/routes/auth.google";
-import { loader as loginLoader } from "../../app/routes/login";
-import { loader as signupLoader } from "../../app/routes/signup";
-import { action as logoutAction, loader as logoutLoader } from "../../app/routes/logout";
-import { action as refreshAction } from "../../app/routes/refresh";
-import { clearPublicRefreshLimits } from "../../app/server/abuse.server";
-import { requireLogin } from "../../app/server/auth-guard.server";
-import { createClientAddressContext } from "../../app/server/client-address.server";
 
 const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" } as const;
@@ -473,7 +481,11 @@ describe("logout route", () => {
     expect((response as Response).status).toBe(302);
     const loginStartedAtMs = (nowSeconds - 60) * 1000;
     expect(mocks.revokeLogin).toHaveBeenCalledWith(
-      { ...IDENTITY, issuedAtMs: loginStartedAtMs, signedInAtMs: loginStartedAtMs },
+      {
+        ...IDENTITY,
+        issuedAtMs: loginStartedAtMs,
+        signedInAtMs: loginStartedAtMs,
+      },
       login,
     );
 
@@ -728,7 +740,6 @@ describe("auth.google start loader", () => {
       expect((thrown as Response).headers.get("Location")).toBe("/login");
       return true;
     });
-
     mocks.getWebsiteConfig.mockImplementation(() => {
       throw new Error("missing configuration");
     });
@@ -800,7 +811,9 @@ describe("auth.google.callback loader", () => {
         { headers: { cookie: header } },
       ),
     } as never);
-    const { data, status, headers } = dataOf<{ error: { code: string } | null }>(result);
+    const { data, status, headers } = dataOf<{
+      error: { code: string } | null;
+    }>(result);
     expect(status).toBe(400);
     expect(data.error?.code).toBe("invalid_callback");
     expect(headers["Set-Cookie"]).toContain(`${OAUTH_COOKIE_NAME}=; Max-Age=0`);
@@ -885,8 +898,12 @@ describe("auth.google.callback loader", () => {
       (now() - 10) * 1000,
     );
     mocks.isLoginRevoked.mockRejectedValueOnce(new Error("API down"));
-    const result = await callbackLoader({ request: unlinkGoogleRequest(login) } as never);
-    const { data, status, headers } = dataOf<{ error: { code: string } | null }>(result);
+    const result = await callbackLoader({
+      request: unlinkGoogleRequest(login),
+    } as never);
+    const { data, status, headers } = dataOf<{
+      error: { code: string } | null;
+    }>(result);
     expect(status).toBe(503);
     expect(data.error?.code).toBe("unavailable");
     expect(headers["Set-Cookie"]).toContain(`${OAUTH_COOKIE_NAME}=; Max-Age=0`);
@@ -954,8 +971,12 @@ describe("auth.google.callback loader", () => {
         throw new PythonApiError(503, { error: "unavailable" });
       }),
     } as never);
-    const result = await callbackLoader({ request: unlinkGoogleRequest(login) } as never);
-    const { data, status, headers } = dataOf<{ error: { code: string } | null }>(result);
+    const result = await callbackLoader({
+      request: unlinkGoogleRequest(login),
+    } as never);
+    const { data, status, headers } = dataOf<{
+      error: { code: string } | null;
+    }>(result);
     expect(status).toBe(503);
     expect(data.error?.code).toBe("unavailable");
     expect(headers["Set-Cookie"]).not.toContain(`${LOGIN_COOKIE_NAME}=`);
@@ -973,7 +994,9 @@ describe("auth.google.callback loader", () => {
         { headers: { cookie: header } },
       ),
     } as never);
-    const { data, status, headers } = dataOf<{ error: { code: string } | null }>(result);
+    const { data, status, headers } = dataOf<{
+      error: { code: string } | null;
+    }>(result);
     expect(status).toBe(400);
     expect(data.error?.code).toBe("invalid_callback");
     expect(headers["Set-Cookie"]).toContain(`${OAUTH_COOKIE_NAME}=; Max-Age=0`);
@@ -1116,7 +1139,9 @@ describe("auth.google.callback loader", () => {
         { headers: { cookie: header } },
       ),
     } as never);
-    const { data, status, headers } = dataOf<{ error: { code: string } | null }>(result);
+    const { data, status, headers } = dataOf<{
+      error: { code: string } | null;
+    }>(result);
     expect(status).toBe(503);
     expect(data.error?.code).toBe("unavailable");
     expect(headers["Cache-Control"]).toBe("no-store");
@@ -1167,9 +1192,9 @@ describe("auth.google.callback loader", () => {
         headers: testCase.cookie === undefined ? {} : { cookie: testCase.cookie },
       });
       const result = await callbackLoader({ request } as never);
-      const { data, status, headers } = dataOf<{ error: { code: string } | null }>(
-        result,
-      );
+      const { data, status, headers } = dataOf<{
+        error: { code: string } | null;
+      }>(result);
       expect(status, testCase.label).toBe(400);
       expect(data.error?.code, testCase.label).toBe("invalid_callback");
       expect(headers["Cache-Control"]).toBe("no-store");
@@ -1228,7 +1253,9 @@ describe("auth.google.callback loader", () => {
     const result = await callbackLoader({
       request: new Request(`${ORIGIN}/auth/google/callback?code=x&state=y`),
     } as never);
-    const { data, status, headers } = dataOf<{ error: { code: string } | null }>(result);
+    const { data, status, headers } = dataOf<{
+      error: { code: string } | null;
+    }>(result);
     expect(status).toBe(503);
     expect(data.error?.code).toBe("unavailable");
     expect(headers["Set-Cookie"]).toBeUndefined();

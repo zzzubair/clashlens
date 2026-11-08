@@ -1,3 +1,31 @@
+vi.mock("../../app/services/leaderboard.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/leaderboard.server")>();
+  return {
+    ...actual,
+    getTrackedLeaderboard: async (
+      ...args: Parameters<typeof actual.getTrackedLeaderboard>
+    ) => (() => mocks)().getTrackedLeaderboard(...args),
+  };
+});
+vi.mock("../../app/services/leaderboard-search.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/leaderboard-search.server")>();
+  return {
+    ...actual,
+    searchLeaderboard: async (...args: Parameters<typeof actual.searchLeaderboard>) =>
+      (() => mocks)().searchLeaderboard(...args),
+  };
+});
+vi.mock("../../app/services/public-user.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/public-user.server")>();
+  return {
+    ...actual,
+    getPublicUser: async (...args: Parameters<typeof actual.getPublicUser>) =>
+      (() => mocks)().getPublicUser(...args),
+  };
+});
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
@@ -7,6 +35,7 @@ import {
   StaticRouterProvider,
 } from "react-router";
 import { beforeEach, expect, it, vi } from "vitest";
+import type { TrackedLeaderboard } from "../../app/lib/contracts";
 
 const mocks = vi.hoisted(() => ({
   getTrackedLeaderboard: vi.fn(),
@@ -30,8 +59,7 @@ vi.mock("../../app/server/actions.server", async (importOriginal) => ({
 }));
 
 import Leaderboard, { loader } from "../../app/routes/tracked-leaderboard";
-import { PythonApiError } from "../../app/services/python.server";
-import type { TrackedLeaderboard } from "../../app/lib/contracts";
+import { PythonApiError } from "../../app/services/python-response.server";
 import { worstCasePlayers } from "../fixtures/worst-case-players";
 
 const board: TrackedLeaderboard = {
@@ -183,7 +211,10 @@ it.each([
   async (observedAt, generatedAt, age, old) => {
     const fixture = structuredClone(board);
     fixture.generatedAt = generatedAt;
-    fixture.entries[0].freshness = { ...fixture.entries[0].freshness, observedAt };
+    fixture.entries[0].freshness = {
+      ...fixture.entries[0].freshness,
+      observedAt,
+    };
     mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
     const { html } = await render();
     const note = '<span class="sr-only"> · Older than the rest of the board</span>';
@@ -614,7 +645,10 @@ it.each([
 it("keeps worst-case names readable and separates five-digit ranks", async () => {
   mocks.getTrackedLeaderboard.mockResolvedValue({
     ...structuredClone(board),
-    entries: worstCasePlayers.map((player) => ({ ...board.entries[0], ...player })),
+    entries: worstCasePlayers.map((player) => ({
+      ...board.entries[0],
+      ...player,
+    })),
   });
   const { html } = await render();
   for (const player of worstCasePlayers) {
@@ -912,7 +946,9 @@ it("shows the newest Daily board from one read, then names its Season and day wi
     { initialEntries: ["/leaderboards/tracked?view=daily&page=2"] },
   );
   await vi.waitFor(() => expect(router.state.initialized).toBe(true));
-  const data = router.state.loaderData["0-0"] as { latestDailyUrl: string | null };
+  const data = router.state.loaderData["0-0"] as {
+    latestDailyUrl: string | null;
+  };
   expect(data.latestDailyUrl).toBe(explicit);
   await router.navigate(data.latestDailyUrl, {
     replace: true,
@@ -944,9 +980,21 @@ it("gives a signed-in Clasher one tap to the place of the player their dashboard
     // The dashboard leads with the first one being tracked, so Jump to me
     // goes there too, whichever is the Discord bot's default.
     verifiedPlayers: [
-      { ...linked, tag: "#8QU8J9LP", name: "Gone", state: "not_in_legend", rank: null },
+      {
+        ...linked,
+        tag: "#8QU8J9LP",
+        name: "Gone",
+        state: "not_in_legend",
+        rank: null,
+      },
       { ...linked, tag: "#2PP", name: "Nova", state: "tracking", rank: 101 },
-      { ...linked, tag: "#9PJYL8RQ0", name: "Alt", state: "tracking", rank: 102 },
+      {
+        ...linked,
+        tag: "#9PJYL8RQ0",
+        name: "Alt",
+        state: "tracking",
+        rank: 102,
+      },
     ],
   });
   const { html } = await render();
@@ -966,7 +1014,13 @@ it("shows no Jump to me when signed out, or when their player is off the board",
     username: "nova",
     displayName: "Nova",
     verifiedPlayers: [
-      { ...linked, tag: "#9PJYL8RQ0", name: "Gone", state: "not_in_legend", rank: null },
+      {
+        ...linked,
+        tag: "#9PJYL8RQ0",
+        name: "Gone",
+        state: "not_in_legend",
+        rank: null,
+      },
     ],
   });
   const { html, status } = await render();

@@ -1,3 +1,6 @@
+vi.mock("../../app/services/python-transport.server", () => ({
+  requestJson: mocks.requestJson,
+}));
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
@@ -36,21 +39,20 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
   return {
     ...actual,
     createPythonClient: mocks.createPythonClient,
-    requestJson: mocks.requestJson,
   };
 });
 
 import { mapAttackAlerts } from "../../app/lib/discord";
-import {
-  LOGIN_COOKIE_NAME,
-  createLoginCookieValue,
-  createLoginSessionBinding,
-} from "../../app/server/auth-cookies.server";
-import { loadWebsiteConfig } from "../../app/server/config.server";
 import AlertsRoute, {
   action as alertsAction,
   loader as alertsLoader,
 } from "../../app/routes/account.discord-alerts";
+import {
+  createLoginCookieValue,
+  createLoginSessionBinding,
+  LOGIN_COOKIE_NAME,
+} from "../../app/server/auth-cookies.server";
+import { loadWebsiteConfig } from "../../app/server/config.server";
 import * as alertsService from "../../app/services/discord-alerts.server";
 
 const ORIGIN = "https://clashlens.example";
@@ -246,14 +248,12 @@ describe("Discord attack alerts settings", () => {
     const response = await alertsAction({
       request: post({ intent: "attack-alert", tag: "#8QQ", on: "on" }),
     } as never);
-    expect(mocks.requestJson).toHaveBeenCalledWith(
-      "/v1/account/discord-alerts",
-      "POST",
-      Buffer.from(JSON.stringify({ tag: "#8QQ", on: true, alert: "attack" })),
-      undefined,
-      KEY,
-      IDENTITY,
-    );
+    expect(mocks.requestJson).toHaveBeenCalledWith("/v1/account/discord-alerts", {
+      method: "POST",
+      body: Buffer.from(JSON.stringify({ tag: "#8QQ", on: true, alert: "attack" })),
+      requestId: KEY,
+      identity: IDENTITY,
+    });
     expect(response.headers.get("Location")).toBe(
       `/account/discord-alerts?alerts=${outcome}&tag=%238QQ`,
     );
@@ -285,14 +285,12 @@ describe("Discord attack alerts settings", () => {
     const response = await alertsAction({
       request: post({ intent: "day-summary", tag: "#8QQ", on: "off" }),
     } as never);
-    expect(mocks.requestJson).toHaveBeenCalledWith(
-      "/v1/account/discord-alerts",
-      "POST",
-      Buffer.from(JSON.stringify({ tag: "#8QQ", on: false, alert: "day_summary" })),
-      undefined,
-      KEY,
-      IDENTITY,
-    );
+    expect(mocks.requestJson).toHaveBeenCalledWith("/v1/account/discord-alerts", {
+      method: "POST",
+      body: Buffer.from(JSON.stringify({ tag: "#8QQ", on: false, alert: "day_summary" })),
+      requestId: KEY,
+      identity: IDENTITY,
+    });
     expect(response.headers.get("Location")).toBe(
       "/account/discord-alerts?summary=off&tag=%238QQ",
     );
@@ -302,14 +300,12 @@ describe("Discord attack alerts settings", () => {
     const response = await alertsAction({
       request: post({ intent: "dark-picture", on: "on" }),
     } as never);
-    expect(mocks.requestJson).toHaveBeenCalledWith(
-      "/v1/account/discord-alerts",
-      "POST",
-      Buffer.from(JSON.stringify({ on: true, alert: "dark_picture" })),
-      undefined,
-      KEY,
-      IDENTITY,
-    );
+    expect(mocks.requestJson).toHaveBeenCalledWith("/v1/account/discord-alerts", {
+      method: "POST",
+      body: Buffer.from(JSON.stringify({ on: true, alert: "dark_picture" })),
+      requestId: KEY,
+      identity: IDENTITY,
+    });
     expect(response.headers.get("Location")).toBe("/account/discord-alerts?dark=on");
   });
 

@@ -1,19 +1,24 @@
-import { copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { request as httpRequest } from "node:http";
+vi.mock("../../app/services/players.server", () => ({
+  requestRefresh: async () => ({ state: "queued" }),
+}));
+
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
+import { request as httpRequest } from "node:http";
 import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ServerBuild } from "react-router";
-import { createWebsiteServer } from "../../server";
-import { createClientAddressContext } from "../../app/server/client-address.server";
-import { clearPublicRefreshLimits } from "../../app/server/abuse.server";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { action } from "../../app/routes/refresh";
+import { clearPublicRefreshLimits } from "../../app/server/abuse.server";
+import { createClientAddressContext } from "../../app/server/client-address.server";
+import { createWebsiteServer } from "../../server";
 
 vi.mock("../../app/services/python.server", () => ({
   createPythonClient: () => ({ requestRefresh: async () => ({ state: "queued" }) }),
 }));
-vi.mock("../../app/server/config.server", () => ({
+vi.mock("../../app/server/config.server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../app/server/config.server")>()),
   getWebsiteConfig: () => ({ publicOrigin: new URL("https://clashlens.example") }),
 }));
 
@@ -136,7 +141,11 @@ beforeEach(async () => {
 
 async function startServer(publicOrigin: string | undefined) {
   if (server) await new Promise((resolve) => server.close(resolve));
-  server = await createWebsiteServer(build, directory, publicOrigin);
+  server = await createWebsiteServer(
+    build,
+    directory,
+    publicOrigin ?? "https://clashlens.example",
+  );
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Missing test port");
@@ -446,4 +455,15 @@ it("moves every preview address to the same address on clashlens.net", async () 
       expect(response.headers.location).toBe(location);
     }
   }
+});
+
+it.each([
+  "https://clashlens.net/extra",
+  "https://clashlens.net/?query=1",
+  "https://clashlens.net/#fragment",
+  "ftp://clashlens.net/",
+])("refuses invalid public-origin config %s before serving", async (origin) => {
+  await expect(createWebsiteServer(build, directory, origin)).rejects.toThrow(
+    "website login configuration is invalid",
+  );
 });

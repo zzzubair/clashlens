@@ -14,8 +14,8 @@
 import { data, redirect } from "react-router";
 
 import type { NeedsAccountData } from "../components/NeedsAccount";
-import type { LoginIdentity } from "./auth-cookies.server";
 import { readLoginIdentity } from "./actions.server";
+import type { LoginIdentity } from "./auth.server";
 import type { WebsiteConfig } from "./config.server";
 import { getWebsiteConfig } from "./config.server";
 import {

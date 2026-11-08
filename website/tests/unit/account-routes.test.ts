@@ -1,3 +1,12 @@
+vi.mock("../../app/services/public-user.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/public-user.server")>();
+  return {
+    ...actual,
+    getPublicUser: async (...args: Parameters<typeof actual.getPublicUser>) =>
+      mocks.createPythonClient().getPublicUser(...args),
+  };
+});
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
@@ -7,6 +16,25 @@ import {
   StaticRouterProvider,
 } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loader as accountLoader } from "../../app/routes/account";
+import GroupsRoute, {
+  action as groupsAction,
+  loader as groupsLoader,
+} from "../../app/routes/account.groups";
+import { loader as savedPlayersLoader } from "../../app/routes/account.saved-players";
+import {
+  action as setupAction,
+  loader as setupLoader,
+} from "../../app/routes/account.setup";
+import {
+  action as verifyPlayerAction,
+  loader as verifyPlayerLoader,
+} from "../../app/routes/account.verify-player";
+import {
+  allowPublicRefresh,
+  clearPublicRefreshLimits,
+} from "../../app/server/abuse.server";
+import { clientAddressContext } from "../../app/server/client-address.server";
 
 const mocks = vi.hoisted(() => ({
   getWebsiteConfig: vi.fn(),
@@ -34,26 +62,8 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
 });
 
 import { loadWebsiteConfig, type WebsiteConfig } from "../../app/server/config.server";
-import { PythonApiError, type PythonClient } from "../../app/services/python.server";
-import {
-  allowPublicRefresh,
-  clearPublicRefreshLimits,
-} from "../../app/server/abuse.server";
-import { clientAddressContext } from "../../app/server/client-address.server";
-import { loader as accountLoader } from "../../app/routes/account";
-import GroupsRoute, {
-  action as groupsAction,
-  loader as groupsLoader,
-} from "../../app/routes/account.groups";
-import { loader as savedPlayersLoader } from "../../app/routes/account.saved-players";
-import {
-  action as setupAction,
-  loader as setupLoader,
-} from "../../app/routes/account.setup";
-import {
-  action as verifyPlayerAction,
-  loader as verifyPlayerLoader,
-} from "../../app/routes/account.verify-player";
+import { PythonApiError } from "../../app/services/python-response.server";
+import { type PythonClient } from "../../app/services/python.server";
 
 const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 const ORIGIN = "https://clashlens.example";
@@ -456,9 +466,9 @@ describe("account routes", () => {
             headers,
           ),
         } as never);
-        const { data, status } = dataOf<{ generalError: { error: { code: string } } }>(
-          result,
-        );
+        const { data, status } = dataOf<{
+          generalError: { error: { code: string } };
+        }>(result);
         expect(status).toBe(403);
         expect(data.generalError.error.code).toBe("forbidden");
       }
@@ -713,9 +723,9 @@ describe("account routes", () => {
           { Origin: "https://evil.example" },
         ),
       } as never);
-      const { data, status } = dataOf<{ generalError: { error: { code: string } } }>(
-        result,
-      );
+      const { data, status } = dataOf<{
+        generalError: { error: { code: string } };
+      }>(result);
       expect(status).toBe(403);
       expect(data.generalError.error.code).toBe("forbidden");
       expect(client.createGroup).not.toHaveBeenCalled();
@@ -763,9 +773,9 @@ describe("account routes", () => {
           idempotencyKey: IDEMPOTENCY_KEY,
         }),
       } as never);
-      const missingResult = dataOf<{ generalError: { error: { message: string } } }>(
-        missing,
-      );
+      const missingResult = dataOf<{
+        generalError: { error: { message: string } };
+      }>(missing);
       expect(missingResult.status).toBe(422);
       expect(missingResult.data.generalError.error.message).toBe(
         "The watchlist no longer exists. Refresh the page.",

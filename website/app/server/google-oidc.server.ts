@@ -1,3 +1,14 @@
+import {
+  constantTimeEqual,
+  isBoundedCallbackParams,
+  isPlausibleTransaction,
+  isProviderSubject,
+  OAuthCallbackError,
+  type LoginIdentity,
+  type OAuthTransaction,
+} from "./auth.server";
+import { GOOGLE_ISSUER } from "./config.server";
+export const CALLBACK_PATH = "/auth/google/callback";
 /**
  * Server-only Google OpenID Connect service (Authorization Code + PKCE S256).
  *
@@ -15,7 +26,7 @@
  * override outside production).
  */
 
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import type { Configuration } from "openid-client";
 
 import {
   allowInsecureRequests,
@@ -23,58 +34,8 @@ import {
   buildAuthorizationUrl as openidBuildAuthorizationUrl,
   discovery as openidDiscovery,
 } from "openid-client";
-import type { Configuration } from "openid-client";
 
 import type { WebsiteConfig } from "./config.server";
-
-export const OAUTH_TRANSACTION_LIFETIME_SECONDS = 600;
-export const GOOGLE_ISSUER = "https://accounts.google.com";
-export const CALLBACK_PATH = "/auth/google/callback";
-
-export const MAX_PROVIDER_SUBJECT_LENGTH = 128;
-const MAX_CALLBACK_PARAMS = 32;
-const MAX_CALLBACK_PARAM_BYTES = 8192;
-
-/**
- * What the authorization completes: a browser login, or a link/unlink
- * started from an authenticated account. The provider is always the one
- * whose authorize route created the transaction.
- */
-/** Sign in, sign up (a missing account may be made), or change sign-in connections. */
-export type OAuthIntent = "login" | "signup" | "link" | "unlink";
-
-export interface OAuthTransaction {
-  /** The only provider whose callback may consume this transaction. */
-  provider: "google" | "discord";
-  state: string;
-  nonce: string;
-  codeVerifier: string;
-  codeChallenge: string;
-  returnPath: string;
-  intent: OAuthIntent;
-  /** Fingerprint of the initiating login (createLoginSessionBinding), for link/unlink only. */
-  sessionBinding?: string;
-  issuedAt: number;
-  expiresAt: number;
-}
-
-export interface ValidatedGoogleIdentity {
-  provider: "google";
-  providerSubject: string;
-}
-
-export type OAuthCallbackErrorCode =
-  "expired" | "provider_error" | "invalid_state" | "invalid_callback" | "invalid_claims";
-
-export class OAuthCallbackError extends Error {
-  readonly code: OAuthCallbackErrorCode;
-
-  constructor(code: OAuthCallbackErrorCode) {
-    super("Google sign-in could not be completed");
-    this.name = "OAuthCallbackError";
-    this.code = code;
-  }
-}
 
 export interface OidcDiscovery {
   (
@@ -114,70 +75,7 @@ export interface OidcService {
     callbackParams: Record<string, string>,
     transaction: OAuthTransaction,
     now?: number,
-  ): Promise<ValidatedGoogleIdentity>;
-}
-
-/** Google subject bound: non-empty, bounded, no whitespace or control chars. */
-export function isProviderSubject(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    value.length <= MAX_PROVIDER_SUBJECT_LENGTH &&
-    ![...value].some((character) => {
-      const code = character.charCodeAt(0);
-      return /\s/u.test(character) || code <= 0x1f || code === 0x7f;
-    })
-  );
-}
-
-/** Constant-time string comparison for state and nonce values. */
-export function constantTimeEqual(left: string, right: string): boolean {
-  const leftBytes = Buffer.from(left, "utf8");
-  const rightBytes = Buffer.from(right, "utf8");
-  if (leftBytes.length !== rightBytes.length) return false;
-  return timingSafeEqual(leftBytes, rightBytes);
-}
-
-/** The two Phase 1 login providers; transactions are provider-bound. */
-export function isProvider(value: unknown): value is "google" | "discord" {
-  return value === "google" || value === "discord";
-}
-
-/**
- * Fresh one-time OAuth transaction for exactly one provider and intent:
- * state, nonce, and PKCE S256 verifier with challenge, plus the validated
- * same-origin return path. The transaction lives for
- * OAUTH_TRANSACTION_LIFETIME_SECONDS and is consumed once.
- * `now` is the current epoch time in seconds.
- */
-export function createOAuthTransaction(
-  returnPath: string,
-  now: number,
-  random: (size: number) => Buffer = randomBytes,
-  intent: OAuthIntent = "login",
-  provider: "google" | "discord" = "google",
-  sessionBinding?: string,
-): OAuthTransaction {
-  const issuedAt = Math.floor(now);
-  const state = random(24).toString("base64url");
-  const nonce = random(24).toString("base64url");
-  const codeVerifier = random(32).toString("base64url");
-  const codeChallenge = createHash("sha256")
-    .update(codeVerifier, "utf8")
-    .digest()
-    .toString("base64url");
-  return {
-    provider,
-    state,
-    nonce,
-    codeVerifier,
-    codeChallenge,
-    returnPath,
-    intent,
-    ...(sessionBinding === undefined ? {} : { sessionBinding }),
-    issuedAt,
-    expiresAt: issuedAt + OAUTH_TRANSACTION_LIFETIME_SECONDS,
-  };
+  ): Promise<LoginIdentity & { provider: "google" }>;
 }
 
 export function redirectUriFor(publicOrigin: URL): string {
@@ -291,39 +189,8 @@ export async function createGoogleOidcService(
   };
 }
 
-function isBoundedCallbackParams(params: Record<string, string>): boolean {
-  if (Object.keys(params).length > MAX_CALLBACK_PARAMS) return false;
-  let total = 0;
-  for (const [key, value] of Object.entries(params)) {
-    total += key.length + value.length;
-    if (total > MAX_CALLBACK_PARAM_BYTES) return false;
-  }
-  return true;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
-}
-
-export function isPlausibleTransaction(transaction: OAuthTransaction): boolean {
-  return (
-    /^[A-Za-z0-9_-]{16,128}$/.test(transaction.state) &&
-    /^[A-Za-z0-9_-]{16,128}$/.test(transaction.nonce) &&
-    /^[A-Za-z0-9_-]{43,128}$/.test(transaction.codeVerifier) &&
-    /^[A-Za-z0-9_-]{43,128}$/.test(transaction.codeChallenge) &&
-    (transaction.intent === "login" ||
-      transaction.intent === "signup" ||
-      transaction.intent === "link" ||
-      transaction.intent === "unlink") &&
-    (transaction.intent === "login" || transaction.intent === "signup"
-      ? transaction.sessionBinding === undefined
-      : typeof transaction.sessionBinding === "string" &&
-        /^[A-Za-z0-9_-]{43}$/.test(transaction.sessionBinding)) &&
-    isProvider(transaction.provider) &&
-    Number.isSafeInteger(transaction.issuedAt) &&
-    Number.isSafeInteger(transaction.expiresAt) &&
-    transaction.expiresAt - transaction.issuedAt === OAUTH_TRANSACTION_LIFETIME_SECONDS
-  );
 }
 
 /**

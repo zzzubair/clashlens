@@ -1,3 +1,6 @@
+vi.mock("../../app/services/python-transport.server", () => ({
+  requestJson: mocks.requestJson,
+}));
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
@@ -6,6 +9,7 @@ import {
   StaticRouterProvider,
 } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { formatAverage, mapCrewBoards } from "../../app/lib/crew-contracts";
 
 const mocks = vi.hoisted(() => ({
   getWebsiteConfig: vi.fn(),
@@ -29,30 +33,23 @@ vi.mock("../../app/server/actions.server", async (importOriginal) => {
   return { ...actual, readLoginIdentity: mocks.readLoginIdentity };
 });
 
-vi.mock("../../app/services/python.server", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../app/services/python.server")>();
-  return { ...actual, requestJson: mocks.requestJson };
-});
-
 vi.mock("../../app/services/group-players.server", () => ({
   checkPlayerTag: mocks.checkPlayerTag,
 }));
 
 import App, { loader as rootLoader } from "../../app/root";
-import { formatAverage, mapCrewBoards } from "../../app/lib/crew-contracts";
-import CrewBoardRoute, {
-  handle as boardHandle,
-  loader as boardLoader,
-} from "../../app/routes/crews.$crewId.boards.$board";
+import { loader as listLoader } from "../../app/routes/crews";
 import CrewRoute, {
   loader as crewLoader,
   shouldRevalidate,
 } from "../../app/routes/crews.$crewId";
-import { loader as listLoader } from "../../app/routes/crews";
+import CrewBoardRoute, {
+  handle as boardHandle,
+  loader as boardLoader,
+} from "../../app/routes/crews.$crewId.boards.$board";
 import { action as createAction, loader as newLoader } from "../../app/routes/crews.new";
 import { isCrewsEnabled, loadWebsiteConfig } from "../../app/server/config.server";
-import { PythonApiError } from "../../app/services/python.server";
+import { PythonApiError } from "../../app/services/python-response.server";
 
 const ORIGIN = "https://clashlens.example";
 const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" } as const;
@@ -60,7 +57,11 @@ const IDEMPOTENCY_KEY = "3be934b5-68fa-4741-8c7b-e03592e4ad70";
 const CREW_ID = "6f1c2b9e-4a7d-4c1e-9b2a-0d5e8f7a6b3c";
 const TAGS = ["#2PP", "#2QQ", "#2RR", "#2YY", "#2LL", "#2GG", "#2JJ", "#2CC", "#2UU"];
 
-type Args = { request: Request; params: Record<string, string>; context: unknown };
+type Args = {
+  request: Request;
+  params: Record<string, string>;
+  context: unknown;
+};
 const args = (path: string, params: Record<string, string> = {}): Args => ({
   request: new Request(`${ORIGIN}${path}`),
   params,
@@ -157,7 +158,11 @@ function answerCrew(period = "season") {
 
 async function render(
   path: string,
-  route: { path: string; Component: () => unknown; loader: (a: Args) => unknown },
+  route: {
+    path: string;
+    Component: () => unknown;
+    loader: (a: Args) => unknown;
+  },
 ) {
   const handler = createStaticHandler([
     {
@@ -226,7 +231,10 @@ describe("crews switch", () => {
       () => crewLoader(args(`/crews/${CREW_ID}`, crew) as never),
       () =>
         boardLoader(
-          args(`/crews/${CREW_ID}/boards/live`, { ...crew, board: "live" }) as never,
+          args(`/crews/${CREW_ID}/boards/live`, {
+            ...crew,
+            board: "live",
+          }) as never,
         ),
     ]) {
       expect(unwrap(await thrown(run)).status).toBe(404);
@@ -415,14 +423,10 @@ describe("crew page", () => {
     );
     const html = await render(`/crews/${CREW_ID}`, crewRoute);
     expect(mocks.requireLogin).not.toHaveBeenCalled();
-    expect(mocks.requestJson).toHaveBeenCalledWith(
-      `/v1/crews/${CREW_ID}`,
-      "GET",
-      undefined,
-      "crew-view",
-      undefined,
-      undefined,
-    );
+    expect(mocks.requestJson).toHaveBeenCalledWith(`/v1/crews/${CREW_ID}`, {
+      method: "GET",
+      expectedKind: "crew-view",
+    });
     expect(html).toContain('<h1 id="crew-title">Red Dawn</h1>');
     expect(html).toContain("By invite only");
     // The Live leaderboard names every account; there is no second list.
@@ -438,11 +442,7 @@ describe("crew page", () => {
     const html = await render(`/crews/${CREW_ID}?period=today`, crewRoute);
     expect(mocks.requestJson).toHaveBeenCalledWith(
       `/v1/crews/${CREW_ID}/boards?period=today`,
-      "GET",
-      undefined,
-      "crew-boards",
-      undefined,
-      IDENTITY,
+      { method: "GET", expectedKind: "crew-boards", identity: IDENTITY },
     );
     expect(html).toContain("+120");
     expect(html).toMatch(/aria-current="page"[^>]*>Today<\/a>/);
@@ -572,7 +572,7 @@ describe("create a crew", () => {
     expect((response as Response).headers.get("Location")).toBe(
       `/crews/${CREW_ID}?invite=1`,
     );
-    const [target, method, body, , key] = mocks.requestJson.mock.calls[0]!;
+    const [target, { method, body, requestId: key }] = mocks.requestJson.mock.calls[0]!;
     expect([target, method, key]).toEqual(["/v1/account/crews", "POST", IDEMPOTENCY_KEY]);
     expect(JSON.parse((body as Buffer).toString())).toEqual({
       name: "Red Dawn",
@@ -615,14 +615,17 @@ describe("create a crew", () => {
     );
     expect(mocks.checkPlayerTag).toHaveBeenCalledWith(undefined, TAGS[0]);
     // The retry is a new request, since the first one's refusal is stored.
-    expect(mocks.requestJson.mock.calls[1]![4]).not.toBe(IDEMPOTENCY_KEY);
+    expect(mocks.requestJson.mock.calls[1]![1].requestId).not.toBe(IDEMPOTENCY_KEY);
   });
 
   it("says when an account is not in Legend League", async () => {
     mocks.requestJson.mockRejectedValue(
       new PythonApiError(422, { error: "player_not_in_legend", tag: TAGS[0] }),
     );
-    const result = unwrap<{ idempotencyKey: string; fieldErrors: { accounts?: string } }>(
+    const result = unwrap<{
+      idempotencyKey: string;
+      fieldErrors: { accounts?: string };
+    }>(
       await createAction(
         createRequest({
           name: "Red Dawn",
@@ -658,7 +661,7 @@ describe("create a crew", () => {
     expect((response as Response).headers.get("Location")).toBe(
       `/crews/${CREW_ID}?invite=1`,
     );
-    const keys = mocks.requestJson.mock.calls.map((call) => call[4]);
+    const keys = mocks.requestJson.mock.calls.map((call) => call[1].requestId);
     expect(keys[0]).toBe(IDEMPOTENCY_KEY);
     expect(keys[1]).not.toBe(IDEMPOTENCY_KEY);
     expect(keys.slice(2)).toEqual(keys.slice(0, 2));
@@ -669,7 +672,10 @@ describe("create a crew", () => {
       new PythonApiError(409, { error: "player_not_checked", tag: TAGS[0] }),
     );
     mocks.checkPlayerTag.mockResolvedValue({ tag: TAGS[0], state: "checking" });
-    const result = unwrap<{ idempotencyKey: string; fieldErrors: { accounts?: string } }>(
+    const result = unwrap<{
+      idempotencyKey: string;
+      fieldErrors: { accounts?: string };
+    }>(
       await createAction(
         createRequest({
           name: "Red Dawn",

@@ -1,8 +1,8 @@
-import type { ListedGroup, GroupPlayer } from "../lib/account-contracts";
+import type { GroupPlayer, ListedGroup } from "../lib/account-contracts";
 import { MAX_GROUP_TAGS } from "../lib/account-validation";
 import type { PlayerLookup } from "../lib/contracts";
+import type { LoginIdentity } from "../server/auth.server";
 import { addGroupPlayer, checkPlayerTag } from "./group-players.server";
-import type { GoogleAccountIdentity } from "./python.server";
 
 // Adding one player to a group, shared by Your groups and Add to group.
 
@@ -57,7 +57,7 @@ export type AddToGroupResult =
  * add it. Errors without a tag message are thrown for the caller to show.
  */
 export async function addToGroup(
-  identity: GoogleAccountIdentity,
+  identity: LoginIdentity,
   clientAddress: string | undefined,
   group: ListedGroup,
   tag: string,

@@ -4,16 +4,17 @@ import {
   redirect,
   useLoaderData,
   useNavigation,
-  type LoaderFunctionArgs,
   type UNSAFE_DataWithResponseInit as DataWithResponseInit,
+  type LoaderFunctionArgs,
 } from "react-router";
+import { searchPlayers } from "../services/players.server";
 
 import { useBackState } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { PageSearch } from "../components/PageSearch";
+import type { SearchResponse, WebsiteErrorResponse } from "../lib/contracts";
 import { canonicalPlayerPath, noMatchHint, normalizePlayerTag } from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
-import type { SearchResponse, WebsiteErrorResponse } from "../lib/contracts";
 
 export interface SearchLoaderData {
   search: SearchResponse | null;
@@ -67,9 +68,8 @@ export async function loader({
     );
   }
   try {
-    const { createPythonClient } = await import("../services/python.server");
     return {
-      search: await createPythonClient().searchPlayers(query),
+      search: await searchPlayers(query),
       query,
       error: null,
     };

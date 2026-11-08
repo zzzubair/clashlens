@@ -10,14 +10,23 @@ import {
   useNavigation,
   type LoaderFunctionArgs,
 } from "react-router";
+import { searchLeaderboard } from "../services/leaderboard-search.server";
+import { getTrackedLeaderboard } from "../services/leaderboard.server";
+import { getPublicUser } from "../services/public-user.server";
 
 import { moveFocusWithArrows } from "../components/ArrowKeys";
 import { useBackState } from "../components/BackLink";
 import { DashboardIcon } from "../components/DashboardIcon";
 import { ErrorNotice } from "../components/ErrorNotice";
-import { SearchIcon } from "../components/PlayerSearch";
-import { useSeasonReread } from "../components/SeasonReread";
 import { RANKINGS_PAGE_SIZE, TrophyMark } from "../components/LeaderboardShared";
+import { SearchIcon } from "../components/PlayerSearch";
+import {
+  formatAge,
+  formatTimestamp,
+  LocalTimestamp,
+  OLD_UPDATE_SECONDS,
+  useCurrentTime,
+} from "../components/Provenance";
 import {
   comparesWithReset,
   hasRecentDays,
@@ -28,19 +37,13 @@ import {
   shortAge,
   TodayChange,
 } from "../components/ResetChange";
-import {
-  formatAge,
-  formatTimestamp,
-  LocalTimestamp,
-  OLD_UPDATE_SECONDS,
-  useCurrentTime,
-} from "../components/Provenance";
+import { useSeasonReread } from "../components/SeasonReread";
+import "../leaderboard-search.css";
 import { publicPageMeta } from "../lib/blog";
+import type { SnapshotSelector, WebsiteErrorResponse } from "../lib/contracts";
 import { canonicalPlayerPath, noMatchHint, normalizePlayerTag } from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
-import type { SnapshotSelector, WebsiteErrorResponse } from "../lib/contracts";
 import type { Route } from "./+types/tracked-leaderboard";
-import "../leaderboard-search.css";
 
 const PAGE_SIZE = RANKINGS_PAGE_SIZE;
 // A saved Daily board is incomplete when none of its players was saved in the
@@ -112,7 +115,7 @@ async function myPlace(request: Request): Promise<{ tag: string; rank: number } 
     const { createPythonClient } = await import("../services/python.server");
     const client = createPythonClient(identity);
     const { username } = await client.getAccount();
-    const players = (await client.getPublicUser(username)).verifiedPlayers;
+    const players = (await getPublicUser(username)).verifiedPlayers;
     const lead = players.find((player) => player.state === "tracking") ?? players[0];
     return lead?.rank ? { tag: lead.tag, rank: lead.rank } : null;
   } catch {
@@ -174,11 +177,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
     throw new Response(null, { status: 422 });
   const me = viewValue === "live" ? myPlace(request) : Promise.resolve(null);
   try {
-    const { createPythonClient } = await import("../services/python.server");
-    const client = createPythonClient();
     // The board and the search start together. An exact tag still redirects
     // first, leaving the board unread, and a failed search is still the error.
-    const boardRead = client.getTrackedLeaderboard(
+    const boardRead = getTrackedLeaderboard(
       PAGE_SIZE,
       viewValue,
       (page - 1) * PAGE_SIZE,
@@ -186,7 +187,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       focusTag ?? undefined,
     );
     boardRead.catch(() => undefined);
-    const search = query ? await client.searchLeaderboard(query) : null;
+    const search = query ? await searchLeaderboard(query) : null;
     if (search?.exactTag)
       throw redirect(playerRankUrl(search.exactTag, search.results[0].rank));
     const leaderboard = await boardRead;
@@ -208,9 +209,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
       me: await me,
     } as const;
   } catch (cause) {
-    const { PythonApiError } = await import("../services/python.server");
+    const { PythonApiError } = await import("../services/python-response.server");
     if (focusTag && cause instanceof PythonApiError && cause.status === 404) {
-      const { createPythonClient } = await import("../services/python.server");
       const missing: WebsiteErrorResponse = {
         error: {
           code: "missing",
@@ -219,7 +219,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         },
       };
       return {
-        leaderboard: await createPythonClient().getTrackedLeaderboard(PAGE_SIZE, "live"),
+        leaderboard: await getTrackedLeaderboard(PAGE_SIZE, "live"),
         error: missing,
         pageUnavailableUrl: null,
         latestDailyUrl: null,

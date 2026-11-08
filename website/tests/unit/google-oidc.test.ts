@@ -2,25 +2,23 @@ import { createHash } from "node:crypto";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { loadWebsiteConfig } from "../../app/server/config.server";
-import type { WebsiteConfig } from "../../app/server/config.server";
+import type { LoginIdentity, OAuthTransaction } from "../../app/server/auth.server";
 import {
-  CALLBACK_PATH,
-  GOOGLE_ISSUER,
   MAX_PROVIDER_SUBJECT_LENGTH,
   OAUTH_TRANSACTION_LIFETIME_SECONDS,
   OAuthCallbackError,
   constantTimeEqual,
-  createGoogleOidcService,
   createOAuthTransaction,
-  isProviderSubject,
   isPlausibleTransaction,
+  isProviderSubject,
+} from "../../app/server/auth.server";
+import type { WebsiteConfig } from "../../app/server/config.server";
+import { GOOGLE_ISSUER, loadWebsiteConfig } from "../../app/server/config.server";
+import type { OidcServiceDeps } from "../../app/server/google-oidc.server";
+import {
+  CALLBACK_PATH,
+  createGoogleOidcService,
   redirectUriFor,
-} from "../../app/server/google-oidc.server";
-import type {
-  OidcServiceDeps,
-  OAuthTransaction,
-  ValidatedGoogleIdentity,
 } from "../../app/server/google-oidc.server";
 
 const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
@@ -269,7 +267,7 @@ describe("Google OIDC service", () => {
     const { deps, authorizationCodeGrant } = fakeDeps();
     const service = await createGoogleOidcService(testConfig(), deps);
     const oauthTransaction = transaction();
-    const identity: ValidatedGoogleIdentity = await service.validateCallback(
+    const identity: LoginIdentity = await service.validateCallback(
       { state: oauthTransaction.state, code: "auth-code" },
       oauthTransaction,
       1_000_100,

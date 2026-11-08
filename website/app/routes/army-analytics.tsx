@@ -7,13 +7,22 @@ import {
   useLoaderData,
   useLocation,
   useNavigate,
+  useNavigation,
   useNavigationType,
   useSearchParams,
-  useNavigation,
   useSubmit,
   type LoaderFunctionArgs,
   type ShouldRevalidateFunctionArgs,
 } from "react-router";
+import analyticsSheetStyles from "../analytics-sheet.css?url";
+import analyticsStyles from "../analytics.css?url";
+import {
+  getArmyAnalytics,
+  getArmySeasons,
+  getArmySeasonSummary,
+  NoCompletedLegendDaysError,
+} from "../services/army-analytics.server";
+import { PythonApiError } from "../services/python-response.server";
 
 import { ArmyMap } from "../components/ArmyMap";
 import { UnitArt } from "../components/ArmyPortraits";
@@ -28,12 +37,10 @@ import {
   starRate,
   type ArmyRow,
 } from "../lib/army-stats";
-import type { WebsiteErrorResponse } from "../lib/contracts";
 import { publicPageMeta } from "../lib/blog";
+import type { WebsiteErrorResponse } from "../lib/contracts";
 import { seasonDates } from "../lib/season-end";
 import type { Route } from "./+types/army-analytics";
-import analyticsSheetStyles from "../analytics-sheet.css?url";
-import analyticsStyles from "../analytics.css?url";
 
 export function links() {
   return [
@@ -125,22 +132,20 @@ export async function loader({ request }: LoaderFunctionArgs) {
   // Attacks only, over the whole Season: the API's defaults are the attack
   // view and every finished Legend day from Day 1.
   const sort = source.get("sort") ?? "usage-rate";
-  const python = await import("../services/python.server");
   let pastSeasonsRead: Promise<string[]> = Promise.resolve([]);
   try {
-    const client = python.createPythonClient();
-    pastSeasonsRead = armySeasons(client);
+    pastSeasonsRead = armySeasons();
     if (season !== "current") {
       const summaryQuery = new URLSearchParams({ category, sort });
       // A past Season's Armies keep the Top N of each day's board.
       if (category === "army-types") summaryQuery.set("population", population);
       if (source.has("offset")) summaryQuery.set("offset", source.get("offset")!);
-      const analytics = await client
-        .getArmySeasonSummary(season, summaryQuery)
-        .catch((cause: { status?: unknown }) => {
+      const analytics = await getArmySeasonSummary(season, summaryQuery).catch(
+        (cause: { status?: unknown }) => {
           if (category === "army-types" && cause.status === 404) return null;
           throw cause;
-        });
+        },
+      );
       if (analytics === null) {
         return data(
           {
@@ -180,7 +185,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     });
     return {
       recentAvailable,
-      analytics: await client.getArmyAnalytics(query),
+      analytics: await getArmyAnalytics(query),
       error: null,
       seasonEmpty: null,
       historicalSummary: false,
@@ -189,7 +194,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     };
   } catch (cause) {
     const pastSeasons = await pastSeasonsRead;
-    if (cause instanceof python.NoCompletedLegendDaysError) {
+    if (cause instanceof NoCompletedLegendDaysError) {
       // The current season has no completed Legend day; show the agreed empty
       // state and link to the previous season instead of serving its data.
       return data(
@@ -271,7 +276,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }
     const timedOut =
       season === "current" &&
-      cause instanceof python.PythonApiError &&
+      cause instanceof PythonApiError &&
       (cause.payload as { error?: unknown } | null)?.error === "timeout";
     return {
       recentAvailable,
@@ -295,11 +300,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
 // The list only adds finished Seasons to the picker, so the page still works
 // without it.
-async function armySeasons(
-  client: ReturnType<typeof import("../services/python.server").createPythonClient>,
-) {
+async function armySeasons() {
   try {
-    return await client.getArmySeasons();
+    return await getArmySeasons();
   } catch {
     return [];
   }

@@ -182,8 +182,9 @@ describe("calculated starting trophies on the player page", () => {
       );
       process.env.NODE_ENV = "test";
       process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-      const { createPythonClient } = await import("../../app/services/python.server");
-      const player = await createPythonClient().getPlayer("#2PP");
+      const player = await (
+        await import("../../app/services/players.server")
+      ).getPlayer("#2PP");
       expect(player.currentDay?.startTrophies).toBe(expected);
       expect(player.seasonDays.map((value) => value.startTrophies)).toEqual([
         expected,
@@ -261,8 +262,7 @@ describe("calculated starting trophies on the player page", () => {
       );
       process.env.NODE_ENV = "test";
       process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-      const { createPythonClient } = await import("../../app/services/python.server");
-      return createPythonClient().getPlayer("#2PP");
+      return (await import("../../app/services/players.server")).getPlayer("#2PP");
     };
     const player = await load([
       { type: "automatic_defense", amount: -32, evidence_state: "observed" },

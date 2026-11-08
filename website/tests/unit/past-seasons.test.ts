@@ -1,4 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock("../../app/services/players.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/players.server")>();
+  return {
+    ...actual,
+    getPlayer: async (...args: Parameters<typeof actual.getPlayer>) =>
+      mocks.createPythonClient().getPlayer(...args),
+    getPlayerSeasons: async (...args: Parameters<typeof actual.getPlayerSeasons>) =>
+      mocks.createPythonClient().getPlayerSeasons(...args),
+  };
+});
 import { PassThrough } from "node:stream";
 import { createElement, type ReactElement } from "react";
 import { renderToPipeableStream } from "react-dom/server";
@@ -7,6 +17,7 @@ import {
   createStaticRouter,
   StaticRouterProvider,
 } from "react-router";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createPythonClient: vi.fn(),
@@ -31,7 +42,7 @@ vi.mock("../../app/services/past-seasons.server", () => ({
 
 import type { PastSeasonFinish, PlayerPage } from "../../app/lib/contracts";
 import PlayerRoute, { loader as playerLoader } from "../../app/routes/player";
-import { PythonApiError } from "../../app/services/python.server";
+import { PythonApiError } from "../../app/services/python-response.server";
 
 const TAG = "#2PP";
 const FINISHES: PastSeasonFinish[] = [
@@ -314,7 +325,10 @@ describe("past Seasons client boundary", () => {
 
   it.each([
     { tag: "#OTHER", seasons: [] },
-    { tag: TAG, seasons: [{ season_id: "2021-12", trophies: -1, global_rank: null }] },
+    {
+      tag: TAG,
+      seasons: [{ season_id: "2021-12", trophies: -1, global_rank: null }],
+    },
     {
       tag: TAG,
       seasons: [

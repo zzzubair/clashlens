@@ -1,3 +1,15 @@
+vi.mock("../../app/services/python-transport.server", () => ({
+  requestJson: mocks.requestJson,
+}));
+vi.mock("../../app/services/public-user.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/public-user.server")>();
+  return {
+    ...actual,
+    getPublicUser: async (...args: Parameters<typeof actual.getPublicUser>) =>
+      mocks.createPythonClient().getPublicUser(...args),
+  };
+});
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
@@ -36,7 +48,6 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
     await importOriginal<typeof import("../../app/services/python.server")>();
   return {
     ...actual,
-    requestJson: mocks.requestJson,
     createPythonClient: mocks.createPythonClient,
   };
 });
@@ -51,6 +62,12 @@ import {
   mapCrew,
   mapInvitePreview,
 } from "../../app/lib/crew-contracts";
+import { loader as setupLoader } from "../../app/routes/account.setup";
+import VerifyPlayerRoute, {
+  action as verifyAction,
+  handle as verifyHandle,
+  loader as verifyLoader,
+} from "../../app/routes/account.verify-player";
 import { action as crewAction } from "../../app/routes/crews.$crewId";
 import CrewMembersRoute, {
   action as membersAction,
@@ -65,18 +82,12 @@ import JoinRoute, {
   action as joinAction,
   loader as joinLoader,
 } from "../../app/routes/crews.join.$code";
-import VerifyPlayerRoute, {
-  action as verifyAction,
-  handle as verifyHandle,
-  loader as verifyLoader,
-} from "../../app/routes/account.verify-player";
-import { loader as setupLoader } from "../../app/routes/account.setup";
 import { loader as loginLoader } from "../../app/routes/login";
 import { loader as signupLoader } from "../../app/routes/signup";
 import { clearPublicRefreshLimits } from "../../app/server/abuse.server";
 import { clientAddressContext } from "../../app/server/client-address.server";
 import { loadWebsiteConfig } from "../../app/server/config.server";
-import { PythonApiError } from "../../app/services/python.server";
+import { PythonApiError } from "../../app/services/python-response.server";
 
 const ORIGIN = "https://clashlens.example";
 const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" } as const;
@@ -86,7 +97,11 @@ const INVITE_ID = "0b6f2d3e-1c4a-4f5b-8e9d-7a6c5b4d3e2f";
 const CODE = "h3Kq8Zp2vT_x-Yb1Wc9Dd0";
 const EXPIRES = "2026-10-19T14:20:00+00:00";
 
-type Args = { request: Request; params: Record<string, string>; context: unknown };
+type Args = {
+  request: Request;
+  params: Record<string, string>;
+  context: unknown;
+};
 
 function post(path: string, fields: Record<string, string>, params = {}): Args {
   return {
@@ -153,7 +168,12 @@ function crewPayload(role = "owner") {
       },
     ],
     invites: [
-      { invite_id: INVITE_ID, made_by: "Kenji", expires_at: EXPIRES, mine: false },
+      {
+        invite_id: INVITE_ID,
+        made_by: "Kenji",
+        expires_at: EXPIRES,
+        mine: false,
+      },
     ],
   };
 }
@@ -342,13 +362,13 @@ describe("invite", () => {
       ) as never,
     );
     const calls = mocks.requestJson.mock.calls;
-    expect(calls.map((call) => [call[0], call[1]])).toEqual([
+    expect(calls.map((call) => [call[0], call[1].method])).toEqual([
       [`/v1/account/crews/${CREW_ID}/invites`, "POST"],
       [`/v1/account/crews/${CREW_ID}/invites`, "POST"],
     ]);
-    expect(JSON.parse((calls[1]![2] as Buffer).toString())).toEqual({ new: true });
+    expect(JSON.parse((calls[1]![1].body as Buffer).toString())).toEqual({ new: true });
     // Each write gets its own key from the page's, never the page's key itself.
-    expect(new Set([KEY, calls[0]![4], calls[1]![4]]).size).toBe(3);
+    expect(new Set([KEY, calls[0]![1].requestId, calls[1]![1].requestId]).size).toBe(3);
   });
 
   it("says why no link is made for a full crew", async () => {
@@ -385,7 +405,7 @@ describe("members", () => {
     mocks.requestJson.mockResolvedValue({ removed: true, tag: "#2QQ", left_crew: false });
     const { data } = unwrap<Answer>(await members({ intent: "remove", tag: "#2qq" }));
     expect(data.notice).toBe("Kicked #2QQ.");
-    const [target, method] = mocks.requestJson.mock.calls[0]!;
+    const [target, { method }] = mocks.requestJson.mock.calls[0]!;
     expect([target, method]).toEqual([
       `/v1/account/crews/${CREW_ID}/players/%232QQ`,
       "DELETE",
@@ -401,10 +421,10 @@ describe("members", () => {
     mocks.requestJson.mockResolvedValue({ left: true, crew_id: CREW_ID });
     const left = await thrown(() => members({ intent: "leave" }));
     expect((left as Response).headers.get("Location")).toBe("/crews");
-    expect(mocks.requestJson.mock.calls[1]!.slice(0, 2)).toEqual([
-      `/v1/account/crews/${CREW_ID}/members/me`,
-      "DELETE",
-    ]);
+    expect([
+      mocks.requestJson.mock.calls[1]![0],
+      mocks.requestJson.mock.calls[1]![1].method,
+    ]).toEqual([`/v1/account/crews/${CREW_ID}/members/me`, "DELETE"]);
   });
 
   it("makes and removes an admin", async () => {
@@ -417,13 +437,18 @@ describe("members", () => {
       await members({ intent: "promote", username: "kenji" }),
     );
     expect(promoted.data.notice).toBe("Kenji is now an admin.");
+    mocks.requestJson.mockResolvedValue({
+      username: "kenji",
+      display_name: "Kenji",
+      role: "member",
+    });
     const demoted = unwrap<Answer>(
       await members({ intent: "demote", username: "kenji" }),
     );
     expect(demoted.data.notice).toBe("Kenji is no longer an admin.");
     expect(
       mocks.requestJson.mock.calls.map((call) =>
-        JSON.parse((call[2] as Buffer).toString()),
+        JSON.parse((call[1].body as Buffer).toString()),
       ),
     ).toEqual([{ role: "admin" }, { role: "member" }]);
   });
@@ -442,8 +467,21 @@ describe("members", () => {
     const { data } = unwrap<Answer>(await members({ intent: "add", "join:#2RR": "on" }));
     expect(data.notice).toBe("Added 1 account.");
     expect(mocks.checkPlayerTag).toHaveBeenCalledWith(undefined, "#2RR");
-    const keys = mocks.requestJson.mock.calls.map((call) => call[4]);
+    const keys = mocks.requestJson.mock.calls.map((call) => call[1].requestId);
     expect(keys[0]).not.toBe(keys[1]);
+  });
+
+  it("accepts the canonical username returned after a mixed-case member request", async () => {
+    mocks.requestJson.mockResolvedValue({
+      username: "kenji",
+      display_name: "Kenji",
+      role: "admin",
+    });
+    const answer = unwrap<Answer>(
+      await members({ intent: "promote", username: "Kenji" }),
+    );
+    expect(answer.status).toBe(200);
+    expect(answer.data.notice).toBe("Kenji is now an admin.");
   });
 
   it("says why a write was refused, with a fresh key", async () => {
@@ -527,6 +565,29 @@ describe("members", () => {
     expect(unwrap<Answer>(await members({ intent: "delete" })).status).toBe(400);
     expect(mocks.requestJson).not.toHaveBeenCalled();
   });
+  // A malformed success cannot redirect someone out of their crew or claim a saved role.
+  it.each([
+    [
+      "remove",
+      { intent: "remove", tag: "#2PP", own: "1" },
+      { removed: true, tag: "#2PP", left_crew: "yes" },
+    ],
+    [
+      "promote",
+      { intent: "promote", username: "kenji" },
+      { username: "kenji", role: "admin", display_name: 3 },
+    ],
+    [
+      "promote",
+      { intent: "promote", username: "kenji" },
+      { username: "someoneelse", role: "admin", display_name: "Kenji" },
+    ],
+  ] as const)("rejects an unreadable %s success", async (_intent, fields, payload) => {
+    mocks.requestJson.mockResolvedValue(payload);
+    const answer = unwrap<Answer>(await members(fields));
+    expect(answer.status).toBe(502);
+    expect(answer.data.notice).toBeNull();
+  });
 });
 
 describe("edit crew", () => {
@@ -557,7 +618,14 @@ describe("edit crew", () => {
   });
 
   it("renames, resizes, turns off a link and hands over", async () => {
-    mocks.requestJson.mockResolvedValue({});
+    mocks.requestJson
+      .mockResolvedValueOnce({ crew_id: CREW_ID })
+      .mockResolvedValueOnce({ crew_id: CREW_ID })
+      .mockResolvedValueOnce({ revoked: true, invite_id: INVITE_ID })
+      .mockResolvedValueOnce({
+        crew_id: CREW_ID,
+        left_crew: false,
+      });
     const notices = [];
     for (const fields of <Record<string, string>[]>[
       { intent: "rename", name: "  Blue Moon " },
@@ -576,8 +644,10 @@ describe("edit crew", () => {
     expect(
       mocks.requestJson.mock.calls.map((call) => [
         call[0],
-        call[1],
-        call[2] === undefined ? null : JSON.parse((call[2] as Buffer).toString()),
+        call[1].method,
+        call[1].body === undefined
+          ? null
+          : JSON.parse((call[1].body as Buffer).toString()),
       ]),
     ).toEqual([
       [`/v1/account/crews/${CREW_ID}`, "PATCH", { name: "Blue Moon" }],
@@ -618,6 +688,17 @@ describe("edit crew", () => {
     expect(html).toContain('min="4"');
     expect(html).toContain("Delete crew");
   });
+  it("refuses an unreadable handover result", async () => {
+    mocks.requestJson.mockResolvedValue({
+      crew_id: CREW_ID,
+      left_crew: "yes",
+    });
+    const answer = unwrap<Answer>(
+      await settings({ intent: "transfer", username: "kenji" }),
+    );
+    expect(answer.status).toBe(502);
+    expect(answer.data.notice).toBeNull();
+  });
 });
 
 describe("join by invite", () => {
@@ -625,7 +706,12 @@ describe("join by invite", () => {
     const accounts = mapInvitePreview(
       invitePayload({
         accounts: [
-          { tag: "#2PP", name: "Left", trophies: 4900, eligibility: "not_in_legend" },
+          {
+            tag: "#2PP",
+            name: "Left",
+            trophies: 4900,
+            eligibility: "not_in_legend",
+          },
           { tag: "#2RR", name: "New", trophies: 5200, eligibility: "ok" },
         ],
       }),
@@ -755,7 +841,7 @@ describe("join by invite", () => {
     expect((response as Response).headers.get("Location")).toBe(
       `/crews/${CREW_ID}?saved=joined`,
     );
-    const [target, method, body, , key] = mocks.requestJson.mock.calls[0]!;
+    const [target, { method, body, requestId: key }] = mocks.requestJson.mock.calls[0]!;
     expect([target, method, key]).toEqual([
       `/v1/account/crew-invites/${CODE}/accept`,
       "POST",

@@ -1,20 +1,16 @@
+vi.mock("../../app/services/python-transport.server", () => ({
+  requestJson: mocks.requestJson,
+}));
 import { createHmac } from "node:crypto";
 
 import { describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ requestJson: vi.fn() }));
 
-vi.mock("../../app/services/python.server", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../app/services/python.server")>();
-  return { ...actual, requestJson: mocks.requestJson };
-});
-
 import {
   LOGIN_COOKIE_LIFETIME_SECONDS,
   LOGIN_COOKIE_NAME,
   OAUTH_COOKIE_NAME,
-  OAUTH_TRANSACTION_LIFETIME_SECONDS,
   buildClearCookieHeader,
   buildSetCookieHeader,
   cookieAttributes,
@@ -24,15 +20,22 @@ import {
   parseLoginCookieValue,
   parseOAuthTransactionCookieValue,
 } from "../../app/server/auth-cookies.server";
-import type { LoginIdentity } from "../../app/server/auth-cookies.server";
-import { createOAuthTransaction } from "../../app/server/google-oidc.server";
+import type { LoginIdentity } from "../../app/server/auth.server";
+import {
+  OAUTH_TRANSACTION_LIFETIME_SECONDS,
+  createOAuthTransaction,
+} from "../../app/server/auth.server";
 import { isLoginRevoked, revokeLogin } from "../../app/server/login-session.server";
 
 const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 const KEY = Buffer.from(TEST_SECRET, "base64url");
 const OTHER_KEY = Buffer.alloc(32, 0x42);
 const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" } as const;
-const SESSION = { ...IDENTITY, issuedAtMs: 1_750_000_000, signedInAtMs: 1_750_000_000 };
+const SESSION = {
+  ...IDENTITY,
+  issuedAtMs: 1_750_000_000,
+  signedInAtMs: 1_750_000_000,
+};
 
 function oauthTransaction(now = 1_750_000) {
   return createOAuthTransaction("/account", now, (size) => Buffer.alloc(size, 0x2a));
@@ -495,13 +498,13 @@ describe("login session requests", () => {
     await revokeLogin(session!, value);
     const [check, logout] = mocks.requestJson.mock.calls;
     expect(check[0]).toBe("/v1/account/session/check");
-    expect(JSON.parse(check[2].toString("utf8"))).toEqual({
+    expect(JSON.parse(check[1].body.toString("utf8"))).toEqual({
       session: createLoginSessionBinding(value),
       issued_at_ms: 1_750_000_000,
     });
-    expect(check[5]).toEqual(SESSION);
+    expect(check[1].identity).toEqual(SESSION);
     expect(logout[0]).toBe("/v1/account/session/revoke");
-    expect(JSON.parse(logout[2].toString("utf8"))).toEqual({
+    expect(JSON.parse(logout[1].body.toString("utf8"))).toEqual({
       session: createLoginSessionBinding(value),
     });
   });
@@ -510,7 +513,7 @@ describe("login session requests", () => {
     const removedAtMs = 1_760_000_000_000;
     // The API refuses a login that signed in at or before the removal.
     mocks.requestJson.mockImplementation(
-      async (_path: string, _method: string, body: Buffer) => ({
+      async (_path: string, { body }: { body: Buffer }) => ({
         revoked: JSON.parse(body.toString("utf8")).issued_at_ms <= removedAtMs,
       }),
     );

@@ -1,3 +1,24 @@
+vi.mock("../../app/services/leaderboard.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/leaderboard.server")>();
+  return {
+    ...actual,
+    getTrackedLeaderboard: async (
+      ...args: Parameters<typeof actual.getTrackedLeaderboard>
+    ) => mocks.createPythonClient().getTrackedLeaderboard(...args),
+  };
+});
+vi.mock("../../app/services/players.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/players.server")>();
+  return {
+    ...actual,
+    getPlayer: async (...args: Parameters<typeof actual.getPlayer>) =>
+      mocks.createPythonClient().getPlayer(...args),
+    getPlayerSeasons: async (...args: Parameters<typeof actual.getPlayerSeasons>) =>
+      mocks.createPythonClient().getPlayerSeasons(...args),
+  };
+});
 import { PassThrough } from "node:stream";
 import { createElement } from "react";
 import { renderToPipeableStream } from "react-dom/server";
@@ -43,7 +64,7 @@ import {
 import PlayerRoute, { loader as playerLoader } from "../../app/routes/player";
 import { clearPublicRefreshLimits } from "../../app/server/abuse.server";
 import { clientAddressContext } from "../../app/server/client-address.server";
-import { PythonApiError } from "../../app/services/python.server";
+import { PythonApiError } from "../../app/services/python-response.server";
 
 const TAG = "#PC2QRC9QY";
 const PLAYER_LINK =

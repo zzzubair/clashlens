@@ -1,3 +1,20 @@
+vi.mock("../../app/services/players.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/players.server")>();
+  return {
+    ...actual,
+    getPlayer: async (...args: Parameters<typeof actual.getPlayer>) =>
+      (() => ({
+        getPlayer: mocks.getPlayer,
+        getPlayerSeasons: vi.fn().mockResolvedValue([]),
+      }))().getPlayer(...args),
+    getPlayerSeasons: async (...args: Parameters<typeof actual.getPlayerSeasons>) =>
+      (() => ({
+        getPlayer: mocks.getPlayer,
+        getPlayerSeasons: vi.fn().mockResolvedValue([]),
+      }))().getPlayerSeasons(...args),
+  };
+});
 import { createElement, Fragment } from "react";
 import { renderToString } from "react-dom/server";
 import { createRoutesStub, Meta, Outlet } from "react-router";
@@ -30,8 +47,8 @@ vi.mock("../../app/services/past-seasons.server", () => ({
 }));
 
 import type { PlayerPage } from "../../app/lib/contracts";
-import { PythonApiError } from "../../app/services/python.server";
 import { loader, meta, type PlayerLoaderData } from "../../app/routes/player";
+import { PythonApiError } from "../../app/services/python-response.server";
 
 const TAG = "#2PP";
 const ORIGIN = "http://localhost";

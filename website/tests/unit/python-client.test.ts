@@ -70,9 +70,9 @@ describe("server-only Python client response boundary", () => {
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
 
-    const { createPythonClient } = await import("../../app/services/python.server");
-
-    await expect(createPythonClient().getTrackedLeaderboard(25)).rejects.toMatchObject({
+    await expect(
+      (await import("../../app/services/leaderboard.server")).getTrackedLeaderboard(25),
+    ).rejects.toMatchObject({
       status: 502,
       payload: { error: "malformed" },
     });
@@ -94,8 +94,9 @@ describe("server-only Python client response boundary", () => {
     );
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
-    await expect(createPythonClient().getTrackedLeaderboard()).resolves.toMatchObject({
+    await expect(
+      (await import("../../app/services/leaderboard.server")).getTrackedLeaderboard(),
+    ).resolves.toMatchObject({
       entries: [],
       provenance: { observedAt: null },
       sourceObservations: {
@@ -133,8 +134,9 @@ describe("server-only Python client response boundary", () => {
     );
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
-    await expect(createPythonClient().getTrackedLeaderboard()).rejects.toMatchObject({
+    await expect(
+      (await import("../../app/services/leaderboard.server")).getTrackedLeaderboard(),
+    ).rejects.toMatchObject({
       status: 502,
       payload: { error: "malformed" },
     });
@@ -186,8 +188,9 @@ describe("server-only Python client response boundary", () => {
     );
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
-    await expect(createPythonClient().getTrackedLeaderboard()).resolves.toMatchObject({
+    await expect(
+      (await import("../../app/services/leaderboard.server")).getTrackedLeaderboard(),
+    ).resolves.toMatchObject({
       entries: [
         {
           recentDays: [
@@ -206,7 +209,9 @@ describe("server-only Python client response boundary", () => {
       [day("2026-08-04T06:00:00Z", 40)],
       Array(8).fill(day("2026-08-04T05:00:00Z", 40)),
     ])
-      await expect(createPythonClient().getTrackedLeaderboard()).rejects.toMatchObject({
+      await expect(
+        (await import("../../app/services/leaderboard.server")).getTrackedLeaderboard(),
+      ).rejects.toMatchObject({
         status: 502,
         payload: { error: "malformed" },
       });
@@ -240,9 +245,11 @@ describe("server-only Python client response boundary", () => {
     );
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
     await expect(
-      createPythonClient().getTrackedLeaderboard(25, "daily"),
+      (await import("../../app/services/leaderboard.server")).getTrackedLeaderboard(
+        25,
+        "daily",
+      ),
     ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
   });
 
@@ -252,9 +259,9 @@ describe("server-only Python client response boundary", () => {
     process.env.NODE_ENV = "production";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
 
-    const { createPythonClient } = await import("../../app/services/python.server");
-
-    await expect(createPythonClient().getTrackedLeaderboard()).rejects.toMatchObject({
+    await expect(
+      (await import("../../app/services/leaderboard.server")).getTrackedLeaderboard(),
+    ).rejects.toMatchObject({
       status: 503,
       payload: { error: "unavailable" },
     });
@@ -267,10 +274,8 @@ describe("server-only Python client response boundary", () => {
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
 
-    const { createPythonClient } = await import("../../app/services/python.server");
-
     await expect(
-      createPythonClient().searchPlayers("x".repeat(81)),
+      (await import("../../app/services/players.server")).searchPlayers("x".repeat(81)),
     ).rejects.toMatchObject({
       status: 400,
       payload: { error: "invalid_input" },
@@ -286,10 +291,8 @@ describe("server-only Python client response boundary", () => {
       process.env.NODE_ENV = "test";
       process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
 
-      const { createPythonClient } = await import("../../app/services/python.server");
-
       await expect(
-        createPythonClient().searchPlayers("Nova", limit),
+        (await import("../../app/services/players.server")).searchPlayers("Nova", limit),
       ).rejects.toMatchObject({
         status: 400,
         payload: { error: "invalid_input" },
@@ -314,10 +317,11 @@ describe("server-only Python client response boundary", () => {
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
 
-    const { createPythonClient } = await import("../../app/services/python.server");
-
     await expect(
-      createPythonClient().getRefreshStatus("work-1", "#2PP"),
+      (await import("../../app/services/players.server")).getRefreshStatus(
+        "work-1",
+        "#2PP",
+      ),
     ).rejects.toMatchObject({
       status: 409,
       payload: { error: "conflict" },
@@ -346,10 +350,9 @@ describe("server-only Python client response boundary", () => {
       );
       process.env.NODE_ENV = "test";
       process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-      const { createPythonClient } = await import("../../app/services/python.server");
 
       await expect(
-        createPythonClient().getRefreshStatus(
+        (await import("../../app/services/players.server")).getRefreshStatus(
           "7c4d7f3a-4ff1-4fdd-889e-2284debc622d",
           "#2PP",
         ),
@@ -374,10 +377,9 @@ describe("server-only Python client response boundary", () => {
     );
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
 
     await expect(
-      createPythonClient().getRefreshStatus(
+      (await import("../../app/services/players.server")).getRefreshStatus(
         "7c4d7f3a-4ff1-4fdd-889e-2284debc622d",
         "#2PP",
       ),
@@ -401,9 +403,9 @@ describe("server-only Python client response boundary", () => {
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
     const idempotencyKey = "3be934b5-68fa-4741-8c7b-e03592e4ad70";
 
-    const { createPythonClient } = await import("../../app/services/python.server");
-
-    await createPythonClient().requestRefresh("#2PP", idempotencyKey);
+    await (
+      await import("../../app/services/players.server")
+    ).requestRefresh("#2PP", idempotencyKey);
 
     expect(fetchMock).toHaveBeenCalledWith(
       new URL("/v1/players/%232PP/refresh", "http://python-fixture.test/"),
@@ -425,9 +427,10 @@ describe("server-only Python client response boundary", () => {
     vi.stubGlobal("fetch", fetchMock);
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
 
-    await expect(createPythonClient().getTrackedLeaderboard()).rejects.toMatchObject({
+    await expect(
+      (await import("../../app/services/leaderboard.server")).getTrackedLeaderboard(),
+    ).rejects.toMatchObject({
       status: 502,
     });
 
@@ -520,8 +523,9 @@ describe("server-only Python client response boundary", () => {
     );
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
-    await expect(createPythonClient().getTrackedLeaderboard()).resolves.toMatchObject({
+    await expect(
+      (await import("../../app/services/leaderboard.server")).getTrackedLeaderboard(),
+    ).resolves.toMatchObject({
       view: "live",
       entries: [
         {
@@ -622,8 +626,9 @@ describe("server-only Python client response boundary", () => {
     );
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
-    const leaderboard = await createPythonClient().getTrackedLeaderboard(25, "daily", 0, {
+    const leaderboard = await (
+      await import("../../app/services/leaderboard.server")
+    ).getTrackedLeaderboard(25, "daily", 0, {
       officialSeasonId: "2026-08",
       dayNumber: 21,
     });
@@ -686,8 +691,9 @@ describe("server-only Python client response boundary", () => {
     );
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
-    await expect(createPythonClient().searchPlayers("Nova")).resolves.toMatchObject({
+    await expect(
+      (await import("../../app/services/players.server")).searchPlayers("Nova"),
+    ).resolves.toMatchObject({
       exactTag: null,
       results: [
         { freshness: { observedAt: "2026-08-06T11:59:00+00:00" }, state: "uncertain" },
@@ -709,9 +715,10 @@ describe("server-only Python client response boundary", () => {
     );
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
 
-    await expect(createPythonClient().searchPlayers("#2pp")).resolves.toMatchObject({
+    await expect(
+      (await import("../../app/services/players.server")).searchPlayers("#2pp"),
+    ).resolves.toMatchObject({
       exactTag: "#2PP",
       knownOnly: true,
     });
@@ -901,7 +908,10 @@ describe("server-only Python client response boundary", () => {
       screen_ready: {
         ...full.screen_ready,
         days: [
-          { ...currentDay, offense_events: [{ ...offenseEvents[0], trophy_change: -1 }] },
+          {
+            ...currentDay,
+            offense_events: [{ ...offenseEvents[0], trophy_change: -1 }],
+          },
           previousDay,
         ],
       },
@@ -950,8 +960,9 @@ describe("server-only Python client response boundary", () => {
     vi.stubGlobal("fetch", fetchMock);
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
-    const mapped = await createPythonClient().getPlayer("#2PP");
+    const mapped = await (
+      await import("../../app/services/players.server")
+    ).getPlayer("#2PP");
     expect(mapped.season).toMatchObject({
       anchor: "2026-08-04T05:00:00+00:00",
       dayCount: 28,
@@ -976,7 +987,9 @@ describe("server-only Python client response boundary", () => {
     });
     expect(mappedCurrentDay.offenseEvents).toEqual(offenseEvents.map(mapExpectedEvent));
     expect(mappedCurrentDay.defenseEvents).toEqual(defenseEvents.map(mapExpectedEvent));
-    await expect(createPythonClient().getPlayer("#2PP")).resolves.toMatchObject({
+    await expect(
+      (await import("../../app/services/players.server")).getPlayer("#2PP"),
+    ).resolves.toMatchObject({
       season: null,
       currentDay: null,
       currentDayPublishedAt: null,
@@ -984,19 +997,27 @@ describe("server-only Python client response boundary", () => {
       dataQuality: [{ code: "unavailable" }],
       profile: { notFoundAt: "2026-08-06T12:30:00+00:00", confidence: "uncertain" },
     });
-    await expect(createPythonClient().getPlayer("#2PP")).rejects.toMatchObject({
+    await expect(
+      (await import("../../app/services/players.server")).getPlayer("#2PP"),
+    ).rejects.toMatchObject({
       status: 502,
       payload: { error: "malformed" },
     });
-    await expect(createPythonClient().getPlayer("#2PP")).rejects.toMatchObject({
+    await expect(
+      (await import("../../app/services/players.server")).getPlayer("#2PP"),
+    ).rejects.toMatchObject({
       status: 502,
       payload: { error: "malformed" },
     });
-    const [excessDay] = (await createPythonClient().getPlayer("#2PP")).seasonDays;
+    const [excessDay] = (
+      await (await import("../../app/services/players.server")).getPlayer("#2PP")
+    ).seasonDays;
     expect(excessDay.offenseEvents).toHaveLength(9);
     expect(excessDay.uncertainty).toEqual(["attack_count_exceeds_eight"]);
     // Shared/player provenance cannot use the live leaderboard's empty-source exception.
-    await expect(createPythonClient().getPlayer("#2PP")).rejects.toMatchObject({
+    await expect(
+      (await import("../../app/services/players.server")).getPlayer("#2PP"),
+    ).rejects.toMatchObject({
       status: 502,
       payload: { error: "malformed" },
     });
@@ -1007,390 +1028,16 @@ describe("server-only Python client response boundary", () => {
     vi.stubGlobal("fetch", fetchMock);
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
     await expect(
-      createPythonClient().requestRefresh("#2PP", "not-a-uuid"),
-    ).rejects.toMatchObject({ status: 400, payload: { error: "invalid_input" } });
+      (await import("../../app/services/players.server")).requestRefresh(
+        "#2PP",
+        "not-a-uuid",
+      ),
+    ).rejects.toMatchObject({
+      status: 400,
+      payload: { error: "invalid_input" },
+    });
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  function armyAnalyticsPayload() {
-    return {
-      kind: "army-analytics",
-      total_attacks: 2,
-      usable_army_sample: 2,
-      army_states: { fully_decoded: 1, partial: 1 },
-      army_states_sum_confirmed: true,
-      unknown_affected_attacks: 1,
-      unknown_component_occurrences: 1,
-      perspective_disagreement_count: 0,
-      missing_trophy_membership_evidence: 3,
-      cohort_evidence: {
-        cohort_players: 4,
-        stale_or_uncertain_cohort_members: 2,
-        streak_excluded_players: 1,
-        shielded_player_days: 3,
-      },
-      collection_coverage: { state: "complete", completed_days: 8, covered_days: [9] },
-      freshness: { state: "frozen" },
-      reproducibility: {
-        official_season_id: "1783918800",
-        legend_days: [23, 23],
-        snapshot_versions: [4],
-      },
-      versions: {
-        decoder: "army-decoder-v2",
-        catalog: "unit-catalog-v1",
-        analytics: "army-analytics-v2",
-      },
-      publication_identity: "army-publication-abc123-v1",
-      selection: {
-        lens: "offense",
-        season: "1783918800",
-        start_day: 23,
-        end_day: 23,
-        population: "top-100",
-        category: "troops",
-        sort: "usage-rate",
-      },
-      rows: [
-        {
-          key: "troop:58",
-          label: "Ice Golem",
-          usage_count: 2,
-          usage_denominator: 2,
-          usage_rate: 1,
-          star_counts: [0, 0, 0, 2],
-          star_rates: [0, 0, 0, 1],
-          three_star_rate: 1,
-          average_stars: 3,
-          average_destruction: 100,
-          unknown_excluded_attacks: 0,
-        },
-      ],
-    };
-  }
-
-  it("translates a current season with no completed days into the empty-state error", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            error: "no_completed_legend_days",
-            previous_season_id: "1783916800",
-          }),
-          { status: 404, headers: { "content-type": "application/json" } },
-        ),
-      ),
-    );
-    process.env.NODE_ENV = "test";
-    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const mod = await import("../../app/services/python.server");
-    const error = await mod
-      .createPythonClient()
-      .getArmyAnalytics(new URLSearchParams({ season: "current" }))
-      .catch((cause: unknown) => cause);
-    expect(error).toBeInstanceOf(mod.NoCompletedLegendDaysError);
-    expect(error).toMatchObject({ previousSeasonId: "1783916800" });
-  });
-
-  it("maps the army analytics payload and preserves URL-backed state", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(armyAnalyticsPayload()), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    process.env.NODE_ENV = "test";
-    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
-    const query = new URLSearchParams({
-      season: "1783918800",
-      lens: "defense",
-      start_day: "3",
-      end_day: "9",
-      population: "band-51-100",
-      category: "equipment-for-hero",
-      sort: "average-destruction",
-    });
-    const mapped = await createPythonClient().getArmyAnalytics(query);
-    expect(fetchMock.mock.calls[0][0]).toBeInstanceOf(URL);
-    expect((fetchMock.mock.calls[0][0] as URL).pathname).toBe("/v1/analytics/armies");
-    expect(mapped).toMatchObject({
-      kind: "army-analytics",
-      totalAttacks: 2,
-      usableArmySample: 2,
-      armyStates: { fully_decoded: 1, partial: 1 },
-      armyStatesSumConfirmed: true,
-      unknownAffectedAttacks: 1,
-      perspectiveDisagreementCount: 0,
-      missingTrophyMembershipEvidence: 3,
-      cohortEvidence: {
-        cohortPlayers: 4,
-        staleOrUncertainCohortMembers: 2,
-        streakExcludedPlayers: 1,
-        shieldedPlayerDays: 3,
-      },
-      collectionCoverage: { state: "complete", completedDays: 8, coveredDays: [9] },
-      freshness: { state: "frozen" },
-      reproducibility: {
-        officialSeasonId: "1783918800",
-        legendDays: [23, 23],
-        snapshotVersions: [4],
-      },
-      publicationIdentity: "army-publication-abc123-v1",
-      versions: { decoder: "army-decoder-v2", analytics: "army-analytics-v2" },
-      selection: {
-        // The echoed selection is the Python-resolved canonical state, not
-        // just the submitted URL parameters.
-        lens: "offense",
-        season: "1783918800",
-        startDay: 23,
-        endDay: 23,
-        population: "top-100",
-        category: "troops",
-        sort: "usage-rate",
-      },
-    });
-    expect(mapped.rows[0]).toMatchObject({
-      key: "troop:58",
-      usageCount: 2,
-      usageDenominator: 2,
-      threeStarRate: 1,
-      starCounts: [0, 0, 0, 2],
-    });
-  });
-
-  it("maps army types' average trophies and refuses a malformed one", async () => {
-    const [unit] = armyAnalyticsPayload().rows;
-    const payload = (miss: unknown) => ({
-      ...armyAnalyticsPayload(),
-      rows: [
-        {
-          ...unit,
-          key: "army-type:3",
-          average_trophies: 40,
-          average_miss_trophies: null,
-          variants: [
-            {
-              ...unit,
-              key: "army-variant:3:3",
-              variant_id: 3,
-            },
-          ],
-        },
-        {
-          ...unit,
-          key: "army-type:4",
-          average_trophies: 36.6,
-          average_miss_trophies: miss,
-        },
-      ],
-    });
-    const fetchMock = vi.fn(() =>
-      Promise.resolve(
-        new Response(
-          JSON.stringify(payload(fetchMock.mock.calls.length > 1 ? "26" : 26.3)),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          },
-        ),
-      ),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    process.env.NODE_ENV = "test";
-    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
-    const query = new URLSearchParams({ season: "current", category: "army-types" });
-    const mapped = await createPythonClient().getArmyAnalytics(query);
-    expect(
-      mapped.rows.map(({ averageTrophies, averageMissTrophies }) => [
-        averageTrophies,
-        averageMissTrophies,
-      ]),
-    ).toEqual([
-      [40, null],
-      [36.6, 26.3],
-    ]);
-    // An Armies type row carries its variants.
-    expect(mapped.rows[0].variants?.map((row) => [row.key, row.variantId])).toEqual([
-      ["army-variant:3:3", 3],
-    ]);
-    expect(mapped.rows[1].variants).toBeUndefined();
-    await expect(createPythonClient().getArmyAnalytics(query)).rejects.toMatchObject({
-      status: 502,
-    });
-  });
-
-  it("maps a whole-season army summary without day ranges or population filters", async () => {
-    const payload = {
-      ...armyAnalyticsPayload(),
-      history_usage_only: true,
-      rows: [
-        {
-          key: "troop:58@5",
-          unit_id: "troop:58",
-          label: "Yeti",
-          quantity: 5,
-          usage_count: 2,
-          usage_denominator: 4,
-          usage_rate: 0.5,
-          one_star_count: 0,
-          two_star_count: 1,
-          three_star_count: 1,
-        },
-      ],
-      publication_identity: "army-season-abc123-def45678",
-      collection_coverage: { state: "partial", completed_days: 20 },
-      reproducibility: {
-        official_season_id: "1785714000",
-        legend_days: [1, 28],
-        snapshot_versions: [],
-      },
-      selection: {
-        lens: "defense",
-        season: "1785714000",
-        start_day: 1,
-        end_day: 28,
-        population: "all",
-        category: "troops",
-        sort: "usage-rate",
-      },
-    };
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(payload), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    process.env.NODE_ENV = "test";
-    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
-    const query = new URLSearchParams({
-      lens: "defense",
-      category: "troops",
-      sort: "usage-rate",
-    });
-    const mapped = await createPythonClient().getArmySeasonSummary("1785714000", query);
-    const url = fetchMock.mock.calls[0][0] as URL;
-    expect(url.pathname).toBe("/v1/analytics/armies/seasons/1785714000");
-    expect(url.searchParams.has("start_day")).toBe(false);
-    expect(url.searchParams.has("population")).toBe(false);
-    expect(mapped.selection).toMatchObject({
-      startDay: 1,
-      endDay: 28,
-      population: "all",
-    });
-    expect(mapped.collectionCoverage).toEqual({ state: "partial", completedDays: 20 });
-    expect(mapped.rows[0]).toMatchObject({
-      usageCount: 2,
-      quantity: 5,
-      oneStarCount: 0,
-      twoStarCount: 1,
-      threeStarCount: 1,
-    });
-    expect(mapped.rows[0].starCounts).toBeUndefined();
-  });
-
-  it("reads the finished seasons that have army data and rejects a malformed list", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(Response.json({ seasons: ["1785714000", "1783296000"] }))
-      .mockResolvedValueOnce(Response.json({ seasons: [1785714000] }));
-    vi.stubGlobal("fetch", fetchMock);
-    process.env.NODE_ENV = "test";
-    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
-    await expect(createPythonClient().getArmySeasons()).resolves.toEqual([
-      "1785714000",
-      "1783296000",
-    ]);
-    expect((fetchMock.mock.calls[0][0] as URL).pathname).toBe(
-      "/v1/analytics/armies/seasons",
-    );
-    await expect(createPythonClient().getArmySeasons()).rejects.toMatchObject({
-      status: 502,
-      payload: { error: "malformed" },
-    });
-  });
-
-  it("rejects an army analytics payload with malformed evidence coverage", async () => {
-    const payload = armyAnalyticsPayload();
-    delete (payload as Record<string, unknown>).cohort_evidence;
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(payload), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    process.env.NODE_ENV = "test";
-    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
-    await expect(
-      createPythonClient().getArmyAnalytics(new URLSearchParams({ season: "x" })),
-    ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
-  });
-
-  it.each([
-    [
-      "wrong army analytics kind",
-      (payload: Record<string, unknown>) => {
-        payload.kind = "army-analytics-v1";
-      },
-    ],
-    [
-      "missing army-state reconciliation flag",
-      (payload: Record<string, unknown>) => {
-        delete payload.army_states_sum_confirmed;
-      },
-    ],
-    [
-      "non-integer army-state count",
-      (payload: Record<string, unknown>) => {
-        (payload.army_states as Record<string, unknown>).partial = "1";
-      },
-    ],
-    [
-      "missing publication identity",
-      (payload: Record<string, unknown>) => {
-        delete payload.publication_identity;
-      },
-    ],
-    [
-      "a truncated star-count vector",
-      (payload: Record<string, unknown>) => {
-        (payload.rows as Array<Record<string, unknown>>)[0].star_counts = [0, 0, 0];
-      },
-    ],
-    [
-      "a malformed row denominator",
-      (payload: Record<string, unknown>) => {
-        (payload.rows as Array<Record<string, unknown>>)[0].usage_denominator = "2";
-      },
-    ],
-  ])("rejects army analytics with %s", async (_name, mutate) => {
-    const payload = armyAnalyticsPayload();
-    mutate(payload);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(JSON.stringify(payload), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-      ),
-    );
-    process.env.NODE_ENV = "test";
-    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
-    await expect(
-      createPythonClient().getArmyAnalytics(new URLSearchParams("season=x")),
-    ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
   });
 
   it("keeps a disagreement battle on its player event", async () => {
@@ -1471,8 +1118,9 @@ describe("server-only Python client response boundary", () => {
     );
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
-    const mapped = await createPythonClient().getPlayer("#2PP");
+    const mapped = await (
+      await import("../../app/services/players.server")
+    ).getPlayer("#2PP");
     const event = mapped.currentDay?.offenseEvents[0];
     if (!event) throw new Error("expected an offense event");
     // Disagreement battles stay visible on their row instead of being dropped.
