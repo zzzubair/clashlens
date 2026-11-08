@@ -3,10 +3,11 @@ results (``ArtifactState``), each member (``MemberStatus``), each correction
 (``CorrectionState``), each frozen input list (``ManifestStage``) and each
 army decode (``DecodeVerdict``).
 
-The database holds every one of these states, with CHECK constraints listing
-the same values and triggers that keep published rows immutable; these types
-name them for the Python code that moves them, and a test keeps both lists
-equal. Each Reset's publication lock (``boundary.lock_boundary_publication``)
+The database holds the first three, with CHECK constraints listing the same
+values and triggers that keep published rows immutable; these types name them
+for the Python code that moves them, and a test keeps both lists equal.
+``ManifestStage`` and ``DecodeVerdict`` are worked out each time and never
+stored. Each Reset's publication lock (``boundary.lock_boundary_publication``)
 serialises the moves, so a crash or retry leaves the last committed state and
 the next publication re-check carries on from it.
 """

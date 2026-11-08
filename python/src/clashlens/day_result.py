@@ -23,8 +23,9 @@ class DayState(StrEnum):
     """How far a Legend day's evidence goes, saved as each version's
     ``state``. Its value is the saved text.
 
-    LIVE: the day has not ended. COMPLETE: continuous battle logs, both
-    Reset readings usable and no failure reason. MALFORMED: evidence that
+    LIVE: the day has not ended. COMPLETE: continuous battle logs, a usable
+    start and end total (from Reset readings, the Season rule or the
+    calculated totals) and no failure reason. MALFORMED: evidence that
     cannot be read. INCONSISTENT: readable evidence that disagrees, such as a
     trophy equation mismatch or a disputed battle. PARTIAL: anything else
     ended, such as a missing reading or a gap in the logs.
