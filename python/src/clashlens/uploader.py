@@ -26,6 +26,7 @@ import signal
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
@@ -69,6 +70,51 @@ _GLOBAL_ARCHIVE_FAILURES = {
 }
 
 
+class ArchiveHealth(StrEnum):
+    """What the last upload to finish says about the archive.
+
+    - ``UNCONFIGURED``: no archive is set; nothing is ever uploaded.
+    - ``UNKNOWN``: no upload has finished since this process started.
+    - ``READY``: the last upload to finish succeeded.
+    - ``DEGRADED``: the last to finish failed in a way that may pass, and the
+      failed upload is due again in 5 s; or the archive marker could not be
+      checked, and nothing is claimed until the shared re-check passes.
+    - ``TERMINAL``: the last to finish failed in a way no retry fixes
+      (configuration, permission or marker); see ``UploadGate.ARCHIVE_STOPPED``.
+
+    ``Uploader._record_outcome`` is the only place it moves. It is reported to
+    the collector every REPORT_SECONDS and resets when the process restarts.
+    """
+
+    UNCONFIGURED = "unconfigured"
+    UNKNOWN = "unknown"
+    READY = "ready"
+    DEGRADED = "degraded"
+    TERMINAL = "terminal"
+
+
+class UploadGate(StrEnum):
+    """Whether an owner may claim an upload; ``Uploader.gate`` derives it.
+
+    - ``OPEN``: claim the next due upload.
+    - ``NO_ARCHIVE``: no archive is set.
+    - ``ARCHIVE_STOPPED``: the last failure was terminal. Owners stop claiming
+      until the process restarts, except that a later retryable failure from an
+      upload already in flight reopens it.
+    - ``SPOOL_FAILED``: a saved response could not be read. Not known to be
+      safe until a restart rechecks the spool; the collector pauses too.
+
+    The first claim also checks the archive's identity against PostgreSQL once
+    per process; a mismatch is a terminal failure. Owners that may not claim
+    wait a second and ask again.
+    """
+
+    OPEN = "open"
+    NO_ARCHIVE = "no_archive"
+    ARCHIVE_STOPPED = "archive_stopped"
+    SPOOL_FAILED = "spool_failed"
+
+
 class Uploader:
     """Copies saved responses to the archive, one upload per owner at a time."""
 
@@ -86,14 +132,41 @@ class Uploader:
         self.archive_instance_id = archive_instance_id
         self.stages = StageMetrics()
         self.outcomes: dict[str, int] = {}
-        self.archive_health = "unconfigured" if archive is None else "unknown"
+        self.archive_health = (
+            ArchiveHealth.UNCONFIGURED if archive is None else ArchiveHealth.UNKNOWN
+        )
         self.spool_io_failed = False
         # The latest archive failure's failure_evidence, kept after recovery.
         self.archive_failure: dict[str, Any] | None = None
-        self._archive_terminal = False
+        # Whether the last failure to finish was terminal. Kept apart from
+        # archive_health: a success finishing after it does not reopen claims.
+        self._last_failure_terminal = False
         self._archive_identity_validated = False
         self._next_release = 0.0
         self._database_slots = asyncio.Semaphore(DATABASE_CONNECTIONS)
+
+    def gate(self) -> UploadGate:
+        if self.archive is None:
+            return UploadGate.NO_ARCHIVE
+        if self._last_failure_terminal:
+            return UploadGate.ARCHIVE_STOPPED
+        if self.spool_io_failed:
+            return UploadGate.SPOOL_FAILED
+        return UploadGate.OPEN
+
+    def _record_outcome(self, failure: str | None, *, marker: bool = False) -> None:
+        """``marker``: the archive's marker could not be checked, which says
+        nothing about an upload, so an earlier terminal failure still stops
+        claims."""
+        if failure is None:
+            self.archive_health = ArchiveHealth.READY
+            return
+        terminal = failure in _GLOBAL_ARCHIVE_FAILURES
+        if not marker:
+            self._last_failure_terminal = terminal
+        self.archive_health = (
+            ArchiveHealth.TERMINAL if terminal else ArchiveHealth.DEGRADED
+        )
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -137,14 +210,14 @@ class Uploader:
         self, owner: str, stop_requested: asyncio.Event, idle_seconds: float
     ) -> None:
         while not stop_requested.is_set():
-            if self.spool_io_failed:
+            if self.gate() is UploadGate.SPOOL_FAILED:
                 await _wait_or_stop(stop_requested, max(1.0, idle_seconds))
                 continue
             if not await self.upload_once(owner=owner):
                 await _wait_or_stop(stop_requested, max(1.0, idle_seconds))
 
     async def upload_once(self, *, owner: str) -> bool:
-        if self.archive is None or self._archive_terminal:
+        if self.gate() in {UploadGate.NO_ARCHIVE, UploadGate.ARCHIVE_STOPPED}:
             return False
         if time.monotonic() >= self._next_release:
             # One owner returns expired leases each half lease.
@@ -161,7 +234,7 @@ class Uploader:
             "marker_check", self.archive.check_marker_health
         )
         if marker_health == "degraded":
-            self.archive_health = "degraded"
+            self._record_outcome("archive_unavailable", marker=True)
             self.archive_failure = getattr(self.archive, "marker_failure", None)
             return False
         claimed_at = time.monotonic()
@@ -237,13 +310,11 @@ class Uploader:
             )
             self._count("uploaded")
             self.stages.record("upload_total", time.monotonic() - claimed_at)
-            self.archive_health = "ready"
+            self._record_outcome(None)
         except ArchiveReadError as error:
             detail = str(error)
             if claim.unresolved_write is not None and not wrote:
-                detail = collector_uploads.unresolved_write_detail(
-                    claim.unresolved_write, detail
-                )
+                detail = claim.unresolved_write.failure_detail(detail)
             try:
                 await self._keep_lease(renewal, claim, lease)
                 await _stop_task(renewal_stop, renewal)
@@ -263,8 +334,7 @@ class Uploader:
                 return True
             self._count(error.category)
             self.archive_failure = failure_evidence(error.stage or "upload", error)
-            self._archive_terminal = error.category in _GLOBAL_ARCHIVE_FAILURES
-            self.archive_health = "terminal" if self._archive_terminal else "degraded"
+            self._record_outcome(error.category)
         except collector_uploads.UploadLeaseLost:
             # A competing owner can safely retry: immutable archive writes are
             # content-addressed, and no stale owner reaches the database commit.
@@ -291,11 +361,7 @@ class Uploader:
                 "archive_read", self.archive.read_verified, reference, claim.response_hash
             )
         except ArchiveReadError as error:
-            if (
-                error.category == "archive_missing"
-                and claim.unresolved_write is None
-                and claim.attempt_count > 1
-            ):
+            if error.category == "archive_missing" and claim.missing_copy_is_proof():
                 missing = ArchiveReadError(
                     "spool_missing",
                     "pending upload has no local raw response and no archived copy",
@@ -383,6 +449,33 @@ class Uploader:
         self.outcomes[outcome] = self.outcomes.get(outcome, 0) + 1
 
 
+class UploaderProcessState(StrEnum):
+    """Where the uploads process stands; ``UploaderProcess`` alone moves it.
+
+    - ``STOPPED``: no process runs: before ``run`` and once the collector stops.
+    - ``STARTING``: a new process is being spawned.
+    - ``RUNNING``: it runs and its reports are read.
+    - ``ENDING``: it exited, sent nothing for SILENT_SECONDS, or the collector
+      is stopping: terminate it, wait up to STOP_SECONDS, then kill it.
+    - ``RESTART_WAIT``: waiting to start it again (``restart_delay``).
+
+    A start that fails ends the same way as a process that exits. Only a
+    collector stop leaves this cycle; uploads never stop collection.
+    """
+
+    STOPPED = "stopped"
+    STARTING = "starting"
+    RUNNING = "running"
+    ENDING = "ending"
+    RESTART_WAIT = "restart_wait"
+
+
+def restart_delay(previous: float, ran_seconds: float) -> float:
+    """One that ran a while starts again soon; one that keeps failing waits
+    twice as long each time, up to a minute."""
+    return RESTART_SECONDS if ran_seconds >= 60 else min(60.0, previous * 2)
+
+
 class UploaderProcess:
     """Keeps the uploads process running for the collector."""
 
@@ -390,27 +483,28 @@ class UploaderProcess:
         self.arguments = arguments
         self.report: dict[str, Any] = {}
         self.restarts = 0
-        self.running = False
+        self.state = UploaderProcessState.STOPPED
         self._reported_at: float | None = None
 
     async def run(self, collector: Any, stop_requested: asyncio.Event) -> None:
         delay = RESTART_SECONDS / 2
-        while not stop_requested.is_set():
-            started = time.monotonic()
-            event: dict[str, Any] = {"event": "uploader_restart"}
-            try:
-                event["exit_code"] = await self._run_once(collector, stop_requested)
-            except Exception as error:  # noqa: BLE001 - restart, never stop collection
-                event["error"] = type(error).__name__
-            if stop_requested.is_set():
-                return
-            self.restarts += 1
-            # One that ran a while starts again soon; one that keeps failing
-            # waits twice as long each time, up to a minute.
-            ran_a_while = time.monotonic() - started >= 60
-            delay = RESTART_SECONDS if ran_a_while else min(60.0, delay * 2)
-            print(json.dumps({**event, "wait_seconds": delay}), flush=True)
-            await _wait_or_stop(stop_requested, delay)
+        try:
+            while not stop_requested.is_set():
+                started = time.monotonic()
+                event: dict[str, Any] = {"event": "uploader_restart"}
+                try:
+                    event["exit_code"] = await self._run_once(collector, stop_requested)
+                except Exception as error:  # noqa: BLE001 - restart, never stop collection
+                    event["error"] = type(error).__name__
+                if stop_requested.is_set():
+                    return
+                self.restarts += 1
+                delay = restart_delay(delay, time.monotonic() - started)
+                print(json.dumps({**event, "wait_seconds": delay}), flush=True)
+                self.state = UploaderProcessState.RESTART_WAIT
+                await _wait_or_stop(stop_requested, delay)
+        finally:
+            self.state = UploaderProcessState.STOPPED
 
     async def _run_once(
         self, collector: Any, stop_requested: asyncio.Event
@@ -436,11 +530,12 @@ class UploaderProcess:
                 reports.put_nowait(None)
 
         stopping = asyncio.create_task(stop_requested.wait())
+        self.state = UploaderProcessState.STARTING
         try:
             process.start()
             sender.close()
             loop.add_reader(receiver.fileno(), readable)
-            self.running = True
+            self.state = UploaderProcessState.RUNNING
             while True:
                 report = asyncio.create_task(reports.get())
                 done, _pending = await asyncio.wait(
@@ -456,7 +551,7 @@ class UploaderProcess:
                     break
                 self._apply(message, collector)
         finally:
-            self.running = False
+            self.state = UploaderProcessState.ENDING
             stopping.cancel()
             loop.remove_reader(receiver.fileno())
             sender.close()
@@ -484,14 +579,13 @@ class UploaderProcess:
         self.report = report
         self._reported_at = time.monotonic()
         collector.archive_health = str(report.get("archive_health", "unknown"))
-        if report.get("spool_io_failed") and not collector._spool_io_failed:
+        if report.get("spool_io_failed") and not collector.spool_health.io_failed:
             # The same pause a failed spool read in the collector causes.
-            collector._spool_io_failed = True
-            collector._count("spool_io_failure")
+            collector.spool_health.record_io_failure()
 
     def metric_lines(self) -> list[str]:
         lines = [
-            f"clashlens_uploader_running {int(self.running)}",
+            f"clashlens_uploader_running {int(self.state is UploaderProcessState.RUNNING)}",
             f"clashlens_uploader_restarts_total {self.restarts}",
         ]
         if self._reported_at is not None:

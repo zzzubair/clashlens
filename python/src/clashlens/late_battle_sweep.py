@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from time import monotonic
 from typing import Any
 
@@ -285,17 +286,45 @@ def sweep_late_battles(database: Database, *, now: datetime) -> tuple[int, int] 
     return len(first_days) - failed, failed
 
 
-class LateBattleSweep:
-    """Run the sweep from the worker loop until each Reset's corrections succeed.
+class SweepState(StrEnum):
+    """Where the latest Reset's late-battle sweep is.
 
-    A Reset whose sweep corrected every selected player is recorded in
-    late_battle_sweeps, so a restarted worker does not run it again.
+    - ``waiting``: before the Reset plus ``SWEEP_DELAY``, or its Reset work
+      is unfinished (``reset_work_finished``); nothing is read.
+    - ``retrying``: swept, and at least one player's correction failed and
+      was rolled back; the next check selects again and retries them.
+    - ``complete``: every selected player corrected. Recorded in
+      ``late_battle_sweeps``, so a restarted worker skips the Reset, and a
+      battle saved later waits for the next Reset's sweep.
+
+    ``LateBattleSweep.run_when_due`` owns it, checking at most every
+    ``CHECK_INTERVAL_SECONDS``. Only ``complete`` is saved: a restart while
+    waiting or retrying sweeps again, which is safe as each correction
+    recalculates days from what is saved. A check that fails to read or
+    record logs ``failed`` and the next check tries again.
     """
+
+    WAITING = "waiting"
+    RETRYING = "retrying"
+    COMPLETE = "complete"
+
+    @classmethod
+    def after(cls, result: tuple[int, int] | None) -> SweepState:
+        """The state a ``sweep_late_battles`` result leaves the Reset in."""
+        if result is None:
+            return cls.WAITING
+        return cls.COMPLETE if result[1] == 0 else cls.RETRYING
+
+
+class LateBattleSweep:
+    """Run the sweep from the worker loop until each Reset's corrections
+    succeed; see ``SweepState``."""
 
     def __init__(self, database: Database) -> None:
         self.database = database
         self.next_check_at = float("-inf")
-        self.swept_boundary: datetime | None = None
+        # The Reset this worker last saw complete, so it reads nothing more.
+        self.complete_boundary: datetime | None = None
 
     def run_when_due(self, now: datetime | None = None) -> None:
         if not isinstance(self.database, Database) or monotonic() < self.next_check_at:
@@ -303,7 +332,7 @@ class LateBattleSweep:
         self.next_check_at = monotonic() + CHECK_INTERVAL_SECONDS
         now = now or datetime.now(UTC)
         boundary = ranked_day_for(now).start
-        if boundary == self.swept_boundary:
+        if boundary == self.complete_boundary:
             return
         event = {"event": "late_battle_sweep", "boundary_at": boundary.isoformat()}
         try:
@@ -313,10 +342,11 @@ class LateBattleSweep:
                     (boundary,),
                 ).fetchone()[0]
             if swept:
-                self.swept_boundary = boundary
+                self.complete_boundary = boundary
                 return
             result = sweep_late_battles(self.database, now=now)
-            if result is not None and result[1] == 0:
+            state = SweepState.after(result)
+            if state is SweepState.COMPLETE:
                 with self.database.pool.connection() as connection:
                     connection.execute(
                         "INSERT INTO late_battle_sweeps (boundary_at) VALUES (%s)"
@@ -332,13 +362,13 @@ class LateBattleSweep:
         if result is None:
             return
         corrected, failed = result
-        if failed == 0:
-            self.swept_boundary = boundary
+        if state is SweepState.COMPLETE:
+            self.complete_boundary = boundary
         print(
             json.dumps(
                 {
                     **event,
-                    "status": "complete" if failed == 0 else "retrying",
+                    "status": state.value,
                     "corrected_players": corrected,
                     "failed_players": failed,
                 }

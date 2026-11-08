@@ -314,9 +314,10 @@ def test_pictures_stop_in_time_for_a_dm_waiting_to_be_tried_again(monkeypatch, s
         clock = asyncio.get_running_loop().time
         started = clock()
         waiting = alerts.Delivery(1, 2, "1", 2, datetime.now(UTC), Reply(()))
-        waiting.id, waiting.claimed_at, waiting.retry_at = 2, started - 119, started + 0.3
-        loop._waiting.append(waiting)
-        loop._pictures.append((1, {"battle_id": 1, "dark_picture": False}, started + 300))
+        waiting.id, waiting.claimed_at = 2, started - 119
+        loop._waiting.append((waiting, alerts.Waiting(started + 0.3, 0.0)))
+        loop._pictures.append(
+            alerts.PendingPicture(1, {"battle_id": 1, "dark_picture": False}, started + 300))
         running = asyncio.create_task(loop.run())
         try:
             while ("sent", 2) not in happened and clock() - started < 3:
@@ -346,10 +347,11 @@ def test_a_picture_read_cut_off_before_it_started_holds_up_no_later_one() -> Non
         busy = threading.Event()
         loop = AlertLoop(store, Discord(), SITE)  # type: ignore[arg-type]
         clock = asyncio.get_running_loop().time
-        loop._pictures.append((1, {"battle_id": 1, "dark_picture": False}, clock() + 300))
+        loop._pictures.append(
+            alerts.PendingPicture(1, {"battle_id": 1, "dark_picture": False}, clock() + 300))
         held = asyncio.create_task(asyncio.to_thread(busy.wait, 5))
         await asyncio.sleep(0.05)  # the one thread is busy
-        loop._waiting.append(SimpleNamespace(retry_at=clock() + 0.1))  # type: ignore[arg-type]
+        loop._waiting.append((None, alerts.Waiting(clock() + 0.1, 0.0)))  # type: ignore[arg-type]
         await loop._add_pictures(list(loop._pictures))
         busy.set()
         await held
@@ -660,3 +662,122 @@ def test_only_an_attacker_with_no_saved_days_is_not_tracked_yet() -> None:
     store = SimpleNamespace(player_page=lambda _tag, _now: page)
     assert AlertStore(None, store).attacker("#8QQ", day, day) == {  # type: ignore[arg-type]
         "clan": "Night", "rank": 9, "start_trophies": 5312, "hit_rate": "Unavailable"}
+
+
+def test_a_try_moves_a_logged_dm_to_sent_refused_waiting_or_failed() -> None:
+    """Each try's answer, with 100 seconds left: taken is sent; refused keeps
+    Discord's reason; not reached waits 10 seconds, doubling to at most 120
+    and at least as long as Discord asked, if that ends before the DM's last
+    moment, else it fails; a try cut off, or any other fault, fails it."""
+
+    def step(error: Exception | None, wait: float = 0.0, left: float = 100.0) -> object:
+        return alerts.after_try(error, wait, left, 1000.0, 10.0, 120.0)
+
+    assert step(None) == alerts.Finished(alerts.Logged.SENT)
+    assert step(Refused("dms_closed")) == alerts.Finished(alerts.Logged.REFUSED, "dms_closed")
+    assert step(Unreachable()) == alerts.Waiting(1010.0, 10.0)
+    assert step(Unreachable(), wait=10.0) == alerts.Waiting(1020.0, 20.0)
+    assert step(Unreachable(), wait=80.0, left=200.0) == alerts.Waiting(1120.0, 120.0)
+    assert step(Unreachable(30.0)) == alerts.Waiting(1030.0, 10.0)
+    assert step(Unreachable(), wait=80.0) == alerts.Finished(alerts.Logged.FAILED)
+    assert step(Unreachable(100.0)) == alerts.Finished(alerts.Logged.FAILED)
+    assert step(TimeoutError()) == alerts.Finished(alerts.Logged.FAILED)
+    assert step(RuntimeError("fault")) == alerts.Finished(alerts.Logged.FAILED)
+
+
+def test_a_dm_discord_did_not_take_waits_and_is_tried_again_only_while_due(
+    monkeypatch,
+) -> None:
+    """A confirmation and an alert, each logged before its first try, which
+    Discord cannot reach: neither is finished, both wait. In the next round
+    the confirmation, whose switch went off meanwhile, is logged failed with
+    no other try; the alert is tried again with the same nonce, logged sent,
+    and its picture waits."""
+    monkeypatch.setattr(alerts, "RETRY_SECONDS", 0.0)
+    tries: list[int] = []
+    finished: list[tuple] = []
+    new: list[bool] = [True]
+    confirmation = {"account_id": 1, "player_id": 3, "discord_user_id": "1", "tag": "#3PP",
+                    "name": "Drift", "confirm_requested_at": datetime(2026, 10, 12, 6, tzinfo=UTC),
+                    "colour": PLAYER_COLOURS[0]}
+    attack = {"account_id": 1, "defender_player_id": 2, "discord_user_id": "1",
+              "defender_tag": "#2PP", "defender_name": "Wanderer", "attacker_tag": "#8QQ",
+              "attacker_name": "Drift", "stars": 3, "destruction_percentage": 100,
+              "trophies_lost": 40, "saved_at": datetime(2026, 10, 12, 6, tzinfo=UTC),
+              "ranked_day_start": datetime(2026, 10, 12, 5, tzinfo=UTC), "battle_id": 7,
+              "colour": PLAYER_COLOURS[0], "dark_picture": False}
+    store = SimpleNamespace(
+        prune=lambda: None,
+        confirmations_due=lambda: [confirmation] if new[0] else [],
+        due=lambda: [attack] if new[0] else [],
+        attacker=lambda *_: {"clan": None, "rank": None, "start_trophies": None,
+                             "hit_rate": "not tracked yet"},
+        claim=lambda delivery: delivery.battle_id or 100,
+        still_due=lambda delivery: delivery.battle_id is not None,
+        finish=lambda *outcome: finished.append(outcome),
+        legend_day=lambda *_: None,
+    )
+
+    class Discord:
+        """Cannot be reached for each DM's first try."""
+
+        async def send_dm(self, _user: str, _reply: Reply, nonce: int, _left: float) -> int:
+            tries.append(nonce)
+            if tries.count(nonce) == 1:
+                raise Unreachable
+            return nonce
+
+    async def rounds() -> tuple[int, list[tuple], int, int]:
+        loop = AlertLoop(store, Discord(), SITE)  # type: ignore[arg-type]
+        waiting = await loop.tick()
+        after_first = (list(finished), len(loop._waiting))
+        new[0] = False
+        return waiting, *after_first, await loop.tick(), len(loop._pictures)  # type: ignore[return-value]
+
+    assert asyncio.run(rounds()) == (0, [], 2, 1, 1)
+    assert tries == [100, 7, 7]
+    assert finished == [(100, "failed", None), (7, "sent", None)]
+
+
+def test_a_pending_picture_waits_for_its_battle_and_is_left_out_once_failed_or_expired(
+    monkeypatch,
+) -> None:
+    """Three delivered alerts wait for their pictures. In the first round
+    battle 1 is not saved into its Legend day yet, so it waits; reading
+    battle 2's day fails, so it is left out; battle 3 stopped waiting before
+    the round and is left out unread. In the next round battle 1 is saved
+    and its picture is edited in; nothing waits after."""
+    monkeypatch.setattr(picture, "draw", lambda *_: b"png")
+    picture._DRAWER.submit(lambda: None).result(5)  # earlier tests' drawing has ended
+    reads: list[int] = []
+    added: list[int] = []
+    saved = [False]
+
+    def legend_day(alert: dict, _now: datetime) -> dict | None:
+        reads.append(alert["battle_id"])
+        if alert["battle_id"] == 2:
+            raise RuntimeError("read failed")
+        return a_day() if saved[0] else None
+
+    store = SimpleNamespace(prune=lambda: None, confirmations_due=list, due=list,
+                            legend_day=legend_day)
+
+    class Discord:
+        async def add_picture(self, message: int, _png: bytes) -> None:
+            added.append(message)
+
+    async def rounds() -> list[list[int]]:
+        loop = AlertLoop(store, Discord(), SITE)  # type: ignore[arg-type]
+        clock = asyncio.get_running_loop().time
+        for battle in (1, 2, 3):
+            loop._pictures.append(alerts.PendingPicture(
+                battle, {"battle_id": battle, "dark_picture": False},
+                clock() + (-1 if battle == 3 else 300)))
+        waiting = []
+        for saved[0] in (False, True):
+            await loop.tick()
+            waiting.append([pending.message for pending in loop._pictures])
+        return waiting
+
+    assert asyncio.run(rounds()) == [[1], []]
+    assert reads == [1, 2, 1] and added == [1]

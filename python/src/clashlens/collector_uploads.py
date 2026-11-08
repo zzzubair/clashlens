@@ -9,6 +9,35 @@ from uuid import UUID, uuid4
 
 from .archive import immutable_reference
 
+# Uploads retry at least 5 seconds apart, so a write that may yet land is
+# waited for through at least two and a half minutes of later attempts.
+UNRESOLVED_WRITE_ATTEMPTS = 30
+
+
+@dataclass(frozen=True, slots=True)
+class WriteMayLand:
+    """An earlier attempt's archive write that may still land.
+
+    An upload row moves pending -> leased (one attempt; ``attempt_count`` + 1)
+    -> complete, failed (retryable: due again in 5 s; otherwise never), or
+    back to pending once its lease runs out. A lease that ran out or a
+    retryable failure leaves that attempt's write unresolved: the archive may
+    still store it later. For UNRESOLVED_WRITE_ATTEMPTS attempts after that
+    write, each claim carries this state (``WRITE_UNRESOLVED_SQL`` derives it
+    from the row), so a missing archived copy is not yet proof the bytes are
+    lost, and an attempt that writes nothing keeps naming this write in its
+    failure detail (``failure_detail``), which the next claim reads back. It
+    resolves when an upload completes or the attempts pass that budget. The
+    row is the only record, so it survives restarts; claims only read it.
+    """
+
+    attempt: int
+
+    def failure_detail(self, detail: str) -> str:
+        """The failure detail of an attempt that wrote nothing while this
+        write may yet land, so the next claim still counts from this write."""
+        return f"write attempt {self.attempt} may yet land: {detail}"
+
 
 @dataclass(frozen=True, slots=True)
 class UploadClaim:
@@ -22,8 +51,12 @@ class UploadClaim:
     # Non-empty when retired bytes were seen again: the upload must use the
     # hash's generation suffix so the tombstoned location stays untouched.
     generation: str = ""
-    # The attempt whose write may yet land, if any; see WRITE_UNRESOLVED_SQL.
-    unresolved_write: int | None = None
+    unresolved_write: WriteMayLand | None = None
+
+    def missing_copy_is_proof(self) -> bool:
+        """Whether a missing archived copy proves the bytes are gone: not on a
+        first attempt, nor while an earlier attempt's write may yet land."""
+        return self.unresolved_write is None and self.attempt_count > 1
 
 
 class UploadLeaseLost(RuntimeError):
@@ -39,17 +72,6 @@ class ArchivedCopy:
     # An upload of these bytes holds a lease right now, or its last write may
     # yet land.
     uploading: bool
-
-
-# Uploads retry at least 5 seconds apart, so a write that may yet land is
-# waited for through at least two and a half minutes of later attempts.
-UNRESOLVED_WRITE_ATTEMPTS = 30
-
-
-def unresolved_write_detail(attempt: int, detail: str) -> str:
-    """The failure detail of an attempt that wrote nothing while ``attempt``'s
-    write may yet land, so the next claim still counts from that write."""
-    return f"write attempt {attempt} may yet land: {detail}"
 
 
 # The attempt whose write may yet land: the last one, unless the last one
@@ -170,7 +192,7 @@ def claim_upload(
         claimed[3],
         int(claimed[4]),
         str(claimed[5]),
-        row[1],
+        None if row[1] is None else WriteMayLand(int(row[1])),
     )
 
 

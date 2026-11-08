@@ -1,11 +1,72 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
 from . import api_db, api_leaderboard
 from .api_db import ApiDatabase, OperationResult, RequestBinding, _text
 from .domain import ranked_day_for
+
+
+class LookupState(StrEnum):
+    """What Clash Lens can tell a caller about a tag (``_lookup``'s ``state``).
+
+    - ``UNKNOWN``: no player row, no check yet, or a check the collector
+      holds right now with nothing processed.
+    - ``CHECKING``: a profile check is waiting, its saved response is still
+      being processed, collection finished but nothing is processed yet, or
+      a profile was just saved and the weekly league record is deciding.
+    - ``TRACKING``: Clash Lens tracks the player.
+    - ``NOT_IN_LEGEND``: saved profiles show the player outside Legend I.
+    - ``UNCERTAIN``: a profile is saved but its league is not confirmed.
+    - ``NOT_FOUND``: the game says the tag has no player.
+    - ``FAILED``: the newest check failed or was cancelled, or was
+      processed without saving a profile.
+
+    Events: ``admit`` queues a check for a tag in ``RECHECKABLE``, at most
+    once per 30 seconds; the collector and worker then move it through
+    ``CHECKING`` to an answer. Collection finishing is a separate, earlier
+    point than a processed profile, so a Refresh whose collection is
+    complete can still read ``CHECKING``. Nothing here is stored: every read
+    derives the state again from the player's flags, newest profile, newest
+    check and its processing job, so a restart changes nothing.
+    """
+
+    UNKNOWN = "unknown"
+    CHECKING = "checking"
+    TRACKING = "tracking"
+    NOT_IN_LEGEND = "not_in_legend"
+    UNCERTAIN = "uncertain"
+    NOT_FOUND = "not_found"
+    FAILED = "failed"
+
+
+# A visit may start a new check only for these.
+RECHECKABLE = frozenset({LookupState.UNKNOWN, LookupState.FAILED, LookupState.NOT_FOUND})
+# The game confirmed these players exist.
+CONFIRMED = frozenset({LookupState.TRACKING, LookupState.NOT_IN_LEGEND, LookupState.UNCERTAIN})
+
+
+def _check_progress(
+    work: str | None, failure: str | None, processing: str | None
+) -> LookupState:
+    """The state of a player with no saved profile, from its newest check's
+    collection status and failure and that response's processing status."""
+    if failure == "player_not_found":
+        return LookupState.NOT_FOUND
+    if work in ("pending", "waiting_retry") or processing in (
+        "pending",
+        "leased",
+        "waiting_retry",
+        "waiting_dependency",
+    ):
+        return LookupState.CHECKING
+    if work in ("failed", "cancelled") or processing in ("failed", "complete"):
+        return LookupState.FAILED
+    if work == "complete":
+        return LookupState.CHECKING
+    return LookupState.UNKNOWN
 
 
 def _lookup(
@@ -24,22 +85,24 @@ def _lookup(
         """,
         (tag,),
     ).fetchone()
-    state = "unknown"
+    state = LookupState.UNKNOWN
     if row is not None:
         player_id, active, eligibility, confirmed, no_current_profile, deciding = row
         if not active and confirmed and deciding:
             # The weekly league record decides within seconds whether a
             # player whose profile was just saved is tracked.
-            state = "checking"
+            state = LookupState.CHECKING
         elif active:
             why = _why_no_results(connection, player_id, tag, now or datetime.now(UTC))
             # A newest rejected profile is explained even after accepted ones.
             if no_current_profile or why.get("reason", "pending") != "pending":
-                return {"tag": tag, "state": "tracking", **why}
-            state = "tracking"
+                return {"tag": tag, "state": LookupState.TRACKING, **why}
+            state = LookupState.TRACKING
         elif confirmed:
             state = (
-                "not_in_legend" if _text(eligibility) == "ineligible" else "uncertain"
+                LookupState.NOT_IN_LEGEND
+                if _text(eligibility) == "ineligible"
+                else LookupState.UNCERTAIN
             )
             # Off the board, the newest saved profile still names the player,
             # and its league when that profile is itself outside Legend I.
@@ -87,22 +150,7 @@ def _lookup(
                 work, failure, processing, saved_since = work_row
                 if saved_since:
                     return _lookup(connection, tag)
-                if failure == "player_not_found":
-                    state = "not_found"
-                elif work in ("pending", "waiting_retry") or processing in (
-                    "pending",
-                    "leased",
-                    "waiting_retry",
-                    "waiting_dependency",
-                ):
-                    state = "checking"
-                elif work in ("failed", "cancelled") or processing in (
-                    "failed",
-                    "complete",
-                ):
-                    state = "failed"
-                elif work == "complete":
-                    state = "checking"
+                state = _check_progress(_text(work), _text(failure), _text(processing))
     return {"tag": tag, "state": state}
 
 
@@ -213,7 +261,7 @@ def admit(connection: Any, normalized_tag: str) -> dict[str, Any]:
     # reuse work.
     lock_tag(connection, normalized_tag)
     lookup = _lookup(connection, normalized_tag)
-    if lookup["state"] in {"unknown", "failed", "not_found"}:
+    if lookup["state"] in RECHECKABLE:
         # Failed and negative checks have the same minimum retry interval
         # as Refresh. Known real players are never rechecked by a visit.
         recent = connection.execute(

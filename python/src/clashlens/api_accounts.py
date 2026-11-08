@@ -1,13 +1,20 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import psycopg
 from psycopg.types.json import Jsonb
 
-from . import api_db, api_groups, api_leaderboard, api_player_lookup, api_players
+from . import (
+    api_db,
+    api_groups,
+    api_leaderboard,
+    api_player_lookup,
+    api_players,
+)
 from .api_db import (
     AccountContext,
     ApiDatabase,
@@ -30,6 +37,8 @@ GROUP_LOOKUP_LIMIT = 20
 def resolve_account(
     database, provider: str, provider_subject: str
 ) -> AccountContext | None:
+    """The account holding this sign-in connection; None means setup required
+    (see provider_membership)."""
     with database.pool.connection() as connection:
         row = connection.execute(
             """
@@ -41,73 +50,6 @@ def resolve_account(
             (provider, provider_subject),
         ).fetchone()
         return None if row is None else _account_context(row)
-
-
-def login_session_revoked(
-    database, session_hash: str, provider: str, provider_subject: str, issued_at_ms: int
-) -> bool:
-    """True when this exact login logged out, or when its provider identity
-    was removed at or after the millisecond the login signed in."""
-    with database.pool.connection() as connection:
-        row = connection.execute(
-            """
-            SELECT EXISTS (
-                SELECT 1 FROM login_session_revocations WHERE session_hash = %s
-            ) OR EXISTS (
-                SELECT 1 FROM provider_identity_removals
-                WHERE provider = %s AND provider_subject = %s
-                  AND removed_at >= %s
-            )
-            """,
-            (
-                session_hash,
-                provider,
-                provider_subject,
-                datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=issued_at_ms),
-            ),
-        ).fetchone()
-        return bool(row and row[0])
-
-
-def revoke_login_session(database, session_hash: str) -> None:
-    with database.pool.connection() as connection:
-        with connection.transaction():
-            _record_logout(connection, session_hash)
-
-
-def _record_logout(connection: Any, session_hash: str) -> None:
-    # A login cookie lives 30 days and is renewed only while its login has not
-    # logged out, so an older logout guards nothing.
-    connection.execute(
-        "DELETE FROM login_session_revocations"
-        " WHERE revoked_at < now() - interval '31 days'"
-    )
-    connection.execute(
-        "INSERT INTO login_session_revocations (session_hash) VALUES (%s)"
-        " ON CONFLICT (session_hash) DO NOTHING",
-        (session_hash,),
-    )
-
-
-def _record_identity_removal(
-    connection: Any, provider: str, provider_subject: str
-) -> None:
-    # Every login cookie issued through this identity up to now stops working,
-    # on every browser. Relinking never clears the row, and a login cookie
-    # lives 30 days, so an older removal guards nothing.
-    connection.execute(
-        "DELETE FROM provider_identity_removals"
-        " WHERE removed_at < now() - interval '31 days'"
-    )
-    connection.execute(
-        """
-        INSERT INTO provider_identity_removals (provider, provider_subject, removed_at)
-        VALUES (%s, %s, clock_timestamp())
-        ON CONFLICT (provider, provider_subject) DO UPDATE SET removed_at =
-            GREATEST(provider_identity_removals.removed_at, EXCLUDED.removed_at)
-        """,
-        (provider, provider_subject),
-    )
 
 
 def create_account(
@@ -263,357 +205,6 @@ def update_account(
                 )
             api_db._complete_request(connection, binding.request_id, result)
             return result
-
-
-def link_provider(
-    database: ApiDatabase,
-    binding: RequestBinding,
-    *,
-    account_id: int,
-    provider: str,
-    provider_subject: str,
-) -> OperationResult:
-    """Idempotently attach one provider identity to the signed-in account.
-
-    A collision never merges or moves identities: a subject owned by any
-    other account, or an account that already holds this provider with a
-    different subject, is refused with a safe conflict.
-
-    The account row lock serializes every provider mutation for one
-    account, so concurrent links and unlinks observe a stable provider
-    set and can never remove the final identity together.
-    """
-    with database.pool.connection() as connection:
-        with connection.transaction():
-            locked_account = connection.execute(
-                """
-                SELECT id FROM clash_lens_accounts WHERE id = %s FOR UPDATE
-                """,
-                (account_id,),
-            ).fetchone()
-            if locked_account is None:
-                result = OperationResult(404, {"error": "account_not_found"})
-                api_db._complete_request(connection, binding.request_id, result)
-                return result
-            existing = api_db._reserve_request(database, connection, binding)
-            if existing is not None:
-                return existing
-            owner = connection.execute(
-                """
-                SELECT account_id FROM account_provider_identities
-                WHERE provider = %s AND provider_subject = %s
-                FOR UPDATE
-                """,
-                (provider, provider_subject),
-            ).fetchone()
-            current = connection.execute(
-                """
-                SELECT provider_subject FROM account_provider_identities
-                WHERE account_id = %s AND provider = %s
-                FOR UPDATE
-                """,
-                (account_id, provider),
-            ).fetchone()
-            collision = (owner is not None and int(owner[0]) != account_id) or (
-                current is not None and _text(current[0]) != provider_subject
-            )
-            if collision:
-                result = OperationResult(
-                    409, {"error": "provider_identity_conflict"}
-                )
-                api_db._complete_request(connection, binding.request_id, result)
-                return result
-            if current is None:
-                inserted = connection.execute(
-                    """
-                    INSERT INTO account_provider_identities (
-                        account_id, provider, provider_subject
-                    ) VALUES (%s, %s, %s)
-                    ON CONFLICT DO NOTHING
-                    """,
-                    (account_id, provider, provider_subject),
-                )
-                if inserted.rowcount != 1:
-                    # The unique constraints arbitrate absent-key races.
-                    result = OperationResult(
-                        409, {"error": "provider_identity_conflict"}
-                    )
-                    api_db._complete_request(connection, binding.request_id, result)
-                    return result
-                _audit_provider_event(
-                    connection,
-                    account_id=account_id,
-                    provider=provider,
-                    action="link",
-                    result="succeeded",
-                    operator_identity=None,
-                    reason="linked from the authenticated account",
-                )
-            if provider == "discord":
-                # Connecting Discord again adds the bot, which then confirms
-                # each attack alert switch again; when each went on is kept.
-                connection.execute(
-                    "UPDATE discord_attack_alerts SET confirm_requested_at = clock_timestamp()"
-                    " WHERE account_id = %s",
-                    (account_id,),
-                )
-            providers = _account_providers(connection, account_id)
-            result = OperationResult(
-                200,
-                {"providers": providers},
-            )
-            api_db._complete_request(connection, binding.request_id, result)
-            return result
-
-
-def unlink_provider(
-    database: ApiDatabase,
-    binding: RequestBinding,
-    *,
-    account_id: int,
-    provider: str,
-    provider_subject: str,
-    ended_session: str | None = None,
-) -> OperationResult:
-    """Remove one freshly reauthenticated provider identity.
-
-    The final linked identity cannot be removed, and unlinking never
-    deletes the account or any private data. Every login issued through the
-    removed identity up to now ends, on every browser. When `ended_session`
-    is given, that login is also recorded as logged out in the same
-    transaction.
-
-    The account row lock serializes concurrent unlinks: the second unlink
-    re-reads the remaining providers only after the first commits, so two
-    simultaneous unlinks can never remove both identities.
-    """
-    with database.pool.connection() as connection:
-        with connection.transaction():
-            locked_account = connection.execute(
-                """
-                SELECT id FROM clash_lens_accounts WHERE id = %s FOR UPDATE
-                """,
-                (account_id,),
-            ).fetchone()
-            if locked_account is None:
-                result = OperationResult(404, {"error": "account_not_found"})
-                api_db._complete_request(connection, binding.request_id, result)
-                return result
-            existing = api_db._reserve_request(database, connection, binding)
-            if existing is not None:
-                return existing
-            owned = connection.execute(
-                """
-                SELECT 1 FROM account_provider_identities
-                WHERE account_id = %s AND provider = %s
-                  AND provider_subject = %s
-                FOR UPDATE
-                """,
-                (account_id, provider, provider_subject),
-            ).fetchone()
-            if owned is None:
-                result = OperationResult(404, {"error": "provider_not_linked"})
-                api_db._complete_request(connection, binding.request_id, result)
-                return result
-            remaining = _account_providers(connection, account_id)
-            if len(remaining) <= 1:
-                result = OperationResult(409, {"error": "final_provider"})
-                api_db._complete_request(connection, binding.request_id, result)
-                return result
-            connection.execute(
-                """
-                DELETE FROM account_provider_identities
-                WHERE account_id = %s AND provider = %s
-                  AND provider_subject = %s
-                """,
-                (account_id, provider, provider_subject),
-            )
-            _audit_provider_event(
-                connection,
-                account_id=account_id,
-                provider=provider,
-                action="unlink",
-                result="succeeded",
-                operator_identity=None,
-                reason="unlinked after fresh provider authentication",
-            )
-            _record_identity_removal(connection, provider, provider_subject)
-            if ended_session is not None:
-                _record_logout(connection, ended_session)
-            providers = _account_providers(connection, account_id)
-            result = OperationResult(200, {"providers": providers})
-            api_db._complete_request(connection, binding.request_id, result)
-            return result
-
-
-def _account_providers(connection: Any, account_id: int) -> list[str]:
-    return [
-        _text(row[0])
-        for row in connection.execute(
-            """
-            SELECT provider FROM account_provider_identities
-            WHERE account_id = %s ORDER BY provider
-            """,
-            (account_id,),
-        )
-    ]
-
-
-def _audit_provider_event(
-    connection: Any,
-    *,
-    account_id: int,
-    provider: str,
-    action: str,
-    result: str,
-    operator_identity: str | None,
-    reason: str,
-) -> None:
-    connection.execute(
-        """
-        INSERT INTO provider_identity_audits (
-            account_id, provider, action, result, operator_identity, reason
-        ) VALUES (%s, %s, %s, %s, %s, %s)
-        """,
-        (account_id, provider, action, result, operator_identity, reason),
-    )
-
-
-def support_attach_discord_identity(
-    database: ApiDatabase,
-    *,
-    account_public_id: str,
-    normalized_player_tag: str,
-    discord_subject: str,
-    operator_identity: str,
-    reason: str,
-) -> tuple[str, str]:
-    """Attach a free Discord identity after maintainer-assisted recovery.
-
-    The requester must already have proven control of a player whose
-    verified link points at the target account. The Discord subject must
-    not belong to any Clash Lens account and the target must not hold
-    Discord yet. Returns a (status, detail) pair; nothing personal beyond
-    the audited event is written.
-
-    Every outcome after target-account resolution is audited: a
-    player/account mismatch as a failed recovery and either Discord
-    collision as refused_collision. Self-service refusals keep their
-    records in private_api_requests only.
-    """
-    with database.pool.connection() as connection:
-        with connection.transaction():
-            account = connection.execute(
-                """
-                SELECT id FROM clash_lens_accounts WHERE public_id = %s
-                FOR UPDATE
-                """,
-                (UUID(account_public_id),),
-            ).fetchone()
-            if account is None:
-                return "account_not_found", "target account does not exist"
-            account_id = int(account[0])
-            link = connection.execute(
-                """
-                SELECT link.account_id
-                FROM verified_player_links AS link
-                JOIN players AS player ON player.id = link.player_id
-                WHERE player.normalized_tag = %s
-                FOR UPDATE OF link
-                """,
-                (normalized_player_tag,),
-            ).fetchone()
-            if link is None or int(link[0]) != account_id:
-                _audit_provider_event(
-                    connection,
-                    account_id=account_id,
-                    provider="discord",
-                    action="support_recovery",
-                    result="failed",
-                    operator_identity=operator_identity,
-                    reason=reason,
-                )
-                return (
-                    "player_not_verified_on_account",
-                    "the player is not verified on the target account",
-                )
-            owner = connection.execute(
-                """
-                SELECT account_id FROM account_provider_identities
-                WHERE provider = 'discord' AND provider_subject = %s
-                FOR UPDATE
-                """,
-                (discord_subject,),
-            ).fetchone()
-            if owner is not None:
-                _audit_provider_event(
-                    connection,
-                    account_id=account_id,
-                    provider="discord",
-                    action="support_recovery",
-                    result="refused_collision",
-                    operator_identity=operator_identity,
-                    reason=reason,
-                )
-                return (
-                    "refused_collision",
-                    "the Discord identity belongs to an account",
-                )
-            existing = connection.execute(
-                """
-                SELECT 1 FROM account_provider_identities
-                WHERE account_id = %s AND provider = 'discord'
-                """,
-                (account_id,),
-            ).fetchone()
-            if existing is not None:
-                _audit_provider_event(
-                    connection,
-                    account_id=account_id,
-                    provider="discord",
-                    action="support_recovery",
-                    result="refused_collision",
-                    operator_identity=operator_identity,
-                    reason=reason,
-                )
-                return (
-                    "refused_collision",
-                    "the target account already has Discord linked",
-                )
-            inserted = connection.execute(
-                """
-                INSERT INTO account_provider_identities (
-                    account_id, provider, provider_subject
-                ) VALUES (%s, 'discord', %s)
-                ON CONFLICT DO NOTHING
-                """,
-                (account_id, discord_subject),
-            )
-            if inserted.rowcount != 1:
-                # Keep a concurrent uniqueness refusal in this transaction.
-                _audit_provider_event(
-                    connection,
-                    account_id=account_id,
-                    provider="discord",
-                    action="support_recovery",
-                    result="refused_collision",
-                    operator_identity=operator_identity,
-                    reason=reason,
-                )
-                return (
-                    "refused_collision",
-                    "the Discord identity belongs to an account",
-                )
-            _audit_provider_event(
-                connection,
-                account_id=account_id,
-                provider="discord",
-                action="support_recovery",
-                result="succeeded",
-                operator_identity=operator_identity,
-                reason=reason,
-            )
-            return "attached", "Discord identity attached to the account"
 
 
 def submit_refresh(
@@ -933,9 +524,9 @@ def add_group_player(
                     result = OperationResult(409, {"error": "group_player_exists"})
                 elif len(members) >= api_groups.MAX_COMPARED_MEMBERS:
                     result = OperationResult(422, {"error": "group_full"})
-                elif state == "not_found":
+                elif state == api_player_lookup.LookupState.NOT_FOUND:
                     result = OperationResult(422, {"error": "player_not_found"})
-                elif state not in _CONFIRMED_PLAYER_STATES:
+                elif state not in api_player_lookup.CONFIRMED:
                     # Unchecked, still checking or a failed check: the caller
                     # starts or waits for the player lookup and tries again.
                     result = OperationResult(
@@ -1249,82 +840,103 @@ def set_default_player(
             return result
 
 
+class PlayerUnlink(StrEnum):
+    """What unlinking one of the account's verified players did.
+
+    - ``NOT_VERIFIED``: the player is not verified to this account (404).
+    - ``HAND_OVER_FIRST``: it is the owner's only player in a crew they own,
+      so nothing changed (409, naming the crews).
+    - ``UNLINKED``: the verified link row is gone. In the same transaction
+      its crew places go by cascade (migration 0095), and the migration
+      0105, 0108 and 0112 triggers forget it as the default player and drop
+      its Discord alerts and day summary. A support transfer
+      (``api_verification.TransferCandidate``) fires the same triggers.
+
+    The player row and its game data stay, so it can be linked again by a
+    new verification. The answer is saved with the request, so a retry
+    replays it.
+    """
+
+    NOT_VERIFIED = "player_not_verified"
+    HAND_OVER_FIRST = "owner_must_hand_over"
+    UNLINKED = "unlinked"
+
+
 def unlink_player(
     database: ApiDatabase, binding: RequestBinding, *, normalized_tag: str
 ) -> OperationResult:
-    """Unlink one of the account's own verified players: only the link goes.
-    Its crew places go with it, and the migration 0105, 0108 and 0112 triggers
-    forget it as the default player and drop its Discord alerts and summary.
-    The player and its game data stay, and it can be linked again. Refused,
-    naming the crews, while it is the owner's only player in a crew they own:
-    they hand over or delete it first, as when removing it from the crew."""
+    """Unlink one of the account's own verified players: only the link goes
+    (see ``PlayerUnlink``). Refused while it is the owner's only player in a
+    crew they own: they hand over or delete it first, as when removing it
+    from the crew."""
     with database.pool.connection() as connection:
         with connection.transaction():
             existing = api_db._reserve_request(database, connection, binding)
             if existing is not None:
                 return existing
-            link = connection.execute(
-                """
-                SELECT link.player_id
-                FROM verified_player_links AS link
-                JOIN players AS player ON player.id = link.player_id
-                WHERE player.normalized_tag = %s AND link.account_id = %s
-                FOR UPDATE OF link
-                """,
-                (normalized_tag, binding.account_id),
-            ).fetchone()
-            if link is None:
-                result = OperationResult(404, {"error": "player_not_verified"})
+            outcome, crews = _unlink_player(connection, binding.account_id, normalized_tag)
+            if outcome is PlayerUnlink.UNLINKED:
+                result = OperationResult(200, {"unlinked": normalized_tag})
+            elif outcome is PlayerUnlink.HAND_OVER_FIRST:
+                result = OperationResult(409, {"error": outcome, "crews": crews})
             else:
-                # Every crew write holds the crew row first (migration 0095).
-                connection.execute(
-                    """
-                    SELECT 1 FROM crews
-                    WHERE id IN (SELECT crew_id FROM crew_players WHERE player_id = %s)
-                    ORDER BY id
-                    FOR UPDATE
-                    """,
-                    (link[0],),
-                )
-                owned = connection.execute(
-                    """
-                    SELECT crew.public_id, crew.name
-                    FROM crew_players AS place
-                    JOIN crews AS crew ON crew.id = place.crew_id
-                    JOIN crew_accounts AS member
-                      ON member.crew_id = place.crew_id
-                     AND member.account_id = place.account_id
-                    WHERE place.player_id = %s AND member.role = 'owner'
-                      AND NOT EXISTS (
-                          SELECT 1 FROM crew_players AS other
-                          WHERE other.crew_id = place.crew_id
-                            AND other.account_id = place.account_id
-                            AND other.player_id <> place.player_id
-                      )
-                    ORDER BY lower(crew.name), crew.id
-                    """,
-                    (link[0],),
-                ).fetchall()
-                if owned:
-                    crews = [{"crew_id": str(row[0]), "name": _text(row[1])} for row in owned]
-                    result = OperationResult(
-                        409, {"error": "owner_must_hand_over", "crews": crews}
-                    )
-                else:
-                    removed = connection.execute(
-                        """
-                        DELETE FROM verified_player_links
-                        WHERE player_id = %s AND account_id = %s
-                        """,
-                        (link[0], binding.account_id),
-                    )
-                    result = (
-                        OperationResult(200, {"unlinked": normalized_tag})
-                        if removed.rowcount == 1
-                        else OperationResult(404, {"error": "player_not_verified"})
-                    )
+                result = OperationResult(404, {"error": outcome})
             api_db._complete_request(connection, binding.request_id, result)
             return result
+
+
+def _unlink_player(
+    connection: Any, account_id: int | None, normalized_tag: str
+) -> tuple[PlayerUnlink, list[dict[str, str]]]:
+    link = connection.execute(
+        """
+        SELECT link.player_id
+        FROM verified_player_links AS link
+        JOIN players AS player ON player.id = link.player_id
+        WHERE player.normalized_tag = %s AND link.account_id = %s
+        FOR UPDATE OF link
+        """,
+        (normalized_tag, account_id),
+    ).fetchone()
+    if link is None:
+        return PlayerUnlink.NOT_VERIFIED, []
+    # Every crew write holds the crew row first (migration 0095).
+    connection.execute(
+        """
+        SELECT 1 FROM crews
+        WHERE id IN (SELECT crew_id FROM crew_players WHERE player_id = %s)
+        ORDER BY id
+        FOR UPDATE
+        """,
+        (link[0],),
+    )
+    owned = connection.execute(
+        """
+        SELECT crew.public_id, crew.name
+        FROM crew_players AS place
+        JOIN crews AS crew ON crew.id = place.crew_id
+        JOIN crew_accounts AS member
+          ON member.crew_id = place.crew_id
+         AND member.account_id = place.account_id
+        WHERE place.player_id = %s AND member.role = 'owner'
+          AND NOT EXISTS (
+              SELECT 1 FROM crew_players AS other
+              WHERE other.crew_id = place.crew_id
+                AND other.account_id = place.account_id
+                AND other.player_id <> place.player_id
+          )
+        ORDER BY lower(crew.name), crew.id
+        """,
+        (link[0],),
+    ).fetchall()
+    if owned:
+        crews = [{"crew_id": str(row[0]), "name": _text(row[1])} for row in owned]
+        return PlayerUnlink.HAND_OVER_FIRST, crews
+    removed = connection.execute(
+        "DELETE FROM verified_player_links WHERE player_id = %s AND account_id = %s",
+        (link[0], account_id),
+    )
+    return (PlayerUnlink.UNLINKED if removed.rowcount == 1 else PlayerUnlink.NOT_VERIFIED), []
 
 
 def _replace_group_players(
@@ -1367,10 +979,6 @@ def _replace_group_players(
     ).fetchall()
     for (normalized_tag,) in unchecked:
         api_player_lookup.admit(connection, _text(normalized_tag))
-
-
-# Players the game confirmed exist; only these can be added to a group.
-_CONFIRMED_PLAYER_STATES = frozenset({"tracking", "not_in_legend", "uncertain"})
 
 
 def _lock_group(connection: Any, binding: RequestBinding, group_id: str) -> int | None:

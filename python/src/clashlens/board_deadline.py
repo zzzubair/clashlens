@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import Any
 
 from .boundary_manifest import retry_wait
@@ -57,6 +58,43 @@ def cut_due(connection: Any, boundary_at: datetime) -> bool:
     return generation is not None and _cut_due(connection, boundary_at, generation[0])
 
 
+class DeadlineStage(StrEnum):
+    """Whether a Reset's unfrozen board leaves out members still waiting.
+
+    PUBLISHED: the Reset already published a board, so nobody is left out;
+    a member whose day saves later joins a rebuilt board. WAITING: before
+    ``BOARD_DEADLINE``, or nobody waits: the board waits for every member.
+    CUT_FEW: from ``BOARD_DEADLINE`` with at most ``MAX_UNFINISHED`` waiting:
+    they are left out. HOLDING: from ``BOARD_DEADLINE`` with more waiting:
+    the board keeps waiting and the alert check says how many. CUT_ALL: those
+    many still waiting at ``HARD_DEADLINE``: all of them are left out.
+
+    Derived from the clock and saved rows each time (``deadline_stage``), so
+    a restart sees the same stage.
+    """
+
+    PUBLISHED = "published"
+    WAITING = "waiting"
+    CUT_FEW = "cut_few"
+    HOLDING = "holding"
+    CUT_ALL = "cut_all"
+
+
+def deadline_stage(
+    *, now: datetime, boundary_at: datetime, published: bool, waiting: int
+) -> DeadlineStage:
+    """``waiting`` counts members still waiting, up to ``MAX_UNFINISHED`` + 1."""
+    if published:
+        return DeadlineStage.PUBLISHED
+    if now < boundary_at + BOARD_DEADLINE or waiting == 0:
+        return DeadlineStage.WAITING
+    if waiting <= MAX_UNFINISHED:
+        return DeadlineStage.CUT_FEW
+    if now >= boundary_at + HARD_DEADLINE:
+        return DeadlineStage.CUT_ALL
+    return DeadlineStage.HOLDING
+
+
 def _cut_due(connection: Any, boundary_at: datetime, generation_id: int) -> bool:
     now, unpublished, waiting = connection.execute(
         """
@@ -70,8 +108,9 @@ def _cut_due(connection: Any, boundary_at: datetime, generation_id: int) -> bool
         """,
         (boundary_at, generation_id, MAX_UNFINISHED + 1),
     ).fetchone()
-    return unpublished and now >= boundary_at + BOARD_DEADLINE and 0 < waiting and (
-        waiting <= MAX_UNFINISHED or now >= boundary_at + HARD_DEADLINE)
+    return deadline_stage(
+        now=now, boundary_at=boundary_at, published=not unpublished, waiting=waiting
+    ) in {DeadlineStage.CUT_FEW, DeadlineStage.CUT_ALL}
 
 
 def overdue(connection: Any, boundary_at: datetime) -> bool:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import errno
 import hashlib
 import json
 import math
@@ -47,9 +46,11 @@ from .collector_http import (
     ProviderFailure,
     retry_after_seconds,
 )
+from .collector_liveness import CollectorPhase
 from .operating import SchedulingDelayMetrics
 from .response_fields import content_fingerprint
 from .spool import Spool, SpoolError
+from .spool_health import SpoolHealth, SpoolState
 
 _HANDOFF_LOCK_STRIPES = 4096
 _HANDOFF_PROTOCOL = 2
@@ -115,18 +116,12 @@ class Collector:
         self._retries_while_answering: dict[int, int] = {}
         self._regular_admission_lock = asyncio.Lock()
         self.archive_health = "unconfigured" if archive is None else "unknown"
-        self._spool_io_failed = False
-        self._spool_capacity_failed = False
-        self._spool_recovery_lock = asyncio.Lock()
-        self._spool_probe_after = 0.0
+        self.spool_health = SpoolHealth(self._count)
         self._handoff_locks = tuple(
             asyncio.Lock() for _index in range(_HANDOFF_LOCK_STRIPES)
         )
-        self._handoff_recovery_required = False
-        # Newest saved response per player and request type, kept while it waits; it
-        # resolves when it commits or fails, or to the task committing it later.
-        self._handoff_turns: dict[collector_commits.Identity, collector_commits.Turn] = {}
-        self._later_commits: dict[asyncio.Task[None], int | None] = {}
+        # Saved responses waiting to commit in order; see collector_commits.
+        self.commits = collector_commits.CommitTurns()
         self._unrecovered: list[tuple[str, ResponseHandoff, bool]] = []
         self._stopping = asyncio.Event()
         # Newest committed (seen time, field fingerprint) per scope, identity
@@ -140,6 +135,7 @@ class Collector:
         # their loop and start, for the container health check.
         self.loop_passes: dict[str, float] = {}
         self.database_waits: dict[object, tuple[str, float]] = {}
+        self.phase = CollectorPhase.STARTING
         collector_liveness.mark(self, "start")
 
     async def _database_call(self, operation: Any, *args: Any, **kwargs: Any) -> Any:
@@ -241,7 +237,7 @@ class Collector:
             finally:
                 await _drain_to_thread(stack.close)
         except (OSError, SpoolError) as error:
-            self._record_spool_failure(error)
+            self.spool_health.record_failure(error)
             return ["capacity_paused"] * len(endpoints)
 
     async def _collect_profile_first(
@@ -477,7 +473,6 @@ class Collector:
                 # the check does not compact.
                 identity = (handoff.scope, handoff.identity_key, handoff.endpoint)
                 lock = self._handoff_lock(handoff)
-                pending = self._handoff_turns.get(identity)
                 committed = self._committed.get(identity)
                 cancelled = False
                 compacted = False
@@ -487,8 +482,8 @@ class Collector:
                     and committed is not None
                     and committed[1] == handoff.content_fingerprint
                     and not lock.locked()
-                    and collector_commits.settled(pending)
-                    and not self._handoff_recovery_required
+                    and self.commits.state(identity) is collector_commits.TurnState.SETTLED
+                    and not self.spool_health.recovery_required
                 ):
                     check = asyncio.ensure_future(
                         asyncio.to_thread(
@@ -521,7 +516,7 @@ class Collector:
                             # publish while this response was waiting for the
                             # same stripe. Recovery must run before any
                             # successor can become current.
-                            if self._handoff_recovery_required:
+                            if self.spool_health.recovery_required:
                                 if cancelled:
                                     raise asyncio.CancelledError
                                 return "capacity_paused"
@@ -534,13 +529,12 @@ class Collector:
                                 current_reservation,
                             )
                             published = True
-                            previous = self._handoff_turns.get(identity)
-                            self._handoff_turns[identity] = turn
+                            previous = self.commits.take(identity, turn)
                         # Saved responses commit in publish order, but no
                         # database wait holds the lock, so a later response
                         # always reaches the spool first.
                         behind = None if previous is None else await asyncio.shield(previous)
-                        if self._handoff_recovery_required:
+                        if self.spool_health.recovery_required:
                             if cancelled:
                                 raise asyncio.CancelledError
                             return "capacity_paused"
@@ -553,7 +547,7 @@ class Collector:
                             later = collector_commits.commit_later(self, behind, handoff, name)
                     except BaseException as error:
                         if published or self._sidecar_exists(name):
-                            self._handoff_recovery_required = True
+                            self.spool_health.require_recovery()
                             if isinstance(error, (OSError, SpoolError)):
                                 raise _HandoffRecoveryRequired(
                                     "durable response handoff requires restart recovery"
@@ -561,7 +555,7 @@ class Collector:
                         raise
                     finally:
                         turn.set_result(later)
-                        collector_commits.forget(self, identity, later)
+                        self.commits.forget(identity, later)
                     if later is not None and work.collector_work_id is not None:
                         await asyncio.wait({later})
                         if not cancelled and (later.cancelled() or later.exception()):
@@ -614,14 +608,14 @@ class Collector:
                     return "failed" if response.http_status in {401, 403} else "transient"
                 return "recorded"
             except (OSError, SpoolError) as error:
-                self._record_spool_failure(error)
+                self.spool_health.record_failure(error)
                 return "capacity_paused"
             finally:
                 if owned_reservation and current_reservation is not None:
                     try:
                         current_reservation.__exit__(None, None, None)
                     except (OSError, SpoolError) as error:
-                        self._record_spool_failure(error)
+                        self.spool_health.record_failure(error)
         raise AssertionError("unreachable collector retry loop")
 
     async def _commit_saved(
@@ -637,8 +631,7 @@ class Collector:
         await _drain_to_thread(self.spool.remove_handoff, name)
 
     def held_work(self) -> list[int]:
-        """Work whose saved responses still wait to commit; it is not fetched again."""
-        return [work for work in self._later_commits.values() if work is not None]
+        return self.commits.held_work()
 
     def _make_handoff(
         self,
@@ -687,7 +680,7 @@ class Collector:
         try:
             return any(item_name == name for item_name, _ in self.spool.iter_handoffs())
         except BaseException as error:
-            self._handoff_recovery_required = True
+            self.spool_health.require_recovery()
             raise _HandoffRecoveryRequired(
                 "response handoff state cannot be inspected safely"
             ) from error
@@ -801,6 +794,7 @@ class Collector:
             await _drain_to_thread(self.recover_handoffs)
             collector_commits.commit_unrecovered(self, self._unrecovered)
             await _drain_to_thread(self.spool.cleanup_stale, 60.0)
+            self.phase = CollectorPhase.RUNNING
             tasks += [
                 asyncio.create_task(self._regular_loop(stop_requested, idle_seconds)),
                 asyncio.create_task(
@@ -823,6 +817,7 @@ class Collector:
                 error = failed.exception()
                 assert error is not None
                 raise error
+            self.phase = CollectorPhase.STOPPING
             stop_requested.set()
             outage = getattr(self.client, "provider_outage", None)
             if outage is not None:
@@ -830,6 +825,7 @@ class Collector:
             await asyncio.gather(*tasks)
             await _drain_to_thread(self._sweep_unreferenced)
         finally:
+            self.phase = CollectorPhase.STOPPING
 
             async def finish() -> None:
                 stop_task.cancel()
@@ -839,6 +835,7 @@ class Collector:
                 await asyncio.gather(stop_task, *tasks, return_exceptions=True)
                 server.close()
                 await server.wait_closed()
+                self.phase = CollectorPhase.STOPPED
 
             await _drain_awaitable(finish())
 
@@ -1112,11 +1109,11 @@ class Collector:
         try:
             while not stop_requested.is_set():
                 collector_liveness.mark(self, "uploads")
-                if self._spool_io_failed:
+                if self.spool_health.io_failed:
                     await _wait_or_stop(stop_requested, max(1.0, idle_seconds))
                     continue
                 try:
-                    if self._spool_capacity_failed or loop.time() >= next_cleanup:
+                    if self.spool_health.capacity_exhausted or loop.time() >= next_cleanup:
                         _, found = await asyncio.to_thread(self.cleanup_uploaded)
                         next_cleanup = loop.time() + _CLEANUP_IDLE_SECONDS * (
                             found < _CLEANUP_BATCH_SIZE
@@ -1135,8 +1132,8 @@ class Collector:
                         await asyncio.to_thread(self.spool.cleanup_stale, 60.0)
                         await asyncio.to_thread(self._sweep_unreferenced)
                 except (OSError, SpoolError) as error:
-                    self._record_spool_failure(error)
-                if self._spool_capacity_failed:
+                    self.spool_health.record_failure(error)
+                if self.spool_health.capacity_exhausted:
                     # Uploads and deletion continue while collection is
                     # paused, so archived bytes can make room for this probe.
                     await self._spool_available()
@@ -1148,7 +1145,7 @@ class Collector:
             try:
                 await _drain_to_thread(self.cleanup_uploaded, limit=_SHUTDOWN_CLEANUP_SIZE)
             except (OSError, SpoolError) as error:
-                self._record_spool_failure(error)
+                self.spool_health.record_failure(error)
         finally:
             if uploads is not None and not uploads.done():
                 uploads.cancel()
@@ -1167,22 +1164,18 @@ class Collector:
             return collector_liveness.livez(self)
         if path not in {"/readyz", "/metrics"}:
             return 404, "text/plain", b"not found\n"
-        if self._handoff_recovery_required:
-            ready, reason = False, "handoff_recovery_required"
-        elif self._spool_io_failed:
-            ready, reason = False, "spool_io_failure"
-        elif self._spool_capacity_failed:
-            ready, reason = False, "degraded_capacity"
+        spool_state = self.spool_health.state
+        if spool_state is not SpoolState.WRITABLE:
+            ready, reason = False, spool_state.value
         else:
             try:
                 ready, reason = await asyncio.to_thread(self.spool.readiness)
             except (OSError, SpoolError) as error:
-                self._record_spool_failure(error)
-                ready, reason = False, "spool_io_failure"
+                self.spool_health.record_failure(error)
+                ready, reason = False, SpoolState.IO_FAILED.value
             if reason.startswith("storage_error:"):
-                self._spool_io_failed = True
-                self._count("spool_io_failure")
-                ready, reason = False, "spool_io_failure"
+                self.spool_health.record_io_failure()
+                ready, reason = False, SpoolState.IO_FAILED.value
         regular = self.regular_keys.health()
         interactive = self.interactive_keys.health()
         if path == "/readyz":
@@ -1218,21 +1211,16 @@ class Collector:
             return 503, "text/plain", b"database_unavailable\n"
         database_metrics = self._database_metrics
         stats = None
-        if not self._spool_io_failed:
+        if not self.spool_health.io_failed:
             try:
                 stats = await asyncio.to_thread(self.spool.stats)
             except (OSError, SpoolError) as error:
-                self._record_spool_failure(error)
+                self.spool_health.record_failure(error)
         lines = [
             f'clashlens_collector_keys_healthy{{pool="regular"}} {regular["healthy"]}',
             f'clashlens_collector_keys_healthy{{pool="interactive"}} {interactive["healthy"]}',
             f"clashlens_collector_regular_inflight {self.regular_inflight}",
-            f"clashlens_collector_spool_io_failed {int(self._spool_io_failed)}",
-            f"clashlens_collector_spool_capacity_failed {int(self._spool_capacity_failed)}",
-            (
-                "clashlens_collector_handoff_recovery_required "
-                f"{int(self._handoff_recovery_required)}"
-            ),
+            *self.spool_health.metric_lines(),
             f'clashlens_collector_archive_health{{state="{self.archive_health}"}} 1',
             *getattr(self.client, "metric_lines", list)(),
             *(() if self.uploads is None else self.uploads.metric_lines()),
@@ -1304,48 +1292,10 @@ class Collector:
     def _count(self, outcome: str) -> None:
         self.outcomes[outcome] = self.outcomes.get(outcome, 0) + 1
 
-    def _record_spool_failure(self, error: OSError | SpoolError) -> None:
-        capacity_error = (
-            isinstance(error, SpoolError)
-            and str(error).startswith("degraded_capacity:")
-        ) or (
-            isinstance(error, OSError) and error.errno in {errno.EDQUOT, errno.ENOSPC}
-        )
-        if capacity_error:
-            self._spool_capacity_failed = True
-            self._count("degraded_capacity")
-            return
-        # An I/O or integrity failure is not known to be safe just because the
-        # next capacity probe succeeds. Keep collection paused and readiness
-        # failed until the service restarts and startup recovery rechecks the
-        # spool before admitting another request.
-        self._spool_io_failed = True
-        self._count("spool_io_failure")
-
     async def _spool_available(self) -> bool:
-        if self._handoff_recovery_required:
-            return False
-        if self._spool_io_failed:
-            return False
-        if not self._spool_capacity_failed:
-            return True
-        async with self._spool_recovery_lock:
-            if not self._spool_capacity_failed:
-                return True
-            if time.monotonic() < self._spool_probe_after:
-                return False
-            try:
-                await asyncio.to_thread(self.spool.probe_writable, self.max_body_bytes)
-            except (OSError, SpoolError) as error:
-                self._spool_probe_after = time.monotonic() + 1.0
-                self._record_spool_failure(error)
-                return False
-            if self._spool_io_failed:
-                return False
-            self._spool_capacity_failed = False
-            self._spool_probe_after = 0.0
-            self._count("capacity_recovered")
-            return True
+        return await self.spool_health.collection_open(
+            partial(asyncio.to_thread, self.spool.probe_writable, self.max_body_bytes)
+        )
 
 
 def _retry_delay(attempt: int) -> float:

@@ -10,17 +10,14 @@ from . import (
     job_outcomes,
     queue_refresh,
     reset_baselines,
+    season_anchors,
 )
 from .db import Claim, Database, _text_value, enqueue_discovered_players
-from .domain import (
-    SEASON_ANCHOR_RULE_VERSION,
-    DomainRuleError,
-    ranked_day_for,
-    validate_season_anchor,
-)
-from .profile import PROFILE_PARSER_VERSION, ParsedProfile
+from .domain import ranked_day_for
+from .profile import ParsedProfile
 from .rankings import ParsedOfficialRankings
 from .response_fields import content_fingerprint
+from .season_anchors import AnchorOutcome
 
 # The game applies the automatic defense loss about 7 to 13 minutes after the
 # Reset, and on 6 October 2026 a reading at 05:09:56 first showed the ended
@@ -171,7 +168,7 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                 assert profile_version is not None
             profile_version_id = int(profile_version[0])
             if created_profile:
-                anchor_outcome = _record_season_anchor(
+                anchor_outcome = season_anchors.record(
                     connection, profile_version_id, profile
                 )
             else:
@@ -180,12 +177,12 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                     (profile_version_id,),
                 ).fetchone()
                 anchor_outcome = (
-                    _text_value(retained_anchor[0])
+                    AnchorOutcome(_text_value(retained_anchor[0]))
                     if retained_anchor is not None
                     else (
-                        "conflict"
+                        AnchorOutcome.CONFLICT
                         if profile.source_contract_state == "conflict"
-                        else "not_applicable"
+                        else AnchorOutcome.NOT_APPLICABLE
                     )
                 )
             processing_id = job_outcomes._record_processing_outcome(database, 
@@ -194,7 +191,7 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                 outcome="processed",
                 failure_category=(
                     "season_anchor_conflict"
-                    if anchor_outcome == "conflict"
+                    if anchor_outcome is AnchorOutcome.CONFLICT
                     else None
                 ),
                 parsed_payload_id=parsed_payload_id,
@@ -362,7 +359,7 @@ def _complete_profile_legacy(database: Database, claim: Claim, profile: ParsedPr
                 """,
                 (profile_version_id, observation_id),
             )
-            anchor_outcome = _record_season_anchor(
+            anchor_outcome = season_anchors.record(
                 connection, profile_version_id, profile
             )
             queue_refresh.queue_for_reading(
@@ -419,7 +416,7 @@ def _complete_profile_legacy(database: Database, claim: Claim, profile: ParsedPr
                 outcome="processed",
                 failure_category=(
                     "season_anchor_conflict"
-                    if anchor_outcome == "conflict"
+                    if anchor_outcome is AnchorOutcome.CONFLICT
                     else None
                 ),
             )
@@ -877,171 +874,6 @@ def get_player(database: Database, normalized_tag: str) -> dict[str, Any] | None
             "parser_version": _text_value(row[10]),
             "source_http_status": row[11],
         }
-
-
-def _record_season_anchor(
-    connection: Any,
-    profile_version_id: int,
-    profile: ParsedProfile,
-) -> str:
-    outcome = "not_applicable"
-    failure_reason: str | None = None
-    anchor = None
-    if profile.eligibility_state == "eligible":
-        try:
-            if profile.parser_version == PROFILE_PARSER_VERSION:
-                if profile.season_anchor_current_id is None:
-                    raise DomainRuleError(
-                        "invalid_season_anchor", "profile current season is missing"
-                    )
-                anchor = validate_season_anchor(
-                    profile.season_anchor_current_id,
-                    profile.season_anchor_previous_id or "",
-                )
-            else:
-                if (
-                    profile.current_league_season_id is None
-                    or profile.previous_league_season_id is None
-                ):
-                    raise DomainRuleError(
-                        "invalid_season_anchor", "profile season values are missing"
-                    )
-                anchor = validate_season_anchor(
-                    profile.current_league_season_id,
-                    profile.previous_league_season_id,
-                )
-            outcome = "accepted"
-        except DomainRuleError as error:
-            outcome = "conflict"
-            failure_reason = error.category
-
-    if anchor is not None:
-
-        def read_current(*, for_update: bool) -> Any:
-            lock_clause = "FOR UPDATE OF a" if for_update else ""
-            return connection.execute(
-                f"""
-                SELECT a.id, a.current_league_season_id,
-                       a.previous_league_season_id, a.current_start,
-                       v.observed_at
-                FROM legend_season_anchors AS a
-                JOIN player_profile_versions AS v
-                  ON v.id = a.source_profile_version_id
-                WHERE a.state = 'confirmed'
-                  AND a.anchor_rule_version = %s
-                {lock_clause}
-                """,
-                (SEASON_ANCHOR_RULE_VERSION,),
-            ).fetchone()
-
-        def matches_or_is_not_newer(current: Any) -> bool:
-            return current is not None and (
-                (
-                    _text_value(current[1]) == anchor.current_id
-                    and _text_value(current[2]) == anchor.previous_id
-                )
-                or profile.observed_at <= current[4]
-            )
-
-        current = read_current(for_update=False)
-        if matches_or_is_not_newer(current):
-            pass
-        else:
-            # A possible transition must re-read under the row lock. The
-            # unlocked read is only an optimization for the common no-op
-            # path and is never used to advance confirmed state.
-            current = read_current(for_update=True)
-
-        inserted_initial_anchor = False
-        if current is None:
-            inserted = connection.execute(
-                """
-                INSERT INTO legend_season_anchors (
-                    current_league_season_id, previous_league_season_id,
-                    current_start, previous_start, anchor_rule_version,
-                    source_profile_version_id, state
-                ) VALUES (%s, %s, %s, %s, %s, %s, 'confirmed')
-                ON CONFLICT DO NOTHING
-                RETURNING id
-                """,
-                (
-                    anchor.current_id,
-                    anchor.previous_id,
-                    anchor.current_start,
-                    anchor.previous_start,
-                    SEASON_ANCHOR_RULE_VERSION,
-                    profile_version_id,
-                ),
-            ).fetchone()
-            inserted_initial_anchor = inserted is not None
-            if not inserted_initial_anchor:
-                current = read_current(for_update=True)
-                assert current is not None
-        if inserted_initial_anchor or matches_or_is_not_newer(current):
-            pass
-        elif anchor.current_start > current[3]:
-            connection.execute(
-                "UPDATE legend_season_anchors SET state = 'superseded' WHERE id = %s",
-                (current[0],),
-            )
-            connection.execute(
-                """
-                INSERT INTO legend_season_anchors (
-                    current_league_season_id, previous_league_season_id,
-                    current_start, previous_start, anchor_rule_version,
-                    source_profile_version_id, state
-                ) VALUES (%s, %s, %s, %s, %s, %s, 'confirmed')
-                ON CONFLICT (current_league_season_id, anchor_rule_version)
-                DO UPDATE SET
-                    source_profile_version_id = EXCLUDED.source_profile_version_id,
-                    state = 'confirmed',
-                    confirmed_at = clock_timestamp()
-                """,
-                (
-                    anchor.current_id,
-                    anchor.previous_id,
-                    anchor.current_start,
-                    anchor.previous_start,
-                    SEASON_ANCHOR_RULE_VERSION,
-                    profile_version_id,
-                ),
-            )
-        else:
-            outcome = "conflict"
-            failure_reason = "season_anchor_disagreement"
-
-    connection.execute(
-        """
-        INSERT INTO season_anchor_evidence (
-            profile_version_id, current_league_season_id,
-            previous_league_season_id, current_start, previous_start,
-            anchor_rule_version, outcome, failure_reason
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (profile_version_id) DO UPDATE SET
-            outcome = EXCLUDED.outcome,
-            failure_reason = EXCLUDED.failure_reason
-        """,
-        (
-            profile_version_id,
-            profile.current_league_season_id,
-            profile.previous_league_season_id,
-            anchor.current_start if anchor is not None else None,
-            anchor.previous_start if anchor is not None else None,
-            SEASON_ANCHOR_RULE_VERSION,
-            outcome,
-            failure_reason,
-        ),
-    )
-    if outcome == "conflict":
-        connection.execute(
-            """
-            UPDATE player_profile_versions
-            SET source_contract_state = 'conflict', season_anchor_state = 'conflict'
-            WHERE id = %s
-            """,
-            (profile_version_id,),
-        )
-    return outcome
 
 
 def _profile_semantic_projection(profile: ParsedProfile) -> dict[str, Any]:

@@ -15,7 +15,13 @@ from typing import ClassVar
 import pytest
 
 from clashlens import collector_http
-from clashlens.collector_http import ApiKey, KeyPool, OfficialApiClient, ProviderFailure
+from clashlens.collector_http import (
+    ApiKey,
+    DeadlinePhase,
+    KeyPool,
+    OfficialApiClient,
+    ProviderFailure,
+)
 
 
 def _most_starts_within(starts: list[float], seconds: float) -> int:
@@ -847,3 +853,192 @@ def test_dns_past_deadline_cannot_start_network_and_keeps_capacity(
 
     assert elapsed < 0.3
     assert len(_OfficialHandler.paths_started["/v1/players/%23SMALL"]) == 1
+
+
+def test_key_conditions_pause_recover_and_quarantine_wins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [1000.0]
+    monkeypatch.setattr(collector_http, "monotonic", lambda: clock[0])
+    pool = KeyPool(
+        [ApiKey("regular-1", "one"), ApiKey("regular-2", "two")],
+        starts_per_second=25,
+        concurrency_per_key=3,
+    )
+    assert pool.free_ready_slots() == 6
+    pool.pause("regular-1", 0.2)  # a pause lasts at least one second
+    pool.pause("regular-1", 0.5)  # a shorter later 429 never shortens it
+    assert pool.health() == {"configured": 2, "healthy": 2, "paused": 1}
+    assert pool.free_ready_slots() == 3
+    clock[0] += 1
+    assert pool.health()["paused"] == 0
+    assert pool.free_ready_slots() == 6
+    pool.pause("regular-2", 30)
+    pool.quarantine("regular-2")
+    # A quarantined key is not counted as paused, but its metric still shows it.
+    assert pool.health() == {"configured": 2, "healthy": 1, "paused": 0}
+    assert pool.key_health() == [
+        ("regular-1", True, False, 0),
+        ("regular-2", False, True, 0),
+    ]
+    clock[0] += 60
+    assert pool.free_ready_slots() == 3
+    pool.quarantine("regular-1")
+    with pytest.raises(ProviderFailure, match="no_healthy_api_key"):
+        asyncio.run(pool.run(lambda _key, _start: asyncio.sleep(0)))
+
+
+def test_key_slot_is_released_once_or_drains_until_the_network_call_ends() -> None:
+    pool = KeyPool([ApiKey("regular-1", "one")], starts_per_second=25, concurrency_per_key=2)
+
+    async def run() -> None:
+        async def fails(_key: ApiKey, start_request) -> None:
+            await start_request()
+            raise ProviderFailure("network_failure", retryable=True)
+
+        with pytest.raises(ProviderFailure):
+            await pool.run(fails)
+        assert pool.free_ready_slots() == 2
+
+        network_call_ended = asyncio.get_running_loop().create_future()
+
+        async def times_out(_key: ApiKey, start_request) -> None:
+            await start_request()
+            raise collector_http._DetachedTimeout(network_call_ended)
+
+        with pytest.raises(ProviderFailure, match="timeout"):
+            await pool.run(times_out)
+        # The caller has its timeout, but the slot is still draining.
+        assert pool.free_ready_slots() == 1
+        network_call_ended.set_result(None)
+        await asyncio.sleep(0)
+        assert pool.free_ready_slots() == 2
+
+        hold = asyncio.Event()
+
+        async def holds(_key: ApiKey, start_request) -> None:
+            await start_request()
+            await hold.wait()
+
+        holding = [asyncio.create_task(pool.run(holds)) for _ in range(2)]
+        await asyncio.sleep(0.01)
+        queued = asyncio.create_task(pool.run(holds))
+        await asyncio.sleep(0.01)
+        # A request cancelled while queued never held a slot.
+        queued.cancel()
+        await asyncio.gather(queued, return_exceptions=True)
+        assert pool.free_ready_slots() == 0
+        hold.set()
+        await asyncio.gather(*holding)
+        assert pool.free_ready_slots() == 2
+
+    asyncio.run(run())
+
+
+def test_timed_out_request_keeps_its_slots_until_the_blocking_call_ends() -> None:
+    client = _TimedNetworkClient(
+        "https://example.invalid", max_connections=1, total_timeout_seconds=0.15
+    )
+    pool = KeyPool([ApiKey("regular-1", "one")], starts_per_second=25, concurrency_per_key=1)
+
+    async def run() -> None:
+        started = monotonic()
+        with pytest.raises(ProviderFailure, match="timeout"):
+            await client.fetch_player(pool, "#SLOW", "profile")
+        assert monotonic() - started < 0.3
+        assert pool.free_ready_slots() == 0
+        assert client.metric_lines()[0].endswith(" 1")
+        while pool.free_ready_slots() == 0:
+            await asyncio.sleep(0.01)
+        assert monotonic() - started >= 0.35
+        assert client.metric_lines()[0].endswith(" 0")
+
+    asyncio.run(run())
+
+
+def _deadline(seconds: float = 30.0):
+    loop = asyncio.new_event_loop()
+    signalled = loop.create_future()
+    return loop, signalled, collector_http._RequestDeadline(seconds, loop, signalled)
+
+
+def test_deadline_phases_from_waiting_to_finished_or_abandoned() -> None:
+    loop, signalled, deadline = _deadline()
+    try:
+        assert deadline.phase is DeadlinePhase.WAITING
+        assert deadline.begin()
+        assert deadline.phase is DeadlinePhase.RUNNING and deadline.started
+        deadline.complete()
+        assert deadline.phase is DeadlinePhase.FINISHED
+        # A request that already finished cannot time out afterwards.
+        deadline.expire()
+        loop.run_until_complete(asyncio.sleep(0))
+        assert deadline.phase is DeadlinePhase.FINISHED and not signalled.done()
+        assert not deadline.cancel_before_start()
+    finally:
+        loop.close()
+
+    loop, signalled, deadline = _deadline()
+    try:
+        # A cancellation before the network thread begins abandons it.
+        assert deadline.cancel_before_start()
+        assert deadline.phase is DeadlinePhase.ABANDONED and deadline.expired
+        assert not deadline.begin() and not deadline.started
+    finally:
+        loop.close()
+
+    loop, signalled, deadline = _deadline()
+    try:
+        # The budget running out before the thread begins tells the caller.
+        deadline.expire()
+        loop.run_until_complete(asyncio.wait_for(signalled, 1))
+        assert deadline.phase is DeadlinePhase.ABANDONED
+        assert not deadline.begin()
+    finally:
+        loop.close()
+
+    loop, _signalled, deadline = _deadline()
+    try:
+        deadline.finish()
+        assert deadline.phase is DeadlinePhase.ABANDONED and not deadline.begin()
+    finally:
+        loop.close()
+
+
+def test_deadline_interrupts_a_running_request_and_refuses_new_sockets() -> None:
+    loop, signalled, deadline = _deadline()
+    first, peer = socket.socketpair()
+    late, late_peer = socket.socketpair()
+    try:
+        assert deadline.begin()
+        deadline.register(first)
+        deadline.expire()
+        loop.run_until_complete(asyncio.wait_for(signalled, 1))
+        assert deadline.phase is DeadlinePhase.INTERRUPTED
+        assert deadline.started and deadline.expired
+        assert first.fileno() == -1
+        # The caller is told to keep its slots draining, not to cancel.
+        assert not deadline.cancel_before_start()
+        deadline.register(late)
+        assert late.fileno() == -1
+        with pytest.raises(ProviderFailure, match="timeout"):
+            deadline.guard_connected_socket(late)
+        deadline.finish()
+        assert deadline.phase is DeadlinePhase.INTERRUPTED
+    finally:
+        for item in (first, peer, late, late_peer):
+            item.close()
+        loop.close()
+
+    loop, signalled, deadline = _deadline(0.01)
+    try:
+        assert deadline.begin()
+        sleep(0.02)
+        # Answering after the budget is a timeout even with the bytes in hand.
+        with pytest.raises(ProviderFailure, match="timeout"):
+            deadline.complete()
+        assert deadline.phase is DeadlinePhase.INTERRUPTED
+        loop.run_until_complete(asyncio.sleep(0))
+        assert not signalled.done()
+    finally:
+        loop.close()

@@ -21,7 +21,10 @@ import {
   parseLoginCookieValue,
 } from "../../app/server/auth-cookies.server";
 import { loadWebsiteConfig } from "../../app/server/config.server";
-import { renewLoginCookie } from "../../app/server/login-renewal.server";
+import {
+  loginCookieStage,
+  renewLoginCookie,
+} from "../../app/server/login-renewal.server";
 
 const CONFIG = loadWebsiteConfig({
   NODE_ENV: "test",
@@ -112,6 +115,33 @@ describe("login cookie renewal", () => {
     expect(await visit(cookieIssuedMinutesAgo(120))).toEqual([]);
     mocks.isLoginRevoked.mockRejectedValueOnce(new Error("API down"));
     expect(await visit(cookieIssuedMinutesAgo(120))).toEqual([]);
+  });
+
+  it("names each stage a login cookie can be in", () => {
+    const at = (cookie?: string) =>
+      loginCookieStage(
+        new Request("https://clashlens.example/", {
+          headers:
+            cookie === undefined ? {} : { cookie: `${LOGIN_COOKIE_NAME}=${cookie}` },
+        }),
+        CONFIG,
+        NOW_MS,
+      ).kind;
+    expect(at(undefined)).toBe("absent");
+    expect(at("not-a-signed-cookie")).toBe("unusable");
+    expect(at(cookieIssuedMinutesAgo(30 * 24 * 60))).toBe("unusable");
+    expect(at(cookieIssuedMinutesAgo(59))).toBe("recent");
+    expect(at(cookieIssuedMinutesAgo(60))).toBe("due");
+    const off = { ...CONFIG, loginEnabled: false };
+    expect(
+      loginCookieStage(
+        new Request("https://clashlens.example/", {
+          headers: { cookie: `${LOGIN_COOKIE_NAME}=${cookieIssuedMinutesAgo(60)}` },
+        }),
+        off,
+        NOW_MS,
+      ).kind,
+    ).toBe("absent");
   });
 
   it("keeps a response's own login cookie and never adds one to a shared-cache response", async () => {

@@ -30,6 +30,8 @@ from . import (
     api_status,
     api_verification,
     army_types,
+    login_sessions,
+    provider_membership,
 )
 from .accounts import normalize_display_name, normalize_group_name, normalize_username
 from .api_db import (
@@ -870,13 +872,14 @@ def create_app(
             request, "session.check", production_database, allow_unresolved_identity=True
         )
         assert production_database is not None
-        revoked = api_accounts.login_session_revoked(
+        standing = login_sessions.login_standing(
             production_database,
             body.session,
             context.proof.provider,
             context.proof.provider_subject,
             body.issued_at_ms,
         )
+        revoked = standing is not login_sessions.LoginStanding.ACTIVE
         return JSONResponse(status_code=200, content={"revoked": revoked})
 
     @app.post("/v1/account/session/revoke")
@@ -885,7 +888,7 @@ def create_app(
             request, "session.revoke", production_database, allow_unresolved_identity=True
         )
         assert production_database is not None
-        api_accounts.revoke_login_session(production_database, body.session)
+        login_sessions.revoke_login_session(production_database, body.session)
         return JSONResponse(status_code=200, content={"revoked": True})
 
     @app.patch("/v1/account")
@@ -1146,7 +1149,7 @@ def create_app(
         assert production_database is not None and context.account is not None
         if provider not in _ALLOWED_PROVIDERS:
             raise ApiError(404, "provider_not_found")
-        result = api_accounts.link_provider(production_database,
+        result = provider_membership.link_provider(production_database,
             _binding(
                 request,
                 context,
@@ -1170,7 +1173,7 @@ def create_app(
         assert production_database is not None and context.account is not None
         if provider not in _ALLOWED_PROVIDERS:
             raise ApiError(404, "provider_not_found")
-        result = api_accounts.unlink_provider(production_database,
+        result = provider_membership.unlink_provider(production_database,
             _binding(
                 request,
                 context,

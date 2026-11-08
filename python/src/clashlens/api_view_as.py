@@ -26,15 +26,16 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import Field
 
-from . import api_db, api_players
+from . import api_db, api_discord_alerts, api_players
 from .api import StrictBody, _authorize, _binding, _operation_response
 from .api_db import ApiDatabase, OperationResult, RequestBinding, _text
+from .api_discord_alerts import Switch, SwitchState
 from .profile import normalize_player_tag
 
 # What any account but the owner gets from a pin or follow, whatever it sent.
 NOT_OWNER = OperationResult(404, {"error": "not_found"})
 # The owner's switch for each alert, as the Discord alerts page names them.
-FOLLOW_TABLES = {"attack": "discord_attack_alerts", "day_summary": "discord_day_summary_on"}
+FOLLOW_TABLES = {"attack": Switch.ATTACK, "day_summary": Switch.DAY_SUMMARY}
 
 
 def _is_owner(connection: Any, account_id: int | None) -> bool:
@@ -159,7 +160,6 @@ def set_follow(
     """Turn the owner's own attack alerts or Legend day summary for any
     player on or off. Only the owner's row changes, never the linked
     account's. Anyone but the owner gets NOT_OWNER whatever the tag."""
-    table = FOLLOW_TABLES[alert]
     with database.pool.connection() as connection:
         with connection.transaction():
             existing = api_db._reserve_request(database, connection, binding)
@@ -170,17 +170,11 @@ def set_follow(
             elif (player := _player_id(connection, tag)) is None:
                 result = OperationResult(404, {"error": "player_not_found"})
             else:
-                if on:
-                    connection.execute(
-                        f"INSERT INTO {table} (account_id, player_id) VALUES (%s, %s)"
-                        " ON CONFLICT (account_id, player_id) DO NOTHING",
-                        (binding.account_id, player[0]),
-                    )
-                else:
-                    connection.execute(
-                        f"DELETE FROM {table} WHERE account_id = %s AND player_id = %s",
-                        (binding.account_id, player[0]),
-                    )
+                assert binding.account_id is not None
+                api_discord_alerts.flip(
+                    connection, FOLLOW_TABLES[alert], binding.account_id, player[0],
+                    SwitchState.of(on),
+                )
                 result = OperationResult(200, {"tag": player[1], "alert": alert, "on": on})
             api_db._complete_request(connection, binding.request_id, result)
             return result

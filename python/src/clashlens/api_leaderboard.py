@@ -16,14 +16,12 @@ from .analytics import (
 )
 from .api_db import (
     ApiDatabase,
-    SharedCopy,
     _json_array,
     _net_so_far,
     _public_confidence,
     _public_snapshot_confidence,
     _season_reset_waiting_sql,
     _shown_total,
-    _start_thread,
     _text,
 )
 from .domain import (
@@ -33,6 +31,7 @@ from .domain import (
     ranked_day_for,
     season_opening_reset,
 )
+from .shared_copy import SharedCopy, _start_thread
 
 _LIVE_FRESHNESS_SECONDS = 600
 # Rows kept beside a selected player when their page edge would hide them.

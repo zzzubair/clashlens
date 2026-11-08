@@ -11,7 +11,6 @@ from . import api_leaderboard, api_player_lookup
 from .api_db import (
     PLAYER_SCREEN_READY_VERSION,
     ApiDatabase,
-    SharedCopy,
     _daily_log,
     _frozen_trophies_sql,
     _historical_season_summary,
@@ -20,7 +19,6 @@ from .api_db import (
     _public_confidence,
     _screen_daily_log_with_events,
     _season_reset_waiting_sql,
-    _start_thread,
     _text,
     _withhold_unsupported_entries,
 )
@@ -35,6 +33,7 @@ from .domain import (
     validate_legend_season_start,
 )
 from .season_summaries import reset_board_ranks, season_final_rank
+from .shared_copy import SharedCopy, _start_thread
 
 _LEGEND_I_TIER_ID = 105000036
 

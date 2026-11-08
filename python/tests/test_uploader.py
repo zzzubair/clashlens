@@ -25,8 +25,8 @@ from test_collector import _Client, _collector, _Spool, _Store
 import clashlens.uploader as uploader_module
 from clashlens import collector_liveness
 from clashlens.archive import ArchiveReadError
-from clashlens.collector_uploads import UploadClaim
-from clashlens.uploader import Uploader, UploaderProcess
+from clashlens.collector_uploads import UploadClaim, WriteMayLand
+from clashlens.uploader import Uploader, UploaderProcess, UploaderProcessState
 
 
 def _uploader(spool: _Spool, store: _Store, archive: object) -> Uploader:
@@ -91,6 +91,59 @@ def test_one_bad_archive_object_does_not_stop_other_uploads(
         ("b" * 64, "archive_checksum_mismatch", False),
     ]
     assert uploader.archive_health == "degraded"
+
+
+def test_a_marker_check_that_fails_meanwhile_keeps_a_terminal_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One owner's marker check cannot reach the archive while another
+    owner's upload is refused permission: uploads stay stopped."""
+    spool = _Spool()
+    spool.verify = lambda _digest, _size: b"body"  # type: ignore[attr-defined]
+    store = _Store(spool)
+    claim = UploadClaim("a" * 64, "one", 4, "uploader", "one", datetime.now(UTC), 1)
+    monkeypatch.setattr(
+        uploader_module.collector_uploads, "claim_upload", lambda _database, **_kw: claim
+    )
+    monkeypatch.setattr(
+        uploader_module.collector_uploads, "renew_upload", lambda *_a, **_kw: None
+    )
+    monkeypatch.setattr(
+        uploader_module.collector_uploads, "fail_upload", lambda *_a, **_kw: None
+    )
+    checks = 0
+
+    class Archive:
+        instance_config = None
+
+        @staticmethod
+        def check_marker_health() -> str:
+            nonlocal checks
+            checks += 1
+            if checks == 2:
+                return "ready"
+            deadline = time.monotonic() + 5
+            while uploader.gate() != "archive_stopped" and time.monotonic() < deadline:
+                time.sleep(0.01)
+            return "degraded"
+
+        @staticmethod
+        def write_immutable(
+            _body: bytes, _digest: str, *, generation: str | None = None
+        ) -> str:
+            raise ArchiveReadError(
+                "archive_permission_denied", "access denied", retryable=False
+            )
+
+    uploader = _uploader(spool, store, Archive())
+
+    async def both() -> None:
+        await asyncio.gather(
+            uploader.upload_once(owner="waiting"), uploader.upload_once(owner="refused")
+        )
+
+    asyncio.run(both())
+    assert uploader.gate() == "archive_stopped"
 
 
 def test_background_uploader_drains_multiple_objects_concurrently(
@@ -772,7 +825,7 @@ def test_a_lost_saved_copy_fails_for_good_only_when_the_archive_lacks_it(
         "token",
         datetime.now(UTC),
         attempt,
-        unresolved_write=unresolved_write,
+        unresolved_write=None if unresolved_write is None else WriteMayLand(unresolved_write),
     )
     calls = _one_claim(monkeypatch, claim)
 
@@ -809,7 +862,7 @@ def test_an_attempt_that_writes_nothing_keeps_counting_from_the_last_write(
         datetime.now(UTC),
         40,
         generation,
-        unresolved_write=31,
+        unresolved_write=WriteMayLand(31),
     )
     _one_claim(monkeypatch, claim)
     failures: list[tuple[str, str]] = []
@@ -992,7 +1045,7 @@ def test_stopping_the_collector_stops_the_uploads_process(
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
     assert process.restarts == 0
-    assert process.running is False
+    assert process.state is UploaderProcessState.STOPPED
 
 
 class _UploadArchive(_FixtureS3Handler):

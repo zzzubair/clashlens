@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from .collector_db import CollectorDatabase, CollectorIntent
@@ -15,6 +16,72 @@ if TYPE_CHECKING:
 CHECK_INTERVAL_SECONDS = 2.0
 SCHEDULE_INTERVAL_SECONDS = 60.0
 LIVE_DELAY_LIMIT = timedelta(minutes=2)
+
+
+class Eligibility(StrEnum):
+    """Where an untracked player's eligibility answer stands this week (the
+    week from Monday's Reset, or from ``eligibility_answer_after`` when a
+    Monday re-check's unsaved Legend I answer raised it).
+
+    NOT_DUE: no answer is needed (``players.eligibility_due_at`` empty).
+    DUE: needed now, with no check: the next collector pass with room among
+    the 500 waiting checks adds one, sets the next try 5 minutes on
+    (doubling per attempt to 6 hours) and counts the attempt. CHECK_WAITING:
+    a check waits to be collected. INTERPRETING: this week's profile was
+    fetched and waits for the worker. ANSWERED: tracked, or a recognised
+    league or not-found answer was saved this week: the next pass clears
+    the due time. BACKING_OFF: due again at the saved next try, after a
+    check failed or a profile showed no recognised league.
+
+    Events: a battle log, ranking, import or Monday re-check naming the
+    player saves them as due; each collector pass
+    (``clashlens_admit_discovery_profiles``) clears, waits for or adds a
+    check for each due player, in that order, and the weekly loop below also
+    adds Monday checks for every untracked player. Owner: those database
+    functions write it; ``eligibility`` reads it. Everything is saved, so a
+    failed check, a crash or a restart leaves the player due and the next
+    pass after the next try continues.
+    """
+
+    NOT_DUE = "not_due"
+    DUE = "due"
+    CHECK_WAITING = "check_waiting"
+    INTERPRETING = "interpreting"
+    ANSWERED = "answered"
+    BACKING_OFF = "backing_off"
+
+
+def eligibility(connection: Any, player_id: int, now: datetime) -> Eligibility:
+    """The player's ``Eligibility`` at ``now``, decided as a pass would."""
+    due_at, answered, waiting, interpreting = connection.execute(
+        """
+        SELECT player.eligibility_due_at,
+               player.active OR clashlens_eligibility_answered_since(
+                   player.id, week.boundary_at, %(now)s),
+               EXISTS (
+                   SELECT 1 FROM collector_work AS work
+                   WHERE work.player_id = player.id
+                     AND work.kind IN ('discovery_profile', 'initial_collection', 'live_refresh')
+                     AND work.status IN ('pending', 'waiting_retry')),
+               clashlens_eligibility_processing_since(player.id, week.boundary_at, %(now)s)
+        FROM players AS player
+        CROSS JOIN LATERAL (
+            SELECT GREATEST(clashlens_eligibility_week(%(now)s), player.eligibility_answer_after)
+                AS boundary_at
+        ) AS week
+        WHERE player.id = %(player)s
+        """,
+        {"now": now, "player": player_id},
+    ).fetchone()
+    if due_at is None:
+        return Eligibility.NOT_DUE
+    if answered:
+        return Eligibility.ANSWERED
+    if waiting:
+        return Eligibility.CHECK_WAITING
+    if interpreting:
+        return Eligibility.INTERPRETING
+    return Eligibility.DUE if due_at <= now else Eligibility.BACKING_OFF
 
 
 def has_time_to_spare(database: CollectorDatabase, connection: Any, now: datetime) -> bool:

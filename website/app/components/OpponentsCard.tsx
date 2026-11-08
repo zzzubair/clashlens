@@ -14,6 +14,31 @@ import { DashboardIcon } from "./DashboardIcon";
 import { ShieldIcon, Star, Stars, TrophyIcon } from "./GameIcons";
 import { signed, timeFormatter } from "./LegendClock";
 
+/**
+ * One earlier Legend day on Bases you attacked:
+ *
+ * - `today`: no earlier day is picked; the card's own data shows.
+ * - `unread`: not read yet; it is read once clicking pauses for 0.4 seconds.
+ * - `asking`: its read is on its way; a day has one read at a time.
+ * - `read`: its bases are kept while the account's tab shows.
+ * - `failed`: it could not be read; picking it again asks again.
+ *
+ * Events: picking a day, the pause ending, and the read's answer. The
+ * dashboard owns the days, as its follow-up reads build the card again.
+ */
+export type BasesDayRead = "today" | "unread" | "asking" | "read" | "failed";
+
+export function basesDayRead<Bases>(
+  day: number | null,
+  read: ReadonlyMap<number, Bases | null>,
+  asking: ReadonlySet<number>,
+): BasesDayRead {
+  if (day === null) return "today";
+  if (read.get(day)) return "read";
+  if (asking.has(day)) return "asking";
+  return read.has(day) ? "failed" : "unread";
+}
+
 const STRENGTH_LABELS: Record<BaseStrength, string> = {
   hard: "Hard",
   average: "Average",
@@ -47,7 +72,7 @@ export function basesPath(tag: string, day: number): string {
  * The earlier Legend day chosen on Bases you attacked and each earlier day
  * read for `tag`, kept while its account tab is shown: null when it could not
  * be read. The dashboard holds them, as its follow-up reads build the card
- * again.
+ * again. Each day's read moves as `BasesDayRead` says.
  */
 export function useBasesDay(tag: string) {
   // The earlier day chosen; null for today, whichever day today is.
@@ -63,7 +88,8 @@ export function useBasesDay(tag: string) {
     choose(next: number | null) {
       setChosen(next);
       clearTimeout(pause.current);
-      if (next === null || read.get(next) || asking.current.has(next)) return;
+      const state = basesDayRead(next, read, asking.current);
+      if (next === null || state === "read" || state === "asking") return;
       // A failed read is asked again.
       setRead((old) => {
         const kept = new Map(old);

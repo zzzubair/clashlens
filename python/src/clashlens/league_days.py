@@ -17,6 +17,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import Any
 
 from . import domain, league_week
@@ -181,6 +182,66 @@ def save_season(
     return changed
 
 
+class Tracking(StrEnum):
+    """Whether a player is tracked (polled, and swept at each Reset) and
+    why, saved as ``players.active``, ``next_due_at`` (set while tracked)
+    and ``eligibility_state``.
+
+    Tracked: LEGEND_I, the current week's record says Legend I;
+    UNSETTLED_AFTER_LEGEND_I, after a Legend I week this week is not known,
+    or below only by answers short of an accepted one (Season 0 answers may
+    be the game's mistake); NEWEST_ELIGIBLE, the newest recognised profile
+    shows Legend I, so a player just promoted is polled before the record
+    says so. Stopped: BELOW, the newest recognised profile is below Legend
+    I; UNKNOWN, no recognised answer yet, so eligibility is asked again.
+
+    Events: each weekly decision saved for the current Season
+    (``save_season``) calls ``track``, which derives the state from those
+    rows (``tracking``) and writes it. A player's row starts tracked only
+    when first saved from a profile showing Legend I (``ingestion``), else
+    UNKNOWN; after that only ``track`` changes it.
+    Stopping also cancels their ordinary discovery work. A later promotion
+    or accepted answer saves a decision again, so a stopped player is
+    tracked again. It is derived afresh each time, so a failed or retried
+    call leaves the last written state, and a restart changes nothing until
+    the next decision.
+    """
+
+    LEGEND_I = "legend_i"
+    UNSETTLED_AFTER_LEGEND_I = "unsettled_after_legend_i"
+    NEWEST_ELIGIBLE = "newest_eligible"
+    BELOW = "below"
+    UNKNOWN = "unknown"
+
+    @property
+    def tracked(self) -> bool:
+        return self not in {Tracking.BELOW, Tracking.UNKNOWN}
+
+    @property
+    def eligibility_state(self) -> str:
+        """The saved ``players.eligibility_state``."""
+        return ("eligible" if self.tracked
+                else "ineligible" if self is Tracking.BELOW else "unknown")
+
+
+def tracking(
+    this_week: str, strength: int, last_week: str | None, newest: str | None,
+) -> Tracking:
+    """The tracking state from this week's record row (its league and
+    evidence strength, unknown with none), last week's league (None with no
+    row) and the newest recognised profile's ``eligibility_state`` (None
+    with none)."""
+    unsettled = this_week == League.UNKNOWN.value or (
+        this_week == League.BELOW.value and strength < Strength.ACCEPTED)
+    if this_week == League.LEGEND_I.value:
+        return Tracking.LEGEND_I
+    if unsettled and last_week == League.LEGEND_I.value:
+        return Tracking.UNSETTLED_AFTER_LEGEND_I
+    if newest == "eligible":
+        return Tracking.NEWEST_ELIGIBLE
+    return Tracking.BELOW if newest is not None else Tracking.UNKNOWN
+
+
 def track(connection: Any, player_id: int, now: datetime) -> None:
     """Track the player while the record says they are in Legend I this
     week, or, after a Legend I week, this week is not known or below only by
@@ -201,33 +262,31 @@ def track(connection: Any, player_id: int, now: datetime) -> None:
         """,
         (player_id, [week - WEEK, week]),
     ).fetchall()}
-    this, strength = weeks.get(week, (League.UNKNOWN.value, Strength.NONE))
-    unsettled = this == League.UNKNOWN.value or (
-        this == League.BELOW.value and strength < Strength.ACCEPTED)
-    tracked = (
-        this == League.LEGEND_I.value
-        or unsettled and weeks.get(week - WEEK, (None,))[0] == League.LEGEND_I.value
-    )
-    # Every saved profile of the player, so asked only when the record does
-    # not settle it: on 8 November 2026 this read was 19% of the database's
-    # disk reads, about 400 pages a call, nearly all for Legend I players.
-    newest = None if tracked else connection.execute(
-        """
-        SELECT version.eligibility_state
-        FROM players AS player
-        JOIN player_profile_versions AS version
-          ON version.normalized_tag = player.normalized_tag
-        LEFT JOIN LATERAL (
-            SELECT max(seen.observed_at) AS read_at FROM player_profile_effects AS seen
-            WHERE seen.profile_version_id = version.id
-        ) AS seen ON true
-        WHERE player.id = %s AND version.eligibility_state IN ('eligible', 'ineligible')
-        ORDER BY GREATEST(version.observed_at, seen.read_at) DESC, version.id DESC
-        LIMIT 1
-        """,
-        (player_id,),
-    ).fetchone()
-    tracked = tracked or newest is not None and newest[0] == "eligible"
+    record = weeks.get(week, (League.UNKNOWN.value, Strength.NONE))
+    last_week = weeks.get(week - WEEK, (None,))[0]
+    state = tracking(*record, last_week, None)
+    if not state.tracked:
+        # Every saved profile of the player, so asked only when the record
+        # does not settle it: on 8 November 2026 this read was 19% of the
+        # database's disk reads, about 400 pages a call, nearly all for
+        # Legend I players.
+        newest = connection.execute(
+            """
+            SELECT version.eligibility_state
+            FROM players AS player
+            JOIN player_profile_versions AS version
+              ON version.normalized_tag = player.normalized_tag
+            LEFT JOIN LATERAL (
+                SELECT max(seen.observed_at) AS read_at FROM player_profile_effects AS seen
+                WHERE seen.profile_version_id = version.id
+            ) AS seen ON true
+            WHERE player.id = %s AND version.eligibility_state IN ('eligible', 'ineligible')
+            ORDER BY GREATEST(version.observed_at, seen.read_at) DESC, version.id DESC
+            LIMIT 1
+            """,
+            (player_id,),
+        ).fetchone()
+        state = tracking(*record, last_week, None if newest is None else newest[0])
     connection.execute(
         """
         UPDATE players
@@ -240,10 +299,9 @@ def track(connection: Any, player_id: int, now: datetime) -> None:
           AND (active, eligibility_state, next_due_at IS NOT NULL)
               IS DISTINCT FROM (%(tracked)s, %(state)s, %(tracked)s)
         """,
-        {"tracked": tracked, "player": player_id,
-         "state": "eligible" if tracked else "ineligible" if newest else "unknown"},
+        {"tracked": state.tracked, "player": player_id, "state": state.eligibility_state},
     )
-    if not tracked:
+    if not state.tracked:
         connection.execute("SELECT clashlens_cancel_inactive_discovery_work(%s)", (player_id,))
 
 

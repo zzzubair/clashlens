@@ -7,12 +7,16 @@ overlay reads every few seconds to apply the change. Making a new link
 replaces the old one in place, so the old one shows nothing from then on.
 Each read through the link marks the overlay open, at most once a minute,
 and the collector then checks its player first (collector_overlays.py).
+
+Where a link stands is `LinkState`; whether OBS is watching is
+`ViewerPresence`.
 """
 
 from __future__ import annotations
 
 import re
 import secrets
+from enum import StrEnum
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -23,6 +27,7 @@ from pydantic import Field
 from .api import ApiError, StrictBody, _authorize, _safe_tag
 from .api_accounts import _linked_players
 from .api_db import ApiDatabase, _text
+from .collector_overlays import PRESENCE_SQL, ViewerPresence
 
 _LINK = re.compile(r"[A-Za-z0-9_-]{22}")
 # Each setting and the values it may take; numbers are stream pixels.
@@ -39,6 +44,39 @@ _NUMBERS = {"w", "h", "x", "y", "cw", "ch"}
 _PARTS = {"trophies", "rank", "attacks", "defenses", "net", "day", "updated"}
 DEFAULTS = {"w": "366", "h": "222", "x": "40", "y": "40", "fit": "screen",
             "cw": "1920", "ch": "1080", "text": "light", "bg": "card", "snap": "tl"}
+
+
+class LinkState(StrEnum):
+    """Where one link id stands against an account's overlay.
+
+    ABSENT: the account has no overlay yet, so no link; the first
+    `get_overlay` makes it with its first link, CURRENT. CURRENT: the
+    overlay's one link, which `read_link` answers. RETIRED: any other id,
+    replaced, never made or malformed; it answers nothing for good, since
+    links are random and never reused.
+
+    `new_link` is the only move: given the CURRENT link it makes a new one
+    CURRENT and the given one RETIRED, bumping the version and clearing the
+    viewer presence; given a RETIRED one, such as a repeat of a request that
+    already replaced it, it changes nothing and answers the overlay as it is;
+    with ABSENT it answers overlay_not_found. Each move is one statement on
+    the overlay row, so a failure leaves it as it was and a retry or restart
+    reads the row again; nothing is held in memory.
+    """
+
+    ABSENT = "absent"
+    CURRENT = "current"
+    RETIRED = "retired"
+
+
+def link_state(row: Any, link_id: str) -> LinkState:
+    """Where `link_id` stands against the overlay `row` it was looked up
+    with: ABSENT with no row, else CURRENT when it is the row's link and
+    RETIRED when not. Looked up by the id itself, no row reads like a
+    RETIRED one: nothing."""
+    if row is None:
+        return LinkState.ABSENT
+    return LinkState.CURRENT if _text(row[0]) == link_id else LinkState.RETIRED
 
 
 class OverlayBody(StrictBody):
@@ -65,7 +103,9 @@ def clean_settings(raw: dict[str, str]) -> dict[str, str]:
 
 
 def get_overlay(database: ApiDatabase, account_id: int) -> dict[str, Any]:
-    """The account's overlay, made on first ask, and its verified players."""
+    """The account's overlay, made on first ask (ABSENT to CURRENT,
+    `LinkState`; an overlay already made stays as it is), and its verified
+    players."""
     with database.pool.connection() as connection:
         connection.execute(
             """
@@ -123,19 +163,22 @@ def save_overlay(
 
 
 def new_link(database: ApiDatabase, account_id: int, *, replaces: str) -> dict[str, Any]:
-    """Replace the account's link, when it is still `replaces`."""
+    """Replace the account's link, when `replaces` is CURRENT (`LinkState`),
+    and make the overlay CLOSED (`ViewerPresence`) until OBS reads the new
+    one; a RETIRED `replaces` changes nothing."""
     with database.pool.connection() as connection:
-        connection.execute(
+        moved = connection.execute(
             """
             UPDATE obs_overlays SET link_id = %s, version = version + 1,
                 updated_at = clock_timestamp(), last_seen_at = NULL
             WHERE account_id = %s AND link_id = %s
             """,
             (secrets.token_urlsafe(16), account_id, replaces),
-        )
+        ).rowcount
         row = connection.execute(_OVERLAY_SQL + " WHERE overlay.account_id = %s",
                                  (account_id,)).fetchone()
-    if row is None:
+    was = LinkState.CURRENT if moved else link_state(row, replaces)
+    if was is LinkState.ABSENT:
         raise ApiError(404, "overlay_not_found")
     return {"kind": "obs-overlay", **_overlay(row)}
 
@@ -146,14 +189,15 @@ def read_link(database: ApiDatabase, link_id: str) -> dict[str, Any] | None:
     with database.pool.connection() as connection:
         row = connection.execute(_OVERLAY_SQL + " WHERE overlay.link_id = %s",
                                  (link_id,)).fetchone()
-        if row is None:
+        if link_state(row, link_id) is not LinkState.CURRENT:
             return None
-        # At most one write a minute per link; a no-op otherwise.
+        # Seen now, while a player is chosen: one write a minute per link at
+        # most, as a JUST_SEEN overlay writes nothing.
         connection.execute(
-            """
-            UPDATE obs_overlays SET last_seen_at = clock_timestamp()
-            WHERE link_id = %s AND player_id IS NOT NULL
-              AND (last_seen_at IS NULL OR last_seen_at < clock_timestamp() - interval '1 minute')
+            f"""
+            UPDATE obs_overlays AS overlay SET last_seen_at = clock_timestamp()
+            WHERE overlay.link_id = %s AND overlay.player_id IS NOT NULL
+              AND {PRESENCE_SQL} <> '{ViewerPresence.JUST_SEEN}'
             """,
             (link_id,),
         )

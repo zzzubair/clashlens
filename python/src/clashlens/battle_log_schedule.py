@@ -12,10 +12,15 @@ or changed counts since, needs the profile only every 15 minutes; its battle log
 profile changes only then. See
 docs/collector-polling.md#season-0-profiles.
 
+Each player's entry holds three explicit states: the battle-log fetches it
+owes (``LogDebt``), whether its Legend day is finished (``DayProgress``) and
+how often its profile is checked (``SeasonChecks``). Each moves only in its
+own function below.
+
 This state lives only in collector memory, one small entry per player checked
 since the collector started. A restart forgets it, which makes every player's
 next checks fetch both responses again, so forgetting costs requests, never
-battles.
+battles. A failed or unusable response moves nothing.
 """
 
 from __future__ import annotations
@@ -25,6 +30,8 @@ import json
 import struct
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from enum import Enum
+from typing import Literal
 
 from .battle import LIVE_SOURCE_PARSER_VERSION, _parse_row, is_no_opponent_row
 from .domain import RANKED_DAY_DURATION, battle_day_for, ranked_day_for
@@ -85,17 +92,139 @@ def in_control_group(normalized_tag: str) -> bool:
     return hashlib.sha256(normalized_tag.encode()).digest()[0] < CONTROL_BYTE_LIMIT
 
 
+@dataclass(frozen=True, slots=True)
+class CaughtUp:
+    """No battle-log fetch is owed."""
+
+
+@dataclass(frozen=True, slots=True)
+class FetchOwed:
+    """The profile changed at `since`: a fetch started at or after it is owed,
+    then a follow-up. `follow_up_after`, if set, is the earliest start an
+    earlier follow-up was waiting for, kept for the follow-up owed next."""
+
+    since: datetime
+    follow_up_after: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FollowUpOwed:
+    """One fetch owed, counting only when it starts at or after `after`."""
+
+    after: datetime
+
+
+# Battle-log fetching debt: the battle-log fetches a player still owes.
+#
+# CaughtUp -profile_changed-> FetchOwed -log_saved (requested at or after its
+# `since`)-> FollowUpOwed -log_saved (requested at or after its `after`)->
+# CaughtUp. `follow_up` (an opponent's log showed a battle this player's log
+# lacks, a new attack is being watched, or a log had a new malformed row)
+# moves CaughtUp to FollowUpOwed, or pushes a waiting start later. A player
+# never checked, or with no saved log since the collector started, is due a
+# log whatever its debt. Only `log_debt_after` moves it. A failed fetch or a
+# log with a new malformed row never pays it off, so the next check retries;
+# a restart forgets it, so every player starts unknown and fetches both.
+LogDebt = CaughtUp | FetchOwed | FollowUpOwed
+DebtEvent = Literal["profile_changed", "follow_up", "log_saved"]
+CAUGHT_UP = CaughtUp()
+
+
+def log_debt_after(debt: LogDebt, event: DebtEvent, at: datetime) -> LogDebt:
+    """The debt after `event`: a profile changed, read at `at`; a follow-up
+    must start no earlier than `at`; or a complete log was requested at `at`."""
+    if event == "profile_changed":
+        return FetchOwed(at, _earliest_start(debt))
+    if event == "follow_up":
+        if isinstance(debt, FetchOwed):
+            return FetchOwed(debt.since, _later(debt.follow_up_after, at))
+        return FollowUpOwed(_later(_earliest_start(debt), at))
+    # A log requested before the change was seen may not show it.
+    if isinstance(debt, FetchOwed) and at >= debt.since:
+        return FollowUpOwed(_later(debt.follow_up_after, at + FOLLOW_UP_GAP))
+    if isinstance(debt, FollowUpOwed) and at >= debt.after:
+        return CAUGHT_UP
+    return debt
+
+
+def _earliest_start(debt: LogDebt) -> datetime | None:
+    if isinstance(debt, FetchOwed):
+        return debt.follow_up_after
+    return debt.after if isinstance(debt, FollowUpOwed) else None
+
+
+def _later(start: datetime | None, at: datetime) -> datetime:
+    return at if start is None or start < at else start
+
+
+class DayProgress(Enum):
+    """Finished-for-the-day polling, derived by `_day_progress` from the last
+    saved log and the clock, never stored.
+
+    PLAYING: the last log does not show exactly 8 valid attacks and 8 valid
+    defenses on the Legend day of now, or it has a malformed row; ordinary
+    checks. SETTLING: it does, but its last battle is under FINISHED_SETTLE
+    old, so the profile can still change. FINISHED: settled; the 15-minute
+    safety fetch stops and, while no fetch is owed and the profile is usable,
+    the player is checked with the profile only every FINISHED_RECHECK, the
+    last such wait ending before 04:53. The next Reset, a log that is not
+    finished or a malformed row moves it back to PLAYING; a profile change
+    owes fetches, which resume full checks without changing it.
+    """
+
+    PLAYING = "playing"
+    SETTLING = "settling"
+    FINISHED = "finished"
+
+
+@dataclass(frozen=True, slots=True)
+class OrdinaryChecks:
+    """The profile is fetched on every check. Until the Reset `until`, set by
+    a valid Season or changed counts, an unchanged Season 0 profile keeps it so."""
+
+    until: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SeasonZeroChecks:
+    """The newest profile, read at `since`, reported Legend I with Season ID 0
+    and unchanged counts: the profile is due again SEASON_ZERO_RECHECK later."""
+
+    since: datetime
+
+
+# Season 0 polling: how often a player's ordinary checks fetch the profile.
+#
+# OrdinaryChecks -unchanged Season 0 profile at or after its `until`->
+# SeasonZeroChecks -another one-> SeasonZeroChecks (from that one). A valid
+# Season or changed counts, read in any lane, move either to OrdinaryChecks
+# until the next Reset; leaving SeasonZeroChecks for a valid Season also owes
+# the battle log. Only `season_checks_after` moves it, on a usable profile no
+# older than the newest. A failed profile moves nothing, so the next check
+# retries it. A restart forgets it: ordinary checks, and the first profile
+# counts as changed, so a wait resumes only from the next Reset.
+SeasonChecks = OrdinaryChecks | SeasonZeroChecks
+
+
+def season_checks_after(
+    checks: SeasonChecks, at: datetime, *, season_zero: bool, counts_changed: bool
+) -> SeasonChecks:
+    """The checks after a usable profile read at `at`."""
+    if not season_zero or counts_changed:
+        until = checks.until if isinstance(checks, OrdinaryChecks) else None
+        if until is None or until <= at:
+            until = ranked_day_for(at).end
+        return OrdinaryChecks(until)
+    if isinstance(checks, OrdinaryChecks) and checks.until is not None and at < checks.until:
+        return checks
+    return SeasonZeroChecks(at)
+
+
 @dataclass(slots=True)
 class _Player:
     signals: tuple[int | None, ...] | None = None
     profile_at: datetime | None = None
-    # Battle-log fetches still owed: 2 after a profile change (that check and a
-    # later one), 1 for the follow-up, after an opponent's log showed a battle
-    # or while watching for another attack.
-    owed: int = 0
-    owed_since: datetime | None = None
-    # The last owed fetch counts only when it starts at or after this time.
-    follow_up_after: datetime | None = None
+    debt: LogDebt = CAUGHT_UP
     battle_log_at: datetime | None = None
     latest_battle_at: datetime | None = None
     # The valid battles of the last log, packed as _BATTLE records, to
@@ -107,12 +236,7 @@ class _Player:
     # The Legend day on which the last log showed exactly 8 valid attacks and
     # 8 valid defenses, with no malformed rows.
     finished_day: datetime | None = None
-    # When the newest profile reported Legend I with Season ID 0 and the
-    # same counts as the one before.
-    season_zero_at: datetime | None = None
-    # After a valid Season or changed counts, ordinary checks last until the
-    # next Reset.
-    ordinary_until: datetime | None = None
+    checks: SeasonChecks = OrdinaryChecks()
 
 
 class BattleLogSchedule:
@@ -135,17 +259,18 @@ class BattleLogSchedule:
                 return False
             player = self._players.setdefault(normalized_tag, _Player())
             if player.profile_at is None or completed_at >= player.profile_at:
-                if not _season_zero(body, normalized_tag, completed_at):
-                    if player.season_zero_at is not None:
-                        # A valid Season counts as a change, so the log is fetched.
-                        player.signals = None
-                    _check_until_reset(player, completed_at)
-                elif player.signals != signals:
-                    # Changed counts mean battles; a restarted collector
-                    # cannot tell, so it assumes they did.
-                    _check_until_reset(player, completed_at)
-                elif player.ordinary_until is None or completed_at >= player.ordinary_until:
-                    player.season_zero_at = completed_at
+                season_zero = _season_zero(body, normalized_tag, completed_at)
+                if not season_zero and isinstance(player.checks, SeasonZeroChecks):
+                    # A valid Season counts as a change, so the log is fetched.
+                    player.signals = None
+                # Changed counts mean battles; a restarted collector cannot
+                # tell, so it assumes they did.
+                player.checks = season_checks_after(
+                    player.checks,
+                    completed_at,
+                    season_zero=season_zero,
+                    counts_changed=player.signals != signals,
+                )
             _note_profile(player, signals, completed_at)
             return True
         if endpoint == "battle_log":
@@ -160,10 +285,13 @@ class BattleLogSchedule:
             player.malformed = malformed
             player.finished_day = None if malformed else _finished_day(battles)
             if complete:
-                _note_complete_log(player, started_at, completed_at)
+                if player.battle_log_at is None or completed_at > player.battle_log_at:
+                    player.battle_log_at = completed_at
+                player.debt = log_debt_after(player.debt, "log_saved", started_at)
             else:
-                player.owed = max(player.owed, 1)
-                _start_no_earlier_than(player, started_at + FOLLOW_UP_GAP)
+                player.debt = log_debt_after(
+                    player.debt, "follow_up", started_at + FOLLOW_UP_GAP
+                )
             self._note_battles(normalized_tag, player, battles, completed_at)
             return complete
         return False
@@ -187,8 +315,9 @@ class BattleLogSchedule:
                 and (previous is None or battle_at > previous)
                 and battle_at + ATTACK_WATCH > completed_at
             ):
-                player.owed = max(player.owed, 1)
-                _start_no_earlier_than(player, battle_at + ATTACK_WATCH)
+                player.debt = log_debt_after(
+                    player.debt, "follow_up", battle_at + ATTACK_WATCH
+                )
         for (battle_at, opponent_tag, attack), record in zip(battles, records):
             # Only a battle missing from this player's last log tells its
             # opponent, so an unchanged log never does.
@@ -198,8 +327,9 @@ class BattleLogSchedule:
             if opponent is not None and not _has_battle(
                 opponent, normalized_tag, battle_at, not attack
             ):
-                opponent.owed = max(opponent.owed, 1)
-                _start_no_earlier_than(opponent, completed_at + FOLLOW_UP_GAP)
+                opponent.debt = log_debt_after(
+                    opponent.debt, "follow_up", completed_at + FOLLOW_UP_GAP
+                )
 
     def profile_due(self, normalized_tag: str, *, now: datetime) -> bool:
         """Whether an ordinary check fetches the profile. An unchanged Season 0
@@ -208,8 +338,8 @@ class BattleLogSchedule:
         player = self._players.get(normalized_tag)
         return (
             player is None
-            or player.season_zero_at is None
-            or now - player.season_zero_at >= SEASON_ZERO_RECHECK
+            or not isinstance(player.checks, SeasonZeroChecks)
+            or now - player.checks.since >= SEASON_ZERO_RECHECK
         )
 
     def due(
@@ -226,11 +356,11 @@ class BattleLogSchedule:
             not profile_usable
             or player is None
             or in_control_group(normalized_tag)
-            or player.owed > 0
+            or player.debt != CAUGHT_UP
             or player.battle_log_at is None
             or (
                 now - player.battle_log_at >= SAFETY_INTERVAL
-                and _next_reset(player, now) is None
+                and _day_progress(player, now) is not DayProgress.FINISHED
             )
         )
 
@@ -252,25 +382,31 @@ class BattleLogSchedule:
         least FINISHED_SETTLE old.
         """
         player = self._players.get(normalized_tag)
-        if not profile_usable or player is None or player.owed > 0:
+        if (
+            not profile_usable
+            or player is None
+            or player.debt != CAUGHT_UP
+            or player.finished_day is None
+            or _day_progress(player, now) is not DayProgress.FINISHED
+        ):
             return None
-        reset = _next_reset(player, now)
+        reset = player.finished_day + RANKED_DAY_DURATION
         until = now + FINISHED_RECHECK
-        if reset is None or until >= reset - ADMISSION_CLOSE - ADMISSION_DELAY:
+        if until >= reset - ADMISSION_CLOSE - ADMISSION_DELAY:
             return None
         return until
 
 
-def _next_reset(player: _Player, now: datetime) -> datetime | None:
-    """The next Reset, when the player finished the Legend day of `now`."""
+def _day_progress(player: _Player, now: datetime) -> DayProgress:
     if (
         player.finished_day is None
         or player.latest_battle_at is None
-        or now - player.latest_battle_at < FINISHED_SETTLE
         or ranked_day_for(now).start != player.finished_day
     ):
-        return None
-    return player.finished_day + RANKED_DAY_DURATION
+        return DayProgress.PLAYING
+    if now - player.latest_battle_at < FINISHED_SETTLE:
+        return DayProgress.SETTLING
+    return DayProgress.FINISHED
 
 
 def _finished_day(battles: list[tuple[datetime, str, bool]]) -> datetime | None:
@@ -314,49 +450,15 @@ def _record(battle_at: datetime, opponent_tag: str, attack: bool) -> tuple[int, 
     )
 
 
-def _note_complete_log(
-    player: _Player, started_at: datetime, completed_at: datetime
-) -> None:
-    if player.battle_log_at is None or completed_at > player.battle_log_at:
-        player.battle_log_at = completed_at
-    # A log requested before the change was seen may not show it.
-    if (
-        player.owed == 2
-        and player.owed_since is not None
-        and started_at >= player.owed_since
-    ):
-        player.owed = 1
-        _start_no_earlier_than(player, started_at + FOLLOW_UP_GAP)
-    elif (
-        player.owed == 1
-        and player.follow_up_after is not None
-        and started_at >= player.follow_up_after
-    ):
-        player.owed = 0
-        player.follow_up_after = None
-
-
 def _note_profile(
     player: _Player, signals: tuple[int | None, ...], completed_at: datetime
 ) -> None:
     if player.profile_at is not None and completed_at < player.profile_at:
         return
     if signals != player.signals:
-        player.owed = 2
-        player.owed_since = completed_at
+        player.debt = log_debt_after(player.debt, "profile_changed", completed_at)
     player.signals = signals
     player.profile_at = completed_at
-
-
-def _check_until_reset(player: _Player, at: datetime) -> None:
-    player.season_zero_at = None
-    if player.ordinary_until is None or player.ordinary_until <= at:
-        player.ordinary_until = ranked_day_for(at).end
-
-
-def _start_no_earlier_than(player: _Player, at: datetime) -> None:
-    if player.follow_up_after is None or player.follow_up_after < at:
-        player.follow_up_after = at
 
 
 def _profile_signals(body: bytes) -> tuple[int | None, ...] | None:

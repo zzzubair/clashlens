@@ -574,3 +574,63 @@ def test_the_nightly_recheck_line_goes_once_a_day_from_noon(runtime, monkeypatch
     )]
     assert at(rt, 86400, start) == 0
     assert len(lines()) == 2
+
+
+def test_an_incident_alerts_clears_for_the_hold_then_recovers(tmp_path, monkeypatch):
+    """Each Incident move through hold_recoveries and deliver, with one
+    failed delivery retried from the saved move."""
+    sent: list[str] = []
+    down = [False]
+
+    def post(_webhook, *, payload):
+        if down[0]:
+            raise OSError("Discord down")
+        sent.append(payload["content"])
+
+    monkeypatch.setattr(alerts, "request", post)
+    path = tmp_path / "alerts.json"
+    state: dict = {}
+
+    def run(active, now):
+        findings = {"disk": active}
+        alerts.hold_recoveries(state, findings, now)
+        alerts.deliver(state, findings, now, path, FAKE_WEBHOOK)
+        return alerts.incident_state(state["incidents"]["disk"])
+
+    assert run(False, 0) is alerts.Incident.HEALTHY
+    down[0] = True
+    assert run(True, 60) is alerts.Incident.ALERT_PENDING
+    # Saved before Discord is called, so a restart retries it.
+    assert json.loads(path.read_text())["incidents"]["disk"]["pending"]["active"] is True
+    down[0] = False
+    assert run(True, 120) is alerts.Incident.ALERTED
+    assert [content.split(":")[0] for content in sent] == ["Clash Lens alert"]
+    # An unknown check moves nothing.
+    assert run(None, 180) is alerts.Incident.ALERTED
+    assert run(False, 240) is alerts.Incident.CLEARING
+    assert run(True, 300) is alerts.Incident.ALERTED
+    alerted_at = state["incidents"]["disk"]["alerted_at"]
+    assert run(False, alerted_at + 1) is alerts.Incident.CLEARING
+    down[0] = True
+    hold = alerts.RECOVERY_HOLD
+    assert run(False, alerted_at + hold + 1) is alerts.Incident.RECOVERY_PENDING
+    down[0] = False
+    assert run(False, alerted_at + hold + 60) is alerts.Incident.HEALTHY
+    assert len(sent) == 2 and sent[1].startswith("Clash Lens recovered at")
+
+
+def test_backup_health_waits_out_a_check_that_cannot_run():
+    state: dict = {"resumed_at": 100}
+    health = alerts.backup_health
+    assert health(None, state, 50) is alerts.BackupHealth.UNCHECKED
+    # Time before ./ops last started the stack does not count.
+    assert health(None, state, 950) is alerts.BackupHealth.UNCHECKED
+    assert health(None, state, 1000) is alerts.BackupHealth.UNCHECKED_TOO_LONG
+    # A failed run alerts at once and keeps when the check first could not run.
+    assert health(False, state, 1100) is alerts.BackupHealth.FAILING
+    assert state["backup_failing_since"] == 50
+    assert health(True, state, 1200) is alerts.BackupHealth.HEALTHY
+    assert "backup_failing_since" not in state
+    assert [alerts.BACKUP_FINDING[state] for state in alerts.BackupHealth] == [
+        False, True, None, True
+    ]

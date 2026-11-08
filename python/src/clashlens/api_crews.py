@@ -11,13 +11,15 @@ Every write takes its locks in one order so two writes never wait on each
 other: the crew row, then the caller's account row (only create and accept,
 which count the caller's crews), then player tags in sorted order, the same
 "group row, then the tag" order Group saves use.
+
+Roles and invite links follow the state machines in crew_states.py.
 """
 
 from __future__ import annotations
 
 import secrets
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
@@ -32,24 +34,29 @@ from .api_db import (
     _text,
 )
 from .api_players import left_legend_i
+from .crew_states import (
+    INVITE_LIFETIME,
+    LIVE_INVITE_SQL,
+    MAX_CREWS_PER_ACCOUNT,
+    PERMITTED,
+    CrewAction,
+    CrewEvent,
+    CrewRole,
+    Invite,
+    InviteState,
+    invite_state,
+    move,
+    require,
+    reuse_invite,
+)
+from .crew_states import (
+    Refused as _Refused,
+)
 from .domain import ranked_day_for, season_opening_reset
 
-MAX_CREWS_PER_ACCOUNT = 5
 MAX_CREW_SIZE = 100
 MIN_CREW_SIZE = 2
 DEFAULT_CREW_SIZE = 50
-INVITE_LIFETIME = timedelta(hours=48)
-# Opening Invite shows the caller's newest link again while it has this long
-# left, so a link shared yesterday keeps working.
-INVITE_REUSE_MIN_LEFT = timedelta(hours=24)
-
-_ROLE_ORDER = {"owner": 0, "admin": 1, "member": 2}
-
-
-class _Refused(Exception):
-    def __init__(self, status_code: int, payload: dict[str, Any]) -> None:
-        super().__init__(payload["error"])
-        self.result = OperationResult(status_code, payload)
 
 
 def _write(
@@ -75,7 +82,7 @@ def _write(
 
 def _membership(
     connection: Any, crew_id: str, account_id: int, *, lock: bool
-) -> tuple[int, int, str]:
+) -> tuple[int, int, CrewRole]:
     """The crew's row id, size and the caller's role. A write locks the crew
     row first and reads the role afterwards, so a role changed while it
     waited is the one it sees."""
@@ -91,12 +98,7 @@ def _membership(
         ).fetchone()
     if member is None:
         raise _Refused(404, {"error": "crew_not_found"})
-    return int(crew[0]), int(crew[1]), _text(member[0])
-
-
-def _require(role: str, *allowed: str) -> None:
-    if role not in allowed:
-        raise _Refused(403, {"error": "crew_forbidden"})
+    return int(crew[0]), int(crew[1]), CrewRole(_text(member[0]))
 
 
 def _used(connection: Any, crew_row: int) -> int:
@@ -126,7 +128,7 @@ def _add_places(
     size: int,
     account_id: int,
     tags: list[str],
-    new_role: str | None,
+    new_role: CrewRole | None,
 ) -> list[str]:
     """Check every join rule under the crew lock, then give each tag a place.
 
@@ -196,7 +198,7 @@ def _add_places(
             INSERT INTO crew_accounts (crew_id, account_id, role)
             VALUES (%s, %s, %s)
             """,
-            (crew_row, account_id, new_role),
+            (crew_row, account_id, new_role.value),
         )
     # Only accounts already tracked can take a place, so unlike a Group add
     # there is no player check to start.
@@ -367,7 +369,7 @@ def get_crew(
                 for row in accounts
             ),
             key=lambda member: (
-                _ROLE_ORDER[member["role"]],
+                CrewRole(member["role"]).rank,
                 member["display_name"].casefold(),
                 member["username"],
             ),
@@ -375,23 +377,28 @@ def get_crew(
         # Owners and admins can turn off any link, so they see them all; a
         # member sees only their own.
         invites = connection.execute(
-            """
+            f"""
             SELECT invite.public_id, account.display_name, invite.expires_at,
                    invite.created_by_account_id = %s
             FROM crew_invites AS invite
             JOIN clash_lens_accounts AS account
               ON account.id = invite.created_by_account_id
-            WHERE invite.crew_id = %s AND invite.revoked_at IS NULL
-              AND invite.expires_at > %s
+            WHERE invite.crew_id = %s AND {LIVE_INVITE_SQL}
               AND (%s OR invite.created_by_account_id = %s)
             ORDER BY invite.created_at DESC, invite.id DESC
             """,
-            (account_id, crew_row, now, my_role != "member", account_id),
+            (
+                account_id,
+                crew_row,
+                now,
+                my_role in PERMITTED[CrewAction.ALL_LINKS],
+                account_id,
+            ),
         ).fetchall()
     return {
         "kind": "crew",
         **header,
-        "my_role": my_role,
+        "my_role": my_role.value,
         "members": members,
         "invites": [
             {
@@ -516,7 +523,7 @@ def create_crew(
             size=size,
             account_id=account_id,
             tags=tags,
-            new_role="owner",
+            new_role=move(None, CrewEvent.CREATE),
         )
         return OperationResult(
             201, {"crew_id": str(public_id), "name": name, "size": size}
@@ -538,7 +545,7 @@ def update_crew(
 
     def update(connection: Any) -> OperationResult:
         crew_row, _size, role = _membership(connection, crew_id, account_id, lock=True)
-        _require(role, "owner", "admin")
+        require(role, CrewAction.EDIT)
         if size is not None:
             used = _used(connection, crew_row)
             if size < used:
@@ -565,7 +572,7 @@ def delete_crew(
 
     def delete(connection: Any) -> OperationResult:
         crew_row, _size, role = _membership(connection, crew_id, account_id, lock=True)
-        _require(role, "owner")
+        require(role, CrewAction.DELETE)
         connection.execute("DELETE FROM crews WHERE id = %s", (crew_row,))
         return OperationResult(200, {"deleted": True, "crew_id": crew_id})
 
@@ -615,32 +622,37 @@ def remove_player(
         ).fetchone()
         if place is None:
             raise _Refused(404, {"error": "player_not_in_crew"})
-        holder, player_id, holder_role = int(place[0]), int(place[1]), _text(place[2])
-        if holder == account_id:
-            if role == "owner" and len(_own_tags(connection, crew_row, holder)) == 1:
-                raise _Refused(409, {"error": "owner_must_hand_over"})
-        elif not (
-            role == "owner" or (role == "admin" and holder_role == "member")
-        ):
+        holder, player_id = int(place[0]), int(place[1])
+        holder_role = CrewRole(_text(place[2]))
+        if holder != account_id and not role.outranks(holder_role):
             raise _Refused(403, {"error": "crew_forbidden"})
+        after: CrewRole | None = holder_role
+        other_place = connection.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM crew_players
+                WHERE crew_id = %s AND account_id = %s AND player_id <> %s)
+            """,
+            (crew_row, holder, player_id),
+        ).fetchone()
+        if not other_place[0]:
+            # The owner is refused; anyone else is out of the crew, which
+            # the database's crew_players_member_without_places trigger does.
+            after = move(holder_role, CrewEvent.LAST_PLACE)
         connection.execute(
             "DELETE FROM crew_players WHERE crew_id = %s AND player_id = %s",
             (crew_row, player_id),
         )
-        # A member left with no places is out of the crew (the database's
-        # crew_players_member_without_places trigger).
-        still_in = connection.execute(
-            "SELECT 1 FROM crew_accounts WHERE crew_id = %s AND account_id = %s",
-            (crew_row, holder),
-        ).fetchone()
         return OperationResult(
-            200, {"removed": True, "tag": tag, "left_crew": still_in is None}
+            200, {"removed": True, "tag": tag, "left_crew": after is None}
         )
 
     return _write(database, binding, remove)
 
 
-def _member(connection: Any, crew_row: int, username: str) -> tuple[int, str, str]:
+def _member(
+    connection: Any, crew_row: int, username: str
+) -> tuple[int, str, CrewRole]:
     """The member, locked so a game account moving away can't take them out
     of the crew before the write finishes."""
     row = connection.execute(
@@ -655,13 +667,17 @@ def _member(connection: Any, crew_row: int, username: str) -> tuple[int, str, st
     ).fetchone()
     if row is None:
         raise _Refused(404, {"error": "member_not_found"})
-    return int(row[0]), _text(row[1]), _text(row[2])
+    return int(row[0]), _text(row[1]), CrewRole(_text(row[2]))
 
 
-def _set_role(connection: Any, crew_row: int, account_id: int, role: str) -> None:
+def _set_role(
+    connection: Any, crew_row: int, account_id: int, role: CrewRole | None
+) -> None:
+    """Write a role `move` gave for someone staying in the crew."""
+    assert role is not None
     changed = connection.execute(
         "UPDATE crew_accounts SET role = %s WHERE crew_id = %s AND account_id = %s",
-        (role, crew_row, account_id),
+        (role.value, crew_row, account_id),
     ).rowcount
     if changed != 1:
         raise _Refused(404, {"error": "member_not_found"})
@@ -683,11 +699,10 @@ def set_member_role(
         crew_row, _size, my_role = _membership(
             connection, crew_id, account_id, lock=True
         )
-        _require(my_role, "owner")
+        require(my_role, CrewAction.SET_ROLES)
         target, display_name, target_role = _member(connection, crew_row, username)
-        if target_role == "owner":
-            raise _Refused(409, {"error": "owner_role_fixed"})
-        _set_role(connection, crew_row, target, role)
+        event = CrewEvent.MAKE_ADMIN if role == "admin" else CrewEvent.MAKE_MEMBER
+        _set_role(connection, crew_row, target, move(target_role, event))
         return OperationResult(
             200, {"username": username, "display_name": display_name, "role": role}
         )
@@ -705,14 +720,13 @@ def hand_over(
         crew_row, _size, my_role = _membership(
             connection, crew_id, account_id, lock=True
         )
-        _require(my_role, "owner")
+        require(my_role, CrewAction.HAND_OVER)
         target, _display_name, target_role = _member(connection, crew_row, username)
-        if target_role == "owner":
-            raise _Refused(409, {"error": "owner_role_fixed"})
+        new_owner = move(target_role, CrewEvent.TAKE_OVER)
         # The old owner steps down first, so the one-owner index holds
         # after every statement.
-        _set_role(connection, crew_row, account_id, "admin")
-        _set_role(connection, crew_row, target, "owner")
+        _set_role(connection, crew_row, account_id, move(my_role, CrewEvent.HAND_OVER))
+        _set_role(connection, crew_row, target, new_owner)
         # An owner whose game accounts all moved away kept the crew; as an
         # admin with no places they are out of it.
         left = connection.execute(
@@ -742,8 +756,7 @@ def leave_crew(
 
     def leave(connection: Any) -> OperationResult:
         crew_row, _size, role = _membership(connection, crew_id, account_id, lock=True)
-        if role == "owner":
-            raise _Refused(409, {"error": "owner_must_hand_over"})
+        move(role, CrewEvent.LEAVE)
         # The member's places go with it.
         connection.execute(
             "DELETE FROM crew_accounts WHERE crew_id = %s AND account_id = %s",
@@ -776,17 +789,17 @@ def make_invite(
             "DELETE FROM crew_invites WHERE crew_id = %s AND expires_at <= %s",
             (crew_row, now),
         )
-        live = """
-            FROM crew_invites
-            WHERE crew_id = %s AND created_by_account_id = %s
-              AND revoked_at IS NULL AND expires_at > %s
+        live = f"""
+            FROM crew_invites AS invite
+            WHERE invite.crew_id = %s AND invite.created_by_account_id = %s
+              AND {LIVE_INVITE_SQL}
         """
         newest = connection.execute(
-            f"SELECT public_id, code, expires_at {live} "
-            "ORDER BY created_at DESC, id DESC LIMIT 1",
+            f"SELECT invite.public_id, invite.code, invite.expires_at {live} "
+            "ORDER BY invite.created_at DESC, invite.id DESC LIMIT 1",
             (crew_row, account_id, now),
         ).fetchone()
-        if new or newest is None or newest[2] - now < INVITE_REUSE_MIN_LEFT:
+        if not reuse_invite(None if newest is None else newest[2], now, new=new):
             newest = connection.execute(
                 """
                 INSERT INTO crew_invites (
@@ -835,17 +848,16 @@ def revoke_invite(
     def revoke(connection: Any) -> OperationResult:
         crew_row, _size, role = _membership(connection, crew_id, account_id, lock=True)
         invite = connection.execute(
-            """
-            SELECT id, created_by_account_id FROM crew_invites
-            WHERE crew_id = %s AND public_id = %s
-              AND revoked_at IS NULL AND expires_at > %s
+            f"""
+            SELECT invite.id, invite.created_by_account_id FROM crew_invites AS invite
+            WHERE invite.crew_id = %s AND invite.public_id = %s AND {LIVE_INVITE_SQL}
             """,
             (crew_row, invite_id, now),
         ).fetchone()
         if invite is None:
             raise _Refused(404, {"error": "invite_not_found"})
         if int(invite[1]) != account_id:
-            _require(role, "owner", "admin")
+            require(role, CrewAction.ALL_LINKS)
         connection.execute(
             "UPDATE crew_invites SET revoked_at = %s WHERE id = %s", (now, invite[0])
         )
@@ -854,17 +866,21 @@ def revoke_invite(
     return _write(database, binding, revoke)
 
 
-def _valid_invite(connection: Any, code: str, now: datetime) -> Any:
-    return connection.execute(
+def _invite(connection: Any, code: str) -> Invite | None:
+    """The link with this code and its crew, live or not."""
+    row = connection.execute(
         """
-        SELECT crew.id, crew.public_id, crew.name, crew.size, invite.expires_at
+        SELECT crew.id, crew.public_id, crew.name, crew.size, invite.expires_at,
+               invite.revoked_at
         FROM crew_invites AS invite
         JOIN crews AS crew ON crew.id = invite.crew_id
-        WHERE invite.code = %s AND invite.revoked_at IS NULL
-          AND invite.expires_at > %s
+        WHERE invite.code = %s
         """,
-        (code, now),
+        (code,),
     ).fetchone()
+    if row is None:
+        return None
+    return Invite(int(row[0]), str(row[1]), _text(row[2]), int(row[3]), row[4], row[5])
 
 
 def get_invite(
@@ -884,30 +900,21 @@ def get_invite(
                 ).fetchone()[0]
             )
         )
-        crew = _valid_invite(connection, code, now)
-        if crew is None:
-            ended = connection.execute(
-                """
-                SELECT crew.public_id, crew.name
-                FROM crew_invites AS invite
-                JOIN crews AS crew ON crew.id = invite.crew_id
-                WHERE invite.code = %s
-                """,
-                (code,),
-            ).fetchone()
+        invite = _invite(connection, code)
+        if invite is None or not invite.live(now):
             return {
                 "kind": "crew-invite",
-                "state": "invalid" if ended is None else "ended",
+                "state": invite_state(invite, now).value,
                 **(
                     {}
-                    if ended is None
-                    else {"crew_id": str(ended[0]), "name": _text(ended[1])}
+                    if invite is None
+                    else {"crew_id": invite.crew_id, "name": invite.name}
                 ),
                 "in_crew": False,
                 "crew_count": crew_count,
                 "accounts": [],
             }
-        crew_row = int(crew[0])
+        crew_row = invite.crew_row
         owner = connection.execute(
             """
             SELECT account.display_name
@@ -965,21 +972,18 @@ def get_invite(
                 }
             )
         used = _used(connection, crew_row)
-    if used >= int(crew[3]):
-        state = "full"
-    elif not in_crew and crew_count >= MAX_CREWS_PER_ACCOUNT:
-        state = "limit"
-    else:
-        state = "ok"
+    state = invite_state(
+        invite, now, used=used, in_crew=in_crew, crew_count=crew_count
+    )
     return {
         "kind": "crew-invite",
-        "state": state,
-        "crew_id": str(crew[1]),
-        "name": _text(crew[2]),
+        "state": state.value,
+        "crew_id": invite.crew_id,
+        "name": invite.name,
         "owner_display_name": None if owner is None else _text(owner[0]),
-        "size": int(crew[3]),
+        "size": invite.size,
         "used": used,
-        "expires_at": crew[4],
+        "expires_at": invite.expires_at,
         "in_crew": in_crew,
         "crew_count": crew_count,
         "accounts": accounts,
@@ -998,29 +1002,31 @@ def accept_invite(
     account_id = binding.account_id
 
     def accept(connection: Any) -> OperationResult:
-        crew = _valid_invite(connection, code, now)
-        if crew is not None:
+        invite = _invite(connection, code)
+        if invite_state(invite, now) is InviteState.USABLE:
+            assert invite is not None
             connection.execute(
-                "SELECT 1 FROM crews WHERE id = %s FOR UPDATE", (crew[0],)
+                "SELECT 1 FROM crews WHERE id = %s FOR UPDATE", (invite.crew_row,)
             )
             # Read again under the crew lock: the link may have been turned
             # off, or the crew deleted, while this waited.
-            crew = _valid_invite(connection, code, now)
-        if crew is None:
+            invite = _invite(connection, code)
+        if invite is None or invite_state(invite, now) is not InviteState.USABLE:
             raise _Refused(404, {"error": "invite_invalid"})
-        crew_row = int(crew[0])
         member = connection.execute(
             "SELECT 1 FROM crew_accounts WHERE crew_id = %s AND account_id = %s",
-            (crew_row, account_id),
+            (invite.crew_row, account_id),
         ).fetchone()
+        # A full crew or the account's crew limit is refused by the join's
+        # own checks, in their order.
         _add_places(
             connection,
-            crew_row=crew_row,
-            size=int(crew[3]),
+            crew_row=invite.crew_row,
+            size=invite.size,
             account_id=account_id,
             tags=tags,
-            new_role=None if member is not None else "member",
+            new_role=None if member is not None else move(None, CrewEvent.JOIN),
         )
-        return OperationResult(200, {"crew_id": str(crew[1])})
+        return OperationResult(200, {"crew_id": invite.crew_id})
 
     return _write(database, binding, accept)

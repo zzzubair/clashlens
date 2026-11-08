@@ -451,3 +451,38 @@ describe("page load timing", () => {
     expect(pagePerformance({ ...timing, loadEventEnd: 0 }, 0.05)).toBeNull();
   });
 });
+
+describe("loading PostHog after Accept", () => {
+  it("sends events tracked before it loads, in order, then each at once", async () => {
+    vi.resetModules();
+    posthog.capture.mockClear();
+    let saved: string | null = null;
+    vi.stubGlobal("window", {
+      localStorage: { getItem: () => saved },
+      location: { origin: "https://clashlens.app", pathname: "/" },
+    });
+    try {
+      const analytics = await import("../../app/lib/analytics");
+      expect(analytics.consentStage()).toBe("undecided");
+      // Nothing is kept before Accept.
+      analytics.track("$pageview", { signed_in: false });
+      saved = "accepted";
+      expect(analytics.consentStage()).toBe("accepted");
+      analytics.reopenAnalyticsChoice();
+      expect(analytics.consentStage()).toBe("reopened");
+      expect(analytics.askingForChoice()).toBe(true);
+      analytics.track("ui_error", { kind: "error" });
+      analytics.startAnalytics({ token: TOKEN });
+      analytics.track("$pageview", { signed_in: true });
+      await vi.waitFor(() => expect(posthog.capture).toHaveBeenCalledTimes(2));
+      analytics.track("$pageview", { signed_in: false });
+      expect(posthog.capture.mock.calls.map(([event]) => event)).toEqual([
+        "ui_error",
+        "$pageview",
+        "$pageview",
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

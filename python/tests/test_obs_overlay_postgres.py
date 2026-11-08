@@ -6,6 +6,7 @@ old one for good, and the collector checking an open overlay's player first,
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import psycopg
 import pytest
@@ -164,3 +165,109 @@ def test_an_open_overlays_player_is_checked_first_30_seconds_apart(database_url:
             owner.close()
             api.close()
             collector.close()
+
+
+def test_viewer_presence_moves_with_reads_the_clock_and_new_links(database_url: str) -> None:
+    """Each ViewerPresence state and event: reads mark it seen, at most once
+    a minute and only with a player chosen; the clock alone ages it; a new
+    link closes it."""
+    with domain_database(database_url) as connection_info:
+        owner = ApiDatabase(connection_info)
+        api = ApiDatabase(as_api_role(connection_info))
+        collector = _as_collector(connection_info)
+        try:
+            ids = _players(connection_info, "#2PP")
+            mine = _account(owner, "discord", DISCORD_ID, "drift")
+            _verify(owner, mine, "#2PP")
+            link = api_overlays.get_overlay(api, mine)["link"]
+            with psycopg.connect(connection_info, autocommit=True) as connection:
+
+                def state() -> tuple[str, Any]:
+                    return connection.execute(
+                        f"SELECT {collector_overlays.PRESENCE_SQL}, overlay.last_seen_at"
+                        " FROM obs_overlays AS overlay WHERE overlay.account_id = %s",
+                        (mine,),
+                    ).fetchone()
+
+                def seen(seconds_ago: int) -> None:
+                    connection.execute(
+                        "UPDATE obs_overlays SET last_seen_at ="
+                        " clock_timestamp() - make_interval(secs => %s)",
+                        (seconds_ago,),
+                    )
+
+                in_use = [(ids["#2PP"], "#2PP")]
+                # No player chosen: OBS reading the link writes nothing.
+                api_overlays.read_link(api, link)
+                assert state() == ("closed", None)
+                api_overlays.save_overlay(api, mine, tag="#2PP", settings={})
+                assert state() == ("closed", None)
+                # CLOSED -> JUST_SEEN on a read.
+                api_overlays.read_link(api, link)
+                presence, first = state()
+                assert presence == "just_seen" and first is not None
+                assert collector_overlays.players_in_use(collector) == in_use
+                # JUST_SEEN: a read under a minute later writes nothing.
+                seen(50)
+                held = state()
+                api_overlays.read_link(api, link)
+                assert state() == held and held[0] == "just_seen"
+                # The clock alone: JUST_SEEN -> OPEN, still in use; a read
+                # then writes again.
+                seen(61)
+                assert state()[0] == "open"
+                assert collector_overlays.players_in_use(collector) == in_use
+                api_overlays.read_link(api, link)
+                presence, again = state()
+                assert presence == "just_seen" and again > held[1]
+                # The clock alone: OPEN -> CLOSED; a read opens it again.
+                seen(301)
+                assert state()[0] == "closed"
+                assert collector_overlays.players_in_use(collector) == []
+                api_overlays.read_link(api, link)
+                assert state()[0] == "just_seen"
+                # A new link: CLOSED at once, and the old link opens nothing.
+                new = api_overlays.new_link(api, mine, replaces=link)["link"]
+                assert state() == ("closed", None)
+                assert api_overlays.read_link(api, link) is None
+                assert state() == ("closed", None)
+                assert collector_overlays.players_in_use(collector) == []
+                api_overlays.read_link(api, new)
+                assert state()[0] == "just_seen"
+                # Choosing no player closes it at once.
+                api_overlays.save_overlay(api, mine, tag=None, settings={})
+                assert state()[0] == "closed"
+                assert collector_overlays.players_in_use(collector) == []
+        finally:
+            owner.close()
+            api.close()
+            collector.close()
+
+
+def test_a_link_is_absent_then_current_then_retired_for_good(database_url: str) -> None:
+    """With no overlay there is no link to replace; replacing the current one
+    bumps the version once, and a retired one changes nothing."""
+    with domain_database(database_url) as connection_info:
+        owner = ApiDatabase(connection_info)
+        api = ApiDatabase(as_api_role(connection_info))
+        try:
+            mine = _account(owner, "discord", DISCORD_ID, "drift")
+            with pytest.raises(ApiError) as absent:
+                api_overlays.new_link(api, mine, replaces="A" * 22)
+            assert absent.value.status_code == 404
+            current = api_overlays.get_overlay(api, mine)
+            replaced = api_overlays.new_link(api, mine, replaces=current["link"])
+            assert replaced["version"] == current["version"] + 1
+            for retired in (current["link"], "B" * 22):
+                assert api_overlays.new_link(api, mine, replaces=retired) == replaced
+                assert api_overlays.read_link(api, retired) is None
+        finally:
+            owner.close()
+            api.close()
+
+
+def test_a_link_id_stands_against_the_overlay_row_it_was_looked_up_with() -> None:
+    row = ("A" * 22, {}, 3, None)
+    assert api_overlays.link_state(None, "A" * 22) is api_overlays.LinkState.ABSENT
+    assert api_overlays.link_state(row, "A" * 22) is api_overlays.LinkState.CURRENT
+    assert api_overlays.link_state(row, "B" * 22) is api_overlays.LinkState.RETIRED

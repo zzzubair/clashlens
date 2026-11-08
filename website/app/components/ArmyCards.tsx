@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useReducer, useRef, useState } from "react";
 
 import type { ArmiesData } from "../lib/dashboard-cards";
 import type {
@@ -19,6 +19,49 @@ import { UnitArt } from "./ArmyPortraits";
 import { CardHead, CardNote, InfoTip, Name, Switch } from "./DashboardParts";
 import { TrophyIcon } from "./GameIcons";
 import { signed } from "./LegendClock";
+
+/**
+ * The days chosen on an Armies card and their numbers:
+ *
+ * - `ready`: the chosen days' numbers; null when they could not be read.
+ * - `loading`: the chosen days are being read; the numbers on screen when
+ *   they were asked for stay, faded.
+ *
+ * Events: `choose` (the page's own days come back at once, with no read) and
+ * `answered`. Each choice is a new ask; only the newest ask's answer lands.
+ * A failed read shows as could not be read; choosing again retries. The card
+ * owns it, and drops it when the page goes.
+ */
+export type ArmyDaysRead =
+  | { phase: "ready"; ask: number; days: ArmyDays; armies: PlayerArmies | null }
+  | { phase: "loading"; ask: number; days: ArmyDays; shown: PlayerArmies | null };
+
+export type ArmyDaysEvent =
+  | { type: "choose"; ask: number; days: ArmyDays; initial: PlayerArmies }
+  | { type: "answered"; ask: number; days: ArmyDays; armies: PlayerArmies | null };
+
+export function armyDaysStart(initial: PlayerArmies): ArmyDaysRead {
+  return { phase: "ready", ask: 0, days: initial.days, armies: initial };
+}
+
+/** The only place an Armies card's days move; see `ArmyDaysRead`. */
+export function armyDaysStep(state: ArmyDaysRead, event: ArmyDaysEvent): ArmyDaysRead {
+  if (event.type === "answered") {
+    return event.ask === state.ask
+      ? { phase: "ready", ask: event.ask, days: event.days, armies: event.armies }
+      : state;
+  }
+  if (event.days === event.initial.days) {
+    return { phase: "ready", ask: event.ask, days: event.days, armies: event.initial };
+  }
+  const shown = state.phase === "ready" ? state.armies : state.shown;
+  return { phase: "loading", ask: event.ask, days: event.days, shown };
+}
+
+/** The numbers an Armies card shows: while loading, the ones already shown. */
+export function armyDaysShown(state: ArmyDaysRead): PlayerArmies | null {
+  return state.phase === "ready" ? state.armies : state.shown;
+}
 
 /** Armies on defense lists this many army types. */
 const DEFENSE_ROWS = 5;
@@ -49,38 +92,25 @@ export function armiesPath(tag: string, lens: ArmyLens, days: ArmyDays): string 
 
 /** The numbers for the chosen days: the page's first read, then the card's own. */
 function useArmies(lens: ArmyLens, { tag, armies: initial }: ArmiesData) {
-  // The chosen days and their numbers: null when they could not be read,
-  // undefined while they load.
-  const [chosen, setChosen] = useState<{ days: ArmyDays; armies?: PlayerArmies | null }>({
-    days: initial.days,
-    armies: initial,
-  });
-  // What was on screen when the chosen days were asked for.
-  const [shown, setShown] = useState<PlayerArmies | null>(initial);
+  const [read, dispatch] = useReducer(armyDaysStep, initial, armyDaysStart);
+  // Numbers each ask, so only the newest one's answer lands.
   const asked = useRef(0);
-  const loading = chosen.armies === undefined;
   return {
-    days: chosen.days,
+    days: read.days,
     // While the chosen days load, the numbers already shown stay, faded.
-    armies: loading ? shown : (chosen.armies ?? null),
-    loading,
+    armies: armyDaysShown(read),
+    loading: read.phase === "loading",
     choose(days: ArmyDays) {
       const ask = ++asked.current;
-      if (!loading) setShown(chosen.armies ?? null);
-      if (days === initial.days) {
-        setChosen({ days, armies: initial });
-        return;
-      }
-      setChosen({ days });
+      dispatch({ type: "choose", ask, days, initial });
+      if (days === initial.days) return;
       // Not a router fetcher: its failed read, a dropped connection or a 502
       // from the server in front, would replace the whole page with an error.
       void fetch(armiesPath(tag, lens, days), { headers: { Accept: "application/json" } })
         .then((response) => response.json() as Promise<ArmiesResponse>)
         .then(({ armies }) => armies ?? null)
         .catch(() => null)
-        .then((armies) => {
-          if (ask === asked.current) setChosen({ days, armies });
-        });
+        .then((armies) => dispatch({ type: "answered", ask, days, armies }));
     },
   };
 }

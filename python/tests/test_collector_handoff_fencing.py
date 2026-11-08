@@ -133,13 +133,13 @@ def test_full_cleanup_lookup_while_spool_is_full_clears_an_earlier_rest(
         return count, count
 
     async def spool_available() -> bool:
-        collector._spool_capacity_failed = False
+        collector.spool_health._next_probe_at = None
         return True
 
     async def no_wait(stop_requested: asyncio.Event, _seconds: float) -> None:
         nonlocal waits
         waits += 1
-        collector._spool_capacity_failed = waits == 1
+        collector.spool_health._next_probe_at = 0.0 if waits == 1 else None
         if waits == 3:
             stop_requested.set()
         await asyncio.sleep(0)
@@ -752,9 +752,9 @@ def test_capacity_failure_before_sidecar_keeps_automatic_recovery() -> None:
     assert asyncio.run(
         collector.collect_player(work, lane="ordinary", endpoints=("profile",))
     ) == ["capacity_paused"]
-    assert collector._handoff_recovery_required is False
-    assert collector._spool_capacity_failed is True
-    collector._spool_probe_after = 0.0
+    assert collector.spool_health.recovery_required is False
+    assert collector.spool_health.capacity_exhausted is True
+    collector.spool_health._next_probe_at = 0.0
     assert asyncio.run(
         collector.collect_player(work, lane="ordinary", endpoints=("profile",))
     ) == ["recorded"]

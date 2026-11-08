@@ -7,6 +7,24 @@ import type { VariantExamplesResponse } from "../routes/army-variant-examples";
 import { ArmyPortraits } from "./ArmyPortraits";
 
 /**
+ * A variant's example armies, loaded again each time the variant opens;
+ * closing it drops what loaded. `loading` until the answer, then `ready`, or
+ * `failed`, which says to close and open the variant to try again.
+ */
+export type VariantExamplesRead =
+  | { phase: "loading" }
+  | { phase: "failed" }
+  | { phase: "ready"; examples: ArmyVariantExamples };
+
+export function variantExamplesRead(
+  answer: { examples: ArmyVariantExamples | null } | undefined,
+): VariantExamplesRead {
+  const examples = answer?.examples;
+  if (examples === undefined) return { phase: "loading" };
+  return examples === null ? { phase: "failed" } : { phase: "ready", examples };
+}
+
+/**
  * An opened army on the Armies page: a sheet over the list (from the bottom
  * on a phone, the side when wide) with the army's numbers, then its variants,
  * all closed so every choice shows. A tap opens one with its most-used armies.
@@ -194,21 +212,21 @@ function VariantExamples({
   useEffect(() => {
     void load(url);
   }, [load, url]);
-  const examples = fetcher.data?.examples;
+  const read = variantExamplesRead(fetcher.data);
   return (
     <div
       className="analytics-examples"
       aria-live="polite"
       aria-busy={fetcher.state !== "idle"}
     >
-      {examples === undefined ? (
+      {read.phase === "loading" ? (
         <p className="analytics-examples-rule">Loading armies…</p>
-      ) : examples === null ? (
+      ) : read.phase === "failed" ? (
         <p className="analytics-examples-rule">
           These armies could not load. Close and open {label} to try again.
         </p>
       ) : (
-        <ExampleArmies id={id} label={label} attacks={attacks} examples={examples} />
+        <ExampleArmies id={id} label={label} attacks={attacks} examples={read.examples} />
       )}
     </div>
   );

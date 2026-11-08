@@ -11,7 +11,7 @@ from uuid import uuid4
 from psycopg_pool import ConnectionPool
 
 from . import background_pacing
-from .background_pacing import DAY_RECHECK_PRIORITY, background_lanes
+from .background_pacing import DAY_RECHECK_PRIORITY
 from .operating import database_pool_health
 from .past_reset_pacing import (
     build_permit_busy,
@@ -1025,18 +1025,11 @@ class Database:
 
             rows = [] if job_ids is None else claim(limit, job_ids=job_ids, planned=planned)
             if job_ids is None or (not rows and planned):
-                rows = claim(limit, planned=planned, backfill=())
-                floor = not reset_first and "reconcile_ranked_day" in (work_types or SUPPORTED_WORK_TYPES)
-                # Backfill fills only what live work leaves, none in the Reset-first window; see background_pacing.
-                lanes = [] if planned or hold or (len(rows) >= limit and not floor) else background_lanes(
-                    connection, self._jobs_relation, self._supports_denormalized_contract,
-                    supports_coordinator, self._supports_dependency_deferral, wait=not rows)
-                for priority, room in lanes or ():
-                    rows += claim(min(room, limit - len(rows)), backfill=(priority,))
-                # Paused by late live work, but for a daily result of each priority.
-                if lanes is None and floor:
-                    rows = background_pacing.background_floor(
-                        connection, self._jobs_relation, rows, limit, claim)
+                # Backfill fills only what live work leaves, as its mode allows.
+                rows = background_pacing.claim_background(
+                    connection, self._jobs_relation, claim(limit, planned=planned, backfill=()), limit, claim,
+                    held=hold, planned=planned, work_types=work_types, reset_first=reset_first, contract=(
+                        self._supports_denormalized_contract, supports_coordinator, self._supports_dependency_deferral))
             return self._lease_rows(connection, rows, owner, lease_seconds)
 
     def _lease_rows(

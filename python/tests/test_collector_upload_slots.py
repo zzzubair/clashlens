@@ -112,14 +112,14 @@ def test_saves_a_held_lock_blocks_land_later_in_order_without_holding_checks() -
         assert len(saved) == 2
         assert store.handoffs == []
         held.clear()
-        await asyncio.wait_for(asyncio.gather(*collector._later_commits), 5)
+        await asyncio.wait_for(asyncio.gather(*collector.commits._later), 5)
         assert [handoff.occurrence_key for handoff in store.handoffs] == saved
 
     asyncio.run(scenario())
 
     assert spool.handoffs == {}
     assert collector.outcomes["commit_deferred"] == 2
-    assert not collector._handoff_recovery_required
+    assert not collector.spool_health.recovery_required
 
 
 def _held_saves(store: _Store) -> threading.Event:
@@ -170,7 +170,7 @@ def test_work_waits_for_its_held_save_instead_of_fetching_again(
 
     assert client.fetch_count == 1
     assert completions == [7, 7]
-    assert not collector._handoff_recovery_required
+    assert not collector.spool_health.recovery_required
 
 
 def test_restart_recovery_leaves_held_saves_to_commit_later_and_holds_their_work() -> None:
@@ -234,7 +234,7 @@ def test_restart_recovery_leaves_held_saves_to_commit_later_and_holds_their_work
             assert store.handoffs == []
             assert client.fetch_count == 0
             held.clear()
-            await asyncio.wait_for(asyncio.gather(*collector._later_commits), 5)
+            await asyncio.wait_for(asyncio.gather(*collector.commits._later), 5)
             while not store.completed:
                 await asyncio.sleep(0.01)
         finally:
@@ -251,7 +251,7 @@ def test_restart_recovery_leaves_held_saves_to_commit_later_and_holds_their_work
     assert client.fetch_count == 1
     assert store.completed == [7]
     assert spool.handoffs == {}
-    assert not collector._handoff_recovery_required
+    assert not collector.spool_health.recovery_required
 
 
 def test_work_behind_a_save_that_failed_is_not_reported_recorded(
@@ -290,7 +290,7 @@ def test_work_behind_a_save_that_failed_is_not_reported_recorded(
 
     asyncio.run(scenario())
 
-    assert collector._handoff_recovery_required
+    assert collector.spool_health.recovery_required
     assert store.handoffs == []
     assert len(spool.handoffs) == 2
 
@@ -416,7 +416,7 @@ def test_a_held_player_never_delays_another_players_reset_or_regular_checks(
             asyncio.create_task(collector._intent_loop(stop, False, 0.01)),
         ]
         try:
-            while not collector._later_commits or collector.regular_inflight:
+            while not collector.commits._later or collector.regular_inflight:
                 await asyncio.sleep(0.01)
             assert store.sweeps == []
             Clock.current = reset_at + timedelta(seconds=1)
@@ -424,10 +424,10 @@ def test_a_held_player_never_delays_another_players_reset_or_regular_checks(
                 await asyncio.sleep(0.01)
                 assert time.monotonic() - started < 5
             # #2P0P's answer is still waiting for the worker.
-            assert collector._later_commits
+            assert collector.commits._later
             assert "#2P0P" not in {h.identity_key for h in store.handoffs}
         finally:
-            waiting = list(collector._later_commits)
+            waiting = list(collector.commits._later)
             stop.set()
             collector._stopping.set()
             await asyncio.gather(*loops)
@@ -462,7 +462,7 @@ def test_a_save_left_at_stop_keeps_later_saves_from_committing_first() -> None:
         first = collector.collect_player(work, lane="ordinary", endpoints=("profile",))
         assert await first == ["recorded"]
         collector._stopping.set()
-        await asyncio.wait(set(collector._later_commits))
+        await asyncio.wait(set(collector.commits._later))
         # The worker lets go during shutdown, and another answer arrives.
         held.clear()
         second = collector.collect_player(work, lane="ordinary", endpoints=("profile",))
@@ -470,6 +470,6 @@ def test_a_save_left_at_stop_keeps_later_saves_from_committing_first() -> None:
 
     asyncio.run(scenario())
 
-    assert collector._handoff_recovery_required
+    assert collector.spool_health.recovery_required
     assert store.handoffs == []
     assert len(spool.handoffs) == 1

@@ -29,12 +29,9 @@ from clashlens.db import (
     Database,
     LeaseLost,
 )
+from clashlens.maintenance_permit import MaintenancePermit, PermitState
 from clashlens.past_reset_pacing import build_permit_busy
-from clashlens.worker import (
-    MaintenancePermit,
-    ObservationProcessor,
-    process_until_stopped,
-)
+from clashlens.worker import ObservationProcessor, process_until_stopped
 
 TAGS = [f"#2{first}{second}" for first in "PYLQ" for second in "GRJCU"]
 
@@ -259,8 +256,10 @@ def test_one_process_at_a_time_runs_publication_maintenance(database_url: str) -
         try:
             assert first.acquire()
             assert not second.acquire()
+            assert (first.state, second.state) == (PermitState.HELD, PermitState.STANDBY)
             assert first.acquire()  # it keeps the permit while it runs
             first.close()  # a process that stops gives it up
+            assert first.state is PermitState.DISCONNECTED
             # The server frees the lock once it ends the closed session, a
             # moment after the client hangs up.
             deadline = time.monotonic() + 10
@@ -268,6 +267,18 @@ def test_one_process_at_a_time_runs_publication_maintenance(database_url: str) -
                 time.sleep(0.05)
             assert second.held
             assert not first.acquire()
+            assert first.state is PermitState.STANDBY
+            # A lost connection loses the permit; the next try starts over.
+            with psycopg.connect(connection_info, autocommit=True) as admin:
+                admin.execute("SELECT pg_terminate_backend(%s)", (second.connection.info.backend_pid,))
+            assert not second.acquire()
+            assert (second.state, second.connection) == (PermitState.DISCONNECTED, None)
+            deadline = time.monotonic() + 10
+            while not first.acquire() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert first.held
+            assert not second.acquire()
+            assert second.state is PermitState.STANDBY
         finally:
             first.close()
             second.close()

@@ -43,6 +43,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import Enum, StrEnum
 from typing import Any, Protocol
 
 from clashlens.api_db import ApiDatabase
@@ -147,6 +148,76 @@ class Unreachable(Exception):
         self.retry_after = retry_after
 
 
+class Logged(StrEnum):
+    """A delivery log row's `state`: an attack alert or confirmation DM in
+    discord_attack_alert_deliveries, a summary in discord_day_summary_deliveries.
+
+    A DM is due until it is logged SENDING, just before its first try and only
+    while still due; the row's id makes every try's nonce, so Discord drops a
+    repeat, and a logged DM is never logged again. A try Discord did not take
+    leaves it SENDING and `Waiting` in the loop's memory. It then finishes
+    once (`after_try`, or the loop giving up): SENT; REFUSED, with Discord's
+    reason, never tried again; FAILED, once `NONCE_SECONDS` from its first try,
+    or the next Reset for a summary, are up, or once it is no longer due.
+    SKIPPED is only for a summary with no finished day, logged without a DM.
+    A crash or restart leaves the row SENDING, never tried again: a DM can be
+    lost but never sent twice.
+    """
+
+    SENDING = "sending"
+    SENT = "sent"
+    REFUSED = "refused"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+@dataclass(frozen=True)
+class Waiting:
+    """A logged DM Discord did not take, to be tried again with the same nonce
+    at `retry_at`, by the loop's clock, after a wait of `wait` seconds, doubled
+    for the try after that."""
+
+    retry_at: float
+    wait: float
+
+
+@dataclass(frozen=True)
+class Finished:
+    """How a logged DM ended, as the delivery log keeps it."""
+
+    state: Logged
+    reason: str | None = None
+
+
+def after_try(
+    error: Exception | None, wait: float, time_left: float, now: float,
+    first_wait: float, longest_wait: float,
+) -> Waiting | Finished:
+    """Where one try of a logged DM leaves it, the only place a try moves it
+    on. `error` is what the try raised, None when Discord took it; `wait` the
+    wait before this try, 0 before the first; `time_left` the seconds to its
+    last moment, at `now`. Discord not taking it (`Unreachable`) waits
+    `first_wait` seconds, doubling up to `longest_wait`, and at least as long
+    as Discord asked, if that ends before its last moment; anything else not
+    taken fails it."""
+    if error is None:
+        return Finished(Logged.SENT)
+    if isinstance(error, Refused):
+        return Finished(Logged.REFUSED, error.reason)
+    if isinstance(error, Unreachable):
+        wait = min(max(2 * wait, first_wait), longest_wait)
+        pause = max(wait, error.retry_after)
+        if pause < time_left:
+            return Waiting(now + pause, wait)
+    return Finished(Logged.FAILED)
+
+
+def expected(error: Exception) -> bool:
+    """Whether a try's `error` is Discord's answer, or the try being cut
+    off, rather than a fault to log."""
+    return isinstance(error, Refused | Unreachable | TimeoutError)
+
+
 class Messenger(Protocol):
     async def send_dm(
         self, discord_user_id: str, reply: Reply, nonce: int | str, time_left: float
@@ -173,13 +244,10 @@ class Delivery:
     reply: Reply
     # The attack, for an attack alert, whose picture is added once delivered.
     alert: dict[str, Any] | None = None
-    # Its delivery log id once claimed, also the nonce of every try, and the
-    # loop's clock time then, just before its first try.
+    # Its delivery log id once claimed (logged SENDING), also the nonce of
+    # every try, and the loop's clock time then, just before its first try.
     id: int = 0
     claimed_at: float = 0.0
-    # The loop's clock time of the next try, and the wait before it.
-    retry_at: float = 0.0
-    wait: float = 0.0
 
     def params(self) -> dict[str, Any]:
         return {
@@ -195,6 +263,39 @@ class Delivery:
         """Seconds until its last moment, `NONCE_SECONDS` after its first try,
         by the loop's clock now."""
         return self.claimed_at + NONCE_SECONDS - asyncio.get_running_loop().time()
+
+
+@dataclass(frozen=True)
+class PendingPicture:
+    """A delivered alert still waiting for its picture: the DM `send_dm`
+    returned, its attack, and the loop's clock time it stops waiting."""
+
+    message: Any
+    alert: dict[str, Any]
+    give_up_at: float
+
+
+class PictureStep(Enum):
+    """What one look at a `PendingPicture` in a round did.
+
+    The alert's text is already delivered and logged SENT; its picture is a
+    later step that can still be pending. Each round after the one that sent
+    the alert looks at the pictures waiting, oldest first:
+    ADDED: its Legend day read, drawn and edited into the DM; done.
+    NOT_SAVED: its battle is not saved into the Legend day yet; it waits.
+    NO_ROOM: the round's end came, or a cut-off read or the drawing is still
+    busy; it and every later picture wait for the next round.
+    FAILED: the read, drawing or edit failed; left out, the alert stays.
+    EXPIRED: `PICTURE_SECONDS` after delivery; left out.
+    Pending pictures live only in the loop's memory: a restart leaves out
+    every one still waiting.
+    """
+
+    ADDED = "added"
+    NOT_SAVED = "not saved"
+    NO_ROOM = "no room"
+    FAILED = "failed"
+    EXPIRED = "expired"
 
 
 class AlertStore:
@@ -361,10 +462,9 @@ class AlertLoop:
         self.now = now
         self._pruned_at: float | None = None
         # Claimed DMs Discord could not take yet, waiting for their next try.
-        self._waiting: list[Delivery] = []
-        # Delivered alerts waiting for their picture: the message, the
-        # attack, and the loop's clock time to stop waiting.
-        self._pictures: list[tuple[Any, dict[str, Any], float]] = []
+        self._waiting: list[tuple[Delivery, Waiting]] = []
+        # Delivered alerts waiting for their picture, oldest first.
+        self._pictures: list[PendingPicture] = []
         # Clear while a picture's read of its Legend day, cut off by the end
         # of its round, still runs; no other picture is read until it ends.
         self._read = threading.Event()
@@ -379,7 +479,7 @@ class AlertLoop:
             try:
                 await self.tick()
                 now = asyncio.get_running_loop().time()
-                pause = max(0.0, min([pause, *(d.retry_at - now for d in self._waiting)]))
+                pause = max(0.0, min([pause, *(w.retry_at - now for _, w in self._waiting)]))
             except Exception:
                 log.exception("attack alert round failed")
             await asyncio.sleep(pause)
@@ -397,16 +497,17 @@ class AlertLoop:
             await asyncio.to_thread(self.alerts.prune)
             self._pruned_at = clock
         sent = 0
-        for delivery in list(self._waiting):
+        for entry in list(self._waiting):
+            delivery, waiting = entry
             expired = delivery.time_left() <= 0
-            if not expired and delivery.retry_at > asyncio.get_running_loop().time():
+            if not expired and waiting.retry_at > asyncio.get_running_loop().time():
                 continue
             if expired or not await asyncio.to_thread(self.alerts.still_due, delivery):
-                await self._finish(delivery, "failed", None)
-                self._waiting.remove(delivery)
+                await self._finish(delivery, Finished(Logged.FAILED))
+                self._waiting.remove(entry)
             else:
-                self._waiting.remove(delivery)
-                sent += await self._send(delivery)
+                self._waiting.remove(entry)
+                sent += await self._send(delivery, waiting.wait)
         for switch in await asyncio.to_thread(self.alerts.confirmations_due):
             sent += await self._claim(
                 Delivery(
@@ -436,37 +537,42 @@ class AlertLoop:
         await self._add_pictures(pictures)
         return sent
 
-    async def _add_pictures(
-        self, pictures: list[tuple[Any, dict[str, Any], float]]
-    ) -> None:
-        """Add each of `pictures` whose battle is saved into its Legend day,
-        until the round's end: `PICTURE_ROUND_SECONDS` from now, or the next
-        try of a DM waiting to be tried again if sooner. The end cuts off the
-        read, the drawing and the edit alike; a picture cut off, not reached,
-        or waiting for its read or drawing to have room, is tried again next
-        round, until it stops waiting. One that fails is left out."""
+    async def _add_pictures(self, pictures: list[PendingPicture]) -> None:
+        """Look at each of `pictures` in turn until the round's end:
+        `PICTURE_ROUND_SECONDS` from now, or the next try of a DM waiting to
+        be tried again if sooner. Each picture done with (`PictureStep`)
+        stops waiting; NO_ROOM ends the round's pictures."""
         time = asyncio.get_running_loop().time
-        end = min([time() + PICTURE_ROUND_SECONDS, *(d.retry_at for d in self._waiting)])
-        for waiting in pictures:
-            message, alert, give_up_at = waiting
-            if time() >= end or not self._read.is_set():
+        end = min([time() + PICTURE_ROUND_SECONDS, *(w.retry_at for _, w in self._waiting)])
+        for pending in pictures:
+            step = await self._try_picture(pending, end)
+            if step is PictureStep.NO_ROOM:
                 return
-            if time() < give_up_at:
-                try:
-                    async with asyncio.timeout_at(end) as cut:
-                        if not await self._add_picture(message, alert):
-                            continue
-                except picture.Busy:
-                    return
-                except TimeoutError:
-                    if cut.expired():
-                        log.info("attack alert picture for battle %s waits for next round",
-                                 alert["battle_id"])
-                        return
-                    log.exception("attack alert picture for battle %s failed", alert["battle_id"])
-                except Exception:
-                    log.exception("attack alert picture for battle %s failed", alert["battle_id"])
-            self._pictures.remove(waiting)
+            if step is not PictureStep.NOT_SAVED:
+                self._pictures.remove(pending)
+
+    async def _try_picture(self, pending: PendingPicture, end: float) -> PictureStep:
+        """Add `pending`'s picture if there is room before `end`, which cuts
+        off the read, the drawing and the edit alike."""
+        time, battle = asyncio.get_running_loop().time, pending.alert["battle_id"]
+        if time() >= end or not self._read.is_set():
+            return PictureStep.NO_ROOM
+        if time() >= pending.give_up_at:
+            return PictureStep.EXPIRED
+        try:
+            async with asyncio.timeout_at(end) as cut:
+                added = await self._add_picture(pending.message, pending.alert)
+            return PictureStep.ADDED if added else PictureStep.NOT_SAVED
+        except picture.Busy:
+            return PictureStep.NO_ROOM
+        except TimeoutError:
+            if cut.expired():
+                log.info("attack alert picture for battle %s waits for next round", battle)
+                return PictureStep.NO_ROOM
+            log.exception("attack alert picture for battle %s failed", battle)
+        except Exception:
+            log.exception("attack alert picture for battle %s failed", battle)
+        return PictureStep.FAILED
 
     async def _add_picture(self, message: Any, alert: dict[str, Any]) -> bool:
         """Read the alert's Legend day, draw it and edit it into `message`;
@@ -499,14 +605,15 @@ class AlertLoop:
         delivery.claimed_at = asyncio.get_running_loop().time()
         return await self._send(delivery)
 
-    async def _send(self, delivery: Delivery) -> int:
-        """Try one logged DM, cut off at its last moment, and log how it went
-        or wait to try again if there is time; 1 when it was delivered."""
+    async def _send(self, delivery: Delivery, wait: float = 0.0) -> int:
+        """Try one logged DM, `wait` seconds after the try before it if any,
+        cut off at its last moment, and log how it went or wait to try again
+        if there is time (`after_try`); 1 when it was delivered."""
         left = delivery.time_left()
         if left <= 0:
-            await self._finish(delivery, "failed", None)
+            await self._finish(delivery, Finished(Logged.FAILED))
             return 0
-        state, reason = "sent", None
+        message, error = None, None
         try:
             message = await asyncio.wait_for(
                 self.messenger.send_dm(
@@ -514,29 +621,25 @@ class AlertLoop:
                 ),
                 left,
             )
-        except Refused as refusal:
-            state, reason = "refused", refusal.reason
-        except Unreachable as outage:
-            delivery.wait = min(max(2 * delivery.wait, RETRY_SECONDS), RETRY_LONGEST_SECONDS)
-            wait = max(delivery.wait, outage.retry_after)
-            if wait < delivery.time_left():
-                delivery.retry_at = asyncio.get_running_loop().time() + wait
-                self._waiting.append(delivery)
-                log.info("attack alert delivery=%s waiting to try again", delivery.id)
-                return 0
-            state = "failed"
-        except TimeoutError:
-            state = "failed"
-        except Exception:
-            log.exception("attack alert delivery %s failed", delivery.id)
-            state = "failed"
-        await self._finish(delivery, state, reason)
-        if state == "sent" and delivery.alert is not None:
+        except Exception as caught:
+            error = caught
+            if not expected(caught):
+                log.exception("attack alert delivery %s failed", delivery.id)
+        clock = asyncio.get_running_loop().time
+        step = after_try(
+            error, wait, delivery.time_left(), clock(), RETRY_SECONDS, RETRY_LONGEST_SECONDS
+        )
+        if isinstance(step, Waiting):
+            self._waiting.append((delivery, step))
+            log.info("attack alert delivery=%s waiting to try again", delivery.id)
+            return 0
+        await self._finish(delivery, step)
+        if step.state is Logged.SENT and delivery.alert is not None:
             self._pictures.append(
-                (message, delivery.alert, asyncio.get_running_loop().time() + PICTURE_SECONDS)
+                PendingPicture(message, delivery.alert, clock() + PICTURE_SECONDS)
             )
-        return int(state == "sent")
+        return int(step.state is Logged.SENT)
 
-    async def _finish(self, delivery: Delivery, state: str, reason: str | None) -> None:
-        await asyncio.to_thread(self.alerts.finish, delivery.id, state, reason)
-        log.info("attack alert delivery=%s outcome=%s", delivery.id, reason or state)
+    async def _finish(self, delivery: Delivery, step: Finished) -> None:
+        await asyncio.to_thread(self.alerts.finish, delivery.id, step.state.value, step.reason)
+        log.info("attack alert delivery=%s outcome=%s", delivery.id, step.reason or step.state)

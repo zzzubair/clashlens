@@ -11,7 +11,11 @@ import psycopg
 import pytest
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
-from clashlens.archive_retention import retire_archive_objects
+from clashlens.archive_retention import (
+    ArchiveCopy,
+    archive_copy,
+    retire_archive_objects,
+)
 from clashlens.spool import Spool
 
 FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
@@ -321,8 +325,11 @@ def test_retirement_fences_replay_and_keeps_active_work(
                 # Unfinished processing keeps the response usable.
                 report = retire_archive_objects(cleanup, spool, client, apply=True, **OPTIONS)
                 assert report["marked_objects"] == 0
+                assert archive_copy(connection, reference) is ArchiveCopy.PROTECTED
                 assert processor.process_job(pending, owner="expiry-duplicate").outcome == "processed"
+                assert archive_copy(connection, reference) is ArchiveCopy.DUE
                 assert retire_archive_objects(cleanup, spool, client, apply=True, **OPTIONS)["marked_objects"] == 1
+                assert archive_copy(connection, reference) is ArchiveCopy.HELD
                 with pytest.raises(psycopg.errors.RaiseException, match="expired"):
                     _replay_job(connection, observation, "supercell-source-parser-v2")
                 # Recollection gets a separate location. Deleting the old key can
@@ -336,9 +343,13 @@ def test_retirement_fences_replay_and_keeps_active_work(
                     FROM archive_catalogue WHERE archive_reference = %s
                     """, (renewed, reference),
                 )
+                assert archive_copy(connection, renewed) is ArchiveCopy.KEPT
                 _hold_elapsed(connection, "13 days")
+                assert archive_copy(connection, reference) is ArchiveCopy.RELEASED
                 assert retire_archive_objects(cleanup, spool, client, apply=True, **OPTIONS)["deleted_objects"] == 1
                 assert client.keys == {renewed.removeprefix("s3://evidence/")}
+                assert (archive_copy(connection, reference), archive_copy(connection, renewed)) == (
+                    ArchiveCopy.EXPIRED, ArchiveCopy.KEPT)
                 assert connection.execute("SELECT count(*) FROM player_profile_versions").fetchone()[0] == 1
         finally:
             spool.close()

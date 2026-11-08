@@ -549,3 +549,26 @@ def test_an_expired_country_list_leaves_an_empty_board_unknown(
     assert (printed["countries_expected"], printed["countries_pulled"]) == (0, 0)
     assert (printed["board_entries"], printed["board_measured_coverage"]) == (0, 0.0)
     assert printed["global_on_board"] == 0
+
+
+def test_a_resets_ranking_check_steps_from_its_saved_pulls() -> None:
+    """Early list, then polls until R's list is seen, then countries until
+    R+2 h, then scoring; a list never seen stops the pulls."""
+    step, steps = game_rankings.ranking_step, game_rankings.RankingStep
+
+    def pull(purpose: str, after: timedelta, body: bytes | None, failure: str | None = None):
+        return game_rankings.Pull(purpose, None, RESET + after, failure, body)
+
+    failed = pull("global_early", timedelta(seconds=30), None, "timeout")
+    early = pull("global_early", timedelta(seconds=30), _global(YESTERDAY_RANKS))
+    seen = pull("global_reset", timedelta(minutes=6), None)
+    already = pull("global_early", timedelta(seconds=30), _global(TODAY_RANKS))
+    assert step(RESET, RESET + timedelta(seconds=10), []) is steps.EARLY
+    assert step(RESET, RESET + timedelta(minutes=2), [failed]) is steps.EARLY
+    assert step(RESET, RESET + timedelta(minutes=6), [failed]) is steps.MISSED
+    assert step(RESET, RESET + timedelta(minutes=1), [early]) is steps.POLLING
+    assert step(RESET, RESET + timedelta(minutes=10), [early, seen]) is steps.COUNTRIES
+    assert step(RESET, RESET + timedelta(minutes=1), [already]) is steps.COUNTRIES
+    assert step(RESET, RESET + timedelta(minutes=61), [early]) is steps.MISSED
+    assert step(RESET, RESET + timedelta(hours=2), [early]) is steps.SCORING
+    assert step(RESET, RESET + timedelta(hours=2), [early, seen]) is steps.SCORING

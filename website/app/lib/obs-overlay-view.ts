@@ -178,10 +178,122 @@ function demoBattle(kind: OverlayBattle["kind"], i: number): OverlayBattle {
 }
 
 /**
- * Draw the overlay into `root` and keep it live. With `link`, it follows the
- * saved settings of that private link, read every 3 seconds; a replaced link
- * shows nothing. Without, it takes its settings from `search` and from the
- * page around it (the account page's preview). Returns a stop function.
+ * What the overlay shows, from its settings alone (`overlaySource`):
+ *
+ * - `none`: no player picked; it says "Pick a player".
+ * - `player`: the picked player, read every 3 seconds. A failed read keeps
+ *   the last view and marks it offline; the next read tries again.
+ * - `demo`: a made-up day that plays a battle every 12 seconds, named after
+ *   the picked player when one is read.
+ *
+ * Picking another player or turning the demo on or off starts that source
+ * over: its first read shows no battle notice, and each later read that
+ * brings new battles shows one notice for all of them, replacing any notice
+ * still showing (`BattleRead`, `Notice`).
+ */
+export type OverlaySource = "none" | "player" | "demo";
+
+export function overlaySource(cfg: { demo: boolean; tag: string }): OverlaySource {
+  return cfg.demo ? "demo" : cfg.tag ? "player" : "none";
+}
+
+/**
+ * How the overlay follows its private link's saved settings, read every 3
+ * seconds:
+ *
+ * - `unread`: no settings read yet; the first answer applies them afresh.
+ * - `following`: the settings of one saved version and player (`key`) show; a
+ *   new version or player applies on top of them.
+ * - `retired`: the link was replaced, so the overlay shows nothing and checks
+ *   once a minute; an answer after that applies afresh.
+ *
+ * A failed read keeps the last settings. Nothing is kept between page loads,
+ * so OBS reloading the source starts `unread`.
+ */
+type LinkFollow =
+  { kind: "unread" } | { kind: "following"; key: string } | { kind: "retired" };
+
+/**
+ * Which battles the current source has already shown (`accept` moves it):
+ *
+ * - `first`: none yet; the next read only records its battles, with no notice.
+ * - `seen`: these battle ids are on screen; a later read's other battles are new.
+ *
+ * Starting a source over (another player, the demo on or off) goes back to
+ * `first`. A failed read keeps it.
+ */
+export type BattleRead = { kind: "first" } | { kind: "seen"; ids: Set<string> };
+
+/** One read's battles: which are new to the screen (none on a first or
+ * `quiet` read), and what has been seen after it. */
+export function readBattles(
+  read: BattleRead,
+  battles: OverlayBattle[],
+  quiet: boolean,
+): { read: BattleRead; fresh: OverlayBattle[] } {
+  const fresh =
+    read.kind === "seen" && !quiet ? battles.filter((b) => !read.ids.has(b.id)) : [];
+  return { read: { kind: "seen", ids: new Set(battles.map((b) => b.id)) }, fresh };
+}
+
+/**
+ * The battle notice (`showToast` moves it):
+ *
+ * - `hidden`: no notice shows.
+ * - `showing`: these battles' notice shows for 6 seconds, then hides; a newer
+ *   notice replaces it and starts the 6 seconds again. A redraw keeps it showing.
+ */
+export type Notice = { kind: "hidden" } | { kind: "showing"; battles: OverlayBattle[] };
+
+/** The notice new battles bring, or null when there are none or pop-ups are off. */
+export function noticeFor(battles: OverlayBattle[], popup: boolean): Notice | null {
+  return popup && battles.length ? { kind: "showing", battles } : null;
+}
+
+/**
+ * Whether the overlay is still mounted: `running` until the returned stop
+ * function makes it `stopped`, after which no timer runs and nothing redraws.
+ */
+type Mounted = "running" | "stopped";
+
+/**
+ * The overlay's timers and its `Mounted` state, their one owner: `later`
+ * runs only while `running`, and `stop` makes it `stopped` and clears every
+ * timer still waiting. Nothing restarts it; a new mount makes new timers.
+ */
+export function overlayTimers() {
+  let mounted: Mounted = "running";
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  return {
+    running: () => mounted === "running",
+    later(run: () => void, ms: number) {
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        if (mounted === "running") run();
+      }, ms);
+      timers.add(timer);
+      return timer;
+    },
+    cancel(timer: ReturnType<typeof setTimeout> | undefined) {
+      if (timer === undefined) return;
+      clearTimeout(timer);
+      timers.delete(timer);
+    },
+    stop() {
+      mounted = "stopped";
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
+    },
+  };
+}
+
+/**
+ * Draw the overlay into `root` and keep it live, until the returned stop
+ * function clears every timer. With `link`, it follows the saved settings of
+ * that private link (`LinkFollow`). Without, it takes its settings from
+ * `search` and from the page around it (the account page's preview). What it
+ * shows is `OverlaySource`; its progress is `BattleRead`, `Notice` and
+ * `Mounted`.
  */
 export function mountOverlay(
   root: HTMLElement,
@@ -191,28 +303,15 @@ export function mountOverlay(
   const stage = root.querySelector<HTMLElement>(".ov-stage")!;
   let cfg = readConfig("");
   let data: View | null = null;
-  let seen: Set<string> | null = null;
+  let read: BattleRead = { kind: "first" };
   let freshIds = new Set<string>();
-  let activeToast: OverlayBattle[] | null = null;
+  let notice: Notice = { kind: "hidden" };
   let hidden: Part[] = [];
-  let stopped = false;
-  const timers = new Set<ReturnType<typeof setTimeout>>();
+  const clock = overlayTimers();
+  const { later, cancel } = clock;
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
   let demoTimer: ReturnType<typeof setTimeout> | undefined;
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
-  const later = (run: () => void, ms: number) => {
-    const timer = setTimeout(() => {
-      timers.delete(timer);
-      if (!stopped) run();
-    }, ms);
-    timers.add(timer);
-    return timer;
-  };
-  const cancel = (timer: ReturnType<typeof setTimeout> | undefined) => {
-    if (timer === undefined) return;
-    clearTimeout(timer);
-    timers.delete(timer);
-  };
 
   function squares(list: OverlayBattle[], withNumbers: boolean) {
     let html = "";
@@ -401,7 +500,7 @@ export function mountOverlay(
   }
 
   function render() {
-    if (stopped) return;
+    if (!clock.running()) return;
     if (!cfg.w || !cfg.h) {
       stage.innerHTML = "";
       return;
@@ -436,12 +535,12 @@ export function mountOverlay(
     box.style.height = `${cfg.h / scale - shadow}px`;
     stage.style.transform = `scale(${scale})`;
     freshIds = new Set();
-    if (activeToast) {
+    if (notice.kind === "showing") {
       const el = stage.querySelector<HTMLElement>(".ov-toast")!;
-      const last = activeToast[activeToast.length - 1];
+      const last = notice.battles[notice.battles.length - 1];
       el.style.transition = "none";
       el.className = `ov-toast ov-${last.kind} ov-${tone(last)} ov-show`;
-      el.innerHTML = toastHtml(activeToast);
+      el.innerHTML = toastHtml(notice.battles);
       void el.offsetWidth;
       el.style.transition = "";
     }
@@ -482,18 +581,19 @@ export function mountOverlay(
   // One pop-up per update, shown the moment the squares change. Battles that
   // land together share one pop-up; a newer update replaces the one showing.
   function showToast(list: OverlayBattle[]) {
-    if (!cfg.popup || !list.length) return;
+    const next = noticeFor(list, cfg.popup);
+    if (!next) return;
     cancel(toastTimer);
     const el = stage.querySelector<HTMLElement>(".ov-toast");
     if (!el) return;
     const last = list[list.length - 1];
     el.className = `ov-toast ov-${last.kind} ov-${tone(last)}`;
     el.innerHTML = toastHtml(list);
-    activeToast = list;
+    notice = next;
     void el.offsetWidth;
     el.classList.add("ov-show");
     toastTimer = later(() => {
-      activeToast = null;
+      notice = { kind: "hidden" };
       stage.querySelector(".ov-toast")?.classList.remove("ov-show");
     }, TOAST_MS);
   }
@@ -501,8 +601,9 @@ export function mountOverlay(
   // The squares, totals and pop-up all come from this one update.
   function accept(next: View, quiet = false) {
     const battles = next.day?.battles ?? [];
-    const fresh = seen && !quiet ? battles.filter((b) => !seen!.has(b.id)) : [];
-    seen = new Set(battles.map((b) => b.id));
+    const after = readBattles(read, battles, quiet);
+    read = after.read;
+    const fresh = after.fresh;
     data = next;
     fresh.forEach((b) => freshIds.add(b.id));
     render();
@@ -519,17 +620,20 @@ export function mountOverlay(
     return next;
   }
 
+  // Whether `tag` is still the player the overlay reads.
+  const reading = (tag: string) => overlaySource(cfg) === "player" && cfg.tag === tag;
+
   async function poll() {
     cancel(pollTimer);
-    if (cfg.demo || !cfg.tag) return;
+    if (overlaySource(cfg) !== "player") return;
     const tag = cfg.tag;
     try {
       const next = await readPlayer(tag);
-      if (tag === cfg.tag && !cfg.demo) accept(next);
+      if (reading(tag)) accept(next);
     } catch {
-      if (tag === cfg.tag && !cfg.demo) accept({ ...(data ?? {}), error: "offline" });
+      if (reading(tag)) accept({ ...(data ?? {}), error: "offline" });
     }
-    if (tag === cfg.tag && !cfg.demo) pollTimer = later(poll, PLAYER_POLL_MS);
+    if (reading(tag)) pollTimer = later(poll, PLAYER_POLL_MS);
   }
 
   // ---------- demo: a made-up day that plays a battle every 12 seconds ----------
@@ -571,7 +675,7 @@ export function mountOverlay(
         quiet,
       );
     };
-    seen = null;
+    read = { kind: "first" };
     for (let k = 0; k < 5; k++) push(true); // the starting battles make no pop-ups
     // The first made-up battle lands straight away, then one every 12 seconds.
     const every = () => {
@@ -588,14 +692,15 @@ export function mountOverlay(
       // Lay out again once the font is in, so the fit is measured with it.
       document.fonts.load(`700 24px "${FONT_FAMILY[cfg.font]}"`).then(render, () => {});
     }
-    if (cfg.demo) {
+    const wasDemo = overlaySource(prev) === "demo";
+    if (overlaySource(cfg) === "demo") {
       cancel(pollTimer);
-      if (!first && !prev.demo && prev.tag === cfg.tag && data?.name) startDemo();
-      else if (!prev.demo || first || prev.tag !== cfg.tag) {
+      if (!first && !wasDemo && prev.tag === cfg.tag && data?.name) startDemo();
+      else if (!wasDemo || first || prev.tag !== cfg.tag) {
         if (prev.tag !== cfg.tag) data = null;
         const tag = cfg.tag;
         const start = (d: View | null) => {
-          if (tag !== cfg.tag || !cfg.demo) return;
+          if (tag !== cfg.tag || overlaySource(cfg) !== "demo") return;
           if (d) data = d;
           startDemo();
         };
@@ -605,9 +710,9 @@ export function mountOverlay(
       return;
     }
     stopDemo();
-    if (first || prev.tag !== cfg.tag || prev.demo) {
+    if (first || prev.tag !== cfg.tag || wasDemo) {
       data = null;
-      seen = null;
+      read = { kind: "first" };
       render();
       void poll();
     } else render();
@@ -626,15 +731,14 @@ export function mountOverlay(
   window.addEventListener("message", onMessage);
   // Keep "Updated N min ago" honest.
   const tick = setInterval(() => {
-    if (data && !cfg.demo) render();
+    if (data && overlaySource(cfg) !== "demo") render();
   }, 30_000);
   void document.fonts.ready.then(render);
 
   if (link !== null) {
     // A saved link: the settings live on Clash Lens and are read again every
     // 3 seconds, so a change on the account page shows here with no new address.
-    let applied: string | null = null;
-    let started = false;
+    let followed: LinkFollow = { kind: "unread" };
     const follow = async () => {
       let wait = SETTINGS_POLL_MS;
       try {
@@ -648,8 +752,7 @@ export function mountOverlay(
           cfg = readConfig("");
           data = null;
           stage.innerHTML = "";
-          started = false;
-          applied = null;
+          followed = { kind: "retired" };
           wait = 60_000;
         } else if (res.ok) {
           const saved = (await res.json()) as {
@@ -658,14 +761,14 @@ export function mountOverlay(
             tag: string | null;
           };
           const key = `${saved.version} ${saved.tag}`;
-          if (key !== applied) {
-            applied = key;
+          if (followed.kind !== "following" || followed.key !== key) {
+            const first = followed.kind !== "following";
+            followed = { kind: "following", key };
             const query = new URLSearchParams({
               ...saved.settings,
               p: (saved.tag ?? "").replace(/^#/, ""),
             });
-            apply(`?${query}`, !started);
-            started = true;
+            apply(`?${query}`, first);
           }
         }
       } catch {
@@ -682,9 +785,7 @@ export function mountOverlay(
   }
 
   return () => {
-    stopped = true;
-    for (const timer of timers) clearTimeout(timer);
-    timers.clear();
+    clock.stop();
     clearInterval(tick);
     window.removeEventListener("message", onMessage);
   };

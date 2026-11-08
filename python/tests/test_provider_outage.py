@@ -9,11 +9,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 from test_collector import _Client, _collector, _Spool, _Store
 
+from clashlens import collector_http
 from clashlens.collector_db import CollectorWork
 from clashlens.collector_http import (
     ApiKey,
     KeyPool,
     OfficialApiClient,
+    OutagePhase,
     ProviderFailure,
     ProviderOutage,
 )
@@ -287,3 +289,113 @@ def test_paused_regular_work_does_not_hold_a_reset_or_run_once_admission_closes(
     assert asyncio.run(run()) == 0
     # The paused check waits for its next pass instead of running mid-Reset.
     assert started == [work]
+
+
+@pytest.fixture()
+def clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    now = [1000.0]
+    monkeypatch.setattr(collector_http, "monotonic", lambda: now[0])
+    return now
+
+
+def test_outage_phases_move_through_pause_probe_and_recovery(clock) -> None:
+    outage = ProviderOutage(threshold=3, base_delay=5, max_delay=8)
+
+    async def run() -> None:
+        # An answer between failures restarts the count.
+        for failed in (True, True, False, True, True):
+            outage.record(failed=failed, probe=False)
+        assert outage.phase() is OutagePhase.ANSWERING
+        assert await outage.admit() is False
+        outage.record(failed=True, probe=False)
+        assert outage.phase() is OutagePhase.PAUSED
+        assert outage.active and outage.paused
+        # A straggler's failure during the pause does not lengthen it.
+        outage.record(failed=True, probe=False)
+        clock[0] += 5
+        assert outage.phase() is OutagePhase.PROBE_DUE
+        assert not outage.paused
+        assert await outage.admit() is True
+        assert outage.phase() is OutagePhase.PROBING
+        waiting = asyncio.create_task(outage.admit())
+        await asyncio.sleep(0)
+        assert not waiting.done()
+        # The failed probe doubles the pause, capped at max_delay.
+        outage.record(failed=True, probe=True)
+        assert outage.phase() is OutagePhase.PAUSED
+        clock[0] += 7.9
+        assert outage.phase() is OutagePhase.PAUSED
+        clock[0] += 0.1
+        assert outage.phase() is OutagePhase.PROBE_DUE
+        # The waiting request wakes after the pause and becomes the probe.
+        assert await asyncio.wait_for(waiting, 1) is True
+        follower = asyncio.create_task(outage.admit())
+        await asyncio.sleep(0)
+        # A rate limit or rejected key still counts as the provider answering.
+        outage.record(failed=False, probe=True)
+        assert outage.phase() is OutagePhase.ANSWERING
+        assert await asyncio.wait_for(follower, 1) is False
+
+    asyncio.run(run())
+
+
+def test_a_probe_that_ends_without_an_answer_lets_the_next_request_probe(
+    clock,
+) -> None:
+    outage = ProviderOutage(threshold=1, base_delay=5)
+
+    async def run() -> None:
+        outage.record(failed=True, probe=False)
+        clock[0] += 5
+        assert await outage.admit() is True
+        next_probe = asyncio.create_task(outage.admit())
+        await asyncio.sleep(0)
+        assert not next_probe.done()
+        # The probe was cancelled or refused without retry: no new evidence.
+        outage.record(failed=None, probe=True)
+        assert await asyncio.wait_for(next_probe, 1) is True
+        assert outage.phase() is OutagePhase.PROBING
+
+    asyncio.run(run())
+
+
+def test_a_probe_that_outlives_its_outage_blocks_the_next_outage_probe(
+    clock,
+) -> None:
+    outage = ProviderOutage(threshold=1, base_delay=5, max_delay=60)
+
+    async def run() -> None:
+        outage.record(failed=True, probe=False)
+        clock[0] += 5
+        assert await outage.admit() is True
+        # Another request's answer ends the outage while the probe is out.
+        outage.record(failed=False, probe=False)
+        assert outage.phase() is OutagePhase.ANSWERING
+        outage.record(failed=True, probe=False)
+        clock[0] += 5
+        assert outage.phase() is OutagePhase.PROBING
+        # The old probe's failure counts as this outage's probe.
+        outage.record(failed=True, probe=True)
+        clock[0] += 9.9
+        assert outage.phase() is OutagePhase.PAUSED
+        clock[0] += 0.1
+        assert outage.phase() is OutagePhase.PROBE_DUE
+
+    asyncio.run(run())
+
+
+def test_stopping_fails_waiting_requests_only_during_an_outage(clock) -> None:
+    outage = ProviderOutage(threshold=1, base_delay=5)
+
+    async def run() -> None:
+        outage.stop()
+        # Shutdown alone does not hold back requests while the API answers.
+        assert await outage.admit() is False
+        outage.record(failed=True, probe=False)
+        with pytest.raises(ProviderFailure, match="provider_outage") as failure:
+            await outage.admit()
+        assert failure.value.retryable
+        # A restarted collector builds a new outage state that starts answering.
+        assert ProviderOutage().phase() is OutagePhase.ANSWERING
+
+    asyncio.run(run())

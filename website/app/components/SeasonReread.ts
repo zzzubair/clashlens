@@ -5,12 +5,31 @@ const SEASON_MS = 28 * 24 * 60 * 60 * 1000;
 // The same confirmed 28-day phase used by the server's Season validation.
 const SEASON_ANCHOR_MS = 1_783_918_800_000;
 
+/**
+ * How far the page's clock can be trusted when it decides that Season Reset
+ * has passed:
+ *
+ * - `settled`: it runs from the server's load time plus elapsed time.
+ * - `slipped`: elapsed and device time disagreed by over a second (device
+ *   sleep or a device clock change). Only a fresh server time can settle it,
+ *   so the next check reads the page again even within a minute of the last.
+ * - `asked`: that read was asked. The server time it brings becomes the clock,
+ *   even if earlier, and the clock is `settled`.
+ *
+ * Events: each check (which may slip), a read asked by a check, and a new
+ * server load time. Any other load time only moves the clock forward, so a
+ * buffered answer from before Reset cannot wind it back. A failed read stays
+ * `asked` and is retried once a minute; a slip while `asked` asks again at
+ * once. `useSeasonReread` owns it, one per page; a reload starts `settled`.
+ */
+export type ClockTrust = "settled" | "slipped" | "asked";
+
 type Clock = {
   loadedAt?: string;
   now: number;
   elapsed: number;
   wall: number;
-  unsettled?: "slipped" | "asked";
+  trust: ClockTrust;
 };
 
 function advanceClock(clock: Clock) {
@@ -22,7 +41,7 @@ function advanceClock(clock: Clock) {
   // device clock's elapsed time, never its absolute date.
   clock.now += Math.max(ran, moved);
   // Sleep or a device clock change: only a fresh server time can settle it.
-  if (Math.abs(moved - ran) > 1_000) clock.unsettled = "slipped";
+  if (Math.abs(moved - ran) > 1_000) clock.trust = "slipped";
   clock.elapsed = elapsed;
   clock.wall = wall;
   return clock.now;
@@ -34,6 +53,23 @@ export function seasonStartAt(time: number) {
 
 export function nextSeasonReset(loadedAt: string) {
   return seasonStartAt(Date.parse(loadedAt)) + SEASON_MS;
+}
+
+/**
+ * Whether a check reads the page again: never while hidden or while a read or
+ * navigation runs; when Reset passed, a recovery is awaited or the clock is
+ * not settled; and at most once a minute unless the clock just slipped.
+ */
+export function seasonCheckReads(check: {
+  hidden: boolean;
+  busy: boolean;
+  due: boolean;
+  trust: ClockTrust;
+  sinceRead: number;
+}): boolean {
+  if (check.hidden || check.busy) return false;
+  if (!check.due && check.trust === "settled") return false;
+  return check.trust === "slipped" || check.sinceRead >= 60_000;
 }
 
 /** Reread saved data at Season Reset and once a minute while awaiting recovery. */
@@ -54,14 +90,15 @@ export function useSeasonReread(
     now: loadedAt ? Date.parse(loadedAt) : 0,
     elapsed: performance.now(),
     wall: Date.now(),
+    trust: "settled",
   });
   advanceClock(clock.current);
   if (loadedAt && clock.current.loadedAt !== loadedAt) {
     const served = Date.parse(loadedAt);
-    if (clock.current.unsettled === "asked") {
+    if (clock.current.trust === "asked") {
       // Requested after the device clock slipped, so it carries the real time.
       clock.current.now = lastRead.current = served;
-      clock.current.unsettled = undefined;
+      clock.current.trust = "settled";
     } else {
       // A buffered response from before Reset cannot wind the established clock back.
       clock.current.now = Math.max(clock.current.now, served);
@@ -82,16 +119,16 @@ export function useSeasonReread(
       const elapsed = advanceClock(clock.current);
       const expired = elapsed >= reset;
       if (expired && sourceTime) setExpiredFor(sourceTime);
-      const { unsettled } = clock.current;
-      if (
-        document.hidden ||
-        (!expired && !recoveryWaiting && !unsettled) ||
-        busy.current ||
-        inFlight.current ||
-        (unsettled !== "slipped" && elapsed - lastRead.current < 60_000)
-      )
-        return;
-      if (unsettled) clock.current.unsettled = "asked";
+      const { trust } = clock.current;
+      const reads = seasonCheckReads({
+        hidden: document.hidden,
+        busy: busy.current || inFlight.current,
+        due: expired || recoveryWaiting,
+        trust,
+        sinceRead: elapsed - lastRead.current,
+      });
+      if (!reads) return;
+      if (trust !== "settled") clock.current.trust = "asked";
       lastRead.current = elapsed;
       inFlight.current = true;
       void Promise.resolve(revalidate())
