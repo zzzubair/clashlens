@@ -58,6 +58,12 @@ def may_delete(stage: RawBodyStage) -> bool:
 
 
 # Hashes whose local copy the database still needs: RECORDED or DELETABLE.
+# Two single-table reads, no join, so stale statistics leave the planner no
+# join to get wrong. After the 7 October 2026 Reset the planner expected 1 kept
+# upload, found 4,287, and rescanned every response-state row for each (286
+# million rows, about 60 s). That state branch added nothing: a copy is only
+# marked deleted while complete, and every path away from complete clears the
+# mark, so its rows all have no mark already.
 RECORDED_SQL = """
     SELECT response_hash
     FROM collector_response_uploads
@@ -69,17 +75,18 @@ RECORDED_SQL = """
 """
 
 
+# Whether processing not finished yet still reads an upload's (aliased
+# ``upload``) bytes.
+STILL_PROCESSING_SQL = """EXISTS (
+    SELECT 1 FROM python_processing_jobs AS job
+    JOIN collector_observations AS observation ON observation.id = job.observation_id
+    WHERE job.work_type = 'process_observation' AND job.status <> 'complete'
+      AND observation.response_hash = upload.response_hash)"""
+
+
 # Upload rows (aliased ``upload``) whose local copy is DELETABLE.
-DELETABLE_SQL = """
+DELETABLE_SQL = f"""
     upload.state = 'complete'
     AND upload.local_deleted_at IS NULL
-    AND NOT EXISTS (
-        SELECT 1
-        FROM python_processing_jobs AS job
-        JOIN collector_observations AS observation
-          ON observation.id = job.observation_id
-        WHERE job.work_type = 'process_observation'
-          AND observation.response_hash = upload.response_hash
-          AND job.status <> 'complete'
-    )
+    AND NOT {STILL_PROCESSING_SQL}
 """

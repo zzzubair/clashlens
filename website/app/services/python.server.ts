@@ -90,7 +90,8 @@ export interface PythonClient {
   ): Promise<TrackedLeaderboard>;
   searchLeaderboard(query: string): Promise<LeaderboardSearch>;
   searchPlayers(query: string, limit?: number): Promise<SearchResponse>;
-  getPlayer(tag: string): Promise<PlayerPage>;
+  /** Without `battles`, each day keeps its totals but lists no battles. */
+  getPlayer(tag: string, battles?: boolean): Promise<PlayerPage>;
   getPlayerSeasons(tag: string): Promise<SummarizedSeasonRef[]>;
   getPlayerSeason(tag: string, seasonId: string): Promise<HistoricalSeasonSummary>;
   getArmyAnalytics(query: URLSearchParams): Promise<ArmyAnalytics>;
@@ -311,9 +312,9 @@ export class NoCompletedLegendDaysError extends Error {
   }
 }
 
-async function getPlayerPage(tag: string): Promise<PlayerPage> {
+async function getPlayerPage(tag: string, battles = true): Promise<PlayerPage> {
   const payload = await requestJson<unknown>(
-    `/v1/players/${encodeURIComponent(tag)}`,
+    `/v1/players/${encodeURIComponent(tag)}${battles ? "" : "?battles=false"}`,
     "GET",
     undefined,
     undefined,

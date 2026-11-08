@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import psycopg
 import pytest
@@ -303,6 +304,70 @@ def test_cleanup_prioritizes_oldest_last_use_over_a_reused_upload(
             )
 
         assert database.deletable_hashes(limit=1) == [cold_hash]
+
+
+def test_cleanup_lookup_checks_a_slice_of_a_resets_unprocessed_uploads(
+    database_url: str,
+) -> None:
+    # 6 November 2026, 05:04: checking every upload a Reset left waiting for
+    # processing took 7.6 s, and the next lookup 30 s later checked them all
+    # again. Each lookup checks the next slice, so every one is still found.
+    with upload_database(database_url) as connection_info:
+        _archive_instance(connection_info)
+        player_id = _player(connection_info)
+        database = CollectorDatabase(connection_info)
+        hashes = [_hash(f"reset-{n}") for n in range(300)]
+        for n, response_hash in enumerate(hashes):
+            database.record_response(_handoff(
+                occurrence_key=f"reset-{n}", response_hash=response_hash,
+                player_id=player_id, completed_at=NOW + timedelta(seconds=n)))
+        processed = hashes[::15]
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE collector_response_uploads SET state = 'complete',"
+                " archive_reference = 's3://evidence/' || response_hash,"
+                " archive_instance_id = 'fixture-instance', completed_at = %s",
+                (NOW,),
+            )
+            connection.execute(
+                """
+                UPDATE python_processing_jobs AS job SET status = 'complete', completed_at = %s
+                FROM collector_observations AS observation
+                WHERE observation.id = job.observation_id
+                  AND observation.response_hash = ANY(%s)
+                """,
+                (NOW, processed),
+            )
+        checked: list[int] = []
+
+        @contextmanager
+        def explained():
+            with database.pool.connection() as connection:
+                def execute(query: str, params: tuple) -> object:
+                    plan = connection.execute(
+                        f"EXPLAIN (ANALYZE, FORMAT JSON) {query}", params
+                    ).fetchone()[0][0]["Plan"]
+                    checked.append(_kept_uploads_read(plan))
+                    return connection.execute(query, params)
+
+                yield SimpleNamespace(execute=execute)
+
+        database._connection = explained  # type: ignore[method-assign]
+        try:
+            found = [database.deletable_hashes(limit=50) for _ in range(7)]
+        finally:
+            database.close()
+
+    assert max(checked) <= 50, checked
+    # Six lookups check all 300, in order, then the seventh starts over.
+    assert [hash for turn in found[:6] for hash in turn] == processed
+    assert found[6] == []
+
+
+def _kept_uploads_read(plan: dict) -> int:
+    if plan.get("Relation Name") == "collector_response_uploads":
+        return int(plan["Actual Rows"])
+    return sum(_kept_uploads_read(child) for child in plan.get("Plans", []))
 
 
 def test_upload_renewal_requires_the_same_live_claim(database_url: str) -> None:

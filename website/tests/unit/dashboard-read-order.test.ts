@@ -74,3 +74,40 @@ it("drops a failed Season list read when the player page is missing", async () =
   const cards = readCards(["season-graph"], ctx, IDENTITY);
   await expect(cards["season-graph"]).resolves.toBeNull();
 });
+
+it("reads other players' pages for Rivals and Watchlist once each, without their battles", async () => {
+  const entry = (rank: number) => ({
+    tag: rank === 4 ? TAG : `#P${rank}`,
+    name: `P${rank}`,
+    rank,
+    trophies: 5400 - rank,
+    freshness: { observedAt: "2026-11-07T12:00:00Z" },
+  });
+  const board = { totalEntries: 7, entries: [1, 2, 3, 4, 5, 6, 7].map(entry) };
+  const client = {
+    getPlayer: vi.fn<(tag: string, battles?: boolean) => Promise<null>>(async () => null),
+    getTrackedLeaderboard: vi.fn(async () => board),
+    listGroups: vi.fn(async () => ({
+      groups: [{ groupId: "mates", name: "Mates", tags: ["#P1", "#Q9"], players: [] }],
+      season: "1793595600",
+    })),
+  };
+  const ctx: CardContext = {
+    client: client as unknown as PythonClient,
+    selected: { tag: TAG, name: "Nova", state: "tracking" } as LinkedPlayerCard,
+    settings: { ...defaultSettings(), groupWindow: "season" },
+  };
+  const cards = readCards(["rivals-watch", "group-watch"], ctx, IDENTITY);
+  await Promise.all(Object.values(cards));
+  const calls = client.getPlayer.mock.calls.map((call) => call.join(" "));
+  expect(calls.sort()).toEqual([
+    "#LQ2V8PJ0",
+    "#P1 false",
+    "#P2 false",
+    "#P3 false",
+    "#P5 false",
+    "#P6 false",
+    "#P7 false",
+    "#Q9 false",
+  ]);
+});

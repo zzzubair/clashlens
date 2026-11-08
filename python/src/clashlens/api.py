@@ -430,13 +430,16 @@ def create_app(
         )
 
     @app.get("/v1/players/{tag}")
-    def player(tag: str, request: Request) -> JSONResponse:
+    def player(
+        tag: str, request: Request, battles: bool = Query(default=True)
+    ) -> JSONResponse:
         _authorize(request, "player.read", production_database)
         normalized_tag = _safe_tag(tag)
         result = api_players.get_player_page(production_database,
             normalized_tag,
             now=current_time(),
             freshness_seconds=_DEFAULT_FRESHNESS_SECONDS,
+            battles=battles,
         )
         if result is None:
             raise ApiError(404, "player_not_found")

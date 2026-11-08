@@ -609,6 +609,7 @@ function rivalNumbers(page: PlayerPage | null, mode: "live" | "season") {
 async function rivalsData(
   ctx: CardContext,
   pages: PageReader,
+  totals: PageReader,
 ): Promise<RivalsData | null> {
   const tag = ctx.selected.tag;
   // Only the Season rows need the last Reset; the live rows start without it.
@@ -639,7 +640,7 @@ async function rivalsData(
     const middle = near[RIVALS_ABOVE];
     const shown = whole(first) ?? (middle && whole(await focused(middle.tag))) ?? near;
     const read = await Promise.all(
-      shown.map(async (entry) => [entry, await pages(entry.tag)] as const),
+      shown.map(async (entry) => [entry, await totals(entry.tag)] as const),
     );
     const rows = read.map(([entry, page]): RivalRow => {
       const before = lastRank(page);
@@ -682,7 +683,7 @@ async function rivalsData(
         trophies: entry.trophies,
         you: entry.tag === tag,
         moved: null,
-        ...rivalNumbers(await pages(entry.tag), "season"),
+        ...rivalNumbers(await totals(entry.tag), "season"),
       })),
     );
     return { rows, days: reset.finished };
@@ -812,6 +813,14 @@ export function readCards(
     if (!read.has(tag)) read.set(tag, unlessMissing(ctx.client.getPlayer(tag)));
     return read.get(tag)!;
   };
+  // Other players' cards show their days' totals, never their battles.
+  const totalsRead = new Map<string, Promise<PlayerPage | null>>();
+  const totals: PageReader = (tag) => {
+    if (tag === ctx.selected.tag) return pages(tag);
+    if (!totalsRead.has(tag))
+      totalsRead.set(tag, unlessMissing(ctx.client.getPlayer(tag, false)));
+    return totalsRead.get(tag)!;
+  };
   const season = async () => {
     const page = await pages(ctx.selected.tag);
     return page === null ? null : seasonData(page);
@@ -863,7 +872,7 @@ export function readCards(
       return page === null ? null : clockData(page);
     },
     goal: () => goalData(ctx, pages),
-    "rivals-watch": () => rivalsData(ctx, pages),
+    "rivals-watch": () => rivalsData(ctx, pages, totals),
     "heat-map": season,
     cutoffs: () => cutoffsData(ctx, pages),
     "season-graph": async () => {
@@ -876,7 +885,7 @@ export function readCards(
     },
     "recent-form": season,
     "offense-consistency": season,
-    "group-watch": () => groupWatchData(ctx, pages, identity),
+    "group-watch": () => groupWatchData(ctx, totals, identity),
   };
   return Object.fromEntries(
     cards

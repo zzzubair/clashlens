@@ -537,24 +537,26 @@ def _boundary_snapshot_status(
     }.get(_text_value(ranked[0]) if ranked else "", "pending")
     if status != "complete":
         return status
+    # Whether any accepted reading is at or before the Reset: stop at the
+    # first. Sorting the whole history for it read about 118 pages a member
+    # cold on the copy of 14 October 2026, at every member result.
     profile = connection.execute(
         """
-        SELECT 1
-        FROM player_profile_versions AS profile
-        LEFT JOIN player_profile_effects AS effect
-          ON effect.profile_version_id = profile.id
-        WHERE profile.player_id = %s
-          AND profile.source_contract_state = 'accepted'
-          AND (%s::timestamptz IS NULL OR COALESCE(effect.observed_at, profile.observed_at) <= %s)
-        ORDER BY COALESCE(effect.observed_at, profile.observed_at) DESC,
-                 COALESCE(effect.id, profile.id) DESC
-        LIMIT 1
+        SELECT EXISTS (
+            SELECT 1
+            FROM player_profile_versions AS profile
+            LEFT JOIN player_profile_effects AS effect
+              ON effect.profile_version_id = profile.id
+            WHERE profile.player_id = %s
+              AND profile.source_contract_state = 'accepted'
+              AND (%s::timestamptz IS NULL
+                   OR COALESCE(effect.observed_at, profile.observed_at) <= %s))
         """,
         (player_id, boundary_at, boundary_at),
-    ).fetchone()
+    ).fetchone()[0]
     # A player not read in the ended day's week before the Reset ranks by
     # their Complete day, named by their first Legend I reading since.
-    return "complete" if profile is not None or boundary_at is not None and (
+    return "complete" if profile or boundary_at is not None and (
         boundary_members.first_readings(
             connection, boundary_at, {player_id: ranked_day_version_id})
     ) else "missing"

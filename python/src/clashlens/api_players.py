@@ -159,7 +159,10 @@ def get_player_page(
     *,
     now: datetime,
     freshness_seconds: int,
+    battles: bool = True,
 ) -> dict[str, Any] | None:
+    """A player's page. Without ``battles``, each day keeps its totals but
+    lists none of its battles, and no army is named."""
     with database.pool.connection() as connection:
         metadata_join, metadata_columns = database._current_profile_metadata(connection)
         # A player who has not played yet this Season shows the newest
@@ -414,6 +417,9 @@ def get_player_page(
         for day in days.values():
             end = day["ranked_day_end"]
             day["reset_rank"] = None if end is None else ranks.get(datetime.fromisoformat(end))
+            if not battles:
+                # Its totals and battles_complete were worked out from them.
+                day["offense_events"], day["defense_events"] = [], []
         data_quality = []
         if age_seconds > freshness_seconds:
             data_quality.append(
