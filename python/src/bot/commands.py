@@ -117,16 +117,16 @@ class Commands:
             return work(later)
         return result
 
-    def stats(self, discord_id: str, discord_name: str, player: str | None = None) -> Reply:
+    def stats(self, discord_id: str, player: str | None = None) -> Reply:
         """Today and this Season so far for any tracked player named by tag or
         name, for anyone; or with no player, for the person's default or only
         linked account, which needs their Discord connected."""
         return self._one_moment(
-            lambda now: self._stats(self.store.account(discord_id), discord_name, player, now)
+            lambda now: self._stats(self.store.account(discord_id), player, now)
         )
 
     def _stats(
-        self, account: AccountContext | None, discord_name: str, player: str | None, now: datetime
+        self, account: AccountContext | None, player: str | None, now: datetime
     ) -> Reply:
         if player is not None and player.strip():
             tag = self._find(player, now)
@@ -140,7 +140,7 @@ class Commands:
                 return replies.name_a_player()
             tag = self._default(account, cards)
             if tag is None:
-                return replies.which_player(self.site, cards, "stats")
+                return replies.which_player(self.site, cards)
         page = self.store.player_page(tag, now)
         if page is None:
             return replies.not_tracked(self.site, tag)
@@ -185,7 +185,7 @@ class Commands:
             return named[0]["tag"]
         return tag if is_tag else replies.no_such_player(text)
 
-    def pick(self, discord_id: str, action: str, tag: str) -> Reply:
+    def pick(self, discord_id: str, tag: str) -> Reply:
         """A dropdown choice; which player to look up when this Discord user
         is no longer connected, as for /stats with no player."""
         account = self.store.account(discord_id)
@@ -193,7 +193,7 @@ class Commands:
             return replies.name_a_player()
         if find_own(self.store.players(account, self.now()), tag) is None:
             return replies.not_own()
-        return self._one_moment(lambda now: self._stats(account, "", tag, now))
+        return self._one_moment(lambda now: self._stats(account, tag, now))
 
     def player_choices(self, discord_id: str, current: str) -> list[replies.Choice]:
         """Autocomplete for /stats: the person's own players first, then known

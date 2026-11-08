@@ -17,7 +17,6 @@ SNAPSHOT_ORDERING_RULE_VERSION = "tracked-player-order-v3"
 SEASON_DESTRUCTION_ORDERING_RULE_VERSION = "tracked-player-order-v2"
 FRESHNESS_RULE_VERSION = "profile-freshness-10m-v1"
 PROFILE_FRESHNESS_SECONDS = 600
-ANALYTICS_RULE_VERSION = "legend-analytics-v1"
 CLASSIFICATION_VERSION = "army-classifier-unavailable-v1"
 CLASSIFICATION_CONFIDENCE = "unclassified"
 

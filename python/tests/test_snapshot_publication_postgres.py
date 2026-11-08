@@ -173,7 +173,6 @@ def _seed_snapshot_job(
         fixture_database = Database(connection_info)
         try:
             manifest = boundary._freeze_boundary_manifest(
-                fixture_database,
                 connection,
                 generation_id=int(generation_id),
                 artifact_kind="snapshot",
@@ -376,8 +375,7 @@ def _prepare_snapshot_correction(
             """,
             (new_generation_id, generation[0]),
         )
-        manifest = boundary._freeze_boundary_manifest(database,
-            connection,
+        manifest = boundary._freeze_boundary_manifest(connection,
             generation_id=new_generation_id,
             artifact_kind="snapshot",
         )
@@ -598,7 +596,6 @@ def _publish_snapshot_population(
                 quality=quality,
                 input_hash=f"{count:064x}",
                 ordering_rule_version=SNAPSHOT_ORDERING_RULE_VERSION,
-                publish=False,
             )
             connection.commit()
         finally:

@@ -207,7 +207,7 @@ def _set_own_switch(
 ) -> OperationResult:
     with database.pool.connection() as connection:
         with connection.transaction():
-            existing = api_db._reserve_request(database, connection, binding)
+            existing = api_db._reserve_request(connection, binding)
             if existing is not None:
                 return existing
             # Locking the ownership row holds off a transfer until this commits,
@@ -235,7 +235,7 @@ def set_dark_picture(database: ApiDatabase, binding: RequestBinding, *, on: bool
     """Turn the account's dark attack alert picture on or off."""
     with database.pool.connection() as connection:
         with connection.transaction():
-            existing = api_db._reserve_request(database, connection, binding)
+            existing = api_db._reserve_request(connection, binding)
             if existing is not None:
                 return existing
             if on:

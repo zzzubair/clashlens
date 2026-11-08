@@ -313,9 +313,6 @@ class S3ArchiveReader:
         if not callable(validator) or not validator(config):
             raise ValueError("archive instance configuration contradicts PostgreSQL")
 
-    def marker_health(self) -> str:
-        return self.check_marker_health()
-
     def check_marker_health(self) -> str:
         config = self.instance_config
         if config is None:
@@ -642,9 +639,6 @@ class SpoolFirstReader:
         return {"ready": ready, "component": "spool", "reason": reason, "remote_health": self.archive.check_marker_health()}
 
     def check_marker_health(self) -> str:
-        return self.archive.check_marker_health()
-
-    def marker_health(self) -> str:
         return self.archive.check_marker_health()
 
     def read_verified(

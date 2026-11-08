@@ -250,7 +250,7 @@ def test_an_attack_the_worker_saves_sends_one_dm_with_the_attackers_hit_rate(
             sent = [asyncio.run(loop.tick()) for _ in range(3)]
 
             stats = Commands(store, SITE, now=lambda: day_3 - timedelta(minutes=1)).stats(
-                DISCORD_ID, "drift", attacker)
+                DISCORD_ID, attacker)
         finally:
             api.close()
             owner.close()

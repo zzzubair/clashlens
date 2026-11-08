@@ -17,8 +17,10 @@ from test_army_analytics_publication_postgres import (
     _publish_day,
     _publish_day_correction,
     _row,
-    _seed_frozen_snapshot_at,
     _selection,
+)
+from test_army_analytics_publication_seasons_postgres import (
+    _seed_frozen_snapshot_at,
 )
 
 from clashlens import api_analytics, army_rank_bands, army_types

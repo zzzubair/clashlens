@@ -33,7 +33,6 @@ from .db import (
     DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
-    Database,
     _text_value,
 )
 from .domain import (
@@ -75,7 +74,6 @@ def retry_wait(failures: str) -> str:
 
 
 def freeze_boundary_manifest(
-    database: Database,
     connection: Any,
     *,
     generation_id: int,

@@ -217,8 +217,7 @@ def test_manifest_is_sorted_frozen_and_reused_after_member_change(
                     generation=1,
                     supersedes_id=None,
                 )
-                next_manifest = boundary._freeze_boundary_manifest(database, 
-                    connection,
+                next_manifest = boundary._freeze_boundary_manifest(connection,
                     generation_id=next_generation,
                     artifact_kind="snapshot",
                 )
@@ -426,7 +425,6 @@ def test_army_rows_keep_the_day_evidence_out_of_the_frozen_row(
                     ).encode("utf-8")
                 ).hexdigest()
                 assert boundary._freeze_boundary_manifest(
-                    database,
                     connection,
                     generation_id=generation_id,
                     artifact_kind="army",
@@ -685,10 +683,9 @@ def test_changed_armies_check_only_their_players_frozen_army_inputs(
             check = boundary_publication._boundary_army_manifest_needs_correction
             checked: list[list[int] | None] = []
 
-            def spy(database, connection, *, manifest_id, player_ids):
+            def spy(connection, *, manifest_id, player_ids):
                 checked.append(player_ids)
                 return check(
-                    database,
                     connection,
                     manifest_id=manifest_id,
                     player_ids=player_ids,
@@ -721,13 +718,11 @@ def test_changed_armies_check_only_their_players_frozen_army_inputs(
                 # A player outside the changed battle reads nothing, though
                 # the Reset's frozen army is now out of date.
                 assert check(
-                    database,
                     connection,
                     manifest_id=army_input["manifest_id"],
                     player_ids=battle_players,
                 )
                 assert not check(
-                    database,
                     connection,
                     manifest_id=army_input["manifest_id"],
                     player_ids=[max(battle_players) + 1000],
@@ -860,7 +855,7 @@ def test_army_correction_compares_every_frozen_side_by_contents(
     # unchanged two-sided battle always looked changed.
     freeze = boundary._freeze_boundary_manifest
 
-    def opponent_then_freeze(database, connection, *, generation_id, artifact_kind):
+    def opponent_then_freeze(connection, *, generation_id, artifact_kind):
         if artifact_kind == "army":
             connection.execute(
                 """
@@ -901,7 +896,6 @@ def test_army_correction_compares_every_frozen_side_by_contents(
                 " SET battles = jsonb_set(battles, '{0,included}', 'false')"
             )
         return freeze(
-            database,
             connection,
             generation_id=generation_id,
             artifact_kind=artifact_kind,
@@ -924,7 +918,6 @@ def test_army_correction_compares_every_frozen_side_by_contents(
 
                 def needs_correction() -> bool:
                     return boundary_publication._boundary_army_manifest_needs_correction(
-                        database,
                         connection,
                         manifest_id=army_input["manifest_id"],
                         player_ids=[frozen["player_id"]],
@@ -970,7 +963,6 @@ def test_army_correction_follows_a_battle_moved_after_the_freeze(
 
                 def needs_correction() -> bool:
                     return boundary_publication._boundary_army_manifest_needs_correction(
-                        database,
                         connection,
                         manifest_id=army_input["manifest_id"],
                         player_ids=[frozen["player_id"]],
@@ -1084,7 +1076,6 @@ def test_frozen_army_build_follows_a_battle_merged_after_the_freeze(
                 # The moved decode is still the frozen one: no correction.
                 assert (
                     not boundary_publication._boundary_army_manifest_needs_correction(
-                        database,
                         connection,
                         manifest_id=army_input["manifest_id"],
                         player_ids=[frozen["player_id"]],
@@ -1112,7 +1103,7 @@ def test_army_frozen_after_a_merge_reads_the_moved_report(
     freeze = boundary._freeze_boundary_manifest
     moves: list[tuple[int, int]] = []
 
-    def merge_then_freeze(database, connection, *, generation_id, artifact_kind):
+    def merge_then_freeze(connection, *, generation_id, artifact_kind):
         if artifact_kind == "army" and not moves:
             [(old,)] = connection.execute("SELECT id FROM legend_battles").fetchall()
             target = _merge_into_day_before(connection, old)
@@ -1164,7 +1155,6 @@ def test_army_frozen_after_a_merge_reads_the_moved_report(
                 (target, target),
             )
         return freeze(
-            database,
             connection,
             generation_id=generation_id,
             artifact_kind=artifact_kind,
@@ -1275,7 +1265,6 @@ def test_frozen_army_build_keeps_a_report_still_on_its_battle(
                 )
                 assert (
                     not boundary_publication._boundary_army_manifest_needs_correction(
-                        database,
                         connection,
                         manifest_id=army_input["manifest_id"],
                         player_ids=[frozen["player_id"]],

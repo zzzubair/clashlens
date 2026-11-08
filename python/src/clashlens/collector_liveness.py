@@ -23,7 +23,6 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from .spool_health import SpoolState
@@ -42,29 +41,6 @@ LOOPS = ("regular", "intents", "uploads")
 # has BULK_STATEMENT_TIMEOUT instead.
 STATEMENT_TIMEOUT = "60s"
 BULK_STATEMENT_TIMEOUT = "5min"
-
-
-class CollectorPhase(StrEnum):
-    """Where ``Collector.run`` is; ``run`` is the only place it moves.
-
-    - ``STARTING``: the health port is open first, then recovery replays the
-      responses saved to the spool before a restart and clears old temporary
-      files. A recovery failure ends the run (``STOPPING``, then ``STOPPED``);
-      the next start recovers again.
-    - ``RUNNING``: the collection, intent and upload loops run, with the
-      uploads process (see ``uploader.UploaderProcess``).
-    - ``STOPPING``: a stop was asked for, so the loops finish what they hold
-      and a last sweep runs; or a loop failed, so the rest are cancelled.
-    - ``STOPPED``: every loop has ended and the health port is closed.
-
-    ``/livez`` reads loop passes, not this phase: a loop that has not come
-    round yet still answers ``starting`` after ``RUNNING`` begins.
-    """
-
-    STARTING = "starting"
-    RUNNING = "running"
-    STOPPING = "stopping"
-    STOPPED = "stopped"
 
 
 # The loop that is running: set by each loop's mark and inherited by the tasks

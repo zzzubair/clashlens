@@ -330,7 +330,7 @@ def test_campaign_lists_only_moves_not_yet_published(database_url: str) -> None:
 
 
 def test_campaign_registration_drops_finished_work_until_activated(
-    database_url: str, monkeypatch
+    database_url: str
 ) -> None:
     with _campaign_database(database_url) as (connection_info, worker):
         with _owner(connection_info) as connection:
@@ -361,8 +361,12 @@ def test_campaign_registration_drops_finished_work_until_activated(
         # No repair stage has a handler yet, so nothing can activate a campaign.
         with pytest.raises(domain_repair.CampaignRefused, match="stages not installed"):
             domain_repair.activate(worker, SEASON, now=NOW)
-        monkeypatch.setattr(domain_repair, "HANDLERS", dict.fromkeys(domain_repair.REQUIRED_STAGES))
-        domain_repair.activate(worker, SEASON, now=NOW)
+        # Activation is unavailable; seed a retained active campaign to test its readers.
+        with _owner(connection_info) as connection:
+            connection.execute(
+                "UPDATE domain_repair_campaigns SET state = 'active'"
+                " WHERE official_season_id = %s", (SEASON,),
+            )
         _decoded(connection_info, second)
         with pytest.raises(domain_repair.CampaignRefused, match="campaign is active"):
             domain_repair.register(worker, SEASON, now=NOW)
@@ -431,8 +435,12 @@ def test_campaign_hold_defers_only_affected_artifacts(
         with pytest.raises(domain_repair.CampaignRefused, match="not installed"):
             domain_repair.activate(worker, SEASON, now=NOW)
         domain_repair.register(worker, SEASON, now=NOW)
-        monkeypatch.setattr(domain_repair, "HANDLERS", dict.fromkeys(domain_repair.REQUIRED_STAGES))
-        domain_repair.activate(worker, SEASON, now=NOW)
+        # Activation is unavailable; seed a retained active campaign to test its readers.
+        with _owner(connection_info) as connection:
+            connection.execute(
+                "UPDATE domain_repair_campaigns SET state = 'active'"
+                " WHERE official_season_id = %s", (SEASON,),
+            )
 
         def builds() -> list[datetime]:
             # A build starts with the board's inputs frozen; the army's freeze

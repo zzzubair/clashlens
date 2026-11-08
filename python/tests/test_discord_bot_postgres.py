@@ -231,8 +231,8 @@ def test_with_none_chosen_the_default_is_the_first_tracked_player(database_url: 
             assert (summary["default_player"], summary["next_default_player"]) == ("#2PP", None)
             assert store.default_tag(account) == "#2PP"
             commands = Commands(store, Site("https://clashlens.test"), now=lambda: NOW)
-            assert commands.stats(DISCORD_ID, "drift").text.startswith("### ")
-            assert "#L82" not in commands.stats(DISCORD_ID, "drift").text
+            assert commands.stats(DISCORD_ID).text.startswith("### ")
+            assert "#L82" not in commands.stats(DISCORD_ID).text
             # A chosen default stays chosen, tracked or not.
             assert _set_default(bot, account, "#L82") is True
             assert store.default_tag(account) == "#L82"
@@ -253,7 +253,7 @@ def test_with_none_chosen_the_default_is_the_first_tracked_player(database_url: 
             summary = api_accounts.get_multi_account_summary(bot, mine)
             assert summary is not None
             assert (summary["default_player"], summary["next_default_player"]) == (None, None)
-            assert commands.stats(DISCORD_ID, "drift").text.startswith("Which linked account?")
+            assert commands.stats(DISCORD_ID).text.startswith("Which linked account?")
         finally:
             bot.close()
             owner.close()
@@ -301,7 +301,7 @@ def test_bot_shows_a_player_who_has_not_played_yet_at_5000(database_url: str) ->
             (card,) = store.players(account, NOW)
             assert (card["reason"], card["trophies"]) == (None, 5000)
             commands = Commands(store, Site("https://clashlens.test"), now=lambda: NOW)
-            reply = commands.stats(DISCORD_ID, "drift")
+            reply = commands.stats(DISCORD_ID)
             assert reply.text.startswith("### Player #2PP")
             assert "Being checked" not in reply.text
         finally:
@@ -374,7 +374,7 @@ def test_bot_finds_a_player_who_has_not_played_yet_by_name(database_url: str) ->
             assert account is not None
             commands = Commands(store, Site("https://clashlens.test"), now=lambda: NOW)
 
-            found = commands.stats(DISCORD_ID, "drift", "Drifter")
+            found = commands.stats(DISCORD_ID, "Drifter")
             assert found.text.startswith("### Drifter #8QQ")
             assert "Being checked" not in found.text
             assert [choice.value for choice in commands.player_choices(DISCORD_ID, "drift")] == [
@@ -425,7 +425,7 @@ def test_bot_names_and_dates_a_player_by_the_profile_their_page_shows(
             assert account is not None
             commands = Commands(store, Site("https://clashlens.test"), now=lambda: NOW)
 
-            found = commands.stats(DISCORD_ID, "drift", "Drifter")
+            found = commands.stats(DISCORD_ID, "Drifter")
             assert found.text.startswith("### Drifter #8QQ")
             assert [choice.label for choice in commands.player_choices(DISCORD_ID, "drift")] == [
                 "Drifter #8QQ · 5,000"

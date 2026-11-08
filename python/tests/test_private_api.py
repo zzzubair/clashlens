@@ -223,11 +223,6 @@ def test_caller_operation_matrix_google_beta_and_complete_private_operations(
                 leaderboard_target,
                 headers=signed_headers(leaderboard_target),
             )
-            analytics_target = "/v1/analytics/basic"
-            analytics = client.get(
-                analytics_target,
-                headers=signed_headers(analytics_target),
-            )
             public_user_target = "/v1/users/missinguser"
             public_user = client.get(
                 public_user_target,
@@ -273,7 +268,6 @@ def test_caller_operation_matrix_google_beta_and_complete_private_operations(
             assert discord_search.status_code == 403
             assert discord_search.json() == {"error": "caller_operation_not_authorized"}
             assert leaderboard.status_code == 200
-            assert analytics.status_code == 200
             assert public_user.status_code == 404
             assert anonymous_account.status_code == 403
             assert discord_identity.status_code == 403
@@ -352,29 +346,8 @@ def test_caller_operation_matrix_google_beta_and_complete_private_operations(
                     subject="google-api-owner",
                 ),
             )
-            export_data = json_body({"format": "google_sheets_scaffold"})
-            export = client.post(
-                "/v1/account/exports",
-                content=export_data,
-                headers=signed_headers(
-                    "/v1/account/exports",
-                    method="POST",
-                    body=export_data,
-                    provider="google",
-                    subject="google-api-owner",
-                ),
-            )
             assert group.status_code == 201
             assert summary.status_code == 200
-            assert export.status_code == 403
-            assert export.json() == {"error": "caller_operation_not_authorized"}
-            assert database.scalar("SELECT count(*) FROM account_export_requests") == 0
-            assert (
-                database.scalar(
-                    "SELECT count(*) FROM python_processing_jobs WHERE work_type = 'build_export'"
-                )
-                == 0
-            )
 
             token_request_id = str(uuid4())
             verify_target = "/v1/players/%232PP/verifytoken"
@@ -867,3 +840,23 @@ def test_saving_a_group_refuses_more_players_than_a_comparison_shows() -> None:
     GroupBody(name="Main", tags=["#2PP"] * MAX_COMPARED_MEMBERS)
     with pytest.raises(ValidationError):
         GroupBody(name="Main", tags=["#2PP"] * (MAX_COMPARED_MEMBERS + 1))
+
+
+@pytest.mark.parametrize(("method", "target"), [
+    ("GET", "/v1/battles/1/army?perspective=attacker"),
+    ("GET", "/v1/analytics/basic"),
+    ("POST", "/v1/account/exports"),
+    ("GET", "/v1/account/exports/00000000-0000-4000-8000-000000000001"),
+])
+def test_removed_routes_are_not_available(database_url: str, method: str, target: str) -> None:
+    app = create_app(
+        database=ApiDatabase(database_url),
+        keys={("typescript-website", "current"): TS_CURRENT},
+        clock=lambda: NOW_SECONDS,
+    )
+    with TestClient(app) as client:
+        response = client.request(
+            method, target,
+            headers=signed_headers(target, method=method),
+        )
+    assert response.status_code == 404

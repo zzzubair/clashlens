@@ -251,8 +251,6 @@ class _Board:
     ends: dict[str, tuple[int, int]]
     best_ends: list[int]
     worst_ends: list[int]
-    held: int
-    defenses: int
     similar: _Similar
     # tag -> (trophies now, open attacks, open defenses), for the projection.
     slots_left: dict[str, tuple[int, int, int]]
@@ -292,7 +290,6 @@ def _read_board(
     slots = {version: slots[version] for version in versions if version in slots}
     ends: dict[str, tuple[int, int]] = {}
     slots_left: dict[str, tuple[int, int, int]] = {}
-    held = defenses = 0
     # Day start trophies -> [defenses, held defenses, trophies lost].
     by_start: dict[int, list[int]] = {}
     for row in live:
@@ -316,22 +313,17 @@ def _read_board(
             basis - MAX_BATTLE_TROPHIES * open_defenses,
         )
         slots_left[tag] = (basis, open_attacks, open_defenses)
-        if defended:
-            defenses += int(defended)
-            held += int(defended) - int(tripled or 0)
-            if start is not None:
-                tally = by_start.setdefault(int(start), [0, 0, 0])
-                tally[0] += int(defended)
-                tally[1] += int(defended) - int(tripled or 0)
-                tally[2] += int(lost)
+        if defended and start is not None:
+            tally = by_start.setdefault(int(start), [0, 0, 0])
+            tally[0] += int(defended)
+            tally[1] += int(defended) - int(tripled or 0)
+            tally[2] += int(lost)
     return _Board(
         day_start=day_start,
         computed_at=now,
         ends=ends,
         best_ends=sorted(best for best, _ in ends.values()),
         worst_ends=sorted(worst for _, worst in ends.values()),
-        held=held,
-        defenses=defenses,
         similar=_similar(by_start),
         slots_left=slots_left,
     ), slots
@@ -920,11 +912,6 @@ def get_player_today(
         "rank_range": None if board is None else rank_range(board, tag),
         "projected_rank": None if board is None else projected_rank(board, projection, tag),
         "projected_rank_pending": pending,
-        # Every player's, only for the website released before each base had
-        # its own; never a base's comparison.
-        "legends_held": {"held": board.held, "defenses": board.defenses}
-        if board is not None and board.defenses
-        else None,
         "open_defenses": open_defenses,
         "automatic_defense_each": auto_each,
         "opponents": None if today is None else opponents,

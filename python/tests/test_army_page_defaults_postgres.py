@@ -21,10 +21,12 @@ from test_army_analytics_publication_postgres import (
     SEASON_ID,
     _army_job,
     _event,
-    _insert_confirmed_anchor,
     _processor,
     _publish_day,
     _row,
+)
+from test_army_analytics_publication_seasons_postgres import (
+    _insert_confirmed_anchor,
     _seed_frozen_snapshot_at,
 )
 from test_private_api import NOW_SECONDS, TS_CURRENT, signed_headers

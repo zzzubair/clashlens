@@ -216,7 +216,7 @@ def judge(
         return None
     losses = [0, *(loss for loss in loss_candidates if loss)]
 
-    def fits(ended: int, new: int, loss: int) -> list[bool]:
+    def fits(ended: int, new: int) -> list[bool]:
         """Whether the reading shows the value unraised, raised, or both: a
         raise applied to a total above it changes nothing."""
         # A Season's reset can land after the first readings (5 October
@@ -261,7 +261,7 @@ def judge(
             for raised in fits(
                 base - short - loss + sum(delta for delta, _, ended in chosen if ended),
                 new_day_change - new_short
-                + sum(delta for delta, _, ended in chosen if not ended), loss)
+                + sum(delta for delta, _, ended in chosen if not ended))
         ]
     if found:
         run, chosen, loss, _ = found[0]

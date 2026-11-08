@@ -123,7 +123,7 @@ def set_pin(database: ApiDatabase, binding: RequestBinding, *, tag: str | None) 
     None. Anyone but the owner gets NOT_OWNER whatever the tag."""
     with database.pool.connection() as connection:
         with connection.transaction():
-            existing = api_db._reserve_request(database, connection, binding)
+            existing = api_db._reserve_request(connection, binding)
             if existing is not None:
                 return existing
             if not _is_owner(connection, binding.account_id):
@@ -162,7 +162,7 @@ def set_follow(
     account's. Anyone but the owner gets NOT_OWNER whatever the tag."""
     with database.pool.connection() as connection:
         with connection.transaction():
-            existing = api_db._reserve_request(database, connection, binding)
+            existing = api_db._reserve_request(connection, binding)
             if existing is not None:
                 return existing
             if not _is_owner(connection, binding.account_id):

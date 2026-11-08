@@ -1038,7 +1038,7 @@ _DECODE_CONTENTS = """
 
 
 def _boundary_army_manifest_needs_correction(
-    database, connection: Any, *, manifest_id: int, player_ids: list[int] | None
+    connection: Any, *, manifest_id: int, player_ids: list[int] | None
 ) -> bool:
     """Whether the changed players' frozen army readings differ from now.
 
@@ -1316,11 +1316,9 @@ def _enqueue_army_analytics(
                 (army_status, generation_id, int(player_id)),
             )
         if (
-            not getattr(database, "_disable_decode_corrections", False)
-            and _text_value(coordinator[2]) in {"ready", "building", "published"}
+            _text_value(coordinator[2]) in {"ready", "building", "published"}
             and coordinator[3] is not None
             and _boundary_army_manifest_needs_correction(
-                database,
                 connection,
                 manifest_id=int(coordinator[3]),
                 player_ids=player_ids,

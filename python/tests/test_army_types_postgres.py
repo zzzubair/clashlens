@@ -23,8 +23,10 @@ from test_army_analytics_publication_postgres import (
     _processor,
     _publish_day,
     _row,
-    _seed_frozen_snapshot_at,
     _selection,
+)
+from test_army_analytics_publication_seasons_postgres import (
+    _seed_frozen_snapshot_at,
 )
 from test_private_api import NOW, NOW_SECONDS, TS_CURRENT, signed_headers
 

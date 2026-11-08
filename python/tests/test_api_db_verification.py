@@ -124,7 +124,7 @@ def test_collector_and_verification_share_the_interactive_limit(
 
             def acquire_verification():
                 return api_verification.acquire_official_permit(
-                    database, fingerprint, request_id=str(uuid4())
+                    database, fingerprint
                 )
 
             python_first = acquire_verification() if verification_first else None
@@ -184,7 +184,7 @@ def test_gate_cooldown_and_quarantine_persist_and_fail_closed(
                 cooldown_seconds=30,
             )
             cooldown = api_verification.acquire_official_permit(database,
-                fingerprint, request_id=str(uuid4())
+                fingerprint
             )
             api_verification.apply_official_key_action(database,
                 fingerprint,
@@ -192,7 +192,7 @@ def test_gate_cooldown_and_quarantine_persist_and_fail_closed(
                 cooldown_seconds=30,
             )
             quarantined = api_verification.acquire_official_permit(database,
-                fingerprint, request_id=str(uuid4())
+                fingerprint
             )
 
             assert cooldown.granted is False

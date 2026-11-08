@@ -9,7 +9,6 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from . import (
-    battle_day_repair,
     boundary,
     domain,
     first_battle_log,
@@ -1349,14 +1348,3 @@ def enqueue_reconciliation(
         connection.commit()
         assert row is not None
         return int(row[0])
-
-
-def enqueue_current_season_republication(
-    database: Database,
-    *,
-    max_jobs: int = 100,
-) -> dict[str, Any]:
-    """Compatibility entry; see ``battle_day_repair``."""
-    return battle_day_repair.enqueue_current_season_republication(
-        database, max_jobs=max_jobs
-    )

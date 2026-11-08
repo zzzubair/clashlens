@@ -138,10 +138,6 @@ def test_bases_compare_with_legends_at_similar_trophies(
     assert {tag: _strength(row) for tag, row in bases.items()} == {
         TYPICAL: "average", STRONG: "hard",
     }
-    # Against every player's 56.5% the typical base was Easy.
-    assert read["legends_held"] == {"held": 226, "defenses": 400}
-    assert _strength({**bases[TYPICAL], "legends_held": read["legends_held"]}) == "easy"
-
     # On Day 4 today's card has no bases yet; Day 3's read shows the same
     # bases, defenses and comparisons as on the day, from every player's
     # saved Day 3 rather than the Live Leaderboard.

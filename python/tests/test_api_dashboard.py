@@ -365,7 +365,6 @@ def test_dashboard_today_ranks_bases_and_automatic_defense(database_url: str) ->
             ] == {"best": 1, "worst": 3}
             # Every player's 4 of 5 held is kept for the older website, but
             # under 50 defenses near a base gives that base no comparison.
-            assert today["legends_held"] == {"held": 4, "defenses": 5}
             assert [row["legends_held"] for row in today["opponents"]] == [None] * 2
             assert today["open_defenses"] == 6
             assert today["automatic_defense_each"] == 23

@@ -21,8 +21,6 @@ from .api_db import (
     ARMY_ANALYTICS_QUERY_WORK_MEM,
     ApiDatabase,
     _json_array,
-    _public_army,
-    _season_reset_waiting_sql,
     _text,
 )
 from .api_players import army_units
@@ -36,7 +34,7 @@ from .army_analytics import (
     public_army_states,
     row_label,
 )
-from .army_decoder import CURRENT_DECODES, DECODER_VERSION
+from .army_decoder import DECODER_VERSION
 from .army_history import HISTORY_READ_CATEGORIES, HISTORY_SORTS, usage_rows
 from .army_rank_bands import counted_boards, read_rank_band_totals
 from .army_season_summaries import PROJECTION_VERSION as ARMY_HISTORY_VERSION
@@ -46,7 +44,6 @@ from .domain import (
     SEASON_ANCHOR_RULE_VERSION,
     SEASON_DURATION,
     ranked_day_for,
-    season_opening_reset,
 )
 
 
@@ -849,76 +846,6 @@ def get_army_analytics(
             )
             database._army_cache_put(cache_key, result)
             return deepcopy(result)
-
-
-def get_battle_army(
-    database, battle_id: int, perspective: str
-) -> dict[str, Any] | None:
-    with database.pool.connection() as connection:
-        row = connection.execute(
-            f"""
-            SELECT battle_id, perspective, status, failure_category,
-                   home_troops, spells, siege, cc_troops, heroes,
-                   unresolved_components, decoder_version, catalog_version
-            FROM {CURRENT_DECODES} AS decode WHERE perspective = %s
-            """,
-            (DECODER_VERSION, [battle_id], perspective),
-        ).fetchone()
-        return None if row is None else _public_army(row)
-
-
-def get_basic_analytics(
-    database: ApiDatabase,
-    *,
-    now: datetime,
-    freshness_seconds: int,
-) -> dict[str, Any]:
-    with database.pool.connection() as connection:
-        row = connection.execute(
-            f"""
-            SELECT count(*), avg(profile.trophies),
-                   count(*) FILTER (
-                       WHERE player.current_observed_at
-                             >= %s - make_interval(secs => %s)
-                   )
-            FROM players AS player
-            JOIN player_profile_versions AS profile
-                ON profile.id = player.current_profile_version_id
-            -- Trophies from before a player's Season reset are left out,
-            -- including first-day trophies equal to the frozen final board or
-            -- not explained by the day's recorded battles.
-            WHERE player.active = true
-              AND profile.current_league_season_id = %s
-              AND NOT {_season_reset_waiting_sql(
-                  "player.id", "profile.trophies", "%s"
-              )}
-            """,
-            (
-                now,
-                freshness_seconds,
-                ranked_day_for(now).official_season_id,
-                season_opening_reset(now),
-            ),
-        ).fetchone()
-        sample_size = int(row[0])
-        fresh = int(row[2])
-        return {
-            "population": "tracked_players",
-            "period": {"as_of": now.astimezone(UTC).isoformat()},
-            "sample_size": sample_size,
-            "coverage": {
-                "profile_observations": sample_size,
-                "battle_observations": 0,
-            },
-            "freshness": {"fresh": fresh, "stale": sample_size - fresh},
-            "classification_state": "unclassified",
-            "classification_version": None,
-            "analytics_rule_version": "basic-profile-v1",
-            "unclassified_count": 0,
-            "results": {
-                "average_trophies": None if row[1] is None else float(row[1])
-            },
-        }
 
 
 def _army_timeout(deadline: float | None, ceiling: float) -> float:

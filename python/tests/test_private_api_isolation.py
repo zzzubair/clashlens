@@ -295,7 +295,7 @@ def test_group_mutations_cannot_name_another_account(accounts):
         assert_private_state(client, other)
 
 
-def test_private_endpoints_require_signed_identity_and_exports_stay_disabled(accounts):
+def test_private_endpoints_require_signed_identity(accounts):
     client, owners = accounts
     for owner, other in (owners, owners[::-1]):
         group_path = f"/v1/account/groups/{other['group']['group_id']}"
@@ -316,8 +316,6 @@ def test_private_endpoints_require_signed_identity_and_exports_stay_disabled(acc
             ("GET", "/v1/account/obs-overlay", None),
             ("POST", "/v1/account/obs-overlay", {"tag": other["tag"], "settings": {}}),
             ("POST", "/v1/account/obs-overlay/link", {"replaces": "a" * 22}),
-            ("POST", "/v1/account/exports", {"format": "google_sheets_scaffold"}),
-            ("GET", f"/v1/account/exports/{uuid4()}", None),
         ]
         for method, target, value in endpoints:
             body = b"" if value is None else json_body(value)
@@ -351,10 +349,6 @@ def test_private_endpoints_require_signed_identity_and_exports_stay_disabled(acc
                 client.request(method, target, content=body, headers=proof).status_code
                 == 401
             )
-            if "/exports" in target:
-                denied = call(client, owner, method, target, value)
-                assert denied.status_code == 403
-                assert denied.json() == {"error": "caller_operation_not_authorized"}
         assert_private_state(client, other)
 
 

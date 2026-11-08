@@ -168,10 +168,6 @@ class AttackAlertBody(StrictBody):
     tag: str | None = Field(default=None, min_length=1, max_length=16)
 
 
-class ExportBody(StrictBody):
-    format: Literal["google_sheets_scaffold", "csv_scaffold"]
-
-
 class ApiError(Exception):
     def __init__(
         self,
@@ -661,7 +657,6 @@ def create_app(
                 official_season_id=official_season_id,
                 season_day_number=season_day_number,
                 now=current_time(),
-                freshness_seconds=_DEFAULT_FRESHNESS_SECONDS,
             )
         if result is None:
             raise ApiError(404, "leaderboard_not_found")
@@ -767,31 +762,6 @@ def create_app(
         if result is None:
             raise ApiError(404, "army_analytics_unavailable")
         return JSONResponse(status_code=200, content=_json_safe(result))
-
-    @app.get("/v1/battles/{battle_id}/army")
-    def battle_army(
-        battle_id: int,
-        request: Request,
-        perspective: Literal["attacker", "defender"],
-    ) -> JSONResponse:
-        _authorize(request, "player.read", production_database)
-        if battle_id < 1:
-            raise ApiError(422, "invalid_request")
-        result = api_analytics.get_battle_army(production_database, battle_id, perspective)
-        if result is None:
-            raise ApiError(404, "battle_army_not_found")
-        return JSONResponse(status_code=200, content=_json_safe(result))
-
-    @app.get("/v1/analytics/basic")
-    def analytics(request: Request) -> JSONResponse:
-        _authorize(request, "analytics.read", production_database)
-        return JSONResponse(
-            status_code=200,
-            content=api_analytics.get_basic_analytics(production_database,
-                now=current_time(),
-                freshness_seconds=_DEFAULT_FRESHNESS_SECONDS,
-            ),
-        )
 
     @app.get("/v1/users/{username}")
     def public_user(username: str, request: Request) -> JSONResponse:
@@ -1081,16 +1051,6 @@ def create_app(
         )
         return _operation_response(result)
 
-    @app.post("/v1/account/exports")
-    def submit_export(body: ExportBody, request: Request) -> JSONResponse:
-        context = _authorize(request, "exports.submit", production_database)
-        assert production_database is not None
-        result = api_accounts.submit_export(production_database,
-            _binding(request, context, "exports.submit", {"format": body.format}),
-            export_format=body.format,
-        )
-        return _operation_response(result)
-
     @app.get("/v1/account/discord-alerts")
     def attack_alerts(request: Request) -> JSONResponse:
         context = _authorize(request, "account.read", production_database)
@@ -1128,18 +1088,6 @@ def create_app(
             on=body.on,
         )
         return _operation_response(result)
-
-    @app.get("/v1/account/exports/{export_id}")
-    def export_status(export_id: str, request: Request) -> JSONResponse:
-        context = _authorize(request, "exports.read", production_database)
-        assert production_database is not None and context.account is not None
-        _safe_uuid(export_id)
-        result = api_accounts.get_export_status(production_database,
-            context.account.internal_id, export_id
-        )
-        if result is None:
-            raise ApiError(404, "export_not_found")
-        return JSONResponse(status_code=200, content=result)
 
     @app.post("/v1/account/providers/{provider}")
     def link_provider(
@@ -1238,7 +1186,6 @@ def create_app(
             api_verification.acquire_official_permit,
             production_database,
             official_credential_fingerprint,
-            request_id=binding.request_id,
         )
         if not permit.granted:
             result = await asyncio.to_thread(

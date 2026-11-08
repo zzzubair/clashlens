@@ -47,14 +47,6 @@ def count_usage(counts: dict[tuple[str, int], list[int]], fact: dict[str, Any]) 
             totals[stars] += 1
 
 
-def aggregate_usage(facts: list[dict[str, Any]]) -> dict[str, list[list[Any]]]:
-    """[typed ID, quantity, uses, one-star, two-star, three-star]."""
-    counts: dict[tuple[str, int], list[int]] = {}
-    for fact in facts:
-        count_usage(counts, fact)
-    return usage_by_category(counts)
-
-
 def usage_by_category(
     counts: dict[tuple[str, int], list[int]],
 ) -> dict[str, list[list[Any]]]:

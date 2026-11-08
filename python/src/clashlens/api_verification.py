@@ -191,10 +191,7 @@ def register_official_credential(database: ApiDatabase, fingerprint: str) -> Non
 def acquire_official_permit(
     database: ApiDatabase,
     fingerprint: str,
-    *,
-    request_id: str,
 ) -> PermitResult:
-    del request_id  # The shared PostgreSQL gate owns the permit identity.
     with database.pool.connection() as connection:
         with connection.transaction():
             registered = connection.execute(
@@ -328,8 +325,7 @@ def reserve_verification(
                             },
                         ),
                     )
-            existing = api_db._reserve_request(database,
-                connection,
+            existing = api_db._reserve_request(connection,
                 binding,
                 recover_expired_verification=True,
             )

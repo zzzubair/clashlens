@@ -760,7 +760,6 @@ def test_whole_population_freeze_matches_the_per_player_freeze(
                         artifact_kind=artifact_kind,
                     )
                     manifest_id, digest = boundary._freeze_boundary_manifest(
-                        database,
                         connection,
                         generation_id=generation_id,
                         artifact_kind=artifact_kind,
@@ -948,7 +947,7 @@ def test_board_leaves_out_players_whose_profile_went_missing_before_the_reset(
         try:
             with database.pool.connection() as connection:
                 manifest_id, _ = boundary._freeze_boundary_manifest(
-                    database, connection, generation_id=generation_id,
+                    connection, generation_id=generation_id,
                     artifact_kind="snapshot",
                 )
                 rows = connection.execute(
@@ -992,7 +991,7 @@ def test_board_rebuild_queues_one_correction_per_board_still_ranking_a_missing_p
             # built before this rule were.
             with database.pool.connection() as connection:
                 boundary._freeze_boundary_manifest(
-                    database, connection, generation_id=generation_id,
+                    connection, generation_id=generation_id,
                     artifact_kind="snapshot",
                 )
             store_observation(
@@ -1160,7 +1159,7 @@ def _build_board(connection_info: str, database: Database, generation_id: int) -
     entry's tag, trophies and confidence in rank order."""
     with database.pool.connection() as connection:
         manifest_id, digest = boundary._freeze_boundary_manifest(
-            database, connection, generation_id=generation_id, artifact_kind="snapshot"
+            connection, generation_id=generation_id, artifact_kind="snapshot"
         )
         connection.execute(
             "UPDATE boundary_publication_generations SET snapshot_state = 'ready'"

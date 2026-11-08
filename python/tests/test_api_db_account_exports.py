@@ -8,7 +8,7 @@ from clashlens import api_accounts, api_leaderboard
 from clashlens.api_db import ApiDatabase
 
 
-def test_account_update_frozen_leaderboard_and_export_scaffold(
+def test_account_update_and_frozen_leaderboard(
     database_url: str,
 ) -> None:
     with migrated_production_database(
@@ -219,35 +219,6 @@ def test_account_update_frozen_leaderboard_and_export_scaffold(
                 "season_day_number": 21,
             }
 
-            export = api_accounts.submit_export(database,
-                account_binding(
-                    account_id,
-                    "exports.submit",
-                    "/v1/account/exports",
-                    {"format": "google_sheets_scaffold"},
-                ),
-                export_format="google_sheets_scaffold",
-            )
-            export_id = export.payload["export_id"]
-            assert export.status_code == 202
-            assert export.payload == {
-                "export_id": export_id,
-                "format": "google_sheets_scaffold",
-                "status": "pending",
-            }
-            assert api_accounts.get_export_status(database, account_id, export_id) == export.payload
-            assert (
-                database.scalar(
-                    "SELECT count(*) FROM python_processing_jobs WHERE work_type = 'build_export'"
-                )
-                == 1
-            )
-            assert (
-                database.scalar(
-                    "SELECT count(*) FROM python_processing_jobs WHERE observation_id IS NULL"
-                )
-                == 1
-            )
         finally:
             database.close()
 

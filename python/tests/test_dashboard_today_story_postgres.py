@@ -155,7 +155,6 @@ def test_rank_range_fills_in_from_a_slow_background_read_and_never_crosses_a_res
     assert {today["board_computed_at"] for today in served.values()} == {
         now.isoformat()
     }
-    assert served[DONE]["legends_held"] == {"held": 8, "defenses": 8}
     assert tomorrow is not None
     assert (tomorrow["rank_range"], tomorrow["board_computed_at"]) == (None, None)
     assert newcomer is not None and climber is not None

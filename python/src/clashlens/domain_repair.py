@@ -744,9 +744,8 @@ def _board_counts(connection: Any, start: datetime) -> dict[str, Any]:
 
 
 ACTIONS = ("preview", "register", "activate")
-# Each later repair change adds its stage; activation refuses until all exist.
+# Campaign execution is not installed; preview and registration remain available.
 REQUIRED_STAGES = ("battle_reports", "army_decodes", "day_results", "publications")
-HANDLERS: dict[str, Any] = {}
 
 
 class CampaignRefused(ValueError):
@@ -1128,28 +1127,8 @@ def register(database: Database, season_id: str, *, now: datetime | None = None)
 
 
 def activate(database: Database, season_id: str, *, now: datetime | None = None) -> dict:
-    """Start holding the campaign's Resets, once every stage can run."""
-    missing = [stage for stage in REQUIRED_STAGES if stage not in HANDLERS]
-    if missing:
-        raise CampaignRefused(f"repair stages not installed: {', '.join(missing)}")
-    with database.pool.connection() as connection, connection.transaction():
-        deadline = _open(connection, season_id, now, write=True)[1]
-        row = connection.execute(
-            "SELECT id, state, target_versions FROM domain_repair_campaigns"
-            " WHERE official_season_id = %s FOR UPDATE",
-            (season_id,),
-        ).fetchone()
-        if row is None or _text_value(row[1]) != CampaignState.REGISTERED:
-            raise CampaignRefused(f"season {season_id} has no registered campaign")
-        if row[2] != target_versions():
-            raise CampaignRefused("pinned versions changed; register again")
-        connection.execute(
-            "UPDATE domain_repair_campaigns SET state = %s,"
-            " updated_at = clock_timestamp() WHERE id = %s",
-            (CampaignState.ACTIVE.value, row[0]),
-        )
-        _still_open(connection, season_id, deadline, now)
-        return {"action": "activate", "season": season_id, "campaign_id": row[0]}
+    """Refuse activation until campaign execution is implemented."""
+    raise CampaignRefused(f"repair stages not installed: {', '.join(REQUIRED_STAGES)}")
 
 
 def run_campaign_command(database: Database, action: str, season_id: str) -> dict:

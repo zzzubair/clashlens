@@ -730,7 +730,6 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     quality=quality,
                     input_hash=input_hash,
                     ordering_rule_version=ordering_rule_version,
-                    publish=True,
                 )
             )
             _publish_snapshot_kind(database, 
@@ -745,7 +744,6 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                 quality=quality,
                 input_hash=input_hash,
                 ordering_rule_version=ordering_rule_version,
-                publish=True,
             )
             if generation_row is not None:
                 connection.execute(
@@ -806,9 +804,8 @@ def _publish_snapshot_kind(
     quality: dict[str, int],
     input_hash: str,
     ordering_rule_version: str,
-    publish: bool,
 ) -> tuple[int, int]:
-    """Assemble one immutable snapshot version, published when ``publish``.
+    """Assemble and publish one immutable snapshot version.
 
     A frozen snapshot publishes at the end of its build, its statistics
     following in their own job (``boundary_publication.complete_analytics``):
@@ -1033,24 +1030,23 @@ def _publish_snapshot_kind(
             """,
             (snapshot_id, Jsonb(entry_rows)),
         )
-    if publish:
+    connection.execute(
+        """
+        UPDATE leaderboard_snapshots
+        SET state = 'published', published_at = clock_timestamp()
+        WHERE id = %s AND state = 'building'
+        """,
+        (snapshot_id,),
+    )
+    if prior is not None and int(prior[0]) != snapshot_id:
         connection.execute(
             """
             UPDATE leaderboard_snapshots
-            SET state = 'published', published_at = clock_timestamp()
-            WHERE id = %s AND state = 'building'
+            SET state = 'superseded'
+            WHERE id = %s AND state = 'published'
             """,
-            (snapshot_id,),
+            (prior[0],),
         )
-        if prior is not None and int(prior[0]) != snapshot_id:
-            connection.execute(
-                """
-                UPDATE leaderboard_snapshots
-                SET state = 'superseded'
-                WHERE id = %s AND state = 'published'
-                """,
-                (prior[0],),
-            )
     return snapshot_id, snapshot_version
 
 

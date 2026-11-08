@@ -90,10 +90,8 @@ class Reply:
     footer: str | None = None
     # Buttons below everything.
     links: tuple[Link, ...] = ()
-    # A dropdown of the person's own players; picking one runs `pick`
-    # ("stats") for that player.
+    # A dropdown of the person's own players; picking one shows their stats.
     choices: tuple[Choice, ...] = ()
-    pick: str | None = None
     placeholder: str | None = None
     # Only the person who ran the command sees it: the not-connected pointer
     # and plain errors meant for them. Every other reply is a normal message
@@ -479,7 +477,7 @@ def not_tracked(site: Site, tag: str) -> Reply:
     )
 
 
-def which_player(site: Site, cards: Sequence[Mapping[str, Any]], action: str) -> Reply:
+def which_player(site: Site, cards: Sequence[Mapping[str, Any]]) -> Reply:
     """No player named and no default found: ask with a dropdown of the
     person's own players."""
     return say(
@@ -487,7 +485,6 @@ def which_player(site: Site, cards: Sequence[Mapping[str, Any]], action: str) ->
         "Clash Lens settings.",
         Link("Choose your default account", site.url(SETTINGS)),
         choices=tuple(choice_for(card) for card in ordered(cards, None)[:MAX_CHOICES]),
-        pick=action,
         placeholder="Which linked account?",
     )
 

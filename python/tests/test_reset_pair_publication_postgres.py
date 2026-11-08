@@ -23,7 +23,12 @@ from test_reconciliation_postgres import (
 )
 from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
-from clashlens import boundary_publication, reconciliation_db, reset_baselines
+from clashlens import (
+    battle_day_repair,
+    boundary_publication,
+    reconciliation_db,
+    reset_baselines,
+)
 from clashlens.collector_db import CollectorDatabase
 from clashlens.db import (
     ANALYTICS_RULE_VERSION,
@@ -328,7 +333,7 @@ def test_republication_finishes_days_left_by_partial_reset_pairs(
                     ]
 
             def repair() -> dict:
-                return reconciliation_db.enqueue_current_season_republication(
+                return battle_day_repair.enqueue_current_season_republication(
                     database, max_jobs=1
                 )
 
@@ -495,7 +500,7 @@ def test_republication_retries_failed_reset_repair_left_live(
                 connection.commit()
 
             def repair(max_jobs: int = 100) -> dict:
-                return reconciliation_db.enqueue_current_season_republication(
+                return battle_day_repair.enqueue_current_season_republication(
                     database, max_jobs=max_jobs
                 )
 
@@ -1077,7 +1082,7 @@ def test_republication_finishes_ended_days_left_live(
             assert _latest_day(database, player_id, today.start)[:2] == ("Live", "Live")
 
             def repair() -> tuple[list[int], list[dict]]:
-                report = reconciliation_db.enqueue_current_season_republication(
+                report = battle_day_repair.enqueue_current_season_republication(
                     database, max_jobs=10
                 )
                 return report["job_ids"], report["failed_blockers"]

@@ -74,10 +74,10 @@ def _record(
 def _publish(database, connection, generation_id: int, boundary_at: datetime) -> None:
     input_hash = format(generation_id, "x").rjust(64, "b")
     snapshot_manifest = boundary._freeze_boundary_manifest(
-        database, connection, generation_id=generation_id, artifact_kind="snapshot"
+        connection, generation_id=generation_id, artifact_kind="snapshot"
     )
     army_manifest = boundary._freeze_boundary_manifest(
-        database, connection, generation_id=generation_id, artifact_kind="army"
+        connection, generation_id=generation_id, artifact_kind="army"
     )
     snapshot_id = connection.execute(
         """

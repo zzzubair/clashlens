@@ -1332,19 +1332,15 @@ def _enqueue_reset_reconciliation(
     ranked_day_start: datetime,
     last_ranked_day_start: datetime,
     recalculate_season: str | None,
-    deduplication_key: str | None = None,
     season_repair: bool = False,
 ) -> int | None:
     boundary_text = boundary_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     ranked_day_start_text = ranked_day_start.astimezone(UTC).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
-    if deduplication_key is None:
-        deduplication_key = (
-            f"reconcile:reset-baseline:{baseline_id}:v{baseline_version}"
-        )
-        if ranked_day_start == boundary_at:
-            deduplication_key += f":{ranked_day_start_text}"
+    deduplication_key = f"reconcile:reset-baseline:{baseline_id}:v{baseline_version}"
+    if ranked_day_start == boundary_at:
+        deduplication_key += f":{ranked_day_start_text}"
     row = connection.execute(
         """
         INSERT INTO python_processing_jobs_worker (

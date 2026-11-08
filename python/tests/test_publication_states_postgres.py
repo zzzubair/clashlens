@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
-from enum import StrEnum
 
 import psycopg
 import pytest
@@ -51,7 +50,9 @@ RESET = datetime(2026, 10, 12, 5, tzinfo=UTC)
         ("ranked_day_versions", "state", DayState),
         # The day's confidence is listed only where the website reads it.
         ("api_player_daily_logs", "confidence", Confidence),
-        ("ranked_day_versions", "shield_state", ShieldState),
+        # Historical rows retain these values; current writers no longer emit them.
+        ("ranked_day_versions", "shield_state",
+         [*ShieldState, "not_shielded", "uncertain_sequence"]),
         ("ranked_day_versions", "automatic_defense_evidence_state", LossEvidence),
         ("season_anchor_evidence", "outcome", AnchorOutcome),
         ("domain_repair_campaigns", "state", CampaignState),
@@ -62,7 +63,7 @@ RESET = datetime(2026, 10, 12, 5, tzinfo=UTC)
     ],
 )
 def test_each_named_state_list_matches_the_database(
-    database_url: str, table: str, column: str, states: Iterable[StrEnum]
+    database_url: str, table: str, column: str, states: Iterable[str]
 ) -> None:
     with domain_database(database_url) as connection_info, psycopg.connect(
         connection_info
@@ -82,7 +83,7 @@ def test_each_named_state_list_matches_the_database(
         ]
     assert lists, table
     allowed = {value for listed in lists for value in re.findall(r"'([A-Za-z_]+)'::text", listed)}
-    assert allowed == {state.value for state in states}
+    assert allowed == set(states)
 
 
 @pytest.mark.parametrize(

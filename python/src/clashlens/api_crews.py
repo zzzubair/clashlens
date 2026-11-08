@@ -68,7 +68,7 @@ def _write(
     so far and is stored as the answer, as every Group write's is."""
     with database.pool.connection() as connection:
         with connection.transaction():
-            existing = api_db._reserve_request(database, connection, binding)
+            existing = api_db._reserve_request(connection, binding)
             if existing is not None:
                 return existing
             try:
