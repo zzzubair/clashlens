@@ -627,7 +627,15 @@ def remove_player(
         if holder != account_id and not role.outranks(holder_role):
             raise _Refused(403, {"error": "crew_forbidden"})
         after: CrewRole | None = holder_role
-        if len(_own_tags(connection, crew_row, holder)) == 1:
+        other_place = connection.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM crew_players
+                WHERE crew_id = %s AND account_id = %s AND player_id <> %s)
+            """,
+            (crew_row, holder, player_id),
+        ).fetchone()
+        if not other_place[0]:
             # The owner is refused; anyone else is out of the crew, which
             # the database's crew_players_member_without_places trigger does.
             after = move(holder_role, CrewEvent.LAST_PLACE)
