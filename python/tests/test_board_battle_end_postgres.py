@@ -75,7 +75,7 @@ def test_board_leaves_out_battles_that_end_after_the_reset(
                  destruction=80),
         ],
     }
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         # Each Reset sweep captures all three players before collecting them.
         with psycopg.connect(connection_info) as connection:
             for tag in PLAYERS:

@@ -28,7 +28,7 @@ def test_stats_totals_every_saved_day_and_never_hides_a_missing_one(
     put the week in Legend I, so both days are saved from it and /stats
     totals them: Day 1 had no battle."""
     day_1, day_2, day_3 = day(1), day(2), day(3)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = Story(connection_info, archive_server, monkeypatch,
                       {tag: Player(tag) for tag in (FULL, LATE)})
         # Day 1: 4 attacks gain 150, three of them three-stars, and 8

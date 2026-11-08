@@ -33,7 +33,7 @@ def test_armies_leave_out_a_finished_day_until_it_is_counted(
     at 06:00 the view serves Day 9 alone, from saved counts, and at 07:00,
     once Day 10 is counted, Days 9 and 10."""
     first, second, third = day(9), day(10), day(11)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, *PLAYERS)
         for player in story.players.values():
             player.battles = [

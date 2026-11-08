@@ -10,10 +10,14 @@ from types import SimpleNamespace
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, record_seasons_to, store_observation
+from domain_test_support import (
+    _processor,
+    domain_database,
+    record_seasons_to,
+    store_observation,
+)
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from test_collector_db_postgres import _handoff, _hash
-from test_domain_processing_postgres import _processor
 
 from clashlens import league_week, population, promotion_candidates
 from clashlens.collector_db import CollectorDatabase
@@ -608,7 +612,7 @@ def test_a_player_first_named_while_tracked_counts_as_an_opponent_once_untracked
 def test_the_delay_from_a_first_check_to_the_first_battle_log_is_reported(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         logged, waiting = _players(connection_info, 2)
         # A battle log named one player before its check found queue space.
         seen_at = datetime.now(UTC) - timedelta(seconds=60)

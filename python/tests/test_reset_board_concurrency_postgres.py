@@ -81,7 +81,7 @@ def _states(connection) -> tuple[int, int]:
 
 
 def test_member_results_do_not_wait_for_each_other(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -104,7 +104,7 @@ def test_member_results_do_not_wait_for_each_other(database_url: str) -> None:
 
 
 def test_last_results_see_every_other_one_and_build_once(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         errors: list[BaseException] = []
         try:
@@ -164,7 +164,7 @@ def _member(connection, player_id: int) -> tuple[str, str]:
 
 
 def test_reset_replay_keeps_the_result_it_waited_for(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         errors: list[BaseException] = []
         try:

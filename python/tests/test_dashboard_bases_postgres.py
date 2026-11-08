@@ -95,7 +95,7 @@ def test_bases_compare_with_legends_at_similar_trophies(
         for tag, start in starts.items()
     }
 
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = Story(connection_info, archive_server, monkeypatch, players)
         story.reset(today, {tag: (start, SEASON) for tag, start in starts.items()})
         story.reads(today + timedelta(hours=9), ends)

@@ -120,7 +120,7 @@ def test_daily_board_lookup_reads_one_input_row_per_board(
     # 7 October 2026: production held about 5.4 million board input rows and
     # finding each board's Legend day walked through all of them, so the
     # daily board hit the statement time limit and showed as unavailable.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _seed_published_boards(connection_info)
         locators: list[tuple[str, tuple]] = []
         execute = psycopg.Connection.execute

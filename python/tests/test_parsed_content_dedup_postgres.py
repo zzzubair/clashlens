@@ -10,6 +10,7 @@ from unittest.mock import patch
 import psycopg
 import pytest
 from domain_test_support import (
+    _processor,
     apply_migration,
     as_api_role,
     decide_leagues,
@@ -18,7 +19,6 @@ from domain_test_support import (
     text,
 )
 from test_discovery_history_prune_postgres import _attach_complete_work
-from test_domain_processing_postgres import _processor
 
 from clashlens import (
     alerts,
@@ -65,7 +65,7 @@ def _replay_job(
 def test_snapshot_manifest_uses_owning_ranking_version_observed_at(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _observation_id, ranking_job = store_observation(
             connection_info,
             archive_server,
@@ -121,7 +121,7 @@ def test_snapshot_manifest_uses_owning_ranking_version_observed_at(
 def test_worker_can_read_battle_observation_source_rows_view(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             assert connection.execute(
                 """
@@ -143,7 +143,7 @@ def test_one_observation_replays_under_both_parser_versions_without_domain_chang
     database_url: str, archive_server
 ) -> None:
     body = PROFILE_FIXTURE.read_bytes()
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         observation_id, initial_job_id = store_observation(
             connection_info,
             archive_server,
@@ -221,7 +221,7 @@ def test_one_observation_replays_under_both_parser_versions_without_domain_chang
 def test_reused_semantic_profile_keeps_retained_season_anchor_conflict(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _anchor_observation_id, anchor_job_id = store_observation(
             connection_info,
             archive_server,
@@ -289,7 +289,7 @@ def test_duplicate_semantic_rows_prefer_current_pointer_without_timestamp_write(
     database_url: str, archive_server
 ) -> None:
     body = PROFILE_FIXTURE.read_bytes()
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         observation_id, first_job = store_observation(
             connection_info,
             archive_server,
@@ -387,7 +387,7 @@ def test_equal_observed_profile_occurrences_keep_final_occurrence_tie_order(
     body_b = json.loads(body_a)
     body_b["clan"]["name"] = "Tie-B"
     bodies = (body_a, json.dumps(body_b).encode(), body_a, body_a)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = []
         for index, body in enumerate(bodies):
             _observation_id, job_id = store_observation(
@@ -432,7 +432,7 @@ def test_public_profile_uses_latest_occurrence_metadata_and_freshness(
     body = PROFILE_FIXTURE.read_bytes()
     first_at = NOW
     second_at = NOW + timedelta(hours=1)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         first_observation, first_job = store_observation(
             connection_info,
             archive_server,
@@ -483,7 +483,7 @@ def test_concurrent_profiles_for_one_player_complete_without_retry(
     from threading import Barrier
     from unittest.mock import patch
 
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _, initial_job = store_observation(
             connection_info, archive_server, occurrence_key="concurrent-profile-initial",
             endpoint="profile", body=PROFILE_FIXTURE.read_bytes(),
@@ -762,7 +762,7 @@ def test_rank_only_profile_check_confirms_without_saving_or_processing(
     trophies = json.loads(PROFILE_FIXTURE.read_bytes())["trophies"]
     body = ranked(812, trophies)
     checked_at = NOW + timedelta(hours=2)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _, job = store_observation(
             connection_info, archive_server, occurrence_key="rank-applied",
             endpoint="profile", body=body, observed_at=NOW, normalized_tag="#2PP",
@@ -834,7 +834,7 @@ def test_player_page_and_leaderboard_freshness_follow_the_last_successful_check(
 ) -> None:
     body = PROFILE_FIXTURE.read_bytes()
     checked_at = NOW + timedelta(hours=2)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         applied, job = store_observation(
             connection_info,
             archive_server,
@@ -975,7 +975,7 @@ def test_duplicate_profiles_reuse_canonical_and_semantic_rows(
     database_url: str, archive_server
 ) -> None:
     body = PROFILE_FIXTURE.read_bytes()
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             duplicate_jobs = [
@@ -1071,7 +1071,7 @@ def test_history_cleanup_keeps_reports_latest_profiles_and_unfinished_work(
 ) -> None:
     from clashlens.history import prune_completed_history
 
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             for endpoint, fixture in [("profile", PROFILE_FIXTURE), ("battle_log", BATTLE_FIXTURE)]:
@@ -1148,7 +1148,7 @@ def _count_battle_result_writes(connection: psycopg.Connection) -> None:
 def test_compact_reports_survive_log_changes_and_perspective_corrections(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info, autocommit=True) as connection:
             _count_battle_result_writes(connection)
         database, processor = _processor(connection_info, archive_server)
@@ -1215,7 +1215,7 @@ def test_compact_reports_survive_log_changes_and_perspective_corrections(
 def test_attacker_and_defender_reporting_at_once_still_classify_the_battle(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         attack = json.loads(BATTLE_FIXTURE.read_bytes())["items"][0]
         defense = dict(attack, attack=False, opponentPlayerTag="#2PP",
                        opponentName="Synthetic Attacker",
@@ -1262,7 +1262,7 @@ def test_attacker_and_defender_reporting_at_once_still_classify_the_battle(
 def test_duplicate_battles_and_rankings_reuse_source_rows(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             jobs = []
@@ -1379,7 +1379,7 @@ def test_same_battle_bytes_reparsed_with_allocation_v2_keep_old_result(
         destructionPercentage=55,
     )
     body = json.dumps({"items": [row]}).encode()
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             for index, parser_version in enumerate(

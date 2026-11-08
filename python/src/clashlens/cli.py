@@ -220,7 +220,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _database_argument(ready)
     _archive_arguments(ready)
-    ready.add_argument("--expected-contract-version", type=int, default=4)
+    ready.add_argument("--expected-contract-version", type=int, default=CONTRACT_VERSION)
 
     queue_status = subparsers.add_parser(
         "queue-status", help="report aggregate production worker queue health"
@@ -835,7 +835,6 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         return Database(
             _database_url(arguments),
             max_size=max_size,
-            expected_contract_version=CONTRACT_VERSION,
             player_discovery_enabled=not getattr(
                 arguments, "disable_player_discovery", False
             ),
@@ -843,23 +842,13 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         )
 
     database = maintenance_database = open_database(database_pool_size)
-    assert_contract_version = getattr(database, "assert_contract_version", None)
-    if callable(assert_contract_version):
-        assert_contract_version(CONTRACT_VERSION)
     stop_requested = Event()
     _install_shutdown_handlers(stop_requested)
     maintenance = None
     try:
         stage_metrics = StageMetrics()
         worker_metrics = WorkerMetrics()
-        try:
-            archive = _archive(
-                arguments, pool_size=archive_pool_size, database=database
-            )
-        except TypeError as error:
-            if "database" not in str(error):
-                raise
-            archive = _archive(arguments, pool_size=archive_pool_size)
+        archive = _archive(arguments, pool_size=archive_pool_size, database=database)
         set_archive_pool_observer = getattr(archive, "set_pool_acquire_observer", None)
         if callable(set_archive_pool_observer):
             set_archive_pool_observer(
@@ -874,11 +863,10 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         # Else the timer's first tick does; either way only with the permit.
         if maintenance_database is database and maintenance.leads():
             maintenance.reevaluate()
-        if isinstance(processor, ObservationProcessor):
-            processor.stage_metrics = database.stage_metrics = stage_metrics
-            processor.claim_batch = getattr(arguments, "claim_batch_size", 1)
-            if process_index:
-                processor.plan_share = (process_index, arguments.processes)
+        processor.stage_metrics = database.stage_metrics = stage_metrics
+        processor.claim_batch = getattr(arguments, "claim_batch_size", 1)
+        if process_index:
+            processor.plan_share = (process_index, arguments.processes)
 
         # Only these threads may run a population build or the timer's checks.
         build_lane = response_lane_count(concurrency, response_lanes) + 1

@@ -47,11 +47,6 @@ def _text(value: Any) -> str:
     return value.decode("utf-8") if isinstance(value, bytes) else str(value)
 
 
-def _table_exists(connection: Any, table: str) -> bool:
-    row = connection.execute("SELECT to_regclass(%s) IS NOT NULL", (table,)).fetchone()
-    return bool(row and row[0])
-
-
 _MEASURED_RELKINDS = ("r", "p", "m", "S")
 _RELKIND_LABELS = {
     "r": "ordinary table",
@@ -123,15 +118,11 @@ def is_season_detail_retired(connection: Any, season_id: str) -> bool:
     Mutating callers hold a season lock first and keep it through their
     writes: shared for writers, exclusive for retirement.
     """
-    if not _table_exists(connection, "season_detail_retirements"):
-        return False
     return season_closure(connection, season_id) is not SeasonClosure.OPEN
 
 
 def retired_day_ranges(connection: Any) -> list[tuple[Any, Any]]:
     """(start, end) bounds of fenced seasons for rolling-log filtering."""
-    if not _table_exists(connection, "season_detail_retirements"):
-        return []
     return [
         (row[0], row[1])
         for row in connection.execute(
@@ -228,43 +219,35 @@ def finalize_season_detail(
     now_utc = _aware_utc(now)
     acquire_retirement_writer(connection)
     _lock_season(connection, season_id)
-    if _table_exists(connection, "season_detail_retirements"):
-        existing = connection.execute(
-            """
-            SELECT status, season_start, season_end
-            FROM season_detail_retirements WHERE official_season_id = %s
-            """,
-            (season_id,),
-        ).fetchone()
-        if existing is not None:
-            close_at, reason = season_close_block(
-                _canonical_season_bounds(connection, season_id), existing[1:3], now_utc
-            )
-            blocking_work = (
-                {} if reason else close_blockers(connection, season_id, *existing[1:3])
-            )
-            if reason is not None or blocking_work:
-                return {
-                    "season_id": season_id,
-                    "status": "blocked",
-                    "reason": reason or "verification_failed",
-                    **close_at,
-                    **({"blocking_work": blocking_work} if blocking_work else {}),
-                    "existing_status": _text(existing[0]),
-                    "already_finalized": True,
-                    "applied": False,
-                }
+    existing = connection.execute(
+        """
+        SELECT status, season_start, season_end
+        FROM season_detail_retirements WHERE official_season_id = %s
+        """,
+        (season_id,),
+    ).fetchone()
+    if existing is not None:
+        close_at, reason = season_close_block(
+            _canonical_season_bounds(connection, season_id), existing[1:3], now_utc
+        )
+        blocking_work = (
+            {} if reason else close_blockers(connection, season_id, *existing[1:3])
+        )
+        if reason is not None or blocking_work:
             return {
                 "season_id": season_id,
-                "status": _text(existing[0]),
+                "status": "blocked",
+                "reason": reason or "verification_failed",
+                **close_at,
+                **({"blocking_work": blocking_work} if blocking_work else {}),
+                "existing_status": _text(existing[0]),
                 "already_finalized": True,
                 "applied": False,
             }
-    else:
         return {
             "season_id": season_id,
-            "status": "missing_retirement_table",
-            "already_finalized": False,
+            "status": _text(existing[0]),
+            "already_finalized": True,
             "applied": False,
         }
     bounds = _canonical_season_bounds(connection, season_id)
@@ -492,8 +475,6 @@ def retire_season_detail(
     _lock_season(connection, season_id)
     if now is None:
         now = _aware_utc(connection.execute("SELECT clock_timestamp()").fetchone()[0])
-    if not _table_exists(connection, "season_detail_retirements"):
-        return {"season_id": season_id, "status": "not_finalized", "applied": False}
     record = connection.execute(
         """
         SELECT status, season_start, season_end,
@@ -990,7 +971,7 @@ def measure_season_storage(
         if _text(row[0]) not in _MEASURED_RELKINDS
     }
     summaries: dict[str, Any] = {}
-    if season_id is not None and _table_exists(connection, "player_season_summaries"):
+    if season_id is not None:
         dist = connection.execute(
             """
             SELECT count(*), min(pg_column_size(summary.*)),
@@ -1010,7 +991,7 @@ def measure_season_storage(
             "max_bytes": int(dist[3] or 0),
             "total_bytes": int(dist[4] or 0),
         }
-    if season_id is not None and _table_exists(connection, "army_season_summaries"):
+    if season_id is not None:
         dist = connection.execute(
             """
             SELECT count(*), sum(pg_column_size(summary.*))
@@ -1030,12 +1011,11 @@ def measure_season_storage(
             ("army_analytics_battle_facts", "official_season_id"),
             ("ranked_day_versions", "official_season_id"),
         ):
-            if _table_exists(connection, table):
-                count = connection.execute(
-                    f"SELECT count(*) FROM {table} WHERE {column} = %s",
-                    (season_id,),
-                ).fetchone()[0]
-                season_counts[table] = int(count)
+            count = connection.execute(
+                f"SELECT count(*) FROM {table} WHERE {column} = %s",
+                (season_id,),
+            ).fetchone()[0]
+            season_counts[table] = int(count)
     return {
         "season_id": season_id,
         "tables": tables,

@@ -61,7 +61,7 @@ def test_ranked_day_enqueue_lookup_uses_day_index(
     database_url: str,
 ) -> None:
     target_day = datetime(2026, 9, 3, 5, tzinfo=UTC)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             connection.execute(
                 """
@@ -741,7 +741,7 @@ def test_battle_logs_before_a_reset_do_not_wait_on_each_other(
 ) -> None:
     # 2026-10-04 03:41 UTC: 7-8 worker connections queued one at a time on
     # the lock of that day's 05:00 Reset, which had not happened yet.
-    with domain_database(database_url, include_coordinator=True) as ci:
+    with domain_database(database_url) as ci:
         battles = _unswept_battles(
             ci, archive_server, {"#2PP": "u1x58", "#2PQ": "u2x58"}
         )
@@ -769,7 +769,7 @@ def test_battle_log_started_before_a_reset_records_its_member(
     # A job that saves decodes before the Reset's sweep exists, then records
     # the player's day result after the collector saves the sweep, still
     # records that result in the Reset's first generation.
-    with domain_database(database_url, include_coordinator=True) as ci:
+    with domain_database(database_url) as ci:
         battle_ids = _unswept_battles(ci, archive_server, {"#2PP": "u1x58"})["#2PP"]
         reset = datetime(2026, 8, 5, 5, tzinfo=UTC)
         db = Database(ci)
@@ -1349,7 +1349,7 @@ def test_a_session_ending_after_its_commit_landed_keeps_the_saved_result(
     invalid_row: bool,
     outcome: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as ci:
+    with domain_database(database_url) as ci:
         ts = datetime(2026, 8, 4, 12, tzinfo=UTC)
         battle_log = endpoint == "battle_log"
         rows = [_live_row(True, "#8PP", "u1x58", ts)]

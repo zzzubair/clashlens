@@ -143,7 +143,7 @@ def test_player_first_seen_during_day_1_gets_a_season_rule_start(
     gained = sum(WIN if attack else -LOSS for _, attack in battles)
     automatic = LOSS if len(battles) == 3 else 0
     log = _log(*battles, filler=filler)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _first_seen(connection_info, archive_server, first_at,
                            profile=_new_season_profile(5000 + gained), log=log)
         # This morning's Reset reading ends Day 1 at 5,000 plus its battles,
@@ -181,7 +181,7 @@ def test_opponent_found_on_day_2_gets_day_1_and_the_backfill_finds_the_rest(
     older = [DAY_1 - timedelta(hours=9 - i / 10) for i in range(47)]
     day_1_attack = (DAY_1 + timedelta(hours=13), True)
     day_2_attack = (DAY_2 + timedelta(hours=5), True)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         # The opponent: first found on Day 2, with a Day 1 battle in their log.
         jobs = _first_seen(
             connection_info, archive_server, found_at, tag="#2YY",
@@ -265,7 +265,7 @@ def test_opponent_whose_battle_log_is_processed_before_their_profile_gets_day_1(
     older = [DAY_1 - timedelta(hours=9 - i / 10) for i in range(47)]
     day_1_attack = (DAY_1 + timedelta(hours=13), True)
     day_2_attack = (DAY_2 + timedelta(hours=5), True)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         profile_job, log_job = _first_seen(
             connection_info, archive_server, found_at, tag="#2YY",
             profile=_new_season_profile(5000 + 2 * WIN, "#2YY"),
@@ -291,7 +291,7 @@ def test_day_1_joiner_processed_after_the_reset_gets_day_1_in_either_order(
     database_url: str, archive_server, log_first: bool
 ) -> None:
     older = [DAY_1 - timedelta(hours=9 - i / 10) for i in range(48)]
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         profile_job, log_job = _first_seen(
             connection_info, archive_server, DAY_1 + timedelta(hours=7, minutes=45),
             profile=_new_season_profile(5000 + 2 * WIN),
@@ -312,7 +312,7 @@ def test_older_first_log_processed_after_a_newer_one_recalculates_day_1(
     found_at = DAY_2 + timedelta(hours=9)  # 14:00 UTC on Day 2
     day_1_attack = (DAY_1 + timedelta(hours=13), True)
     day_2_attack = (DAY_2 + timedelta(hours=5), True)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         profile_job, older_job = _first_seen(
             connection_info, archive_server, found_at, tag="#2YY",
             profile=_new_season_profile(5000 + 2 * WIN, "#2YY"),
@@ -347,7 +347,7 @@ def test_only_the_earliest_saved_log_queues_its_earlier_days(
 ) -> None:
     found_at = DAY_2 + timedelta(hours=9)  # 14:00 UTC on Day 2
     battles = [(DAY_1 + timedelta(hours=13), True), (DAY_2 + timedelta(hours=5), True)]
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         logs = {}
         for hours in (1, 0, 2):
             at = found_at + timedelta(hours=hours)
@@ -383,7 +383,7 @@ def test_day_1_saved_with_the_previous_season_average_is_recalculated_once(
     older = [DAY_1 - timedelta(hours=9 - i / 10) for i in range(47)]
     # Day 1 charges 2 attacks and 1 defense for one missing defense.
     automatic = LOSS
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         # Day 1 joiners: one with a single defense, one with none.
         ending = 5000 + 2 * WIN - LOSS - automatic
         # Read at 13:00, before the Reset's automatic loss.
@@ -449,7 +449,7 @@ def test_day_flagged_by_logs_sharing_only_other_battles_is_recalculated_once(
     later = [DAY_1 + timedelta(hours=8), DAY_1 + timedelta(hours=8, minutes=30)]
     only_multiplayer = _log(filler=later + older)
     ending = 5000 + 2 * WIN
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _first_seen(connection_info, archive_server, DAY_1 + timedelta(hours=7),
                            profile=_new_season_profile(ending),
                            log=_log(*ATTACKS, filler=older))
@@ -540,7 +540,7 @@ def test_day_whose_reset_reading_is_rejected_starts_from_the_previous_days_end(
     # reading is rejected; its battle log is fine.
     season_zero = json.loads(_profile(end_1))
     season_zero["currentLeagueSeasonId"] = 0
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _first_seen(
             connection_info, archive_server, DAY_1 + timedelta(hours=8),
             profile=_new_season_profile(5000 + 2 * WIN - LOSS), log=log_1,
@@ -576,7 +576,7 @@ def test_day_after_a_reading_before_the_loss_takes_the_loss_off_once(
     log_2 = _log(*ATTACKS, *DEFENSE, *day_2_battles, filler=filler)
     season_zero = json.loads(_profile(end_1 + LOSS))
     season_zero["currentLeagueSeasonId"] = 0
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _first_seen(
             connection_info, archive_server, DAY_1 + timedelta(hours=8),
             profile=_new_season_profile(5000 + 2 * WIN - LOSS), log=log_1,
@@ -623,7 +623,7 @@ def test_day_with_no_defense_and_no_end_reading_starts_nothing(
     log_2 = _log(*ATTACKS, *DEFENSE, (DAY_2 + timedelta(hours=2), True), filler=filler)
     season_zero = json.loads(_profile(end_1 + WIN))
     season_zero["currentLeagueSeasonId"] = 0
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _first_seen(
             connection_info, archive_server, DAY_1 + timedelta(hours=8),
             profile=_new_season_profile(5000 + 2 * WIN - LOSS), log=log_1,

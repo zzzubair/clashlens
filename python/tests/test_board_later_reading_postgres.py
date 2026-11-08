@@ -67,7 +67,7 @@ def test_a_later_reading_proves_the_battles_after_an_older_one(
         *(Battle(_at(4, 35, 53) + timedelta(minutes=3 * n), 40 if n < 7 else 29, True)
           for n in range(8)),
     ]
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, *LATE, SLOW)
         for recheck in ("queue_for_reading", "queue_for_battles"):
             monkeypatch.setattr(queue_refresh, recheck, lambda *_: None)

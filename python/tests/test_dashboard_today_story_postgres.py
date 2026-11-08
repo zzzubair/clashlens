@@ -39,7 +39,7 @@ CLIMBER, DONE, RESTING, NEWCOMER = "#2PP", "#8PP", "#9PP", "#PPP"
 def test_rank_range_fills_in_from_a_slow_background_read_and_never_crosses_a_reset(
     database_url: str, archive_server, monkeypatch
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             today = ranked_day_for(connection.execute("SELECT clock_timestamp()").fetchone()[0])
         if today.day_number in (1, 28):

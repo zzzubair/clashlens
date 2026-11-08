@@ -101,7 +101,7 @@ def repair_current_season_reset_baselines(
     """
 
     only_no_opponent = ranked_day_inputs.only_no_opponent_gaps_sql(
-        database, "battle_log"
+        "battle_log"
     )
     with database.pool.connection() as connection:
         with connection.transaction():
@@ -553,7 +553,7 @@ def _evaluate_reset_baseline(
         (f"reset-baseline:{work_id}",),
     )
     endpoints = {
-        endpoint: _load_reset_endpoint_evidence(database, 
+        endpoint: _load_reset_endpoint_evidence(database,
             connection,
             endpoint=endpoint,
             work_id=int(work_id),
@@ -805,7 +805,7 @@ def _record_boundary_baseline(
             else "pending"
         )
         army_status = (
-            boundary._boundary_army_status(database, 
+            boundary._boundary_army_status(database,
                 connection,
                 player_id=player_id,
                 ranked_day_version_id=ranked_version_id,
@@ -829,7 +829,7 @@ def _record_boundary_baseline(
         (member_status, snapshot_status, army_status, generation[0], player_id),
     )
     if not shared:
-        boundary._try_enqueue_boundary_artifacts(database, 
+        boundary._try_enqueue_boundary_artifacts(database,
             connection, boundary_at=boundary_at, generation_id=int(generation[0])
         )
 
@@ -880,12 +880,6 @@ def _load_reset_endpoint_evidence(
          AND profile_effect.parser_version = processing.parser_version
         LEFT JOIN player_profile_versions AS profile
           ON profile.id = profile_effect.profile_version_id
-        """
-        if getattr(database, "_supports_content_dedup", False)
-        else """
-        LEFT JOIN player_profile_versions AS profile
-          ON profile.observation_id = observed.id
-         AND profile.parser_version = processing.parser_version
         """
     )
     endpoint_column = (
@@ -1040,8 +1034,7 @@ def _load_reset_baseline(
     game starts the player at 5,000 there (a Season's first Monday, or a
     Monday they were promoted at), so a reading that cannot give the start
     gives 5,000."""
-    dedup = getattr(database, "_supports_content_dedup", False)
-    profile_observed = "profile_effect.observed_at" if dedup else "profile.observed_at"
+    profile_observed = "profile_effect.observed_at"
     profile_join = (
         """
         LEFT JOIN player_profile_effects AS profile_effect
@@ -1049,12 +1042,6 @@ def _load_reset_baseline(
          AND profile_effect.parser_version = profile_processing.parser_version
         LEFT JOIN player_profile_versions AS profile
           ON profile.id = profile_effect.profile_version_id
-        """
-        if dedup
-        else """
-        LEFT JOIN player_profile_versions AS profile
-          ON profile.observation_id = evidence.profile_observation_id
-         AND profile.parser_version = profile_processing.parser_version
         """
     )
     row = connection.execute(

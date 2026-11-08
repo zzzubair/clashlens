@@ -63,7 +63,7 @@ def test_the_live_board_follows_the_weekly_league_record(
     promoted at the second Monday Reset: STALE_II reads Legend I naming
     Season 0 at 5,000; PROMOTED signs up, wins an attack and reads 5,040."""
     monday, next_monday = day(8), day(15)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = Story(connection_info, archive_server, monkeypatch, {
             tag: Climber(tag) for tag in (STEADY, DROPPED, BACK, STALE_II, PROMOTED)})
         players = story.players

@@ -9,10 +9,9 @@ from types import SimpleNamespace
 
 import psycopg
 import pytest
-from domain_test_support import domain_database
+from domain_test_support import PROFILE_FIXTURE, domain_database
 from test_collector import _collector
 from test_collector_uploads_postgres import _archive_instance
-from test_domain_processing_postgres import PROFILE_FIXTURE
 from test_worker_lifecycle import _worker_namespace
 
 from clashlens import cli, queue_refresh
@@ -91,7 +90,7 @@ def test_full_spool_drains_once_the_archive_returns(
 ) -> None:
     root = tmp_path / "spool"
     limits = {"max_body_bytes": 64 << 10, "max_objects": len(TAGS)}
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _archive_instance(connection_info)
         database = CollectorDatabase(connection_info)
         spool = Spool(root, **limits)
@@ -156,7 +155,7 @@ def test_failed_spool_read_waits_instead_of_failing_the_job(
     database_url: str, tmp_path, monkeypatch, capsys
 ) -> None:
     root = tmp_path / "spool"
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _archive_instance(connection_info)
         database = CollectorDatabase(connection_info)
         _save(connection_info, database, Spool(root, max_body_bytes=64 << 10), TAGS[0])
@@ -197,7 +196,7 @@ def test_cleanup_deletes_the_same_responses_with_few_lookups(
     # that was 42% of all database reads, 16 responses at a time.
     # Flushing to disk changes no outcome here and is most of the time taken.
     monkeypatch.setattr(spool_module.os, "fsync", lambda _fd: None)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _archive_instance(connection_info)
         database = CollectorDatabase(connection_info)
         spool = Spool(tmp_path / "spool", max_body_bytes=64 << 10)
@@ -376,7 +375,7 @@ def test_a_lost_saved_copy_is_read_back_from_the_archive(
 ) -> None:
     root = tmp_path / "spool"
     generation = "b" * 32
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _archive_instance(connection_info)
         database = CollectorDatabase(connection_info)
         spool = Spool(root, max_body_bytes=64 << 10)
@@ -497,7 +496,7 @@ def test_missing_proof_needs_the_archive_marker_to_match(
 ) -> None:
     root = tmp_path / "spool"
     payload = b"fixture archive marker"
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _archive_instance(connection_info)
         database = CollectorDatabase(connection_info)
         spool = Spool(root, max_body_bytes=64 << 10)
@@ -538,7 +537,7 @@ def test_a_write_that_may_yet_land_is_checked_again_before_missing_proof(
     database_url: str, tmp_path
 ) -> None:
     later = datetime.now(UTC) + timedelta(minutes=1)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _archive_instance(connection_info)
         database = CollectorDatabase(connection_info)
         spool = Spool(tmp_path / "spool", max_body_bytes=64 << 10)
@@ -617,7 +616,7 @@ class _FinishesAfterFirstRead:
 def test_an_upload_finishing_during_the_lookup_still_counts_as_archived(
     database_url: str, tmp_path
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _archive_instance(connection_info)
         database = CollectorDatabase(connection_info)
         spool = Spool(tmp_path / "spool", max_body_bytes=64 << 10)
@@ -665,7 +664,7 @@ def test_a_copy_that_appears_after_a_missing_read_is_found_by_the_next_attempt(
     # A missing copy spends one of the job's attempts. Before the next, the
     # collector saves the same bytes again, or an upload of them starts.
     root = tmp_path / "spool"
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _archive_instance(connection_info)
         database = CollectorDatabase(connection_info)
         spool = Spool(root, max_body_bytes=64 << 10)

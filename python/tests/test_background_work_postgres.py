@@ -270,7 +270,7 @@ def test_the_reset_first_window_asks_nothing_of_the_queue() -> None:
 
     assert background_pacing.claim_background(
         None, "python_processing_jobs", [], 4, no_claim, held=True, planned=False,
-        work_types=["redecode_army"], reset_first=True, contract=(True, True, True),
+        work_types=["redecode_army"], reset_first=True,
     ) == []
 
 

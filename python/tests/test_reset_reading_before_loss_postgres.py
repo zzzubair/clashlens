@@ -66,7 +66,7 @@ def test_reading_before_the_loss_completes_the_day_and_settles_the_next_start(
     day_c = [(DAY_C + timedelta(hours=1), True)]
     start_b = 6000 - 8 * LOSS
     end_b = start_b + 2 * WIN - LOSS - 7 * LOSS
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(
             connection_info, archive_server, DAY_A, profile=_profile(6000), log=_log()
         )
@@ -176,7 +176,7 @@ def _day_end_recheck(connection_info: str, archive_server) -> None:
 def test_later_reading_settles_a_reset_reading_missing_an_attack(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         start_b, end_b = _early_reading_days(
             connection_info, archive_server, _profile(6000 + WIN - 8 * LOSS)
         )
@@ -199,7 +199,7 @@ def test_reading_soon_after_the_reset_is_kept_when_a_newer_one_came_first(
     # A new-day defense at 05:15 and a 05:29 profile after it are processed
     # before the 05:10 profile, the only reading that can settle day B.
     end_b = 6000 + WIN - 8 * LOSS
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         start_b, _ = _early_reading_days(
             connection_info, archive_server, _profile(end_b),
             processed_first=(
@@ -230,7 +230,7 @@ def test_recheck_refreshes_saved_days_until_one_stays_the_same(
     end_b = 6000 + WIN - 8 * LOSS
     end_c = end_b - 8 * LOSS
     end_d = end_c - LOSS - 7 * LOSS
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(
             connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
         )
@@ -284,7 +284,7 @@ def test_finishing_a_day_saved_live_refreshes_the_following_day(
 ) -> None:
     # Day B is still saved Live, as when its Reset calculation is delayed,
     # while day C was already saved from B's early Reset reading.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         start_b, end_b = _early_reading_days(
             connection_info, archive_server, _profile(6000 + WIN - 8 * LOSS),
             saved_before_rule=monkeypatch,
@@ -302,7 +302,7 @@ def test_following_day_saved_live_starts_from_the_finished_days_later_reading(
 ) -> None:
     # Day C was saved Live from B's early Reset reading while day B itself
     # was not yet finished; finishing B with the later reading refreshes C.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         start_b, end_b = _early_reading_days(
             connection_info, archive_server, _profile(6000 + WIN - 8 * LOSS),
             saved_before_rule=monkeypatch,
@@ -321,7 +321,7 @@ def test_following_day_saved_live_starts_from_the_finished_days_later_reading(
 def test_season_repair_settles_days_saved_before_the_later_reading_rule(
     database_url: str, archive_server, monkeypatch
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         start_b, end_b = _early_reading_days(
             connection_info, archive_server, _profile(6000 + WIN - 8 * LOSS),
             saved_before_rule=monkeypatch,
@@ -349,7 +349,7 @@ def test_a_season_zero_later_reading_can_confirm_the_day_but_never_contradict_it
     end_b = 6000 + WIN - 8 * LOSS
     payload = json.loads(_profile(end_b if right else end_b + 3))
     payload["currentLeagueSeasonId"] = 0
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _early_reading_days(
             connection_info, archive_server, json.dumps(payload).encode()
         )
@@ -414,7 +414,7 @@ def _zero_defense_day_read_early(
 def test_zero_defense_day_read_before_its_loss_is_charged_by_the_recheck(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         start_b, end_b = _zero_defense_day_read_early(connection_info, archive_server)
         day_b_row, day_c_row = _latest_days(connection_info)
 
@@ -438,7 +438,7 @@ def test_unreadable_new_day_battle_before_the_later_reading_charges_nothing(
     # direction, could explain the later reading's drop by itself.
     payload = json.loads(_log((DAY_C + timedelta(minutes=8), False)))
     payload["items"][0].pop("attack")
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         start_b, _ = _zero_defense_day_read_early(
             connection_info, archive_server, new_day_log=json.dumps(payload).encode()
         )
@@ -461,7 +461,7 @@ def test_reset_reading_before_the_last_attack_landed_settles_both_days(
     day_c = [(DAY_C + timedelta(hours=1), True)]
     start_b = 6000
     end_b = start_b + WIN - 8 * LOSS
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(
             connection_info, archive_server, DAY_A,
             profile=_profile(start_b + 8 * LOSS), log=_log(),
@@ -499,7 +499,7 @@ def test_reading_during_a_battle_log_gap_cannot_contradict_the_day(
         (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
     ]
     end_b = 6000 + WIN - 8 * LOSS
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(
             connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
         )
@@ -556,7 +556,7 @@ def test_each_new_day_battle_saved_after_the_reading_recalculates_the_day_before
         {**log["items"][1], "opponentPlayerTag": "#GQPP",
          "battleTimestamp": f"{DAY_C + timedelta(minutes=7):%Y%m%dT%H%M%S.000Z}"},
     )
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(
             connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
         )
@@ -600,7 +600,7 @@ def test_each_later_reading_and_covering_log_recalculates_the_day_before(
         (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
     ]
     end_b = 6000 + WIN - 8 * LOSS
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(
             connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
         )
@@ -651,7 +651,7 @@ def test_own_report_after_the_opponents_recalculates_the_day_before(
     attack = {**log["items"][0], "stars": 2, "destructionPercentage": 60,
               "opponentPlayerTag": TAG, "battleTimestamp": at}
     defense = {**log["items"][1], "opponentPlayerTag": "#GQPP", "battleTimestamp": at}
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(
             connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
         )
@@ -698,7 +698,7 @@ def test_monday_charge_read_before_the_raise_starts_no_next_day(
     start_z = 4990 + 8 * LOSS
     season_zero = json.loads(_profile(start_z))
     season_zero["currentLeagueSeasonId"] = 0
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(connection_info, archive_server, day_y,
                            profile=_profile(start_z + 8 * LOSS), log=_log())
         jobs += _reset_work(connection_info, archive_server, day_z,
@@ -743,7 +743,7 @@ def test_monday_day_contradicted_after_a_fitting_reset_reading_is_saved(
     defenses = [(day_y + timedelta(hours=hour), False) for hour in range(1, 9)]
     day_z_battles = [(day_z + timedelta(hours=hour), hour < 3) for hour in range(1, 4)]
     end_before_loss = 5000 + 2 * WIN - LOSS
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(connection_info, archive_server, day_y,
                            profile=_profile(5000 + 8 * LOSS), log=_log())
         jobs += _reset_work(connection_info, archive_server, day_z,
@@ -799,7 +799,7 @@ def test_new_day_attack_in_the_reset_reading_moves_out_of_both_days(
         **json.loads(_log(new_day_attack))["items"][0], "opponentPlayerTag": "#GGPP",
     }]}).encode()
     end_b = 6000 + WIN - 8 * LOSS
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(
             connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
         )
@@ -840,7 +840,7 @@ def test_unreadable_new_day_battle_leaves_the_reset_reading_unused(
     weak["items"][0].update(stars=1, destructionPercentage=1)
     unreadable = json.loads(_log((DAY_C + timedelta(minutes=7), False)))["items"][0]
     unreadable.pop("attack")
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(
             connection_info, archive_server, DAY_A, profile=_profile(6040), log=_log()
         )
@@ -890,7 +890,7 @@ def test_monday_reset_reading_after_a_new_day_battle_counts_it_once(
         "battleTimestamp": f"{DAY_A + timedelta(minutes=8):%Y%m%dT%H%M%S.000Z}",
     }]}).encode()
     start_sunday = 4980 + 8 * LOSS
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(connection_info, archive_server, saturday,
                            profile=_profile(start_sunday + 8 * LOSS), log=_log())
         jobs += _reset_work(connection_info, archive_server, sunday,
@@ -928,7 +928,7 @@ def test_a_reading_during_the_day_must_show_the_battles_landed_by_then(
     # must show the six landed by then, not the 12:00 one: 10 trophies off, it
     # makes the day Uncertain even though both Reset readings agree with it.
     day_b = [(DAY_B + timedelta(hours=hour), False) for hour in range(1, 9)]
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(
             connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
         )
@@ -958,7 +958,7 @@ def test_battle_time_is_a_length_only_beside_a_battle_timestamp(
     for item, (at, _attack) in zip(log["items"][1:], day_b[1:], strict=True):
         del item["battleTimestamp"]
         item["battleTime"] = int(at.timestamp())
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(
             connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
         )
@@ -991,7 +991,7 @@ def test_a_disagreeing_reading_during_the_day_outlasts_an_unreadable_new_day_row
     log = json.loads(_log(*day_b))
     unreadable = {**log["items"][0], "battleTimestamp": row_time}
     unreadable.pop("attack")
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(
             connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
         )
@@ -1024,7 +1024,7 @@ def test_a_log_not_joined_to_the_reset_log_makes_no_reading_trustworthy(
     # holds 50 other rows, so a battle between may have rolled out of it: the
     # 05:40 reading can only confirm day B, never contradict it.
     unjoined = _log(filler=[DAY_C + timedelta(minutes=55 - index) for index in range(50)])
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(
             connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
         )
@@ -1060,7 +1060,7 @@ def test_a_reading_during_the_day_is_trusted_without_a_log_after_its_end(
 ) -> None:
     # Day B's end Reset saved no battle log and none came later. Its noon
     # reading is judged on day B's own logs, so it can still disagree.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(
             connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
         )

@@ -69,7 +69,7 @@ def test_monday_reset_reading_before_the_weekly_raise(
     Season's Monday, 28 September 2026."""
     season = PREVIOUS_SEASON
     saturday, sunday, monday, tuesday = (day(number, season) for number in (20, 21, 22, 23))
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch,
                        LATE_RAISE, LOSS_TOO, RAISE_UNDONE, LATE_CREDIT, QUIET, DEFENDED)
         monkeypatch.setattr(scenarios, "READ_AFTER", timedelta(minutes=13))
@@ -240,7 +240,7 @@ def test_season_repair_mends_a_sunday_and_monday_saved_before_the_fix(
     season = PREVIOUS_SEASON
     sunday, monday = day(21, season), day(22, season)
     players = (LATE_RAISE, LOSS_TOO)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _saved_before_the_fix(connection_info, archive_server, monkeypatch)
         before = {tag: (story.saved_day(tag, sunday)["state"], story.saved_day(tag, monday)["start"])
                   for tag in players}
@@ -322,7 +322,7 @@ def test_season_repair_rebuilds_its_boards_within_minutes_and_no_other(
     its last rebuild, the 6 October one from 07:38 to 13:04."""
     season = PREVIOUS_SEASON
     sunday, monday = day(21, season), day(22, season)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _saved_before_the_fix(connection_info, archive_server, monkeypatch)
         story.fixed()
         sunday_waiting = _waiting_corrections(connection_info, sunday)

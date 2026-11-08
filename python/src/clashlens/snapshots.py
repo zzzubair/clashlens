@@ -48,21 +48,16 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
         if generation_number is None
         else None
     )
-    content_dedup = getattr(database, "_supports_content_dedup", False)
     official_entries_relation = (
         "official_top200_version_entries"
-        if content_dedup
-        else "official_top200_entries"
     )
     profile_effect_join = (
         "LEFT JOIN player_profile_effects AS effect\n"
         "                              ON effect.profile_version_id = v.id"
-        if content_dedup
-        else ""
     )
-    profile_observation = "effect.observation_id" if content_dedup else "v.observation_id"
-    profile_observed = "effect.observed_at" if content_dedup else "v.observed_at"
-    profile_effect_id = "effect.id" if content_dedup else "v.id"
+    profile_observation = "effect.observation_id"
+    profile_observed = "effect.observed_at"
+    profile_effect_id = "effect.id"
     with database.pool.connection() as connection:
         with connection.transaction():
             job = database._lock_live_claim(connection, claim, build=True)
@@ -716,7 +711,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                 ).encode("utf-8")
             ).hexdigest()
             frozen_snapshot_id, frozen_snapshot_version = (
-                _publish_snapshot_kind(database, 
+                _publish_snapshot_kind(database,
                     connection,
                     snapshot_kind="frozen",
                     boundary_at=boundary_at,
@@ -732,7 +727,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     ordering_rule_version=ordering_rule_version,
                 )
             )
-            _publish_snapshot_kind(database, 
+            _publish_snapshot_kind(database,
                 connection,
                 snapshot_kind="live",
                 boundary_at=boundary_at,
@@ -862,86 +857,47 @@ def _publish_snapshot_kind(
         ).fetchone()
         assert next_version_row is not None
         snapshot_version = int(next_version_row[0])
-        if getattr(database, "_supports_coordinator_contract", False):
-            snapshot = connection.execute(
-                """
-                INSERT INTO leaderboard_snapshots (
-                    snapshot_kind, boundary_at, version, correction_of_id,
-                    ordering_rule_version, freshness_rule_version, state,
-                    source_ranked_day_version_id, measured_coverage,
-                    stale_entry_count, input_hash,
-                    eligible_population_count, included_entry_count,
-                    fresh_entry_count, excluded_missing_count,
-                    excluded_unavailable_count, excluded_invalid_count,
-                    excluded_malformed_count, excluded_partial_count,
-                    excluded_inconsistent_count, excluded_conflicting_count
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s, 'building', %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                )
-                RETURNING id
-                """,
-                (
-                    snapshot_kind,
-                    boundary_at,
-                    snapshot_version,
-                    prior[0] if prior is not None else None,
-                    ordering_rule_version,
-                    FRESHNESS_RULE_VERSION,
-                    ranked_day_version_id,
-                    coverage,
-                    quality["stale_entry_count"],
-                    input_hash,
-                    quality["eligible_population_count"],
-                    quality["included_entry_count"],
-                    quality["fresh_entry_count"],
-                    quality["excluded_missing_count"],
-                    quality["excluded_unavailable_count"],
-                    quality["excluded_invalid_count"],
-                    quality["excluded_malformed_count"],
-                    quality["excluded_partial_count"],
-                    quality["excluded_inconsistent_count"],
-                    quality["excluded_conflicting_count"],
-                ),
-            ).fetchone()
-        else:
-            snapshot = connection.execute(
-                """
-                INSERT INTO leaderboard_snapshots (
-                    snapshot_kind, boundary_at, version, correction_of_id,
-                    ordering_rule_version, freshness_rule_version, state,
-                    source_ranked_day_version_id, measured_coverage,
-                    stale_entry_count, input_hash,
-                    eligible_population_count, included_entry_count,
-                    fresh_entry_count, excluded_missing_count,
-                    excluded_invalid_count, excluded_malformed_count,
-                    excluded_conflicting_count
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s, 'building', %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s
-                )
-                RETURNING id
-                """,
-                (
-                    snapshot_kind,
-                    boundary_at,
-                    snapshot_version,
-                    prior[0] if prior is not None else None,
-                    ordering_rule_version,
-                    FRESHNESS_RULE_VERSION,
-                    ranked_day_version_id,
-                    coverage,
-                    quality["stale_entry_count"],
-                    input_hash,
-                    quality["eligible_population_count"],
-                    quality["included_entry_count"],
-                    quality["fresh_entry_count"],
-                    quality["excluded_missing_count"],
-                    quality["excluded_invalid_count"],
-                    quality["excluded_malformed_count"],
-                    quality["excluded_conflicting_count"],
-                ),
-            ).fetchone()
+        snapshot = connection.execute(
+            """
+            INSERT INTO leaderboard_snapshots (
+                snapshot_kind, boundary_at, version, correction_of_id,
+                ordering_rule_version, freshness_rule_version, state,
+                source_ranked_day_version_id, measured_coverage,
+                stale_entry_count, input_hash,
+                eligible_population_count, included_entry_count,
+                fresh_entry_count, excluded_missing_count,
+                excluded_unavailable_count, excluded_invalid_count,
+                excluded_malformed_count, excluded_partial_count,
+                excluded_inconsistent_count, excluded_conflicting_count
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, 'building', %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+            RETURNING id
+            """,
+            (
+                snapshot_kind,
+                boundary_at,
+                snapshot_version,
+                prior[0] if prior is not None else None,
+                ordering_rule_version,
+                FRESHNESS_RULE_VERSION,
+                ranked_day_version_id,
+                coverage,
+                quality["stale_entry_count"],
+                input_hash,
+                quality["eligible_population_count"],
+                quality["included_entry_count"],
+                quality["fresh_entry_count"],
+                quality["excluded_missing_count"],
+                quality["excluded_unavailable_count"],
+                quality["excluded_invalid_count"],
+                quality["excluded_malformed_count"],
+                quality["excluded_partial_count"],
+                quality["excluded_inconsistent_count"],
+                quality["excluded_conflicting_count"],
+            ),
+        ).fetchone()
         assert snapshot is not None
         snapshot_id = int(snapshot[0])
     entry_rows = [
@@ -970,66 +926,35 @@ def _publish_snapshot_kind(
         }
         for position, entry in enumerate(entries, start=1)
     ]
-    if getattr(database, "_supports_coordinator_contract", False):
-        connection.execute(
-            """
-            INSERT INTO leaderboard_snapshot_entries (
-                snapshot_id, position, player_id, profile_version_id, trophies,
-                trophy_observation_id, trophy_observed_at,
-                observation_age_seconds, freshness, confidence, tie_hash,
-                profile_observation_id, profile_observed_at,
-                profile_age_seconds, profile_freshness, profile_confidence,
-                official_rank, official_rank_version_id,
-                official_rank_observed_at
-            )
-            SELECT %s, row.position, row.player_id, row.profile_version_id,
-                   row.trophies, row.observation_id, row.observed_at,
-                   row.age_seconds, row.freshness, row.confidence, row.tie_hash,
-                   row.observation_id, row.observed_at, row.age_seconds,
-                   row.freshness, row.confidence, row.official_rank,
-                   row.official_rank_version_id, row.official_rank_observed_at
-            FROM jsonb_to_recordset(%s::jsonb) AS row(
-                position integer, player_id bigint, profile_version_id bigint,
-                trophies integer, observation_id bigint, observed_at timestamptz,
-                age_seconds integer, freshness text, confidence text,
-                tie_hash text, official_rank integer,
-                official_rank_version_id bigint,
-                official_rank_observed_at timestamptz
-            )
-            ON CONFLICT (snapshot_id, position) DO NOTHING
-            """,
-            (snapshot_id, Jsonb(entry_rows)),
+    connection.execute(
+        """
+        INSERT INTO leaderboard_snapshot_entries (
+            snapshot_id, position, player_id, profile_version_id, trophies,
+            trophy_observation_id, trophy_observed_at,
+            observation_age_seconds, freshness, confidence, tie_hash,
+            profile_observation_id, profile_observed_at,
+            profile_age_seconds, profile_freshness, profile_confidence,
+            official_rank, official_rank_version_id,
+            official_rank_observed_at
         )
-    else:
-        connection.execute(
-            """
-            INSERT INTO leaderboard_snapshot_entries (
-                snapshot_id, position, player_id, trophies,
-                trophy_observation_id, trophy_observed_at,
-                observation_age_seconds, freshness, confidence, tie_hash,
-                profile_observation_id, profile_observed_at,
-                profile_age_seconds, profile_freshness, profile_confidence,
-                official_rank, official_rank_version_id,
-                official_rank_observed_at
-            )
-            SELECT %s, row.position, row.player_id, row.trophies,
-                   row.observation_id, row.observed_at, row.age_seconds,
-                   row.freshness, row.confidence, row.tie_hash,
-                   row.observation_id, row.observed_at, row.age_seconds,
-                   row.freshness, row.confidence, row.official_rank,
-                   row.official_rank_version_id, row.official_rank_observed_at
-            FROM jsonb_to_recordset(%s::jsonb) AS row(
-                position integer, player_id bigint, trophies integer,
-                observation_id bigint, observed_at timestamptz,
-                age_seconds integer, freshness text, confidence text,
-                tie_hash text, official_rank integer,
-                official_rank_version_id bigint,
-                official_rank_observed_at timestamptz
-            )
-            ON CONFLICT (snapshot_id, position) DO NOTHING
-            """,
-            (snapshot_id, Jsonb(entry_rows)),
+        SELECT %s, row.position, row.player_id, row.profile_version_id,
+               row.trophies, row.observation_id, row.observed_at,
+               row.age_seconds, row.freshness, row.confidence, row.tie_hash,
+               row.observation_id, row.observed_at, row.age_seconds,
+               row.freshness, row.confidence, row.official_rank,
+               row.official_rank_version_id, row.official_rank_observed_at
+        FROM jsonb_to_recordset(%s::jsonb) AS row(
+            position integer, player_id bigint, profile_version_id bigint,
+            trophies integer, observation_id bigint, observed_at timestamptz,
+            age_seconds integer, freshness text, confidence text,
+            tie_hash text, official_rank integer,
+            official_rank_version_id bigint,
+            official_rank_observed_at timestamptz
         )
+        ON CONFLICT (snapshot_id, position) DO NOTHING
+        """,
+        (snapshot_id, Jsonb(entry_rows)),
+    )
     connection.execute(
         """
         UPDATE leaderboard_snapshots
@@ -1125,5 +1050,3 @@ def _enqueue_snapshot_analytics(
             else ended_day_priority(boundary_at - RANKED_DAY_DURATION),
         ),
     )
-
-

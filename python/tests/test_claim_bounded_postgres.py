@@ -4,6 +4,7 @@ import re
 
 import psycopg
 import pytest
+from domain_test_support import domain_database
 from test_claim_jobs_postgres import (
     _insert_job,
     _insert_observation,
@@ -967,3 +968,34 @@ def test_a_retried_live_job_is_not_hidden_behind_newer_live_work(
             database.close()
         assert claim is not None
         assert (claim.job_id == retried) is retried_first
+
+
+@pytest.mark.parametrize("version", [4, 6])
+def test_database_rejects_another_contract_without_an_explicit_version(
+    database_url: str, version: int,
+) -> None:
+    with domain_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("UPDATE clash_lens_contract SET version = %s", (version,))
+        with pytest.raises(RuntimeError, match="contract version does not match"):
+            Database(connection_info)
+
+
+def test_worker_and_api_readiness_default_to_the_current_contract(database_url: str) -> None:
+    from domain_test_support import as_api_role
+
+    from clashlens.api_db import ApiDatabase
+
+    with domain_database(database_url) as connection_info:
+        database = Database(connection_info)
+        api = ApiDatabase(as_api_role(connection_info))
+        try:
+            assert database.is_ready()
+            assert api.is_ready()
+            with psycopg.connect(connection_info) as connection:
+                connection.execute("UPDATE clash_lens_contract SET version = 4")
+            assert not database.is_ready()
+            assert not api.is_ready()
+        finally:
+            api.close()
+            database.close()

@@ -95,7 +95,7 @@ def test_days_judged_against_the_battle_timeline(
     EARLY's 13 October has a reading at 06:31:00 already showing a defense
     stamped 06:30:00 that lasted 150 s: a profile can show a defense up to 150
     seconds before it ends."""
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, LATE, FIRST, NEXT, EARLY)
         monkeypatch.setattr(scenarios, "READ_AFTER", timedelta(minutes=5, seconds=23))
         story.players[LATE].battles = LATE_13_OCTOBER + LATE_14_OCTOBER
@@ -185,7 +185,7 @@ def test_a_loss_that_never_landed_leaves_the_next_day_where_its_readings_show(
     it ends at 4,800, and Sunday starts where it says."""
     never = "#YPP"
     friday, saturday, sunday, monday = day(5), day(6), day(7), day(8)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, never)
         story.players[never].battles = (
             attacks(friday, *[30] * 8) + defenses(friday, *[30] * 8)

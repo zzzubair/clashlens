@@ -42,9 +42,6 @@ def _upsert_army_decodes(
 ) -> None:
     if not battle_ids:
         return
-    exists = connection.execute("SELECT to_regclass('battle_army_decodes')").fetchone()
-    if exists is None or exists[0] is None:
-        return
     rows = connection.execute(
         """
         SELECT b.id, p.evidence_id, p.perspective, e.army_share_code,
@@ -670,8 +667,6 @@ def _build_manifest_army_facts(
     """
     version_filter = (
         "AND d.ranked_day_version_id = m.ranked_day_version_id"
-        if getattr(database, "_supports_coordinator_contract", False)
-        else ""
     )
     # Pages are ordinal ranges: rebuilding a reused proof's rows in order
     # to take the next 500 would rebuild every remaining row for each page.
@@ -746,8 +741,6 @@ def _build_listed_army_facts(
 ) -> None:
     # Published daily logs own the canonical per-lens battle events;
     # ranked_day_versions contributes the battle-time starting trophies.
-    version_filter = ""
-    version_params: tuple[Any, ...] = ()
     daily_log_filter = ""
     daily_log_params: tuple[Any, ...] = ()
     ranked_state_filter = "AND rv.state = 'Complete' AND rv.coverage_complete"
@@ -757,11 +750,10 @@ def _build_listed_army_facts(
         daily_log_params = (daily_log_ids,)
         ranked_state_filter = ""
         daily_state_filter = ""
-    if getattr(database, "_supports_coordinator_contract", False):
-        version_filter = (
-            "AND (%s::bigint[] IS NULL OR d.ranked_day_version_id = ANY(%s::bigint[]))"
-        )
-        version_params = (ranked_version_ids, ranked_version_ids)
+    version_filter = (
+        "AND (%s::bigint[] IS NULL OR d.ranked_day_version_id = ANY(%s::bigint[]))"
+    )
+    version_params = (ranked_version_ids, ranked_version_ids)
     # A Legend day has about 183,000 facts for 13,000 players. Building them
     # in player batches keeps the worker's memory and each insert bounded;
     # the whole day still commits as one transaction.
@@ -1246,8 +1238,6 @@ def _refresh_army_season_summaries(database, connection: Any, season_id: str) ->
     green; the other lens still refreshes. Seasons with no summaries
     yet cost three locks plus one existence lookup.
     """
-    if not getattr(database, "_supports_army_season_summaries", False):
-        return
     from .season_retirement import (
         acquire_season_lock_shared,
         is_season_detail_retired,

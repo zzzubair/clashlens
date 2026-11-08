@@ -74,14 +74,6 @@ def _snapshot_freshness(
 
 def reevaluate_boundary_publications(database) -> int:
     """Recover ready coordinator generations after worker restart/handoff."""
-    with database.pool.connection() as connection:
-        if (
-            connection.execute(
-                "SELECT to_regclass(current_schema() || '.boundary_publication_generations')"
-            ).fetchone()[0]
-            is None
-        ):
-            return 0
     reset_baselines.settle_failed_reset_work(database)
     with database.pool.connection() as connection:
         with connection.transaction():
@@ -491,7 +483,6 @@ def complete_analytics(database: Database, claim: Claim) -> None:
     snapshot_input_hash = _hash_input(
         claim.input_json.get("snapshot_input_hash"), "snapshot_input_hash"
     )
-    content_dedup = getattr(database, "_supports_content_dedup", False)
     # Each stored row of the day's selected battle logs, once per log that
     # returned it, in each storage layout the compatibility view
     # battle_log_observation_source_rows lists. That view expands every
@@ -504,32 +495,25 @@ def complete_analytics(database: Database, claim: Claim) -> None:
         FROM selected_log AS log
         JOIN battle_source_rows AS source
           ON source.battle_log_observation_id = log.id
+        LEFT JOIN battle_evidence AS evidence
+          ON evidence.source_row_id = source.id
+         AND evidence.observation_row_id IS NULL
+        WHERE log.parsed_payload_id IS NULL
+        UNION ALL
+        SELECT member.source_row_id, log.parser_version
+        FROM selected_log AS log
+        JOIN battle_payload_rows AS member
+          ON member.parsed_payload_id = log.parsed_payload_id
+         AND member.reporting_player_id = log.player_id
+        UNION ALL
+        SELECT member.source_row_id, log.parser_version
+        FROM selected_log AS log
+        JOIN battle_payload_row_lists AS list
+          ON list.parsed_payload_id = log.parsed_payload_id
+         AND list.reporting_player_id = log.player_id
+        CROSS JOIN LATERAL unnest(list.source_row_ids) AS member (source_row_id)
+        WHERE member.source_row_id IS NOT NULL
     """
-    if content_dedup:
-        occurrences = """
-            SELECT source.id AS source_row_id, log.parser_version
-            FROM selected_log AS log
-            JOIN battle_source_rows AS source
-              ON source.battle_log_observation_id = log.id
-            LEFT JOIN battle_evidence AS evidence
-              ON evidence.source_row_id = source.id
-             AND evidence.observation_row_id IS NULL
-            WHERE log.parsed_payload_id IS NULL
-            UNION ALL
-            SELECT member.source_row_id, log.parser_version
-            FROM selected_log AS log
-            JOIN battle_payload_rows AS member
-              ON member.parsed_payload_id = log.parsed_payload_id
-             AND member.reporting_player_id = log.player_id
-            UNION ALL
-            SELECT member.source_row_id, log.parser_version
-            FROM selected_log AS log
-            JOIN battle_payload_row_lists AS list
-              ON list.parsed_payload_id = log.parsed_payload_id
-             AND list.reporting_player_id = log.player_id
-            CROSS JOIN LATERAL unnest(list.source_row_ids) AS member (source_row_id)
-            WHERE member.source_row_id IS NOT NULL
-        """
     with database.pool.connection() as connection:
         with connection.transaction():
             job = database._lock_live_claim(connection, claim, build=True)
@@ -1232,10 +1216,9 @@ def _enqueue_army_analytics(
     boundary_at = ranked_day_start + timedelta(days=1)
     # Before the sweep no generation exists, but the shared lock still makes
     # the first generation wait for these decodes, and see them once created.
-    coordinated = getattr(database, "_supports_coordinator_contract", False)
-    if coordinated and swept is None:
+    if swept is None:
         swept = boundary.lock_boundary_publication_once_swept(connection, boundary_at)
-    if coordinated and swept:
+    if swept:
         # Already held; this reads back whether it is shared.
         shared = boundary.lock_boundary_members(connection, boundary_at)
         coordinator = connection.execute(

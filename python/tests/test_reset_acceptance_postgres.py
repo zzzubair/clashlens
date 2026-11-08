@@ -144,7 +144,7 @@ def _publish(connection, reset: datetime, players: list[int]) -> None:
 def test_the_reset_record_keeps_each_stage_time_and_the_board_counts(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info, autocommit=True) as owner:
             owner.execute("SET session_replication_role = replica")
             players = _seed_reset(owner, RESET)
@@ -221,7 +221,7 @@ def test_an_older_reset_record_keeps_updating_until_its_readings_are_processed(
 ) -> None:
     # A reading can wait days, even beyond a week, for the archive while newer
     # Resets go by.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info, autocommit=True) as owner:
             owner.execute("SET session_replication_role = replica")
             _seed_reset(owner, RESET)
@@ -261,7 +261,7 @@ def test_a_reset_the_check_never_saw_gets_its_record_when_it_returns(
     database_url: str,
 ) -> None:
     # The alert check was down across three Resets.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info, autocommit=True) as owner:
             owner.execute("SET session_replication_role = replica")
             _seed_reset(owner, RESET)
@@ -287,7 +287,7 @@ def test_a_processed_time_whose_jobs_were_cleaned_up_stays_unknown(
 ) -> None:
     # Processing finished, but the finished-job cleanup removed one job before
     # the check saw it: the time is unknown, never the collection time.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info, autocommit=True) as owner:
             owner.execute("SET session_replication_role = replica")
             _seed_reset(owner, RESET)
@@ -311,7 +311,7 @@ def test_a_reset_response_processed_by_a_replay_counts_as_processed(
 ) -> None:
     # The original job failed; the documented replay path processed the same
     # response in a separate job.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info, autocommit=True) as owner:
             owner.execute("SET session_replication_role = replica")
             _seed_reset(owner, RESET)
@@ -351,7 +351,7 @@ def test_a_replaced_reset_response_still_holds_back_the_processed_time(
 ) -> None:
     # A retried Reset item saves a newer battle log; the one it replaced was
     # saved too and must be processed before the readings count as processed.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info, autocommit=True) as owner:
             owner.execute("SET session_replication_role = replica")
             players = _seed_reset(owner, RESET)
@@ -400,7 +400,7 @@ def test_the_alert_probe_prints_the_latest_resets_progress(
 ) -> None:
     reset = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
     reset -= timedelta(hours=(reset.hour - 5) % 24)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         url_file = tmp_path / "database-url"
         url_file.write_text(_as_worker(connection_info))
         monkeypatch.setenv("CLASHLENS_DATABASE_URL_FILE", str(url_file))
@@ -418,4 +418,3 @@ def test_the_alert_probe_prints_the_latest_resets_progress(
         assert readable == shown + 1500
         # No board generation yet: no member waits, failed or was left out.
         assert board == [0, 0, 0, 0]
-

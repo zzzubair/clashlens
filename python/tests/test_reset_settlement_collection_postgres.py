@@ -186,7 +186,7 @@ def _current_reset(now: datetime) -> datetime:
 
 
 def test_one_delayed_work_per_frozen_member_survives_restart(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         # The collector schedules and links checks with its own permissions.
         options = conninfo_to_dict(connection_info).get("options", "")
         collector_role = make_conninfo(
@@ -259,7 +259,7 @@ def test_settlement_always_fetches_profile_then_covering_log(
 ) -> None:
     boundary = _current_reset(datetime.now(UTC))
     with (
-        domain_database(database_url, include_coordinator=True) as connection_info,
+        domain_database(database_url) as connection_info,
         _provider() as origin,
     ):
         (player_id,) = _players(connection_info, TAG)
@@ -334,7 +334,7 @@ def test_settlement_always_fetches_profile_then_covering_log(
 def test_log_started_before_its_profile_arrived_is_fetched_again(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         (player_id,) = _players(connection_info, TAG)
         database = CollectorDatabase(connection_info)
         database.begin_reset(WEDNESDAY_RESET)
@@ -373,7 +373,7 @@ def test_log_started_before_its_profile_arrived_is_fetched_again(
 def test_changed_old_day_log_is_preserved_without_reset_hash_match(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         (player_id,) = _players(connection_info, TAG)
         database = CollectorDatabase(connection_info)
         sweep_id = database.begin_reset(WEDNESDAY_RESET)
@@ -426,7 +426,7 @@ def test_changed_old_day_log_is_preserved_without_reset_hash_match(
 def test_saved_pair_processes_after_newer_profile_and_gapped_log(
     database_url: str, archive_server, old_order
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         observations, jobs = {}, {}
         for key, endpoint, body, minutes in (
             ("profile", "profile", _profile(5766), 20),
@@ -490,7 +490,7 @@ def test_stalled_0520_pass_uses_actual_times_and_expires_without_new_requests(
     database_url: str, tmp_path
 ) -> None:
     with (
-        domain_database(database_url, include_coordinator=True) as connection_info,
+        domain_database(database_url) as connection_info,
         _provider() as origin,
     ):
         first, _second = _players(connection_info, TAG, "#8QV")
@@ -546,7 +546,7 @@ def test_no_request_starts_after_the_cutoff_once_a_check_is_running(
 ) -> None:
     boundary = _current_reset(datetime.now(UTC))
     with (
-        domain_database(database_url, include_coordinator=True) as connection_info,
+        domain_database(database_url) as connection_info,
         _provider() as origin,
     ):
         _players(connection_info, TAG)
@@ -571,7 +571,7 @@ def test_no_request_starts_after_the_cutoff_once_a_check_is_running(
 def test_pending_settlement_does_not_block_regular_or_next_reset(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _players(connection_info, "#2PP", "#8QV", "#9LL", "#QQQ")
         database = CollectorDatabase(connection_info)
         sweep_id = database.begin_reset(WEDNESDAY_RESET)
@@ -645,7 +645,7 @@ def test_transport_retry_keeps_pinned_profile_and_stays_bounded(
 ) -> None:
     boundary = _current_reset(datetime.now(UTC))
     with (
-        domain_database(database_url, include_coordinator=True) as connection_info,
+        domain_database(database_url) as connection_info,
         _provider() as origin,
     ):
         _players(connection_info, TAG)
@@ -681,7 +681,7 @@ def test_missing_player_profile_still_brings_its_battle_log(
     database_url: str, tmp_path, monkeypatch
 ) -> None:
     with (
-        domain_database(database_url, include_coordinator=True) as connection_info,
+        domain_database(database_url) as connection_info,
         _provider() as origin,
     ):
         _players(connection_info, TAG)
@@ -700,7 +700,7 @@ def test_monday_and_season_checks_have_two_endpoints_and_no_acceptance(
     database_url: str, tmp_path, monkeypatch, boundary
 ) -> None:
     with (
-        domain_database(database_url, include_coordinator=True) as connection_info,
+        domain_database(database_url) as connection_info,
         _provider() as origin,
     ):
         _players(connection_info, TAG)
@@ -839,7 +839,7 @@ def test_reset_recheck_repairs_missing_work_while_a_publication_points_at_it(
 ) -> None:
     # On 2026-10-03 the restarted collector's recheck of the existing Reset
     # waited on such a publication and all collection stopped, twice.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         players = _players(connection_info, TAG, "#2QQ", "#2RR")
         database = CollectorDatabase(connection_info)
         try:
@@ -880,7 +880,7 @@ def test_reset_recheck_repairs_missing_work_while_a_publication_points_at_it(
 def test_first_reset_freezes_members_once_for_concurrent_callers(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         players = _players(connection_info, TAG, "#2QQ")
         database = CollectorDatabase(connection_info)
         try:
@@ -897,7 +897,7 @@ def test_first_reset_freezes_members_once_for_concurrent_callers(
 
 
 def test_reset_recheck_still_waits_for_a_real_sweep_edit(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _players(connection_info, TAG)
         database = CollectorDatabase(connection_info)
         try:
@@ -964,7 +964,7 @@ def test_reset_pair_reads_every_profile_before_the_new_day_then_its_battle_log(
     # started at 05:07:20 or later at all 11 Resets from 29 September to
     # 9 October 2026.
     with (
-        domain_database(database_url, include_coordinator=True) as connection_info,
+        domain_database(database_url) as connection_info,
         _provider() as origin,
     ):
         first, second = _players(connection_info, TAG, "#8QV")
@@ -1020,7 +1020,7 @@ def test_reset_pair_reads_every_profile_before_the_new_day_then_its_battle_log(
 
 
 def test_regular_checks_hand_over_to_each_reset_and_back(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _players(connection_info, TAG)
         database = CollectorDatabase(connection_info)
         reset, next_reset = WEDNESDAY_RESET, WEDNESDAY_RESET + timedelta(days=1)
@@ -1070,7 +1070,7 @@ def test_pair_proof_needs_a_usable_profile_then_a_usable_log_after_it() -> None:
 
 
 def test_reset_pair_fetches_what_its_proof_still_needs(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         (player_id,) = _players(connection_info, TAG)
         database = CollectorDatabase(connection_info)
         database.begin_reset(WEDNESDAY_RESET)

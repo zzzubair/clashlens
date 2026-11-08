@@ -171,7 +171,7 @@ def test_a_replacement_saves_one_ordering_label_everywhere(
     older board, freezes its inputs under the current rule."""
     for module in (boundary, boundary_members):
         monkeypatch.setattr(module, "SNAPSHOT_ORDERING_RULE_VERSION", OLDER)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:

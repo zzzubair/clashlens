@@ -372,7 +372,7 @@ def test_the_bot_sends_the_owner_the_alerts_and_summary_the_linked_account_gets(
     worker saves sends each the same attack alert. Only the colour differs:
     the linked account's first player's colour, the owner's gold."""
     day_1, day_2, day_3 = day(1), day(2), day(3)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = Story(connection_info, archive_server, monkeypatch, {FOLLOWED: Player(FOLLOWED)})
         story.players[FOLLOWED].battles = (
             attacks(day_1, 40, 40, 40, 30) + defenses(day_1, *[10] * 8)

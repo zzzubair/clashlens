@@ -73,7 +73,7 @@ def test_a_board_frozen_without_late_days_takes_them_and_a_later_proof(
     LATE's Reset responses wait in the worker until the board has frozen
     without it at 05:30; SWEDE's Reset reading is seen again at 05:50:38."""
     start, end = day(2), day(3)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, SWEDE, LATE, ON_TIME)
         # No reading rechecks a day until the board has frozen, as none did
         # on 8 November before 05:43.

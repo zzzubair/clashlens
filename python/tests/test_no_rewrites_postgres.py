@@ -86,7 +86,7 @@ def test_monday_corrections_battles_and_army_counts_save_only_what_changed(
     28 September 2026."""
     season = PREVIOUS_SEASON
     saturday, sunday, monday = (day(number, season) for number in (20, 21, 22))
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, *PLAYERS)
         monkeypatch.setattr(scenarios, "READ_AFTER", timedelta(minutes=13))
         for player in story.players.values():

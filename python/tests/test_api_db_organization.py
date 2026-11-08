@@ -10,11 +10,10 @@ from uuid import uuid4
 
 import psycopg
 import pytest
-from domain_test_support import decide_leagues, store_observation
+from domain_test_support import _processor, decide_leagues, store_observation
 from test_api_db_public_ops import NOW, anonymous_binding, seed_profile
 from test_api_db_verification import verification_binding
 from test_api_migration import migrated_production_database
-from test_domain_processing_postgres import _processor
 
 from clashlens import api_accounts, api_player_lookup, api_verification, job_outcomes
 from clashlens.api_db import ApiDatabase, RequestBinding

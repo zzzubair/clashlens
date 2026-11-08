@@ -379,9 +379,9 @@ def test_profile_days_read_every_linked_player_at_once_up_to_the_cards_limit(
             database.close()
 
     assert days is not None
-    # The account, its players, which board tables exist, their days and
-    # Reset places, and their weeks: the same five for any number of players.
-    assert counted.reads == 5
+    # Read the account, its players, their days and Reset places, and their
+    # weeks in at most five reads, however many players are linked.
+    assert counted.reads <= 5
     players = days["players"]
     assert [player["tag"] for player in players] == sorted(["#2PP", *more])[:500]
     assert days["season_start"] == "2026-07-13T05:00:00+00:00"

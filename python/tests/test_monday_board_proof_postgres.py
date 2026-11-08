@@ -70,7 +70,7 @@ def test_monday_board_proves_days_from_readings_during_the_day(
     its total at 05:00:00; its attacker's report is not saved here, so the
     defense counts: 4,996, where the board once showed the 03:05:53 reading."""
     saturday, sunday, monday = day(6), day(7), day(8)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch,
                        NEVER, EXACT, LL02YLGG, BELOW, AFTER)
         monkeypatch.setattr(scenarios, "READ_AFTER", timedelta(minutes=4, seconds=56))

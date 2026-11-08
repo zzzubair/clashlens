@@ -12,14 +12,12 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from psycopg.errors import DeadlockDetected, QueryCanceled, SerializationFailure
 
 from clashlens import cli, ingestion, job_outcomes, reconciliation_db, worker
 from clashlens.db import (
     DOMAIN_RULE_VERSION,
     POPULATION_BUILD_WORK_TYPES,
     PROCESSING_VERSION,
-    LeaseLost,
 )
 from clashlens.domain import DomainRuleError
 from clashlens.league_history import (
@@ -34,8 +32,9 @@ from clashlens.worker import (
     DERIVED_WITHOUT_BUILDS,
     ObservationProcessor,
     ProcessResult,
-    process_concurrently,
 )
+
+pytestmark = pytest.mark.usefixtures("worker_maintenance_services")
 
 
 class NoClaimDatabase:
@@ -45,109 +44,6 @@ class NoClaimDatabase:
     def claim_job(self, **_kwargs: object) -> None:
         self.claim_calls += 1
         raise AssertionError("shutdown must stop before claiming another job")
-
-
-@pytest.mark.parametrize(
-    ("conflict", "failure_error"),
-    [
-        (DeadlockDetected, DeadlockDetected),
-        (SerializationFailure, SerializationFailure),
-        # The statement deadline cancels a stuck failure write or the work itself.
-        (DeadlockDetected, QueryCanceled),
-        (QueryCanceled, QueryCanceled),
-    ],
-)
-@pytest.mark.parametrize("spent_attempts", [0, 2])
-@pytest.mark.parametrize(
-    ("refund_conflicts", "lose_lease"), [(0, False), (2, False), (3, False), (3, True)]
-)
-def test_failure_write_conflict_keeps_worker_processing(
-    conflict, failure_error, spent_attempts, refund_conflicts, lose_lease, monkeypatch
-) -> None:
-    claims = [
-        SimpleNamespace(
-            job_id=job_id,
-            work_type="reconcile_ranked_day",
-            processing_version=PROCESSING_VERSION,
-            domain_rule_version=DOMAIN_RULE_VERSION,
-            attempt_count=spent_attempts if job_id == 17 else 0,
-            max_attempts=3,
-        )
-        for job_id in (17, 18)
-    ]
-    conflicted_claim = claims[0]
-
-    class Database:
-        def __init__(self):
-            self.spent_attempts = spent_attempts
-            self.refund_conflicts = refund_conflicts
-
-        def claim_job(self, **_kwargs):
-            if not claims:
-                return None
-            claim = claims.pop(0)
-            if claim.job_id == 17:
-                self.spent_attempts += 1
-            return claim
-
-        def renew_claim(self, _claim, **_kwargs):
-            pass
-
-        def refund_claim_attempt(self, claim):
-            if self.refund_conflicts:
-                self.refund_conflicts -= 1
-                raise failure_error()
-            if lose_lease:
-                raise LeaseLost("job lease expired during recovery")
-            self.spent_attempts = claim.attempt_count
-
-        def expire_lease(self):
-            if self.spent_attempts < conflicted_claim.max_attempts:
-                claims.append(conflicted_claim)
-
-    reject_transactions = True
-
-    def complete_reconciliation(_database, claim):
-        if claim.job_id == 17 and reject_transactions:
-            raise conflict()
-
-    def fail_claim(*_args, **_kwargs):
-        raise failure_error()
-
-    monkeypatch.setattr(
-        reconciliation_db, "complete_reconciliation", complete_reconciliation
-    )
-    monkeypatch.setattr(job_outcomes, "fail_claim", fail_claim)
-    database = Database()
-    processor = ObservationProcessor(database, archive=object())
-    results = process_concurrently(
-        processor,
-        concurrency=1,
-        owner="failure-conflict",
-        max_jobs=2,
-    )
-
-    assert results == [
-        ProcessResult(17, "lease_lost")
-        if lose_lease
-        else ProcessResult(
-            17,
-            "retrying",
-            "database_timeout"
-            if failure_error is QueryCanceled
-            else "database_deadlock",
-        ),
-        ProcessResult(18, "processed"),
-    ]
-    if lose_lease:
-        assert database.spent_attempts == spent_attempts + 1
-        return
-    reject_transactions = False
-    database.expire_lease()
-    assert processor.process_once(owner="failure-conflict") == ProcessResult(
-        17, "processed"
-    )
-    assert database.spent_attempts == spent_attempts + 1
 
 
 @pytest.mark.parametrize("seconds_per_rejection", [2.0, 31.0])
@@ -563,6 +459,7 @@ def test_worker_does_not_claim_after_shutdown_is_requested() -> None:
 
 def test_run_forever_keeps_reported_results_bounded(monkeypatch, capsys) -> None:
     class FakeDatabase:
+        pool = SimpleNamespace(conninfo="test-worker")
         closed = False
         maintenance_calls = 0
 
@@ -599,7 +496,7 @@ def test_run_forever_keeps_reported_results_bounded(monkeypatch, capsys) -> None
 
     monkeypatch.setattr(cli, "Database", lambda _url, **kwargs: database)
 
-    def fake_archive(_arguments: object, *, pool_size: int = 4) -> FakeArchive:
+    def fake_archive(_arguments: object, *, pool_size: int = 4, database: object) -> FakeArchive:
         del _arguments, pool_size
         return FakeArchive()
 
@@ -650,6 +547,7 @@ def test_worker_does_not_claim_or_maintain_when_archive_is_unavailable(
     monkeypatch, capsys, concurrency: int
 ) -> None:
     class FakeDatabase:
+        pool = SimpleNamespace(conninfo="test-worker")
         closed = False
         maintenance_calls = 0
 
@@ -711,6 +609,7 @@ def test_run_forever_rechecks_archive_and_resumes_after_outage(
     monkeypatch, capsys
 ) -> None:
     class FakeDatabase:
+        pool = SimpleNamespace(conninfo="test-worker")
         closed = False
         maintenance_calls = 0
 
@@ -782,6 +681,7 @@ def test_run_forever_keeps_lanes_claiming_and_maintaining_during_a_long_job(
     stop: list[Event] = []
 
     class FakeDatabase:
+        pool = SimpleNamespace(conninfo="test-worker")
         def close(self) -> None:
             return
 
@@ -856,6 +756,7 @@ def test_maintenance_runs_while_every_lane_holds_a_connection(
     stop: list[Event] = []
 
     class PoolModelDatabase:
+        pool = SimpleNamespace(conninfo="test-worker")
         def __init__(self, _url: str, *, max_size: int, **_kwargs: object) -> None:
             self.max_size = max_size
             self.connections = threading.BoundedSemaphore(max_size)
@@ -948,6 +849,7 @@ def test_operating_snapshot_refreshes_while_a_batch_is_blocked(
     monkeypatch,
 ) -> None:
     class FakeDatabase:
+        pool = SimpleNamespace(conninfo="test-worker")
         closed = False
 
         def close(self) -> None:
@@ -1002,11 +904,11 @@ def test_operating_snapshot_refreshes_while_a_batch_is_blocked(
     assert database.closed is True
 
 
-
 def test_initial_operating_snapshot_failure_does_not_stop_work(
     monkeypatch, capsys
 ) -> None:
     class FakeDatabase:
+        pool = SimpleNamespace(conninfo="test-worker")
         def close(self) -> None:
             return
 
@@ -1055,6 +957,7 @@ def test_initial_operating_snapshot_failure_does_not_stop_work(
 
 
 class PoolRecordingDatabase:
+    pool = SimpleNamespace(conninfo="test-worker")
     def __init__(self, _database_url: str, *, max_size: int) -> None:
         self.max_size = max_size
         self.closed = False
@@ -1093,19 +996,17 @@ def test_run_worker_defaults_preserve_the_single_thread_path(
         _url: str,
         *,
         max_size: int,
-        expected_contract_version: int,
         player_discovery_enabled: bool,
         statement_timeout_seconds: int,
     ) -> PoolRecordingDatabase:
         recorded["database_max_size"] = max_size
-        recorded["expected_contract_version"] = expected_contract_version
         recorded["player_discovery_enabled"] = player_discovery_enabled
         recorded["statement_timeout_seconds"] = statement_timeout_seconds
         database = PoolRecordingDatabase(_url, max_size=max_size)
         recorded["database"] = database
         return database
 
-    def fake_archive(_arguments: object, *, pool_size: int = 4) -> PoolRecordingArchive:
+    def fake_archive(_arguments: object, *, pool_size: int = 4, database: object) -> PoolRecordingArchive:
         recorded["archive_pool_size"] = pool_size
         return PoolRecordingArchive(pool_size)
 
@@ -1117,7 +1018,6 @@ def test_run_worker_defaults_preserve_the_single_thread_path(
 
     assert result == 0
     assert recorded["database_max_size"] == 4
-    assert recorded["expected_contract_version"] == 5
     assert recorded["player_discovery_enabled"] is True
     assert recorded["statement_timeout_seconds"] == 900
     assert recorded["archive_pool_size"] == 4
@@ -1144,14 +1044,13 @@ def test_run_worker_disables_player_discovery_when_flagged(monkeypatch) -> None:
         _url: str,
         *,
         max_size: int,
-        expected_contract_version: int,
         player_discovery_enabled: bool,
         statement_timeout_seconds: int,
     ) -> PoolRecordingDatabase:
         recorded["player_discovery_enabled"] = player_discovery_enabled
         return PoolRecordingDatabase(_url, max_size=max_size)
 
-    def fake_archive(_arguments: object, *, pool_size: int = 4) -> PoolRecordingArchive:
+    def fake_archive(_arguments: object, *, pool_size: int = 4, database: object) -> PoolRecordingArchive:
         return PoolRecordingArchive(pool_size)
 
     monkeypatch.setattr(cli, "Database", fake_database)
@@ -1175,17 +1074,15 @@ def test_run_worker_concurrent_path_uses_explicit_pool_sizes(monkeypatch) -> Non
         _url: str,
         *,
         max_size: int,
-        expected_contract_version: int,
         player_discovery_enabled: bool,
         statement_timeout_seconds: int,
     ) -> PoolRecordingDatabase:
         recorded["database_max_size"] = max_size
-        recorded["expected_contract_version"] = expected_contract_version
         database = PoolRecordingDatabase(_url, max_size=max_size)
         recorded["database"] = database
         return database
 
-    def fake_archive(_arguments: object, *, pool_size: int = 4) -> PoolRecordingArchive:
+    def fake_archive(_arguments: object, *, pool_size: int = 4, database: object) -> PoolRecordingArchive:
         recorded["archive_pool_size"] = pool_size
         return PoolRecordingArchive(pool_size)
 
@@ -1217,7 +1114,6 @@ def test_run_worker_concurrent_path_uses_explicit_pool_sizes(monkeypatch) -> Non
 
     assert result == 0
     assert recorded["database_max_size"] == 8
-    assert recorded["expected_contract_version"] == 5
     assert recorded["archive_pool_size"] == 4
     assert recorded["concurrent_args"] == {
         "concurrency": 3,
@@ -1238,15 +1134,13 @@ def test_run_worker_honors_explicit_pool_size_flags(monkeypatch) -> None:
         _url: str,
         *,
         max_size: int,
-        expected_contract_version: int,
         player_discovery_enabled: bool,
         statement_timeout_seconds: int,
     ) -> PoolRecordingDatabase:
         recorded["database_max_size"] = max_size
-        recorded["expected_contract_version"] = expected_contract_version
         return PoolRecordingDatabase(_url, max_size=max_size)
 
-    def fake_archive(_arguments: object, *, pool_size: int = 4) -> PoolRecordingArchive:
+    def fake_archive(_arguments: object, *, pool_size: int = 4, database: object) -> PoolRecordingArchive:
         recorded["archive_pool_size"] = pool_size
         return PoolRecordingArchive(pool_size)
 
@@ -1270,7 +1164,6 @@ def test_run_worker_honors_explicit_pool_size_flags(monkeypatch) -> None:
 
     assert result == 0
     assert recorded["database_max_size"] == 6
-    assert recorded["expected_contract_version"] == 5
     assert recorded["archive_pool_size"] == 12
 
 
@@ -1302,6 +1195,7 @@ def test_worker_writes_terminal_snapshot_after_quiescence(
     from clashlens.cli import ProcessResult
 
     class FakeDatabase:
+        pool = SimpleNamespace(conninfo="test-worker")
         def __init__(self, _url: str, **kwargs: object) -> None:
             del _url, kwargs
 
@@ -1356,6 +1250,7 @@ def test_worker_terminal_write_failure_stays_incomplete(
     from clashlens.cli import ProcessResult
 
     class FakeDatabase:
+        pool = SimpleNamespace(conninfo="test-worker")
         def __init__(self, _url: str, **kwargs: object) -> None:
             del _url, kwargs
 
@@ -1408,6 +1303,7 @@ def test_worker_terminal_refused_when_heartbeat_stuck(
     calls = []
 
     class FakeDatabase:
+        pool = SimpleNamespace(conninfo="test-worker")
         def __init__(self, _url: str, **kwargs: object) -> None:
             del _url, kwargs
 

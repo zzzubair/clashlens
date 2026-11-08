@@ -96,7 +96,7 @@ def test_card_shows_a_projected_place_learned_from_the_day_before(
     examples are saved the card has no projected place and does not ask
     again for one; the worker's first run saves every finished day with a
     Daily board at once."""
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, DONE, CHASER)
         # Today's card is read at 20:00. The worker publishes a day's battles
         # after its Reset when it runs weeks later, as here, so today ends
@@ -188,7 +188,7 @@ def test_equal_trophies_keep_the_daily_boards_order_by_when_battles_ended(
     players' own report times, nor of every defense ending 155 seconds after
     its report. They stay so once RAIDER leaves the live board, as RAIDER's
     published report still says when the battle with HIT ended."""
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch)
         early = TODAY - timedelta(minutes=45)
         story.players = {

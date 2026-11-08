@@ -133,7 +133,7 @@ def test_reset_pair_with_production_parser_versions_publishes_army_day(
     monkeypatch.setattr(
         ObservationProcessor, "_process_claim", ObservationProcessor._process_claim_once
     )
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         pairs = [
             _store_baseline_pair(
                 connection_info,
@@ -254,7 +254,7 @@ def test_republication_finishes_days_left_by_partial_reset_pairs(
     # Production state on 2026-10-02: both Reset results were processed but
     # each pair's latest check said partial, so its day stayed Live.
     opening = DAY_START - timedelta(days=22)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         pairs = [
             _store_baseline_pair(
                 connection_info,
@@ -414,7 +414,7 @@ def test_republication_retries_failed_reset_repair_left_live(
 ) -> None:
     # Production job 1681969 on 2026-10-02: a repaired pair's day rebuild ran
     # out of lease attempts, so its day stayed Live and the pair stayed complete.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         pairs = [
             _store_baseline_pair(
                 connection_info,
@@ -687,7 +687,7 @@ def test_republication_retries_failed_reset_repair_left_live(
 def test_reset_pair_proves_the_reset_only_when_collected_in_time_and_order(
     database_url: str, archive_server, profile_at, battle_log_at, state, reasons
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         profile_id, profile_job = store_observation(
             connection_info,
             archive_server,
@@ -735,7 +735,7 @@ def test_reset_evidence_holds_its_pair_while_the_collector_saves_a_retry(
     # 2026-10-03 05:01: a 504 profile's evidence was being saved when the
     # collector saved the pair's retried battle log. The evidence check then
     # saw a different pair, refused the row, and the worker exited.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         observed = {}
         jobs = {}
         for key, endpoint, body, minutes in (
@@ -904,7 +904,7 @@ def test_failed_ending_reset_finishes_the_day_without_inventing_a_total(
 ) -> None:
     # Production on 2026-10-03: 4,703 ended days stayed Live because a failed
     # ending Reset check queued no recalculation of the day it ended.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor, player_id = _live_day_with_battle(
             connection_info, archive_server, monkeypatch, start=start
         )
@@ -991,7 +991,7 @@ def test_republication_finishes_ended_days_left_live(
         yesterday = ranked_day_for(yesterday.start - timedelta(days=1))
     earlier = ranked_day_for(yesterday.start - timedelta(days=1))
     season = yesterday.season_start + timedelta(days=28 if anchor_moved_on else 0)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         profile_job = store_observation(
             connection_info, archive_server, occurrence_key="profile",
             endpoint="profile", body=_profile(6000), observed_at=DAY_START,
@@ -1167,7 +1167,7 @@ def test_day_saved_live_is_finished_after_its_reset_without_a_reading(
     today = ranked_day_for(datetime.now(UTC))
     earlier = ranked_day_for(today.start - timedelta(days=2))
     older = ranked_day_for(earlier.start - timedelta(days=1))
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         profile_job = store_observation(
             connection_info, archive_server, occurrence_key="profile",
             endpoint="profile", body=_profile(5000), observed_at=DAY_START,
@@ -1241,7 +1241,7 @@ def test_failed_season_opening_reset_finishes_only_the_closing_day(
     opening = DAY_START + timedelta(days=6)
     assert ranked_day_for(opening).season_start == opening
     closing = opening - timedelta(days=1)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         late = opening + timedelta(days=1, minutes=10)
         observed = {
             endpoint: store_observation(

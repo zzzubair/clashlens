@@ -8,9 +8,8 @@ from types import SimpleNamespace
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation
+from domain_test_support import _processor, domain_database, store_observation
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
-from test_domain_processing_postgres import _processor
 
 from clashlens.db import Database, enqueue_discovered_players
 

@@ -754,7 +754,7 @@ def recalculate_ranked_day(
     else:
         version_id = int(existing[0])
         version_number = int(existing[1])
-    _publish_player_daily_log(database, 
+    _publish_player_daily_log(database,
         connection,
         player_id=player_id,
         ranked_day_start=ranked_day.start,
@@ -1023,52 +1023,33 @@ def _publish_player_daily_log(
         (league_week.week_start(ranked_day_start), league_week.League.LEGEND_I.value)
         if ranked_day_start >= league_days.RECORDED_FROM else (None, None)
     )
-    if getattr(database, "_supports_coordinator_contract", False):
-        connection.execute(
-            """
-            INSERT INTO api_player_daily_logs (
-                player_id, ranked_day_start, ranked_day_version_id, version, state, coverage,
-                adjustments, battles, partial_reasons, ranked_day_end,
-                official_season_id, season_day_number, confidence,
-                attack_count, attack_three_star_count, attack_gain,
-                defense_count, defense_three_star_count, defense_loss,
-                net_trophy_change, week_start, league
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                      %s, %s)
-            ON CONFLICT (player_id, ranked_day_start, version) DO NOTHING
-            """,
-            (
-                player_id,
-                ranked_day_start,
-                ranked_day_version_id,
-                *daily_log_values[2:],
-                *week,
-            ),
-        )
-    else:
-        connection.execute(
-            """
-            INSERT INTO api_player_daily_logs (
-                player_id, ranked_day_start, version, state, coverage,
-                adjustments, battles, partial_reasons, ranked_day_end,
-                official_season_id, season_day_number, confidence,
-                attack_count, attack_three_star_count, attack_gain,
-                defense_count, defense_three_star_count, defense_loss,
-                net_trophy_change, week_start, league
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                      %s, %s)
-            ON CONFLICT (player_id, ranked_day_start, version) DO NOTHING
-            """,
-            (*daily_log_values, *week),
-        )
+    connection.execute(
+        """
+        INSERT INTO api_player_daily_logs (
+            player_id, ranked_day_start, ranked_day_version_id, version, state, coverage,
+            adjustments, battles, partial_reasons, ranked_day_end,
+            official_season_id, season_day_number, confidence,
+            attack_count, attack_three_star_count, attack_gain,
+            defense_count, defense_three_star_count, defense_loss,
+            net_trophy_change, week_start, league
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                  %s, %s)
+        ON CONFLICT (player_id, ranked_day_start, version) DO NOTHING
+        """,
+        (
+            player_id,
+            ranked_day_start,
+            ranked_day_version_id,
+            *daily_log_values[2:],
+            *week,
+        ),
+    )
     # Refresh the compact historical summary in the same transaction:
     # a late correction updates an already-summarized season, and a
     # completed day-28 publication establishes one. Active seasons stay
     # on explicit backfill, and unchanged input is a no-op, so routine
     # live publication is unaffected.
-    if public_state != "Live" and getattr(
-        database, "_supports_season_summaries", False
-    ) and official_season_id != "unknown":
+    if public_state != "Live" and official_season_id != "unknown":
         refresh = season_day_number == 28 and public_state == "Complete"
         if not refresh:
             # Probe under the per-player-season lock so a racing first

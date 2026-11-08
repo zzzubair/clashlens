@@ -195,7 +195,7 @@ def test_an_attack_the_worker_saves_sends_one_dm_with_the_attackers_hit_rate(
     # DEFENDER's second defense is by the player tagged _tag(2), and the
     # third by _tag(3), whose profile Clash Lens never read.
     attacker = f"#{_tag(2)}"
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = Story(connection_info, archive_server, monkeypatch,
                       {tag: Player(tag) for tag in (DEFENDER, attacker)})
         # The attacker's own log: Day 1 three attacks, two three-stars, and a

@@ -249,26 +249,20 @@ class TimedMaintenance:
         self.next_queue_maintenance_at = float("-inf")
         self.league_weeks: threading.Thread | None = None
         self.stopping = Event()
-        self.permit = (
-            MaintenancePermit(database.pool.conninfo)
-            if isinstance(database, Database)
-            else None
-        )
+        self.permit = MaintenancePermit(database.pool.conninfo)
 
     def close(self) -> None:
         self.stopping.set()
         if self.league_weeks is not None:
             self.league_weeks.join(MAINTENANCE_STOP_SECONDS)
-        if self.permit is not None:
-            self.permit.close()
+        self.permit.close()
 
     def leads(self) -> bool:
         """Whether this process runs the shared publication maintenance."""
-        return self.permit is None or self.permit.acquire()
+        return self.permit.acquire()
 
     def reevaluate(self) -> None:
-        if isinstance(self.database, Database):
-            boundary_publication.reevaluate_boundary_publications(self.database)
+        boundary_publication.reevaluate_boundary_publications(self.database)
 
     def _publication_turn(
         self, current_time: float, derived_turns: Semaphore | None
@@ -288,7 +282,7 @@ class TimedMaintenance:
         turn = self._publication_turn(current_time, derived_turns)
         if turn is PublicationTurn.RUN:
             try:
-                if self.league_weeks is None and isinstance(self.database, Database):
+                if self.league_weeks is None:
                     self.league_weeks = threading.Thread(
                         target=league_week.decide_until, args=(self.database, self.stopping),
                         name="clashlens-worker-league-week", daemon=True)
@@ -296,12 +290,11 @@ class TimedMaintenance:
                 self.reevaluate()
                 self.late_battles.run_when_due()
                 self.daily_recheck.run_when_due()
-                if isinstance(self.database, Database):
-                    army_rank_bands.refresh_rank_band_totals(self.database)
-                    army_types.refresh_army_types(self.database)
-                    projected_place.refresh_remaining_changes(self.database)
-                    analytics.refresh_live_attack_tallies(self.database)
-                    api_leaderboard.refresh_live_unplayed(self.database)
+                army_rank_bands.refresh_rank_band_totals(self.database)
+                army_types.refresh_army_types(self.database)
+                projected_place.refresh_remaining_changes(self.database)
+                analytics.refresh_live_attack_tallies(self.database)
+                api_leaderboard.refresh_live_unplayed(self.database)
             finally:
                 if derived_turns is not None:
                     derived_turns.release()

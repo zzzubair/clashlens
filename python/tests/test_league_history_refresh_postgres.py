@@ -41,7 +41,7 @@ def test_season_opening_reset_fetches_league_history_again_after_20_minutes(
     database_url: str, tmp_path
 ) -> None:
     with (
-        domain_database(database_url, include_coordinator=True) as connection_info,
+        domain_database(database_url) as connection_info,
         _provider() as origin,
     ):
         first, second = _players(connection_info, "#2PP", "#8PY")
@@ -83,7 +83,7 @@ def test_season_end_history_checks_are_picked_beside_same_due_settlement_checks(
     # On 2 Nov 2026 every settlement check, due with these at 05:20 and
     # scheduled first, filled each pick, so no history check had started by
     # 07:14 although their own slots were free.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _players(connection_info, "#2PP", "#8PY", "#9QQ", "#PQ2")
         database = CollectorDatabase(connection_info)
         database.begin_reset(SEASON_RESET)
@@ -105,7 +105,7 @@ def test_season_end_history_checks_are_picked_beside_same_due_settlement_checks(
 def test_refresh_command_skips_players_whose_refresh_is_still_waiting(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _players(connection_info, "#2PP", "#8PY")
         _players(connection_info, "#9QQ", active=False)
         with psycopg.connect(connection_info) as connection:

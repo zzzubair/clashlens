@@ -7,6 +7,12 @@ from pathlib import Path
 import psycopg
 import pytest
 from domain_test_support import (
+    LIVE_BATTLE_PARSER_VERSION,
+    PROFILE_FIXTURE,
+    _live_battle_row,
+    _prepare_reset_baseline_pair,
+    _processor,
+    _seed_battle_anchor,
     as_api_role,
     decide_leagues,
     domain_database,
@@ -14,14 +20,6 @@ from domain_test_support import (
     text,
 )
 from psycopg import sql
-from test_domain_processing_postgres import (
-    LIVE_BATTLE_PARSER_VERSION,
-    PROFILE_FIXTURE,
-    _live_battle_row,
-    _prepare_reset_baseline_pair,
-    _processor,
-    _seed_battle_anchor,
-)
 
 from clashlens import api_leaderboard, job_outcomes
 from clashlens.api_db import ApiDatabase
@@ -75,7 +73,7 @@ def test_one_pass_shows_every_players_newest_profile_and_skips_older_copies(
     """A backlog drains newest first per player and the stalest player goes first."""
 
     tags = ("#9PP", "#2PP", "#8PP")
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         api = ApiDatabase(as_api_role(connection_info))
         try:
@@ -169,7 +167,7 @@ def test_profiles_are_skipped_only_within_their_own_legend_day(
     archive_server,
 ) -> None:
     reset = DAY.end
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _reset_profile, _reset_battle, reset_profile_job, _battle_job = (
             _prepare_reset_baseline_pair(
                 connection_info, archive_server, boundary=reset
@@ -233,7 +231,7 @@ def test_battle_log_is_skipped_only_when_every_row_is_already_stored(
     database_url: str,
     archive_server,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
         day = ranked_day_for(now)

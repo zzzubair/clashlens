@@ -10,12 +10,14 @@ import json
 from datetime import timedelta
 
 import psycopg
-from domain_test_support import domain_database, store_observation, text
-from test_domain_processing_postgres import (
+from domain_test_support import (
     LIVE_BATTLE_PARSER_VERSION,
     _live_battle_row,
     _processor,
     _seed_battle_anchor,
+    domain_database,
+    store_observation,
+    text,
 )
 
 from clashlens.domain import ranked_day_for
@@ -25,7 +27,7 @@ def test_late_fetched_zero_trophy_defense_lands_on_its_own_day_once(
     database_url: str,
     archive_server,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
         today = ranked_day_for(now)

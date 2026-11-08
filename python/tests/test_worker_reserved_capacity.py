@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import time
 from threading import Event, Semaphore
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +17,8 @@ from clashlens.worker import (
     lane_work_types,
     process_until_stopped,
 )
+
+pytestmark = pytest.mark.usefixtures("worker_maintenance_services")
 
 RESPONSE = "process_observation"
 DAILY = "reconcile_ranked_day"
@@ -95,6 +98,7 @@ class HeldSweep:
 
 
 class QueueOnlyDatabase:
+    pool = SimpleNamespace(conninfo="test-worker")
     def __init__(self) -> None:
         self.queue_maintenance_runs = 0
 

@@ -117,7 +117,7 @@ def _freeze(database: Database, connection: Any, generation_id: int, generation:
 def test_corrections_store_only_changed_rows_and_rebuild_the_full_manifest(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         first_id = seed_population(connection_info, PLAYERS)
         database = Database(connection_info)
         try:
@@ -176,7 +176,7 @@ def test_corrections_store_only_changed_rows_and_rebuild_the_full_manifest(
 def test_a_changed_membership_freezes_a_full_manifest(
     database_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         first_id = seed_population(connection_info, PLAYERS)
         database = Database(connection_info)
         try:
@@ -198,7 +198,7 @@ def test_a_changed_membership_freezes_a_full_manifest(
 
 
 def test_most_rows_changing_still_builds_on_the_full_manifest(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         first_id = seed_population(connection_info, PLAYERS)
         database = Database(connection_info)
         try:
@@ -222,7 +222,7 @@ def test_most_rows_changing_still_builds_on_the_full_manifest(database_url: str)
 
 
 def test_reuse_reaches_only_a_full_manifest_of_the_same_reset(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         first_id = seed_population(connection_info, PLAYERS)
         database = Database(connection_info)
         try:

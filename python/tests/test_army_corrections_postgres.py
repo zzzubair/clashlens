@@ -29,7 +29,7 @@ def test_army_corrections_queue_once_for_resets_that_left_out_a_saved_army(
     army rebuild, once, and none is queued from 04:00 to 07:00 UTC. A side
     whose newest saved army failed to read restores nothing, so it is not
     counted even though an older reading was saved."""
-    with domain_database(database_url, include_coordinator=True) as ci:
+    with domain_database(database_url) as ci:
         ts1 = DAY_START + timedelta(hours=1)
         ts2 = FIRST_RESET + timedelta(hours=1)
         jobs = [

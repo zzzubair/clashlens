@@ -834,7 +834,7 @@ def test_publication_probe_counts_resets_missing_their_publication(
     if latest.hour < 5:
         latest -= timedelta(days=1)
     latest = latest.replace(hour=5, minute=0, second=0, microsecond=0)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         url_file = tmp_path / "database-url"
         url_file.write_text(as_api_role(connection_info))
         monkeypatch.setenv("CLASHLENS_DATABASE_URL_FILE", str(url_file))
@@ -879,13 +879,14 @@ def test_failed_or_pending_checks_keep_the_confirmed_profile_time(
 
     import psycopg
     from domain_test_support import (
+        PROFILE_FIXTURE,
+        _processor,
         as_api_role,
         decide_leagues,
         domain_database,
         store_observation,
     )
     from psycopg.conninfo import conninfo_to_dict, make_conninfo
-    from test_domain_processing_postgres import PROFILE_FIXTURE, _processor
 
     from clashlens import api_leaderboard, api_players
     from clashlens.api_db import ApiDatabase
@@ -895,7 +896,7 @@ def test_failed_or_pending_checks_keep_the_confirmed_profile_time(
     accepted_at = datetime(2026, 8, 6, 6, tzinfo=UTC)
     confirmed_at = accepted_at + timedelta(hours=2)
     body = PROFILE_FIXTURE.read_bytes()
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _, job = store_observation(
             connection_info, archive_server, occurrence_key="confirmed-initial",
             endpoint="profile", body=body, observed_at=accepted_at,
@@ -1011,13 +1012,14 @@ def test_not_found_player_leaves_the_leaderboard_and_alert_until_found_again(
 
     import psycopg
     from domain_test_support import (
+        PROFILE_FIXTURE,
+        _processor,
         as_api_role,
         decide_leagues,
         domain_database,
         store_observation,
     )
     from psycopg.conninfo import conninfo_to_dict, make_conninfo
-    from test_domain_processing_postgres import PROFILE_FIXTURE, _processor
 
     from clashlens import api_leaderboard
     from clashlens.api_db import ApiDatabase
@@ -1031,7 +1033,7 @@ def test_not_found_player_leaves_the_leaderboard_and_alert_until_found_again(
     accepted_at = datetime(2026, 8, 6, 6, tzinfo=UTC)
     body = PROFILE_FIXTURE.read_bytes()
     not_found = b'{"reason":"notFound","message":"Not found"}'
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _, job = store_observation(
             connection_info, archive_server, occurrence_key="nf-initial",
             endpoint="profile", body=body, observed_at=accepted_at,

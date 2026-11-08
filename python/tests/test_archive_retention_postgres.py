@@ -265,11 +265,10 @@ def test_retirement_fences_replay_and_keeps_active_work(
     from concurrent.futures import ThreadPoolExecutor
     from time import monotonic, sleep
 
-    from domain_test_support import domain_database, store_observation
-    from test_domain_processing_postgres import _processor
+    from domain_test_support import _processor, domain_database, store_observation
     from test_parsed_content_dedup_postgres import _replay_job
 
-    with domain_database(database_url, include_coordinator=True) as dsn:
+    with domain_database(database_url) as dsn:
         database, processor = _processor(dsn, archive_server)
         spool = Spool(tmp_path / "retention-spool", max_body_bytes=1 << 20)
         client = DeleteClient()

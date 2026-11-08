@@ -131,7 +131,7 @@ def test_live_rows_carry_their_place_on_the_last_resets_daily_board(
     is off Day 2's board, and is back for the Day 4 Reset."""
     day_28, day_1, day_2 = day(28, PREVIOUS_SEASON), day(1), day(2)
     day_3, day_4 = day(3), day(4)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch,
                        CLIMBER, STILL, NEWCOMER)
         # A public profile links CLIMBER and STILL.
@@ -240,7 +240,7 @@ def test_each_day_keeps_its_own_date_whatever_the_boards(
     Reset is never swept, so it has no board, and the Day 5 Reset is read
     before its board publishes. STEADY plays all 16 battles every day for 80."""
     days = {number: day(number) for number in range(1, 6)}
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, LOSER, STEADY)
         story.players[LOSER].battles = (
             # Day 1: 4 attacks and 8 defenses, 5,000 to 4,920.
@@ -330,7 +330,7 @@ def test_today_starts_from_the_days_settled_start_as_on_the_dashboard(
     open yesterday: its automatic loss of 180 lands after today's Reset
     reading, so that Reset's board ranks it at 5,300 while today starts at
     5,120. STEADY plays all 16 battles a day for 80."""
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             today = ranked_day_for(connection.execute("SELECT clock_timestamp()").fetchone()[0])
         if today.day_number <= 3:

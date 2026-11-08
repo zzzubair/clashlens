@@ -638,14 +638,9 @@ def _boundary_army_status(
         """,
         (player_id, ranked_day_version_id),
     ).fetchone()
-    # Coordinated publication requires daily-log evidence before army
-    # readiness; direct legacy reconciliation retains its old fallback.
+    # Publication requires daily-log evidence before army readiness.
     if daily_log is None:
-        return (
-            "pending"
-            if getattr(database, "_supports_coordinator_contract", False)
-            else snapshot_status
-        )
+        return "pending"
     daily_state = _text_value(daily_log[1])
     daily_coverage = _text_value(daily_log[2])
     if daily_state == "Partial":
@@ -834,7 +829,7 @@ def _record_boundary_generation(
                 ranked_day_version_id=ranked_day_version_id,
                 boundary_at=boundary_at,
             )
-            army_status = _boundary_army_status(database, 
+            army_status = _boundary_army_status(database,
                 connection,
                 player_id=player_id,
                 ranked_day_version_id=ranked_day_version_id,
@@ -879,7 +874,7 @@ def _record_boundary_generation(
                 """,
                 (active_target_correction[0],),
             )
-            _try_enqueue_boundary_artifacts(database, 
+            _try_enqueue_boundary_artifacts(database,
                 connection, boundary_at=boundary_at, generation_id=generation_id
             )
             return True
@@ -961,7 +956,7 @@ def _record_boundary_generation(
         ranked_day_version_id=ranked_day_version_id,
         boundary_at=boundary_at,
     )
-    army_status = _boundary_army_status(database, 
+    army_status = _boundary_army_status(database,
         connection,
         player_id=player_id,
         ranked_day_version_id=ranked_day_version_id,
@@ -1005,7 +1000,7 @@ def _record_boundary_generation(
             ),
         )
     if not shared:
-        _try_enqueue_boundary_artifacts(database, 
+        _try_enqueue_boundary_artifacts(database,
             connection, boundary_at=boundary_at, generation_id=generation_id
         )
     return True
@@ -1423,5 +1418,3 @@ def _create_boundary_artifact_identity(
         ):
             raise ValueError("boundary publication artifact identity conflict")
     return int(row[0])
-
-

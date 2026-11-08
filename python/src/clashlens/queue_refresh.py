@@ -375,7 +375,7 @@ class DailyRecheck:
         self.database, self.next_check_at, self.done = database, float("-inf"), set()
 
     def run_when_due(self, now: datetime | None = None) -> None:
-        if not isinstance(self.database, db.Database) or monotonic() < self.next_check_at:
+        if monotonic() < self.next_check_at:
             return
         self.next_check_at = monotonic() + CHECK_INTERVAL_SECONDS
         with self.database.pool.connection() as connection:

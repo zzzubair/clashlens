@@ -64,7 +64,7 @@ def test_compact_bookkeeping_keeps_results_pages_and_leaderboard_unchanged(
     second = dict(first, opponentPlayerTag="#9PP", stars=2,
                   destructionPercentage=80, battleTimestamp="20260804T130000.000Z")
     fetches = [[first, items[1]], [second, first, items[1]]]
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = list(_store_baseline_pair(
             connection_info, archive_server, key="cut-start", boundary=DAY_START,
             trophies=6000, empty_battle_log=True,
@@ -190,7 +190,7 @@ def test_retiring_a_battle_keeps_the_rest_of_each_listed_fetch(
     retired, ignored = items
     live = dict(retired, opponentPlayerTag="#9PP", battleTimestamp="20260804T130000.000Z")
     fetches = [[retired], [retired, ignored], [live, retired, ignored]]
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             for index, fetch in enumerate(fetches):

@@ -30,7 +30,6 @@ from .db import (
     ended_day_priority,
 )
 from .domain import SEASON_START_TROPHIES, RankedDay
-from .ranked_day_inputs import _source_rows
 from .reconciliation import (
     BATTLE_LOG_MAX_ROWS,
 )
@@ -74,11 +73,10 @@ def coverage_start(
         return None
     window_start, window_end = domain.battle_window(ranked_day.start)
     if int(first[3]) >= BATTLE_LOG_MAX_ROWS:
-        relation, _, _ = _source_rows(database)
         parser_version = _text_value(first[4])
         times = []
         for (source,) in connection.execute(
-            f"SELECT source_json FROM {relation} WHERE battle_log_observation_id = %s",
+            "SELECT source_json FROM battle_log_observation_source_rows WHERE battle_log_observation_id = %s",
             (first[0],),
         ).fetchall():
             try:

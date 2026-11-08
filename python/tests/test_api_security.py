@@ -24,7 +24,7 @@ class FakeDatabase:
     closed: bool = False
 
     def is_ready(self, expected_contract_version: int) -> bool:
-        return self.ready and expected_contract_version == 2
+        return self.ready and expected_contract_version == 5
 
     def close(self) -> None:
         self.closed = True

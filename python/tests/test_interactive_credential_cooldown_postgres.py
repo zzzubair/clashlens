@@ -14,7 +14,7 @@ from clashlens.collector_db import CollectorDatabase
 def test_collector_429_cooldown_blocks_api_verification_and_is_audited(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         fingerprint = hashlib.sha256(b"shared-interactive-fixture").hexdigest()
         collector = CollectorDatabase(connection_info)
         api = ApiDatabase(connection_info)
@@ -81,7 +81,7 @@ def test_collector_registration_rejects_unsafe_rates(rate: int) -> None:
 
 
 def test_lowering_shared_rate_preserves_outstanding_permissions(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         fingerprint = hashlib.sha256(b"shared-rate-change-fixture").hexdigest()
         collector = CollectorDatabase(connection_info)
         api = ApiDatabase(connection_info)

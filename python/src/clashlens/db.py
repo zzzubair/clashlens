@@ -77,12 +77,7 @@ POPULATION_BUILD_WORK_TYPES = (
 )
 
 
-def _supported_job_filter(
-    alias: str,
-    *,
-    denormalized_contract: bool = True,
-    supports_coordinator: bool = False,
-) -> tuple[str, list[Any]]:
+def _supported_job_filter(alias: str) -> tuple[str, list[Any]]:
     """Parameterized SQL predicate for jobs this worker image may claim.
 
     Source jobs require an exact supported endpoint/schema contract and a
@@ -96,41 +91,22 @@ def _supported_job_filter(
     """
     source_clauses: list[str] = []
     params: list[Any] = []
-    coordinator_input_shape = "TRUE"
-    if supports_coordinator:
-        coordinator_input_shape = f"""(
-            {alias}.input_json ? 'generation' AND {alias}.input_json ? 'manifest_id'
-        AND {alias}.input_json ? 'manifest_digest'
-        AND ({alias}.input_json->>'generation') ~ '^[1-9][0-9]*$'
-        AND ({alias}.input_json->>'manifest_id') ~ '^[1-9][0-9]*$'
-        AND ({alias}.input_json->>'manifest_digest') ~ '^[0-9a-f]{{64}}$'
-    )"""
+    coordinator_input_shape = f"""(
+        {alias}.input_json ? 'generation' AND {alias}.input_json ? 'manifest_id'
+    AND {alias}.input_json ? 'manifest_digest'
+    AND ({alias}.input_json->>'generation') ~ '^[1-9][0-9]*$'
+    AND ({alias}.input_json->>'manifest_id') ~ '^[1-9][0-9]*$'
+    AND ({alias}.input_json->>'manifest_digest') ~ '^[0-9a-f]{{64}}$'
+)"""
     for contract in SOURCE_OBSERVATION_CONTRACTS:
-        if denormalized_contract:
-            source_clauses.append(
-                f"""(
-                    {alias}.parser_version = ANY(%s::text[])
-                    AND {alias}.endpoint = %s
-                    AND {alias}.endpoint_version = %s
-                    AND {alias}.schema_version = %s
-                )"""
-            )
-        else:
-            # Pre-0009 schemas carry the contract only on the observation.
-            source_clauses.append(
-                f"""(
-                    {alias}.parser_version = ANY(%s::text[])
-                    AND EXISTS (
-                        SELECT 1 FROM collector_observations AS source_observation
-                        WHERE source_observation.id = COALESCE(
-                            {alias}.observation_id, {alias}.replay_observation_id
-                        )
-                        AND source_observation.endpoint = %s
-                        AND source_observation.endpoint_version = %s
-                        AND source_observation.schema_version = %s
-                    )
-                )"""
-            )
+        source_clauses.append(
+            f"""(
+                {alias}.parser_version = ANY(%s::text[])
+                AND {alias}.endpoint = %s
+                AND {alias}.endpoint_version = %s
+                AND {alias}.schema_version = %s
+            )"""
+        )
         params.extend(
             (
                 sorted(contract.supported_parser_versions),
@@ -214,10 +190,7 @@ def _supported_job_filter(
 
 def _supported_claim_filter(
     alias: str,
-    observation_alias: str,
     *,
-    denormalized_contract: bool = True,
-    supports_coordinator: bool = False,
     past_reset_build_hold: str | None = None,
     operator_build_hold: bool = False,
 ) -> tuple[str, dict[str, Any]]:
@@ -240,35 +213,23 @@ def _supported_claim_filter(
     # collector_observations. This keeps claim plans bounded at any depth.
     source_clauses: list[str] = []
     params: dict[str, Any] = {}
-    coordinator_input_shape = "TRUE"
-    if supports_coordinator:
-        coordinator_input_shape = f"""(
-            {alias}.input_json ? 'generation' AND {alias}.input_json ? 'manifest_id'
-        AND {alias}.input_json ? 'manifest_digest'
-        AND ({alias}.input_json->>'generation') ~ '^[1-9][0-9]*$'
-        AND ({alias}.input_json->>'manifest_id') ~ '^[1-9][0-9]*$'
-        AND ({alias}.input_json->>'manifest_digest') ~ '^[0-9a-f]{{64}}$'
-    )"""
+    coordinator_input_shape = f"""(
+        {alias}.input_json ? 'generation' AND {alias}.input_json ? 'manifest_id'
+    AND {alias}.input_json ? 'manifest_digest'
+    AND ({alias}.input_json->>'generation') ~ '^[1-9][0-9]*$'
+    AND ({alias}.input_json->>'manifest_id') ~ '^[1-9][0-9]*$'
+    AND ({alias}.input_json->>'manifest_digest') ~ '^[0-9a-f]{{64}}$'
+)"""
     for contract in SOURCE_OBSERVATION_CONTRACTS:
         prefix = f"source_contract_{len(params)}"
-        if denormalized_contract:
-            source_clauses.append(
-                f"""(
-                    {alias}.parser_version = ANY(%({prefix}_parsers)s::text[])
-                    AND {alias}.endpoint = %({prefix}_endpoint)s
-                    AND {alias}.endpoint_version = %({prefix}_endpoint_version)s
-                    AND {alias}.schema_version = %({prefix}_schema)s
-                )"""
-            )
-        else:
-            source_clauses.append(
-                f"""(
-                    {alias}.parser_version = ANY(%({prefix}_parsers)s::text[])
-                    AND {observation_alias}.endpoint = %({prefix}_endpoint)s
-                    AND {observation_alias}.endpoint_version = %({prefix}_endpoint_version)s
-                    AND {observation_alias}.schema_version = %({prefix}_schema)s
-                )"""
-            )
+        source_clauses.append(
+            f"""(
+                {alias}.parser_version = ANY(%({prefix}_parsers)s::text[])
+                AND {alias}.endpoint = %({prefix}_endpoint)s
+                AND {alias}.endpoint_version = %({prefix}_endpoint_version)s
+                AND {alias}.schema_version = %({prefix}_schema)s
+            )"""
+        )
         params.update(
             {
                 f"{prefix}_parsers": sorted(contract.supported_parser_versions),
@@ -298,7 +259,7 @@ def _supported_claim_filter(
     # Claim generations fence staggered upgrades so older worker images cannot
     # interpret newer source contracts. Retain earlier generations for queued
     # work and explicit replay.
-    claim_versions = "1, 2, 3, 4, 5, 6, 7" if supports_coordinator else "1, 2, 3"
+    claim_versions = "1, 2, 3, 4, 5, 6, 7"
     return (
         f"""({alias}.claim_compatibility_version IN ({claim_versions}) AND (
             ({alias}.work_type = ANY(%(source_work_types)s::text[])
@@ -382,9 +343,6 @@ _PYTHON_OTHER_CLAIM_PRIORITIES = (
 
 def _claim_filters(
     *,
-    supports_dependency: bool,
-    denormalized_contract: bool,
-    supports_coordinator: bool,
     work_types: Collection[str] | None,
     past_reset_build_hold: str | None,
     operator_build_hold: bool = False,
@@ -393,9 +351,6 @@ def _claim_filters(
     """Claim alias ``job``'s supported filter, whole eligibility and parameters."""
     supported_filter, params = _supported_claim_filter(
         "job",
-        "source_observation",
-        denormalized_contract=denormalized_contract,
-        supports_coordinator=supports_coordinator,
         past_reset_build_hold=past_reset_build_hold,
         operator_build_hold=operator_build_hold,
     )
@@ -407,7 +362,7 @@ def _claim_filters(
     if backfill is not None:
         supported_filter = (f"({supported_filter} AND job.priority {'' if backfill else 'NOT '}"
                             f"IN ({', '.join(map(str, backfill)) or _BACKGROUND}))")
-    dependency_filter = "job.state = 'waiting_dependency' OR " if supports_dependency else ""
+    dependency_filter = "job.state = 'waiting_dependency' OR "
     return supported_filter, f"""(((job.state IN ('pending', 'waiting_retry', 'waiting_dependency')
             AND job.due_at <= statement_timestamp())
         OR (job.state = 'leased'
@@ -440,9 +395,6 @@ def _claim_select_statement(
     job_ids: Collection[int] | None = None,
     limit: int = 1,
     planned: bool = False,
-    supports_dependency: bool = True,
-    denormalized_contract: bool = True,
-    supports_coordinator: bool = False,
     work_types: Collection[str] | None = None,
     past_reset_build_hold: str | None = None,
     operator_build_hold: bool = False,
@@ -471,9 +423,6 @@ def _claim_select_statement(
     no other probe holds, and empty every other class.
     """
     supported_filter, claimable, params = _claim_filters(
-        supports_dependency=supports_dependency,
-        denormalized_contract=denormalized_contract,
-        supports_coordinator=supports_coordinator,
         work_types=work_types,
         past_reset_build_hold=past_reset_build_hold,
         operator_build_hold=operator_build_hold,
@@ -496,7 +445,7 @@ def _claim_select_statement(
         WHEN {background_pacing.RECHECK_PASS} THEN job.priority - 1
         ELSE job.priority + floor(extract(epoch FROM (statement_timestamp() - job.created_at))
         / 60)::integer * 10 END"""
-    dependency_column = "job.dependency_deferral_count" if supports_dependency else "0"
+    dependency_column = "job.dependency_deferral_count"
     ordinary_job_filter = f"""job.attempt_count < job.max_attempts
         AND {supported_filter}"""
     # Dependency resumptions do not consume the ordinary attempt budget. Keep
@@ -520,7 +469,7 @@ def _claim_select_statement(
                     )"""
 
     dependency_probe = (" UNION ALL " + state_probe("job.state = 'waiting_dependency'",
-                        supported_filter) if supports_dependency else "")
+                        supported_filter))
     retried_probe = state_probe("job.state IN ('pending', 'waiting_retry') AND job.attempt_count > 0",
                                 ordinary_job_filter, "job.created_at")
 
@@ -542,7 +491,7 @@ def _claim_select_statement(
                 )""" for priority in classes)
 
     unknown_dependency_probe = other_priorities(
-        "job.state = 'waiting_dependency'", supported_filter) if supports_dependency else ""
+        "job.state = 'waiting_dependency'", supported_filter)
     evidence_probe = other_priorities("job.state IN ('pending', 'waiting_retry')", ordinary_job_filter, [
         background_pacing.EVIDENCE_RECHECK] if DAY_RECHECK_PRIORITY in (backfill or ()) else [], "UNION")
     if job_ids is not None:
@@ -694,7 +643,6 @@ class Database:
         database_url: str,
         *,
         max_size: int = DEFAULT_POOL_SIZE,
-        expected_contract_version: int | None = None,
         player_discovery_enabled: bool = True,
         statement_timeout_seconds: int | None = None,
     ) -> None:
@@ -734,74 +682,12 @@ class Database:
             raise RuntimeError(
                 "required python_processing_jobs_worker view is unavailable"
             )
-        if (
-            expected_contract_version is not None
-            and int(contract_version) != expected_contract_version
-        ):
+        if int(contract_version) != CONTRACT_VERSION:
             self.pool.close()
             raise RuntimeError(
                 "compiled Python contract version does not match database"
             )
-        self._jobs_relation = "python_processing_jobs_worker"
-        self._contract_version = int(contract_version)
-        self._ensure_dependency_support_probed()
-        self._supports_coordinator_contract = self._contract_version >= 4
 
-    def assert_contract_version(self, expected_contract_version: int) -> None:
-        if self._contract_version != expected_contract_version:
-            raise RuntimeError(
-                "compiled Python contract version does not match database"
-            )
-
-    def _ensure_dependency_support_probed(self) -> None:
-        """Probe dependency-deferral and storage-shape support once.
-
-        Subclasses that replace ``__init__`` (for example the worker-role test
-        database) skip the eager probe; claim paths resolve it on first use so
-        they never touch a missing attribute.
-        """
-        if getattr(self, "_dependency_support_probed", False):
-            return
-        with self.pool.connection() as connection:
-            dependency_column = connection.execute(
-                """
-                SELECT EXISTS (
-                    SELECT 1 FROM information_schema.columns
-                    WHERE table_schema = current_schema()
-                      AND table_name = 'python_processing_jobs_worker'
-                      AND column_name = 'dependency_deferral_count'
-                )
-                """
-            ).fetchone()[0]
-            denormalized_contract = connection.execute(
-                """
-                SELECT count(*) = 3
-                FROM information_schema.columns
-                WHERE table_schema = current_schema()
-                  AND table_name = 'python_processing_jobs_worker'
-                  AND column_name IN ('endpoint', 'endpoint_version', 'schema_version')
-                """
-            ).fetchone()[0]
-            content_dedup = connection.execute(
-                """
-                SELECT count(*) = 2
-                FROM information_schema.columns
-                WHERE table_schema = current_schema()
-                  AND table_name = 'player_profile_versions'
-                  AND column_name IN ('parsed_payload_id', 'semantic_projection')
-                """
-            ).fetchone()[0]
-        self._supports_dependency_deferral = bool(dependency_column)
-        self._supports_denormalized_contract = bool(denormalized_contract)
-        self._supports_content_dedup = bool(content_dedup)
-        with self.pool.connection() as connection:
-            self._supports_season_summaries = connection.execute(
-                "SELECT to_regclass('player_season_summaries') IS NOT NULL"
-            ).fetchone()[0]
-            self._supports_army_season_summaries = connection.execute(
-                "SELECT to_regclass('army_season_summaries') IS NOT NULL"
-            ).fetchone()[0]
-        self._dependency_support_probed = True
 
     @contextmanager
     def _timed_connection(self):
@@ -815,7 +701,7 @@ class Database:
     def close(self) -> None:
         self.pool.close()
 
-    def is_ready(self, *, expected_contract_version: int) -> bool:
+    def is_ready(self, *, expected_contract_version: int = CONTRACT_VERSION) -> bool:
         with self.pool.connection() as connection:
             row = connection.execute(
                 """
@@ -854,12 +740,8 @@ class Database:
         ``claim_job(job_id=...)`` rechecks eligibility and lease state because
         a cached plan can become stale before its suggestions are claimed.
         """
-        self._ensure_dependency_support_probed()
         supported_filter, supported_params = _supported_claim_filter(
             "job",
-            "observation",
-            denormalized_contract=self._supports_denormalized_contract,
-            supports_coordinator=getattr(self, "_supports_coordinator_contract", False),
         )
         with self._timed_connection() as connection:
             rows = connection.execute(
@@ -867,7 +749,7 @@ class Database:
                 WITH newest AS (
                     SELECT DISTINCT ON (observation.player_id, job.endpoint)
                            job.id, job.endpoint, observation.player_id
-                    FROM {self._jobs_relation} AS job
+                    FROM python_processing_jobs_worker AS job
                     JOIN collector_observations AS observation
                       ON observation.id = job.observation_id
                     WHERE job.state IN ('pending', 'waiting_retry')
@@ -900,14 +782,14 @@ class Database:
         # are read for that, 53 ms on 8 Oct 2026.
         with self.pool.connection() as connection:
             row = connection.execute(
-                f"""
+                """
                 WITH active AS MATERIALIZED (
                     SELECT state, due_at, state <> 'leased' AND due_at <= clock_timestamp() AS overdue
-                    FROM {self._jobs_relation}
+                    FROM python_processing_jobs_worker
                     WHERE state IN ('pending', 'waiting_retry', 'waiting_dependency', 'leased')
                 ), failed AS (
                     SELECT count(*) AS failed_count
-                    FROM (SELECT 1 FROM {self._jobs_relation} WHERE state = 'failed' LIMIT 1001) AS bounded_failed
+                    FROM (SELECT 1 FROM python_processing_jobs_worker WHERE state = 'failed' LIMIT 1001) AS bounded_failed
                 )
                 SELECT
                     count(*) FILTER (WHERE state = 'pending'),
@@ -922,13 +804,13 @@ class Database:
                 """
             ).fetchone()
             kinds = connection.execute(
-                f"""
+                """
                 SELECT CASE WHEN work_type = ANY(%s::text[]) THEN 'responses'
                             WHEN work_type = 'reconcile_ranked_day' THEN 'results'
                             WHEN work_type = ANY(%s::text[]) THEN 'builds'
                             ELSE 'other' END,
                        count(*), extract(epoch FROM clock_timestamp() - min(due_at))
-                FROM {self._jobs_relation}
+                FROM python_processing_jobs_worker
                 WHERE state IN ('pending', 'waiting_retry', 'waiting_dependency')
                   AND due_at <= clock_timestamp()
                 GROUP BY 1
@@ -999,37 +881,31 @@ class Database:
         if lease_seconds <= 0 or limit < 1:
             raise ValueError("lease duration and claim limit must be positive")
         with self._timed_connection() as connection, connection.transaction():
-            self._ensure_dependency_support_probed()
-            supports_coordinator = getattr(self, "_supports_coordinator_contract", False)
             builds = set(work_types or SUPPORTED_WORK_TYPES) & set(POPULATION_BUILD_WORK_TYPES)
-            if builds and build_permit_busy(connection, self._jobs_relation, builds):
+            if builds and build_permit_busy(connection, "python_processing_jobs_worker", builds):
                 work_types = [kind for kind in work_types or SUPPORTED_WORK_TYPES
                               if kind not in builds]
                 if not work_types:
                     return []
             hold, reset_first = background_pacing.reset_first_claim(connection, work_types, reset_first)
             options = {
-                "supports_dependency": self._supports_dependency_deferral,
-                "denormalized_contract": self._supports_denormalized_contract,
-                "supports_coordinator": supports_coordinator,
                 "work_types": work_types,
                 "reset_first": reset_first,
                 "limit": limit,
-                "past_reset_build_hold": past_reset_build_hold(connection) if supports_coordinator else None,
-                "operator_build_hold": supports_coordinator and operator_correction_waits(connection),
+                "past_reset_build_hold": past_reset_build_hold(connection),
+                "operator_build_hold": operator_correction_waits(connection),
             }
 
             def claim(size: int, **kwargs: Any) -> list[Any]:
                 return [] if size < 1 else connection.execute(*_claim_select_statement(
-                    self._jobs_relation, **{**options, "limit": size, **kwargs})).fetchall()
+                    "python_processing_jobs_worker", **{**options, "limit": size, **kwargs})).fetchall()
 
             rows = [] if job_ids is None else claim(limit, job_ids=job_ids, planned=planned)
             if job_ids is None or (not rows and planned):
                 # Backfill fills only what live work leaves, as its mode allows.
                 rows = background_pacing.claim_background(
-                    connection, self._jobs_relation, claim(limit, planned=planned, backfill=()), limit, claim,
-                    held=hold, planned=planned, work_types=work_types, reset_first=reset_first, contract=(
-                        self._supports_denormalized_contract, supports_coordinator, self._supports_dependency_deferral))
+                    connection, "python_processing_jobs_worker", claim(limit, planned=planned, backfill=()), limit, claim,
+                    held=hold, planned=planned, work_types=work_types, reset_first=reset_first)
             return self._lease_rows(connection, rows, owner, lease_seconds)
 
     def _lease_rows(
@@ -1042,8 +918,7 @@ class Database:
         ids = [int(job["job_id"]) for job in jobs]
         tokens = [uuid4().hex for _ in jobs]
         # A dependency resumption reuses its ordinary attempt slot.
-        resumes = [self._supports_dependency_deferral
-                   and _text_value(job["state"]) == "waiting_dependency" for job in jobs]
+        resumes = [_text_value(job["state"]) == "waiting_dependency" for job in jobs]
         previous = dict(connection.execute(
             "SELECT job_id, max(attempt_number) FROM python_processing_attempts"
             " WHERE job_id = ANY(%s::bigint[]) GROUP BY job_id", (ids,),
@@ -1062,8 +937,8 @@ class Database:
                 (list(previous),),
             )
         expires = dict(connection.execute(
-            f"""
-            UPDATE {self._jobs_relation} AS job
+            """
+            UPDATE python_processing_jobs_worker AS job
             SET state = 'leased', lease_owner = %s, lease_token = claim.token,
                 lease_expires_at = clock_timestamp() + (%s * interval '1 second'),
                 attempt_count = job.attempt_count + CASE WHEN claim.resume THEN 0 ELSE 1 END,
@@ -1138,8 +1013,8 @@ class Database:
             return 0
         with self._timed_connection() as connection, connection.transaction():
             released = connection.execute(
-                f"""
-                UPDATE {self._jobs_relation} AS job
+                """
+                UPDATE python_processing_jobs_worker AS job
                 SET state = CASE WHEN claim.resume THEN 'waiting_dependency' ELSE 'pending' END,
                     attempt_count = claim.attempt_count,
                     lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
@@ -1180,8 +1055,8 @@ class Database:
                 # running out recovers the job instead.
                 connection.execute("SET LOCAL lock_timeout = '1s'")
                 refunded = connection.execute(
-                    f"""
-                    UPDATE {self._jobs_relation}
+                    """
+                    UPDATE python_processing_jobs_worker
                     SET attempt_count = LEAST(attempt_count, %s),
                         updated_at = clock_timestamp()
                     WHERE id = %s AND state = 'leased'
@@ -1230,11 +1105,8 @@ class Database:
         """
         if max_jobs < 1:
             raise ValueError("maintenance job limit must be positive")
-        self._ensure_dependency_support_probed()
         supported_filter, supported_params = _supported_job_filter(
             "job",
-            denormalized_contract=self._supports_denormalized_contract,
-            supports_coordinator=getattr(self, "_supports_coordinator_contract", False),
         )
         with self._timed_connection() as connection:
             with connection.transaction():
@@ -1242,7 +1114,7 @@ class Database:
                     f"""
                     SELECT job.id, ({supported_filter}) AS supported,
                            job.attempt_count >= job.max_attempts AS exhausted
-                    FROM {self._jobs_relation} AS job
+                    FROM python_processing_jobs_worker AS job
                     WHERE job.state = 'leased'
                       AND job.lease_expires_at <= clock_timestamp()
                     ORDER BY job.lease_expires_at, job.id
@@ -1271,8 +1143,8 @@ class Database:
                 )
                 if pending_ids:
                     connection.execute(
-                        f"""
-                        UPDATE {self._jobs_relation}
+                        """
+                        UPDATE python_processing_jobs_worker
                         SET state = 'pending', lease_owner = NULL, lease_token = NULL,
                             lease_expires_at = NULL, updated_at = clock_timestamp()
                         WHERE id = ANY(%s::bigint[])
@@ -1281,8 +1153,8 @@ class Database:
                     )
                 if failed_ids:
                     connection.execute(
-                        f"""
-                        UPDATE {self._jobs_relation}
+                        """
+                        UPDATE python_processing_jobs_worker
                         SET state = 'failed', outcome = 'durable_failure',
                             failure_category = 'lease_expired_max_attempts',
                             failure_detail = 'lease expired after the configured attempt limit',
@@ -1312,7 +1184,7 @@ class Database:
             with connection.transaction():
                 due = connection.execute(
                     f"""SELECT lease_expires_at < clock_timestamp() + (%s * interval '0.5 second')
-                    FROM {self._jobs_relation} WHERE {live}""",
+                    FROM python_processing_jobs_worker WHERE {live}""",
                     (lease_seconds, *fence),
                 ).fetchone()
                 if due is None:
@@ -1321,7 +1193,7 @@ class Database:
                     return
                 renewed = connection.execute(
                     f"""
-                    UPDATE {self._jobs_relation}
+                    UPDATE python_processing_jobs_worker
                     SET lease_expires_at = clock_timestamp() + (%s * interval '1 second')
                     WHERE {live}
                     RETURNING lease_expires_at
@@ -1345,8 +1217,8 @@ class Database:
     def requeue_completed_job(self, job_id: int) -> None:
         with self.pool.connection() as connection:
             connection.execute(
-                f"""
-                UPDATE {self._jobs_relation}
+                """
+                UPDATE python_processing_jobs_worker
                 SET state = 'pending', due_at = clock_timestamp(), outcome = NULL,
                     failure_category = NULL, failure_detail = NULL,
                     lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
@@ -1360,8 +1232,8 @@ class Database:
     def expire_lease(self, job_id: int) -> None:
         with self.pool.connection() as connection:
             connection.execute(
-                f"""
-                UPDATE {self._jobs_relation}
+                """
+                UPDATE python_processing_jobs_worker
                 SET lease_expires_at = clock_timestamp() - interval '1 second'
                 WHERE id = %s AND state = 'leased'
                 """,
@@ -1374,9 +1246,9 @@ class Database:
     ) -> dict[str, Any]:
         """Lock a live claim's job row; a population ``build`` also takes the permit."""
         row = connection.execute(
-            f"""
+            """
             SELECT id, attempt_count, max_attempts
-            FROM {self._jobs_relation}
+            FROM python_processing_jobs_worker
             WHERE id = %s AND state = 'leased'
               AND lease_owner = %s AND lease_token = %s
               AND lease_expires_at > clock_timestamp()
@@ -1421,8 +1293,8 @@ class Database:
         # can take the job while this transaction works, however long that
         # takes. Checking the clock here only threw away finished work.
         completed = connection.execute(
-            f"""
-            UPDATE {self._jobs_relation}
+            """
+            UPDATE python_processing_jobs_worker
             SET state = %s, outcome = %s, failure_category = NULL, failure_detail = NULL,
                 lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
                 completed_at = clock_timestamp(), updated_at = clock_timestamp()

@@ -165,7 +165,7 @@ def _row(connection, lens="offense", category="troops"):
 
 
 def test_migration_is_reentrant(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info, autocommit=True) as connection:
             migration = (
                 Path(__file__).parents[2]
@@ -183,7 +183,7 @@ def test_migration_is_reentrant(database_url: str) -> None:
 def test_complete_season_materializes_whole_season_aggregates(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -236,7 +236,7 @@ def test_complete_season_materializes_whole_season_aggregates(
 
 
 def test_historical_read_needs_no_battle_facts(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -299,7 +299,7 @@ def test_historical_read_needs_no_battle_facts(database_url: str) -> None:
 
 
 def test_historical_read_needs_only_displayed_summary_columns(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             _seed(connection, offense=_offense_specs())
             materialize_army_season(connection, SEASON, "offense")
@@ -343,7 +343,7 @@ def test_historical_read_needs_only_displayed_summary_columns(database_url: str)
 
 
 def test_repeat_is_unchanged_and_correction_refreshes(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -389,7 +389,7 @@ def test_repeat_is_unchanged_and_correction_refreshes(database_url: str) -> None
 def test_partial_days_stay_partial_and_live_season_untouched(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -435,7 +435,7 @@ def test_partial_days_stay_partial_and_live_season_untouched(
 def test_historical_season_endpoint_serves_summary_without_facts(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -494,7 +494,7 @@ def test_historical_season_endpoint_serves_summary_without_facts(
 def test_projected_troop_use_counts_match_live_builder(database_url: str) -> None:
     """Splitting quantities preserves the live total using-battle count."""
     specs = _offense_specs()
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -544,7 +544,7 @@ def test_failed_lens_keeps_prior_and_reports_lens_failure(
     database_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A failed lens never publishes partially; the backfill reports it."""
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -618,7 +618,7 @@ def test_refresh_failure_warns_and_keeps_day_durable(
     database_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A late-correction refresh failure cannot roll back day facts/marker."""
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -626,7 +626,6 @@ def test_refresh_failure_warns_and_keeps_day_durable(
                 connection.commit()
                 materialize_army_season(connection, SEASON, "offense")
                 connection.commit()
-            database._supports_army_season_summaries = True
 
             def _boom(connection, season_id, lens):
                 raise RuntimeError("projection unavailable")
@@ -692,7 +691,7 @@ def test_first_materialization_serializes_with_correction(
     """
     import threading
 
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -703,7 +702,6 @@ def test_first_materialization_serializes_with_correction(
                     ],
                 )
                 connection.commit()
-            database._supports_army_season_summaries = True
             projected = threading.Event()
             release_backfill = threading.Event()
             correction_entered = threading.Event()
@@ -815,7 +813,7 @@ def test_first_materialization_serializes_with_correction(
 def test_saved_day_totals_add_up_to_the_counted_season(database_url: str) -> None:
     """A season adds up saved day totals; a rebuilt day replaces its own."""
     project = army_summaries_module._project_lens
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             _seed(connection, offense=_offense_specs(), defense=_defense_specs())
 

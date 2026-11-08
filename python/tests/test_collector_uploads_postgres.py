@@ -30,7 +30,7 @@ NOW = datetime(2020, 9, 13, 4, 0, tzinfo=UTC)
 
 @contextmanager
 def upload_database(database_url: str) -> Iterator[str]:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         # Upload admission normally uses the database clock. Seed its due time
         # on the same controlled timeline as claim/renew/complete below, even
         # when the real clock has passed every date in this test file.

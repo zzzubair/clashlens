@@ -128,3 +128,26 @@ def database_url() -> str:
     if not value:
         pytest.skip("set CLASHLENS_TEST_DATABASE_URL for PostgreSQL integration tests")
     return value
+
+
+@pytest.fixture
+def worker_maintenance_services(monkeypatch):
+    """Isolate queue/lifecycle unit tests from independent database maintenance."""
+    from types import SimpleNamespace
+
+    from clashlens import worker
+
+    permit = SimpleNamespace(acquire=lambda: True, close=lambda: None)
+    monkeypatch.setattr(worker, "MaintenancePermit", lambda _conninfo: permit)
+    for target, name in (
+        (worker.boundary_publication, "reevaluate_boundary_publications"),
+        (worker.league_week, "decide_until"),
+        (worker.late_battle_sweep.LateBattleSweep, "run_when_due"),
+        (worker.queue_refresh.DailyRecheck, "run_when_due"),
+        (worker.army_rank_bands, "refresh_rank_band_totals"),
+        (worker.army_types, "refresh_army_types"),
+        (worker.projected_place, "refresh_remaining_changes"),
+        (worker.analytics, "refresh_live_attack_tallies"),
+        (worker.api_leaderboard, "refresh_live_unplayed"),
+    ):
+        monkeypatch.setattr(target, name, lambda *_args, **_kwargs: None)
