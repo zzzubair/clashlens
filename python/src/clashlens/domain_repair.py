@@ -212,7 +212,7 @@ def season_repair(
         receipt = _receipt(connection, season_id, revision)
         if scope and receipt is not None:
             # A scoped repair's first run saves its players with the receipt.
-            players = list(receipt.players or ())
+            players = list(receipt.players)
         elif scope:
             players = _scoped_players(connection, start)
         else:
