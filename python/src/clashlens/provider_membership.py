@@ -75,6 +75,13 @@ def read_membership(
         if other_accounts
         else None
     )
+    if owner is not None:
+        # Decided before locking this account's own connection, so two
+        # recoveries naming each other's connections cannot deadlock. An
+        # account holds one connection per provider, so its own is this one.
+        if int(owner[0]) == account_id:
+            return ProviderMembership.ATTACHED
+        return ProviderMembership.OWNED_ELSEWHERE
     current = connection.execute(
         """
         SELECT provider_subject FROM account_provider_identities
@@ -83,8 +90,6 @@ def read_membership(
         """,
         (account_id, provider),
     ).fetchone()
-    if owner is not None and int(owner[0]) != account_id:
-        return ProviderMembership.OWNED_ELSEWHERE
     if current is None:
         return ProviderMembership.FREE
     if _text(current[0]) != provider_subject:

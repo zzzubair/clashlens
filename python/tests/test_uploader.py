@@ -93,6 +93,59 @@ def test_one_bad_archive_object_does_not_stop_other_uploads(
     assert uploader.archive_health == "degraded"
 
 
+def test_a_marker_check_that_fails_meanwhile_keeps_a_terminal_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One owner's marker check cannot reach the archive while another
+    owner's upload is refused permission: uploads stay stopped."""
+    spool = _Spool()
+    spool.verify = lambda _digest, _size: b"body"  # type: ignore[attr-defined]
+    store = _Store(spool)
+    claim = UploadClaim("a" * 64, "one", 4, "uploader", "one", datetime.now(UTC), 1)
+    monkeypatch.setattr(
+        uploader_module.collector_uploads, "claim_upload", lambda _database, **_kw: claim
+    )
+    monkeypatch.setattr(
+        uploader_module.collector_uploads, "renew_upload", lambda *_a, **_kw: None
+    )
+    monkeypatch.setattr(
+        uploader_module.collector_uploads, "fail_upload", lambda *_a, **_kw: None
+    )
+    checks = 0
+
+    class Archive:
+        instance_config = None
+
+        @staticmethod
+        def check_marker_health() -> str:
+            nonlocal checks
+            checks += 1
+            if checks == 2:
+                return "ready"
+            deadline = time.monotonic() + 5
+            while uploader.gate() != "archive_stopped" and time.monotonic() < deadline:
+                time.sleep(0.01)
+            return "degraded"
+
+        @staticmethod
+        def write_immutable(
+            _body: bytes, _digest: str, *, generation: str | None = None
+        ) -> str:
+            raise ArchiveReadError(
+                "archive_permission_denied", "access denied", retryable=False
+            )
+
+    uploader = _uploader(spool, store, Archive())
+
+    async def both() -> None:
+        await asyncio.gather(
+            uploader.upload_once(owner="waiting"), uploader.upload_once(owner="refused")
+        )
+
+    asyncio.run(both())
+    assert uploader.gate() == "archive_stopped"
+
+
 def test_background_uploader_drains_multiple_objects_concurrently(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

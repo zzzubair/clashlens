@@ -154,15 +154,18 @@ class Uploader:
             return UploadGate.SPOOL_FAILED
         return UploadGate.OPEN
 
-    def _record_outcome(self, failure: str | None) -> None:
+    def _record_outcome(self, failure: str | None, *, marker: bool = False) -> None:
+        """``marker``: the archive's marker could not be checked, which says
+        nothing about an upload, so an earlier terminal failure still stops
+        claims."""
         if failure is None:
             self.archive_health = ArchiveHealth.READY
             return
-        self._last_failure_terminal = failure in _GLOBAL_ARCHIVE_FAILURES
+        terminal = failure in _GLOBAL_ARCHIVE_FAILURES
+        if not marker:
+            self._last_failure_terminal = terminal
         self.archive_health = (
-            ArchiveHealth.TERMINAL
-            if self._last_failure_terminal
-            else ArchiveHealth.DEGRADED
+            ArchiveHealth.TERMINAL if terminal else ArchiveHealth.DEGRADED
         )
 
     def snapshot(self) -> dict[str, Any]:
@@ -231,7 +234,7 @@ class Uploader:
             "marker_check", self.archive.check_marker_health
         )
         if marker_health == "degraded":
-            self._record_outcome("archive_unavailable")
+            self._record_outcome("archive_unavailable", marker=True)
             self.archive_failure = getattr(self.archive, "marker_failure", None)
             return False
         claimed_at = time.monotonic()

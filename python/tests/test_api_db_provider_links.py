@@ -336,6 +336,52 @@ def test_concurrent_unlinks_of_both_providers_cannot_empty_the_account(
             database.close()
 
 
+def _verified_accounts(database: ApiDatabase, connection_info: str) -> list[str]:
+    """Two accounts, each with a Google login and verified player #P1P or #P2P;
+    their public ids."""
+    account_ids = [
+        _create_account(
+            database,
+            provider="google",
+            subject=f"recovery-google-{index}",
+            username=f"recover{index}",
+        )
+        for index in (1, 2)
+    ]
+    public_ids = [_public_id(connection_info, account_id) for account_id in account_ids]
+    with psycopg.connect(connection_info) as connection:
+        for index, account_id in enumerate(account_ids, start=1):
+            tag = f"#P{index}P"
+            player_id = connection.execute(
+                "INSERT INTO players (normalized_tag, active) VALUES (%s, false) RETURNING id",
+                (tag,),
+            ).fetchone()[0]
+            request_id = str(uuid4())
+            connection.execute(
+                """
+                INSERT INTO private_api_requests (
+                    request_id, caller, provider, provider_subject, account_id,
+                    operation, method, request_target, identity_json, state,
+                    response_status, response_json, completed_at
+                ) VALUES (
+                    %s, 'typescript-website', 'google', %s, %s,
+                    'player_links.verify', 'POST', %s,
+                    '{}'::jsonb, 'complete', 200, '{}'::jsonb, clock_timestamp()
+                )
+                """,
+                (request_id, f"recovery-google-{index}", account_id, f"/v1/players/{tag}/verifytoken"),
+            )
+            connection.execute(
+                """
+                INSERT INTO verified_player_links (
+                    player_id, account_id, verification_request_id
+                ) VALUES (%s, %s, %s)
+                """,
+                (player_id, account_id, request_id),
+            )
+    return public_ids
+
+
 def test_concurrent_recovery_collision_retains_refusal_audit(
     database_url: str,
 ) -> None:
@@ -344,47 +390,7 @@ def test_concurrent_recovery_collision_retains_refusal_audit(
     ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
-            account_ids = [
-                _create_account(
-                    database,
-                    provider="google",
-                    subject=f"recovery-google-{index}",
-                    username=f"recover{index}",
-                )
-                for index in (1, 2)
-            ]
-            public_ids = [_public_id(connection_info, account_id) for account_id in account_ids]
-            with psycopg.connect(connection_info) as connection:
-                for index, account_id in enumerate(account_ids, start=1):
-                    tag = f"#P{index}P"
-                    player_id = connection.execute(
-                        "INSERT INTO players (normalized_tag, active) VALUES (%s, false) RETURNING id",
-                        (tag,),
-                    ).fetchone()[0]
-                    request_id = str(uuid4())
-                    connection.execute(
-                        """
-                        INSERT INTO private_api_requests (
-                            request_id, caller, provider, provider_subject, account_id,
-                            operation, method, request_target, identity_json, state,
-                            response_status, response_json, completed_at
-                        ) VALUES (
-                            %s, 'typescript-website', 'google', %s, %s,
-                            'player_links.verify', 'POST', %s,
-                            '{}'::jsonb, 'complete', 200, '{}'::jsonb, clock_timestamp()
-                        )
-                        """,
-                        (request_id, f"recovery-google-{index}", account_id, f"/v1/players/{tag}/verifytoken"),
-                    )
-                    connection.execute(
-                        """
-                        INSERT INTO verified_player_links (
-                            player_id, account_id, verification_request_id
-                        ) VALUES (%s, %s, %s)
-                        """,
-                        (player_id, account_id, request_id),
-                    )
-
+            public_ids = _verified_accounts(database, connection_info)
             results: list[tuple[str, str] | None] = [None, None]
             start = threading.Barrier(2)
 
@@ -419,6 +425,56 @@ def test_concurrent_recovery_collision_retains_refusal_audit(
                     """
                 ).fetchone()
             assert refused is not None and int(refused[0]) == 1
+        finally:
+            database.close()
+
+
+def test_recovery_naming_another_accounts_discord_is_refused_without_waiting(
+    database_url: str,
+) -> None:
+    """Refused as soon as the Discord login is found on another account, before
+    the target's own Discord login is read, so two recoveries naming each
+    other's logins cannot deadlock."""
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            public_ids = _verified_accounts(database, connection_info)
+            with psycopg.connect(connection_info, autocommit=True) as connection:
+                connection.execute(
+                    """
+                    INSERT INTO account_provider_identities (account_id, provider, provider_subject)
+                    SELECT id, 'discord', 'discord-' || normalized_username
+                    FROM clash_lens_accounts WHERE public_id = ANY(%s::uuid[])
+                    """,
+                    (public_ids,),
+                )
+            result: list[tuple[str, str]] = []
+            with psycopg.connect(connection_info) as holder:
+                # An unfinished change holds the target's own Discord login.
+                holder.execute(
+                    """
+                    SELECT 1 FROM account_provider_identities
+                    WHERE provider = 'discord' AND provider_subject = 'discord-recover1'
+                    FOR UPDATE
+                    """
+                )
+                thread = threading.Thread(target=lambda: result.append(
+                    provider_membership.support_attach_discord_identity(database,
+                        account_public_id=public_ids[0],
+                        normalized_player_tag="#P1P",
+                        discord_subject="discord-recover2",
+                        operator_identity="operator",
+                        reason="recovery naming another account's login",
+                    )))
+                thread.start()
+                thread.join(5)
+                finished = not thread.is_alive()
+                holder.rollback()
+            thread.join()
+            assert finished
+            assert result == [("refused_collision", "the Discord identity belongs to an account")]
         finally:
             database.close()
 
