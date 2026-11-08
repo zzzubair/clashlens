@@ -82,18 +82,16 @@ describe("server-only Python account client", () => {
   it("rejects malformed public profile search results", async () => {
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(
-          jsonResponse({
-            query: "nova",
-            known_only: true,
-            results: [],
-            users: [
-              { username: "../private", display_name: "Nova", linked_player_count: -1 },
-            ],
-          }),
-        ),
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          query: "nova",
+          known_only: true,
+          results: [],
+          users: [
+            { username: "../private", display_name: "Nova", linked_player_count: -1 },
+          ],
+        }),
+      ),
     );
     await expect(
       (await import("../../app/services/players.server")).searchPlayers("nova"),
