@@ -68,8 +68,11 @@ export async function createWebsiteServer(
   clientDirectory: string,
   publicOrigin = process.env.CLASHLENS_PUBLIC_ORIGIN,
 ) {
-  const origin = loadPublicOrigin(publicOrigin, process.env.NODE_ENV === "production");
-  const live = origin.origin === LIVE_ORIGIN.origin;
+  // ops allows an unset origin (no sign-in); such a host is never the live site.
+  const live =
+    !!publicOrigin?.trim() &&
+    loadPublicOrigin(publicOrigin, process.env.NODE_ENV === "production").origin ===
+      LIVE_ORIGIN.origin;
   // Only files found in the built public directory can be served. No request
   // pathname is ever resolved against the filesystem, and symlinks are excluded.
   const files = new Map<string, string>();

@@ -467,3 +467,14 @@ it.each([
     "website login configuration is invalid",
   );
 });
+
+it("serves a host without a public origin as a closed, non-live site", async () => {
+  if (server) await new Promise((resolve) => server.close(resolve));
+  server = await createWebsiteServer(build, directory, "");
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Missing test port");
+  port = address.port;
+  const robots = await getResponse("/robots.txt", "identity", "GET", "clashlens.net");
+  expect(robots.body.toString()).toBe("User-agent: *\nDisallow: /\n");
+});
