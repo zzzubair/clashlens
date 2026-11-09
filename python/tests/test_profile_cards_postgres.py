@@ -324,6 +324,7 @@ def test_profile_without_linked_players_does_not_read_the_live_board(
             linked = api_accounts.get_public_user_days(database, "groupowner", now=NOW)
             assert linked["players"][0]["days"] == []
             assert linked["players"][0]["heatmap_day_numbers"] == []
+            assert linked["players"][0]["heatmap_day_kinds"] == ""
         finally:
             database.close()
 

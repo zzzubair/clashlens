@@ -359,7 +359,8 @@ def test_leaving_returning_and_signing_up_later_from_saved_game_data(database_ur
         # Days 8–14 were outside Legend I; 15–16 were 5,000 before sign-up.
         # The compact endpoint has no current saved day in this story.
         assert player["heatmap_day_numbers"] == [*range(1, 8), 17]
-        assert player["heatmap_day_kinds"]["17"] == "played"
-        assert player["heatmap_day_kinds"]["15"] == "shield"
+        kinds = dict(zip((kept[0] for kept in player["days"]), player["heatmap_day_kinds"], strict=True))
+        assert kinds[17] == "p"
+        assert kinds[15] == "s"
         assert day_at(page, day(17))["presentation"]["heatmap_kind"] == "played"
         assert [kept[0] for kept in player["days"] if kept[4]] == [15, 16]
