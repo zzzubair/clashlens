@@ -552,19 +552,10 @@
 
 /* The log's rows: a wide screen's headings name attacks and defenses, so
    its numbers need no sword and shield; a phone has no headings and keeps
-   them. A wide row's rank and its move share one line. */
+   them. */
 @media (min-width: 48rem) {
   :root .player-page .log-row .log-battles .game-mark {
     display: none;
-  }
-  :root .player-page .log-rank {
-    grid-auto-flow: column;
-    align-items: center;
-    gap: 0.4rem;
-  }
-  :root .player-page .log-rank-move {
-    min-width: 2.25rem;
-    text-align: left;
   }
   /* "End of day" heads the column, so its numbers need no trophy. */
   :root .player-page .log-row .log-end strong::before {

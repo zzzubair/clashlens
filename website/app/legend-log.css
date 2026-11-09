@@ -387,7 +387,7 @@
      so the Season's days compare at a glance. */
   .player-page {
     --log-columns: [date] 8.5rem [eod] 4.75rem [swing] minmax(0, 1fr) [att] 4rem [def]
-      4rem [net] 4.5rem [rank] 5rem [chev] 0.75rem;
+      4rem [net] 4.5rem [rank] var(--log-rank-width, 5rem) [chev] 0.75rem;
   }
   .player-page .log-row {
     grid-template-columns: var(--log-columns);
@@ -425,6 +425,25 @@
     box-shadow: 0 0 0 1.5px var(--cl-on-action);
     transform: rotate(45deg);
     content: "";
+  }
+}
+/* A wide row's Reset rank sits over its move in the rank column. Where the
+   bar can spare the room, they share one line in a wider column, and a rank
+   too long for it still puts its move underneath, never over the change. */
+@media (min-width: 64rem) {
+  .player-page {
+    --log-rank-width: 9rem;
+  }
+  .player-page .log-rank {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    column-gap: 0.4rem;
+  }
+  .player-page .log-rank-move {
+    min-width: 2.25rem;
+    text-align: left;
   }
 }
 
