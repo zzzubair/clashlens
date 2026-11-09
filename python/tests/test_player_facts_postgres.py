@@ -34,7 +34,24 @@ def served_player(story, tag, now, *, goal_rank=None, battles=True):
         with TestClient(app) as client:
             response = client.get(target, headers=signed_headers(target))
         assert response.status_code == 200, response.text
-        return response.json()
+        result = response.json()
+        import json
+
+        ready = result["screen_ready"]
+        for field in ("history_day_numbers", "trophy_trends", "rival_season"):
+            if field in ready:
+                before = dict(ready)
+                before.pop(field)
+                size = lambda value: len(json.dumps(value, separators=(",", ":")).encode())
+                print(f"{field} bytes ({'full' if battles else 'light'}, {len(ready['days'])} saved days): +{size(ready) - size(before)}")
+        rival = ready["rival_season"]
+        without_rank = {key: value for key, value in rival.items() if key != "reset_rank"}
+        print(f"rival reset_rank bytes: +{size(rival) - size(without_rank)}")
+        if battles and ready["days"]:
+            shown = ready["days"][0]["presentation"]
+            before = {key: value for key, value in shown.items() if key != "heatmap_kind"}
+            print(f"heatmap_kind bytes per day: +{size(shown) - size(before)}")
+        return result
     finally:
         api.close()
 
@@ -56,7 +73,14 @@ def served_public_days(story, tag, now):
         with TestClient(app) as client:
             response = client.get(target, headers=signed_headers(target))
         assert response.status_code == 200, response.text
-        return response.json()
+        result = response.json()
+        import json
+
+        for player in result["players"]:
+            before = {key: value for key, value in player.items() if key != "heatmap_day_kinds"}
+            size = lambda value: len(json.dumps(value, separators=(",", ":")).encode())
+            print(f"public heatmap_day_kinds bytes ({len(player['days'])} saved days): +{size(player) - size(before)}")
+        return result
     finally:
         site.close()
 
@@ -126,10 +150,19 @@ def assert_season_end_facts(story, tag, last, reset):
         from clashlens.api_players import get_player_season_summary
 
         summary = get_player_season_summary(api, tag, str(int((reset - timedelta(days=28)).timestamp())))
+        import json
+
+        with_facts = len(json.dumps(summary, separators=(",", ":")).encode())
+        without_facts = len(json.dumps({key: value for key, value in summary.items() if key != "summary_statistics"}, separators=(",", ":")).encode())
+        print(f"historical summary bytes: {without_facts} -> {with_facts} (+{with_facts - without_facts})")
         assert summary["end_trophies"] == 5320
         assert summary["official_history"]["eod_trophies"] == 5320
         assert summary["season_shape"]["today"] == 29
         assert len(summary["season_shape"]["kinds"]) == 28
+        assert summary["summary_statistics"] == {
+            "attack": {"per_day": 100, "per_battle": 40},
+            "defense": {"per_day": 240, "per_battle": 30},
+        }
         assert summary["daily_entries"]
         assert all("presentation" in entry for entry in summary["daily_entries"])
     finally:
@@ -198,6 +231,7 @@ def test_day_one_goal_uses_5000_baseline(database_url, archive_server, monkeypat
         story.run_worker()
         assert story.served_board(day(2))["entries"][0]["trophies"] == 5080
         full = served_player(story, tag, day(2) + timedelta(hours=1), goal_rank=1)["screen_ready"]
+        assert full["trophy_trends"]["7"] == {"span": 1, "counted": 1, "total": 80}
         result = full["dashboard_goal"]
         assert result["you_then"] == result["line_then"] == 5000
         assert result["history"] == [5000, 5080]
@@ -206,9 +240,10 @@ def test_day_one_goal_uses_5000_baseline(database_url, archive_server, monkeypat
         decoded = []
         monkeypatch.setattr(api_players, "decode_army_share_code", lambda code: decoded.append(code))
         totals = served_player(story, tag, day(2) + timedelta(hours=1), battles=False)["screen_ready"]
+        assert "trophy_trends" not in totals
         assert totals["army_units"] == {} and decoded == []
         assert totals["rival_season"] == {"hit_rate": 1, "offense": 320, "defense": -240,
-                                          "net_per_day": 80, "finished_days": 1}
+                                          "net_per_day": 80, "finished_days": 1, "reset_rank": 1}
         assert totals["rival_season"] == full["rival_season"]
         assert all(not saved["offense_events"] and not saved["defense_events"] for saved in totals["days"])
 
@@ -241,7 +276,7 @@ def test_season_rival_excludes_shields_from_real_worker_days(database_url, archi
         ready = served_player(story, tag, day(9) + timedelta(hours=1), battles=False)["screen_ready"]
         # The Watchlist's Whole Season row: 274 net over the six played days.
         assert ready["rival_season"] == {"hit_rate": 37 / 48, "offense": 1810 / 6, "defense": -1536 / 6,
-                                         "net_per_day": 274 / 6, "finished_days": 8}
+                                         "net_per_day": 274 / 6, "finished_days": 8, "reset_rank": 1}
         assert "dashboard_season" not in ready and "battle_statistics" not in ready
         assert [story.saved_day(tag, day(number)) for number in range(1, 9)] == before
 
@@ -305,6 +340,7 @@ def test_leaving_returning_and_signing_up_later_from_saved_game_data(database_ur
         assert story.served_board(day(18))["entries"][0]["trophies"] == 5040
         page = served_player(story, tag, day(18) + timedelta(hours=2))
         ready = page["screen_ready"]
+        assert ready["history_day_numbers"][day(17).isoformat()] == 17
         assert ready["season_shape"]["kinds"][:18] == ["legend"] * 7 + ["outside"] * 7 + ["waiting"] * 2 + ["legend"] * 2
         assert ready["season_shape"]["legend_days"] == {"expected": 8, "saved": 8}
         assert [run["signed_up"] for run in ready["season_shape"]["runs"]] == [1, 17]
@@ -323,4 +359,7 @@ def test_leaving_returning_and_signing_up_later_from_saved_game_data(database_ur
         # Days 8–14 were outside Legend I; 15–16 were 5,000 before sign-up.
         # The compact endpoint has no current saved day in this story.
         assert player["heatmap_day_numbers"] == [*range(1, 8), 17]
+        assert player["heatmap_day_kinds"]["17"] == "played"
+        assert player["heatmap_day_kinds"]["15"] == "shield"
+        assert day_at(page, day(17))["presentation"]["heatmap_kind"] == "played"
         assert [kept[0] for kept in player["days"] if kept[4]] == [15, 16]

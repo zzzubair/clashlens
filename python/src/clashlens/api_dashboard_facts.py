@@ -97,8 +97,9 @@ def rival_season(context: dict | None, recent: list[dict], season: list[dict], c
     only known totals on days with a battle on that side, excluding shields.
     Net a day counts days with any battle, as the Season cards do.
     """
-    days = [] if context is None else [
-        day for number, day in _season_days(context, recent, season, current).items()
+    saved = {} if context is None else _season_days(context, recent, season, current)
+    days = [
+        day for number, day in saved.items()
         if number < context["current_day_number"]
     ]
     return {
@@ -107,6 +108,7 @@ def rival_season(context: dict | None, recent: list[dict], season: list[dict], c
         "defense": _rate(days, lambda day: -day["defense_loss"] if day["defense_count"] and day["defense_loss"] is not None else None),
         "net_per_day": _rate(days, lambda day: _net(day) if day["attack_count"] or day["defense_count"] else None),
         "finished_days": None if context is None else context["current_day_number"] - 1,
+        "reset_rank": None if context is None else saved.get(context["current_day_number"] - 1, {}).get("reset_rank"),
     }
 
 

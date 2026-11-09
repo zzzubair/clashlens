@@ -82,5 +82,73 @@
       "day_number": 8,
       "day_count": 28
     }
-  ]
+  ],
+  "overlay": {
+    "choices": {
+      "text": [
+        "dark",
+        "light"
+      ],
+      "bg": [
+        "card",
+        "none",
+        "tint"
+      ],
+      "fit": [
+        "overlay",
+        "screen"
+      ],
+      "font": [
+        "arcade",
+        "clashlens",
+        "clean",
+        "esports",
+        "tech"
+      ],
+      "snap": [
+        "bc",
+        "bl",
+        "br",
+        "tc",
+        "tl",
+        "tr"
+      ],
+      "popup": [
+        "0"
+      ],
+      "demo": [
+        "1"
+      ]
+    },
+    "numeric_keys": [
+      "ch",
+      "cw",
+      "h",
+      "w",
+      "x",
+      "y"
+    ],
+    "numeric_max": 4000,
+    "parts": [
+      "attacks",
+      "day",
+      "defenses",
+      "net",
+      "rank",
+      "trophies",
+      "updated"
+    ],
+    "defaults": {
+      "w": "366",
+      "h": "222",
+      "x": "40",
+      "y": "40",
+      "fit": "screen",
+      "cw": "1920",
+      "ch": "1080",
+      "text": "light",
+      "bg": "card",
+      "snap": "tl"
+    }
+  }
 }
