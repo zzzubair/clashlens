@@ -271,6 +271,8 @@ describe("Daily Legend log days", () => {
         calendar: {
           ...PLAYER.calendar,
           as_of: loadedAt,
+          day_start: "2026-10-04T05:00:00Z",
+          day_end: "2026-10-05T05:00:00Z",
           season_start: "2026-09-07T05:00:00Z",
           season_end: "2026-10-05T05:00:00Z",
           day_number: 28,
