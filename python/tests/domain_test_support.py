@@ -193,7 +193,7 @@ def _domain_template(database_url: str) -> str:
 
 
 @contextmanager
-def domain_database(database_url: str) -> Iterator[str]:
+def domain_database(database_url: str, *, clock: Any | None = None) -> Iterator[str]:
     template = _domain_template(database_url)
     database = f"python_domain_{uuid4().hex}"
     with psycopg.connect(database_url, autocommit=True) as admin:
@@ -202,6 +202,8 @@ def domain_database(database_url: str) -> Iterator[str]:
         database_url, dbname=database, options=f"-c search_path={DOMAIN_SCHEMA}"
     )
     try:
+        if clock is not None:
+            connection_info = clock.bind(connection_info)
         yield connection_info
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:

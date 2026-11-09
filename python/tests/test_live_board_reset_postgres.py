@@ -14,8 +14,8 @@ Reset whose board is late or never published moves no day.
 The stories save the readings the collector would have saved, run the real
 worker until the Daily boards publish, and read the Live board the API
 serves. The worker saves a running day only while the database's clock is
-in it, so the story of today's net is today's Legend day, whatever the
-date; the others run on past dates, when each day saves at its end Reset.
+in it, so today's story advances a controlled clock; the others run on past
+dates, when each day saves at its end Reset.
 See docs/testing.md.
 """
 
@@ -24,7 +24,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 import psycopg
-import pytest
 from crews_postgres_support import Site
 from domain_test_support import as_api_role, domain_database
 from reset_scenarios_postgres_support import (
@@ -331,26 +330,20 @@ def test_each_day_keeps_its_own_date_whatever_the_boards(
 
 
 def test_today_starts_from_the_days_settled_start_as_on_the_dashboard(
-    database_url: str, archive_server, monkeypatch
+    database_url: str, archive_server, monkeypatch, fixed_clock
 ) -> None:
-    """Today's Legend day, whatever the date. LOSER leaves 6 defense slots
+    """A controlled Legend day. LOSER leaves 6 defense slots
     open yesterday: its automatic loss of 180 lands after today's Reset
     reading, so that Reset's board ranks it at 5,300 while today starts at
     5,120. STEADY plays all 16 battles a day for 80."""
-    with domain_database(database_url) as connection_info:
+    with domain_database(database_url, clock=fixed_clock) as connection_info:
         with psycopg.connect(connection_info) as connection:
             now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
         today = ranked_day_for(now)
-        if now < today.start + 6 * HOUR + 5 * MINUTE:
-            # The story reads to 11:00 today and the Live board follows the
-            # database's own clock, so before then its later work is not due.
-            pytest.skip("before 11:05 UTC")
-        if today.day_number <= 3:
-            # Two whole days before today, after the Season's Day 1 reset to 5,000.
-            pytest.skip(f"Season Day {today.day_number}")
         season, start = today.season_start, today.start
         before, yesterday = start - 2 * DAY, start - DAY
-        story = _story(connection_info, archive_server, monkeypatch, LOSER, STEADY)
+        story = _story(connection_info, archive_server, monkeypatch, LOSER, STEADY,
+                       wall_clock=fixed_clock)
         story.players[LOSER].battles = (
             # 4 attacks and 8 defenses, 5,400 to 5,320.
             attacks(before, *[40] * 4) + defenses(before, *[30] * 8)

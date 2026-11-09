@@ -161,6 +161,7 @@ class Story:
     decides: bool = True
     # The record's clock: the latest moment the story has read.
     clock: datetime = PREVIOUS_SEASON
+    wall_clock: object | None = None
 
     def __post_init__(self) -> None:
         # The story's clock: the database's, plus the time the story waited.
@@ -183,12 +184,16 @@ class Story:
 
     def _at(self, at: datetime) -> None:
         self.clock = max(self.clock, at)
+        if self.wall_clock is not None:
+            self.wall_clock.set(self.clock)
 
     def wait(self, time: timedelta) -> None:
         """Let ``time`` pass, then run the worker: the newest Reset's board
         rebuilds with corrections at most once an hour."""
         self.elapsed += time
         self.clock += time
+        if self.wall_clock is not None:
+            self.wall_clock.set(self.clock)
         self.run_worker()
 
     def reset(self, boundary: datetime,
@@ -455,9 +460,10 @@ def _ranked(board: dict[str, object] | None) -> dict[str, int]:
     return {entry["tag"]: entry["trophies"] for entry in entries}
 
 
-def _story(connection_info: str, archive_server, monkeypatch, *tags: str) -> Story:
+def _story(connection_info: str, archive_server, monkeypatch, *tags: str,
+           wall_clock: object | None = None) -> Story:
     return Story(connection_info, archive_server, monkeypatch,
-                 {tag: Player(tag) for tag in tags})
+                 {tag: Player(tag) for tag in tags}, wall_clock=wall_clock)
 
 
 def _saturday(start: datetime) -> list[Battle]:

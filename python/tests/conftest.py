@@ -183,3 +183,23 @@ def site(database_url: str):
             yield built
         finally:
             built.close()
+
+
+@pytest.fixture
+def fixed_clock(request, monkeypatch):
+    import sys
+    from datetime import UTC, datetime
+
+    from clock_test_support import TestClock
+
+    # The date has ordinary Legend days on both sides, outside a Season edge.
+    hour, minute = map(int, os.environ.get("CLASHLENS_TEST_CLOCK", "12:00").split(":"))
+    clock = TestClock(datetime(2026, 10, 14, hour, minute, tzinfo=UTC))
+    modules = [
+        module for name, module in list(sys.modules.items())
+        if (name.startswith("clashlens.") or name.endswith("_support")
+            or module is request.module)
+        and getattr(module, "datetime", None) is datetime
+    ]
+    clock.patch(monkeypatch, *modules)
+    return clock

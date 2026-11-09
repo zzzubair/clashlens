@@ -99,8 +99,6 @@ def _clock_from(monkeypatch, at: datetime) -> None:
 def _current_reset(now: datetime) -> datetime:
     boundary = now.replace(hour=5, minute=0, second=0, microsecond=0)
     boundary = boundary if boundary <= now else boundary - timedelta(days=1)
-    if now - boundary > timedelta(hours=23, minutes=50):
-        pytest.skip("this Legend day ends before the retries could be checked")
     return boundary
 
 
@@ -1033,3 +1031,12 @@ def test_reset_pair_fetches_what_its_proof_still_needs(database_url: str) -> Non
         save("newer-log", "battle_log", 10)
         assert needs() == (False, False)
         assert database.complete_intent(work_id) is True
+
+
+@pytest.fixture(autouse=True)
+def _fixed_wall_clock(fixed_clock, monkeypatch):
+    import sys
+    from functools import partial
+
+    monkeypatch.setattr(sys.modules[__name__], "domain_database",
+                        partial(domain_database, clock=fixed_clock))
