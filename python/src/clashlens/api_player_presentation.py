@@ -164,7 +164,11 @@ def display_starts(days: list[dict[str, Any]], profile: Mapping[str, Any]) -> No
         }
 
 
-def display_end(day: Mapping[str, Any], saved: list[dict[str, Any]], weeks: list[dict[str, Any]], now: datetime) -> dict[str, Any]:
+def display_end(
+    day: Mapping[str, Any], saved: list[dict[str, Any]], weeks: list[dict[str, Any]], now: datetime,
+    status: str | None = None,
+) -> dict[str, Any]:
+    """``status`` is the day's finished presentation status, when already known."""
     start = day["display_start"]["trophies"]
     net = day["net_trophy_change"]
     before = None if start is None or net is None else start + net
@@ -190,7 +194,7 @@ def display_end(day: Mapping[str, Any], saved: list[dict[str, Any]], weeks: list
         "player_log": following if following is not None else after if end is not None and end <= now and (now - end < RANKED_DAY_DURATION or left) else None,
         "dashboard": following if following is not None else dashboard,
         "conflict": conflict,
-        "status": "uncertain" if conflict else day_presentation(day, is_current=False)["status"],
+        "status": "uncertain" if conflict else status or day_presentation(day, is_current=False)["status"],
     }
 
 

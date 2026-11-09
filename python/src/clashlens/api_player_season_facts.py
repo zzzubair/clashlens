@@ -6,6 +6,7 @@ inference. Nothing in these projections changes saved day evidence.
 from __future__ import annotations
 
 from datetime import datetime
+from functools import lru_cache
 from typing import Any
 
 from .api_player_presentation import day_presentation, display_end, display_starts
@@ -15,6 +16,10 @@ from .domain import (
     SEASON_START_TROPHIES,
     ranked_day_for,
 )
+
+# Day and week starts repeat across a page's three day lists and every
+# request, so each string is parsed once.
+_at = lru_cache(maxsize=4096)(datetime.fromisoformat)
 
 
 def shape_of(start: datetime, today: int, weeks: list[dict], saved: dict[int, dict], *, historical: bool = False) -> dict[str, Any]:
@@ -29,7 +34,7 @@ def shape_of(start: datetime, today: int, weeks: list[dict], saved: dict[int, di
 
 
 def _membership(start: datetime, today: int, weeks: list[dict], saved: dict[int, str], unplayed: set[int]) -> dict[str, Any]:
-    by_week = {datetime.fromisoformat(week["week_start"]): week for week in weeks}
+    by_week = {_at(week["week_start"]): week for week in weeks}
 
     def week_of(number):
         return by_week.get(start + ((number - 1) // 7 * 7) * RANKED_DAY_DURATION, {})
@@ -122,7 +127,7 @@ def historical_facts(summary: dict[str, Any], *, season_start: datetime | None =
         number = entry.get("season_day_number")
         if number is not None:
             saved.setdefault(number, entry)
-    start = season_start or (datetime.fromisoformat(summary["season_start"]) if summary.get("season_start") else None)
+    start = season_start or (_at(summary["season_start"]) if summary.get("season_start") else None)
     summary["season_shape"] = None if start is None else shape_of(
         start, SEASON_DAY_COUNT + 1, summary.get("season_weeks", []), saved,
         historical=True,
@@ -134,10 +139,10 @@ def battle_statistics(recent: list[dict], season: list[dict], start: datetime, n
     ordered = [*season, *recent]
 
     def day_from(at):
-        return next((day for day in ordered if datetime.fromisoformat(day["ranked_day_start"]) == at), None) if at >= start else None
+        return next((day for day in ordered if _at(day["ranked_day_start"]) == at), None) if at >= start else None
 
     left = shape["last_legend_day_start"] if shape and shape["outside_now"] else None
-    latest_at = datetime.fromisoformat(left) if left else today - RANKED_DAY_DURATION
+    latest_at = _at(left) if left else today - RANKED_DAY_DURATION
     latest = day_from(latest_at)
     previous = day_from(latest_at - RANKED_DAY_DURATION) if not left and (latest is None or latest.get("reset_rank") is None) else None
     selected = previous if previous and previous.get("reset_rank") is not None else latest
@@ -145,8 +150,8 @@ def battle_statistics(recent: list[dict], season: list[dict], start: datetime, n
     result = {}
     for period in ("7", "14", "season"):
         first = start if period == "season" else max(start, today - int(period) * RANKED_DAY_DURATION)
-        days = {datetime.fromisoformat(day["ranked_day_start"]): day for day in [*recent, *season]
-                if first <= datetime.fromisoformat(day["ranked_day_start"]) < today}
+        days = {_at(day["ranked_day_start"]): day for day in [*recent, *season]
+                if first <= _at(day["ranked_day_start"]) < today}
 
         def side(key, days=days, first=first):
             events = {}
@@ -154,7 +159,7 @@ def battle_statistics(recent: list[dict], season: list[dict], start: datetime, n
             for _, day in sorted(days.items()):
                 before = len(events)
                 for event in day[key]:
-                    at = datetime.fromisoformat(event["battle_timestamp"])
+                    at = _at(event["battle_timestamp"])
                     if at < first or at > now or event["battle_id"] in events:
                         continue
                     events[event["battle_id"]] = event
@@ -183,7 +188,7 @@ def battle_statistics(recent: list[dict], season: list[dict], start: datetime, n
             incomplete = any(
                 not day["battles_complete"]
                 for day in ordered
-                if 1 <= (number := (datetime.fromisoformat(day["ranked_day_start"]) - start) // RANKED_DAY_DURATION + 1) < shape["today"]
+                if 1 <= (number := (_at(day["ranked_day_start"]) - start) // RANKED_DAY_DURATION + 1) < shape["today"]
                 and number <= SEASON_DAY_COUNT and shape["kinds"][number - 1] == "legend"
             )
         result[period] = {
@@ -205,17 +210,18 @@ def trophy_trends(recent: list[dict], start: datetime, now: datetime) -> dict | 
     if finished <= 0:
         return None
     saved = {day["ranked_day_start"]: day for day in recent}
+    counted = []
+    for day in saved.values():
+        at = screen_event_timestamp(day["ranked_day_start"])
+        end = screen_event_timestamp(day["ranked_day_end"])
+        if (at is not None and at < today and ranked_day_for(at).start == at
+                and end == at + RANKED_DAY_DURATION
+                and day["completeness"]["state"] == "complete" and day["net_trophy_change"] is not None):
+            counted.append((at, day["net_trophy_change"]))
     result = {}
     for window in (7, 14):
         span = min(window, finished)
-        values = []
-        for day in saved.values():
-            at = screen_event_timestamp(day["ranked_day_start"])
-            end = screen_event_timestamp(day["ranked_day_end"])
-            if (at is not None and today - span * RANKED_DAY_DURATION <= at < today
-                and ranked_day_for(at).start == at and end == at + RANKED_DAY_DURATION
-                and day["completeness"]["state"] == "complete" and day["net_trophy_change"] is not None):
-                values.append(day["net_trophy_change"])
+        values = [net for at, net in counted if today - span * RANKED_DAY_DURATION <= at]
         result[str(window)] = {"span": span, "counted": len(values), "total": sum(values) if values else None}
     return result
 
@@ -232,9 +238,20 @@ def player_facts(page: dict[str, Any], now: datetime, *, battles: bool) -> tuple
         display_starts(group, page)
     season, recent, current = groups
     saved = [*season, *current, *recent]
+    # Copies of one day differ only in their start, so each day's
+    # presentation is worked out once.
+    presented: dict[tuple[str, bool], dict[str, Any]] = {}
+
+    def presentation(day: dict[str, Any], is_current: bool) -> dict[str, Any]:
+        key = (day["ranked_day_start"], is_current)
+        if key not in presented:
+            presented[key] = day_presentation(day, is_current=is_current)
+        return presented[key]
+
     for day in saved:
-        day["presentation"] = day_presentation(day, is_current=day["ranked_day_start"] == ready["current_day_start"])
-        day["display_end"] = display_end(day, saved, ready["season_weeks"], now)
+        day["presentation"] = presentation(day, day["ranked_day_start"] == ready["current_day_start"])
+        day["display_end"] = display_end(
+            day, saved, ready["season_weeks"], now, presentation(day, False)["status"])
     for day in ready["days"]:
         copies = [item for item in saved if item["ranked_day_start"] == day["ranked_day_start"]]
         primary = copies[0]
@@ -249,28 +266,28 @@ def player_facts(page: dict[str, Any], now: datetime, *, battles: bool) -> tuple
             day["display_start_by_reference"] = alternatives
     context = ready["season"]
     calendar = ranked_day_for(now)
-    start = datetime.fromisoformat(context["start"]) if context and datetime.fromisoformat(context["start"]) <= now < datetime.fromisoformat(context["end"]) else calendar.season_start
+    start = _at(context["start"]) if context and _at(context["start"]) <= now < _at(context["end"]) else calendar.season_start
     today = min(SEASON_DAY_COUNT, (now - start) // RANKED_DAY_DURATION + 1)
     numbered = {}
     for day in saved:
-        number = (datetime.fromisoformat(day["ranked_day_start"]) - start) // RANKED_DAY_DURATION + 1
+        number = (_at(day["ranked_day_start"]) - start) // RANKED_DAY_DURATION + 1
         if 1 <= number <= SEASON_DAY_COUNT:
             numbered.setdefault(number, day)
     # Always the Season's 28 days, as the website's seasonShape drew them,
     # even right after the Season Reset before anything is saved.
     ready["season_shape"] = shape_of(start, today, ready["season_weeks"], numbered)
-    below = {datetime.fromisoformat(week["week_start"]) for week in ready["season_weeks"] if week["league"] == "below_legend_i"}
+    below = {_at(week["week_start"]) for week in ready["season_weeks"] if week["league"] == "below_legend_i"}
     ready["stats_day_starts"] = None if context is None else [
-        (datetime.fromisoformat(context["start"]) + offset * RANKED_DAY_DURATION).isoformat()
+        (_at(context["start"]) + offset * RANKED_DAY_DURATION).isoformat()
         for offset in range(context["current_day_number"])
-        if datetime.fromisoformat(context["start"]) + (offset // 7 * 7) * RANKED_DAY_DURATION not in below
+        if _at(context["start"]) + (offset // 7 * 7) * RANKED_DAY_DURATION not in below
     ]
     # selectPlayerHistory's anchor guard deliberately differs from seasonShape.
-    history_start = datetime.fromisoformat(context["start"]) if context and now < datetime.fromisoformat(context["end"]) else calendar.season_start
+    history_start = _at(context["start"]) if context and now < _at(context["end"]) else calendar.season_start
     history = {}
     history_numbers = {}
     for day in saved:
-        number = (datetime.fromisoformat(day["ranked_day_start"]) - history_start) // RANKED_DAY_DURATION + 1
+        number = (_at(day["ranked_day_start"]) - history_start) // RANKED_DAY_DURATION + 1
         if 1 <= number <= SEASON_DAY_COUNT and day["presentation"]["show_in_player_log"]:
             history.setdefault(day["ranked_day_start"][:10], day["ranked_day_start"])
             history_numbers.setdefault(day["ranked_day_start"], number)
