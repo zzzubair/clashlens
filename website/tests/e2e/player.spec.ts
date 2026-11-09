@@ -12,23 +12,16 @@ import { UNSAFE_decodeViaTurboStream } from "react-router";
 import type { PlayerPage, RankedBattleEvent } from "../../app/lib/contracts";
 import { ensureAccount, signIn } from "./helpers/account";
 import {
+  decodePageData,
+  encodePageData,
+  openWorstCasePlayer,
+  refuseRefreshes,
+} from "./helpers/worst-case-player";
+import {
   WORST_SEASON_SUMMARY,
   WORST_SEASONS,
   worstCasePlayer,
 } from "../fixtures/player-worst-case";
-
-// Sends Refresh submissions with an invalid key, so the server refuses them
-// before they spend either per-visitor allowance.
-async function refuseRefreshes(page: Page, allowNext = () => false) {
-  const submissions: string[] = [];
-  await page.route("**/resources/players/*/refresh*", async (route) => {
-    if (route.request().method() !== "POST") return route.continue();
-    submissions.push(route.request().postData() ?? "");
-    if (allowNext()) return route.continue();
-    await route.continue({ postData: "idempotencyKey=invalid" });
-  });
-  return submissions;
-}
 
 function refreshSubmitted(page: Page) {
   return page.waitForResponse(
@@ -36,45 +29,6 @@ function refreshSubmitted(page: Page) {
       response.request().method() === "POST" &&
       response.url().includes("/resources/players/"),
   );
-}
-
-// React Router page data is a flat list of values: objects map "_<key index>"
-// to value indexes, arrays list value indexes, -5 is null and -7 undefined.
-// A streamed value is ["P", its own index], resolved by a later "P<index>:"
-// line; it decodes to undefined, so past Seasons are left out.
-function decodePageData(text: string) {
-  const values: unknown[] = JSON.parse(text.split("\n")[0]);
-  const decode = (index: number): unknown => {
-    if (index < 0) return index === -5 ? null : undefined;
-    const value = values[index];
-    if (Array.isArray(value)) return value[0] === "P" ? undefined : value.map(decode);
-    if (value === null || typeof value !== "object") return value;
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [
-        values[Number(key.slice(1))],
-        decode(item as number),
-      ]),
-    );
-  };
-  return decode(0) as Record<string, { data?: { player?: PlayerPage } }>;
-}
-
-function encodePageData(data: unknown) {
-  const values: unknown[] = [];
-  const encode = (value: unknown): number => {
-    if (value === null) return -5;
-    if (value === undefined) return -7;
-    if (typeof value !== "object") return values.push(value) - 1;
-    const index = values.push(null) - 1;
-    values[index] = Array.isArray(value)
-      ? value.map(encode)
-      : Object.fromEntries(
-          Object.entries(value).map(([key, item]) => [`_${encode(key)}`, encode(item)]),
-        );
-    return index;
-  };
-  encode(data);
-  return `${JSON.stringify(values)}\n`;
 }
 
 function pagePlayer(data: ReturnType<typeof decodePageData>) {
@@ -470,43 +424,6 @@ async function expectUsableLayout(page: Page) {
     return found;
   });
   expect(problems).toEqual([]);
-}
-
-// Opens #2PP from search with worst-case saved data and one past Season.
-// `servesSeason` returning false leaves that read of the past Season unanswered;
-// `edit` changes the player data first.
-async function openWorstCasePlayer(
-  page: Page,
-  servesSeason = () => true,
-  edit: (player: PlayerPage) => void = () => {},
-) {
-  // Day 6 of a Season, so every worst-case day belongs to the current Season.
-  const now = Date.parse("2026-10-10T12:00:00Z");
-  await page.clock.install({ time: now });
-  await page.goto("/blog");
-  const saved = await page.request.get("/players/%232PP.data");
-  const dataType = saved.headers()["content-type"];
-  const decoded = decodePageData(await saved.text());
-  const data = Object.values(decoded).find((route) => route.data?.player)!.data!;
-  const player = worstCasePlayer("#2PP", now);
-  edit(player);
-  Object.assign(data, { player, seasons: WORST_SEASONS });
-  const current = encodePageData(decoded);
-  Object.assign(data, {
-    selectedSeason: WORST_SEASON_SUMMARY.seasonId,
-    historical: { ...WORST_SEASON_SUMMARY, tag: "#2PP" },
-  });
-  const season = encodePageData(decoded);
-  await page.route("**/players/%232PP.data*", (route) => {
-    const past = new URL(route.request().url()).searchParams.has("season");
-    if (past && !servesSeason()) return;
-    return route.fulfill({ contentType: dataType, body: past ? season : current });
-  });
-
-  // Client navigation reads the replaced page data.
-  await page.getByRole("button", { name: "Search players" }).click();
-  await page.getByRole("searchbox").fill("#2PP");
-  await page.getByRole("searchbox").press("Enter");
 }
 
 test("player page holds worst-case player data on a phone", async ({ page }) => {
