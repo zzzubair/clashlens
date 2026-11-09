@@ -481,7 +481,9 @@ def read_player_page(
                 event.get("army_share_code")
                 for day in days.values()
                 for event in (*day["offense_events"], *day["defense_events"])
-            ),
+            )
+            if battles
+            else {},
             "provenance": {
                 "source": "api_player_daily_logs",
                 "observed_at": observed_at.isoformat(),
@@ -518,7 +520,6 @@ def read_player_page(
         if goal_rank is not None:
             ready["dashboard_goal"] = dashboard_goal(connection, result, goal_rank)
     else:
-        ready["army_units"] = {}
         for day in ready["days"]:
             day["offense_events"], day["defense_events"] = [], []
             for key in ("display_start", "display_start_by_reference", "display_end", "presentation"):

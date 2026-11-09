@@ -17,16 +17,19 @@ from test_reset_scenarios_postgres import (
 )
 
 from bot.replies import season_days
+from clashlens import api_players
 from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
 
 
-def served_player(story, tag, now, *, goal_rank=None):
+def served_player(story, tag, now, *, goal_rank=None, battles=True):
     api = ApiDatabase(as_api_role(story.connection_info))
     try:
         app = create_app(api, keys={("typescript-website", "current"): TS_CURRENT},
                          clock=lambda: NOW_SECONDS, now=lambda: now)
         target = f"/v1/players/%23{tag[1:]}" + (f"?goal_rank={goal_rank}" if goal_rank is not None else "")
+        if not battles:
+            target += "?battles=false"
         with TestClient(app) as client:
             response = client.get(target, headers=signed_headers(target))
         assert response.status_code == 200, response.text
@@ -181,6 +184,11 @@ def test_day_one_goal_uses_5000_baseline(database_url, archive_server, monkeypat
         assert result["you_then"] == result["line_then"] == 5000
         assert result["history"] == [5000, 5080]
         assert result["plan"]["pace"] == result["plan"]["drift"] == 80
+        # A page without battles names no army, so it decodes none.
+        decoded = []
+        monkeypatch.setattr(api_players, "decode_army_share_code", lambda code: decoded.append(code))
+        totals = served_player(story, tag, day(2) + timedelta(hours=1), battles=False)["screen_ready"]
+        assert totals["army_units"] == {} and decoded == []
 
 
 def test_full_battles_profile_start_is_only_a_display_projection(database_url, archive_server, monkeypatch):
