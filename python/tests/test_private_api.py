@@ -924,6 +924,7 @@ def test_account_metadata_matches_database_and_http_acceptance(database_url: str
                 board = client.get("/v1/leaderboards/live", headers=signed_headers("/v1/leaderboards/live")).json()
                 assert board["entries"] == []
                 assert board["focus_neighbors"] == 5
+                assert board["calendar"] == listing["calendar"]
         finally:
             database.close()
 

@@ -11,6 +11,7 @@ from .analytics import (
 )
 from .api_db import ApiDatabase
 from .api_player_presentation import (
+    calendar_payload,
     json_array,
     net_so_far,
     player_confidence,
@@ -386,6 +387,7 @@ def get_live_leaderboard(
         "focus_neighbors": _FOCUS_NEIGHBORS,
         "ordering_rule_version": _LIVE_ORDER_VERSION,
         "generated_at": now.astimezone(UTC).isoformat(),
+        "calendar": calendar_payload(now),
         "tracked_population": board.tracked_population,
         "total_entries": total_entries,
         # Tracked players left off until a profile names this Season.
