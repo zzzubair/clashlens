@@ -31,7 +31,7 @@ from .live_board import (
     season_params,
     unplayed_seen_sql,
 )
-from .shared_copy import SharedCopy, _start_thread
+from .shared_copy import SharedCopy
 
 _LIVE_FRESHNESS_SECONDS = 600
 # Rows kept beside a selected player when their page edge would hide them.
@@ -295,7 +295,7 @@ class LiveBoardCache(SharedCopy[_LiveBoard]):
         self,
         *,
         clock: Callable[[], float] = time.monotonic,
-        start: Callable[[Callable[[], None]], None] = _start_thread,
+        start: Callable[[Callable[[], None]], None] | None = None,
     ) -> None:
         super().__init__(
             _read_live_board_from,

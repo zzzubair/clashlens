@@ -11,8 +11,6 @@ from datetime import datetime, timedelta
 from enum import Enum, StrEnum
 from typing import Any
 
-from .api_db import OperationResult
-
 MAX_CREWS_PER_ACCOUNT = 5
 INVITE_LIFETIME = timedelta(hours=48)
 # Opening Invite shows the caller's newest link again while it has this long
@@ -25,7 +23,8 @@ class Refused(Exception):
 
     def __init__(self, status_code: int, payload: dict[str, Any]) -> None:
         super().__init__(payload["error"])
-        self.result = OperationResult(status_code, payload)
+        self.status_code = status_code
+        self.payload = payload
 
 
 class CrewRole(StrEnum):

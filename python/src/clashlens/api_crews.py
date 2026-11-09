@@ -74,7 +74,7 @@ def _write(
                 with connection.transaction():
                     result = operation(connection)
             except _Refused as refusal:
-                result = refusal.result
+                result = OperationResult(refusal.status_code, refusal.payload)
             api_db._complete_request(connection, binding.request_id, result)
             return result
 

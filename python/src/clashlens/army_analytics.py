@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import army_types
+from .army_decoder import with_unnamed_ids
 from .catalog import CATALOG_VERSION, unit_label
 
 ARMY_ANALYTICS_RULE_VERSION = "army-analytics-v2"
@@ -151,58 +152,6 @@ _COUNTS = (
     "facts", "usable", "unknown_affected", "unknown_occurrences", "disagreements",
 )
 _TALLIES = ("states", "hero_facts")
-# Where an old partial army kept each unnamed id, by army code section.
-_UNNAMED_SECTIONS = {
-    "u": ("home_troops", "troop"), "i": ("cc_troops", "troop"),
-    "s": ("spells", "spell"), "d": ("spells", "spell"),
-}
-
-
-def with_unnamed_ids(fact: dict[str, Any]) -> dict[str, Any]:
-    """The army with every saved id in place, named or not.
-
-    Armies saved before saving stopped depending on the unit list kept ids
-    it did not name apart, in ``unresolved_components``, and were marked
-    partial. Reading puts those ids back beside the others, so they count
-    like any other unit and no saved army needs saving again.
-    """
-    unnamed = [
-        item for item in fact.get("unresolved_components") or []
-        if isinstance(item, dict) and item.get("numeric_id") is not None
-    ]
-    if not unnamed and fact.get("army_state", fact.get("status")) != "partial":
-        return fact
-    fact = {**fact, "unresolved_components": []}
-    for key in ("army_state", "status"):
-        if fact.get(key) == "partial":
-            fact[key] = "decoded"
-    heroes = {
-        str(hero["hero"]): {**hero, "equipment": list(hero.get("equipment") or [])}
-        for hero in fact.get("heroes") or []
-        if isinstance(hero, dict) and hero.get("hero")
-    }
-    for item in unnamed:
-        number, origin = item["numeric_id"], str(item.get("origin", ""))
-        if item.get("section") in _UNNAMED_SECTIONS:
-            field, kind = _UNNAMED_SECTIONS[item["section"]]
-            entry = [f"{kind}:{number}", int(item.get("quantity", 1)), origin]
-            fact[field] = [*(fact.get(field) or []), entry]
-            continue
-        # Hero section origins read "hero:<id>:pet" or "hero:<id>:equipment";
-        # an unnamed hero itself ("hero") already has its own entry.
-        if not origin.startswith("hero:"):
-            continue
-        hero_id, _, part = origin.removeprefix("hero:").partition(":")
-        hero = heroes.setdefault(
-            f"hero:{hero_id}", {"hero": f"hero:{hero_id}", "pet": None, "equipment": []}
-        )
-        if part == "pet":
-            hero["pet"] = f"pet:{number}"
-        elif part == "equipment":
-            hero["equipment"] = sorted([*hero["equipment"], f"equipment:{number}"])
-    fact["heroes"] = list(heroes.values())
-    return fact
-
 
 def public_army_states(states: dict[str, int]) -> dict[str, int]:
     """Army read results by state; an old partial army counts as read."""

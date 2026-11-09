@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any, Final
 from urllib.parse import quote, urlsplit
 
+from .http_transport import NoRedirectHandler
+
 OFFICIAL_API_ORIGIN: Final = "https://api.clashofclans.com"
 
 
@@ -283,11 +285,6 @@ def transport_outcome(cause: BaseException | None) -> str:
     return "other"
 
 
-class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, request, response, code, message, headers, new_url):
-        return None
-
-
 class _ExplicitProxyHandler(urllib.request.ProxyHandler):
     def proxy_open(self, request, proxy_url, _type):
         # Keep verification on the explicit proxy, regardless of NO_PROXY.
@@ -323,7 +320,7 @@ def _urllib_transport(
             return self.do_open(Connection, req, context=self._context)
 
     opener = urllib.request.build_opener(
-        _ExplicitProxyHandler(proxies), _NoRedirectHandler(), Handler()
+        _ExplicitProxyHandler(proxies), NoRedirectHandler(), Handler()
     )
     http_request = urllib.request.Request(
         request.url,

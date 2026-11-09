@@ -24,9 +24,9 @@ from fastapi.responses import JSONResponse
 from psycopg.types.json import Jsonb
 from pydantic import Field
 
-from .api import ApiError, StrictBody, _authorize, _safe_tag
 from .api_accounts import _linked_players
 from .api_db import ApiDatabase, _text
+from .api_http import ApiError, StrictBody, authorize, safe_tag
 from .collector_overlays import PRESENCE_SQL, ViewerPresence
 
 _LINK = re.compile(r"[A-Za-z0-9_-]{22}")
@@ -228,7 +228,7 @@ def _overlay(row: Any) -> dict[str, Any]:
 
 def register_overlay_routes(app: FastAPI, *, database: ApiDatabase | None) -> None:
     def account(request: Request, operation: str) -> int:
-        context = _authorize(request, operation, database)
+        context = authorize(request, operation, database)
         assert database is not None and context.account is not None
         return context.account.internal_id
 
@@ -242,7 +242,7 @@ def register_overlay_routes(app: FastAPI, *, database: ApiDatabase | None) -> No
     def save(body: OverlayBody, request: Request) -> JSONResponse:
         account_id = account(request, "account.update")
         assert database is not None
-        tag = None if body.tag is None else _safe_tag(body.tag)
+        tag = None if body.tag is None else safe_tag(body.tag)
         return JSONResponse(content=save_overlay(
             database, account_id, tag=tag, settings=body.settings
         ))
@@ -257,7 +257,7 @@ def register_overlay_routes(app: FastAPI, *, database: ApiDatabase | None) -> No
 
     @app.get("/v1/overlays/{link_id}")
     def by_link(link_id: str, request: Request) -> JSONResponse:
-        _authorize(request, "overlay.read", database)
+        authorize(request, "overlay.read", database)
         if database is None:
             raise ApiError(404, "overlay_not_found")
         result = read_link(database, _link(link_id))

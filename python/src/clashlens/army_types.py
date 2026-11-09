@@ -33,8 +33,7 @@ from datetime import UTC, datetime, time
 from time import monotonic
 from typing import Any
 
-from . import army_analytics
-from .army_decoder import DECODER_VERSION
+from .army_decoder import DECODER_VERSION, with_unnamed_ids
 from .catalog import CATALOG_VERSION, unit_label
 from .domain import DomainRuleError, allocate_trophies
 
@@ -688,7 +687,7 @@ def read_type_rows(
     # read once, after the totals, so the totals never join the decodes.
     partial_ids = [row[2] for row in rows if row[2] is not None]
     partial = {
-        decode_id: army_analytics.with_unnamed_ids({
+        decode_id: with_unnamed_ids({
             "home_troops": troops, "unresolved_components": unnamed, "heroes": heroes,
         })
         for decode_id, troops, unnamed, heroes in connection.execute(
@@ -870,7 +869,7 @@ def variant_examples(
         """,
         ([-army_id for army_id in used if army_id < 0],),
     ).fetchall():
-        army = army_analytics.with_unnamed_ids(dict(zip(
+        army = with_unnamed_ids(dict(zip(
             ("home_troops", "spells", "heroes", "unresolved_components"), saved, strict=True
         )))
         partial_type = classify(army["home_troops"] or [])
@@ -1008,7 +1007,7 @@ def read_type_outcomes(
     ).fetchall():
         if type_id != UNREADABLE and troops is not None:
             # An older partly read army, typed from its saved home troops.
-            type_id = classify(army_analytics.with_unnamed_ids(
+            type_id = classify(with_unnamed_ids(
                 {"home_troops": troops, "unresolved_components": unnamed}
             )["home_troops"])
         key = (str(fact_lens), int(type_id or OTHER), int(stars), int(destruction))
@@ -1044,7 +1043,7 @@ def read_day_totals(
     ).fetchall():
         if troops is not None:
             # An older partly read army, typed from its saved home troops.
-            type_id = classify(army_analytics.with_unnamed_ids(
+            type_id = classify(with_unnamed_ids(
                 {"home_troops": troops, "unresolved_components": unnamed}
             )["home_troops"])
         total = totals[day].setdefault(type_id or OTHER, [0] * len(counts))

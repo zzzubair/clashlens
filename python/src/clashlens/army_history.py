@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
-from .army_analytics import with_unnamed_ids
+from .army_decoder import with_unnamed_ids
 from .catalog import is_siege_troop, is_valid_typed_id, unit_label
 
 HISTORY_CATEGORIES = frozenset({"troops", "spells", "heroes", "pets", "equipment"})

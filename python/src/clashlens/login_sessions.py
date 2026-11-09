@@ -17,9 +17,9 @@ class LoginStanding(StrEnum):
 
     States:
     - ``ACTIVE``: nothing ended it, so the website may use and renew it.
-    - ``LOGGED_OUT``: this exact login logged out (``_record_logout``).
+    - ``LOGGED_OUT``: this exact login logged out (``record_logout``).
     - ``IDENTITY_REMOVED``: the sign-in connection it came through was removed
-      at or after the millisecond it signed in (``_record_identity_removal``),
+      at or after the millisecond it signed in (``record_identity_removal``),
       which ends that login on every browser.
 
     Events: logout and removing a sign-in connection move ``ACTIVE`` to an
@@ -67,10 +67,10 @@ def login_standing(
 def revoke_login_session(database: Any, session_hash: str) -> None:
     with database.pool.connection() as connection:
         with connection.transaction():
-            _record_logout(connection, session_hash)
+            record_logout(connection, session_hash)
 
 
-def _record_logout(connection: Any, session_hash: str) -> None:
+def record_logout(connection: Any, session_hash: str) -> None:
     # A login cookie lives 30 days and is renewed only while its login has not
     # logged out, so an older logout guards nothing.
     connection.execute(
@@ -84,7 +84,7 @@ def _record_logout(connection: Any, session_hash: str) -> None:
     )
 
 
-def _record_identity_removal(
+def record_identity_removal(
     connection: Any, provider: str, provider_subject: str
 ) -> None:
     # Every login cookie issued through this identity up to now stops working,

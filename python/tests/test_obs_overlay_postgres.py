@@ -15,8 +15,8 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from test_discord_bot_postgres import DISCORD_ID, _account, _verify
 
 from clashlens import api_overlays, collector_overlays
-from clashlens.api import ApiError
 from clashlens.api_db import ApiDatabase
+from clashlens.api_http import ApiError
 from clashlens.collector_db import REVISIT_INTERVAL, CollectorDatabase
 
 # Before 04:55 UTC, so regular checks are open.

@@ -8,14 +8,13 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from threading import Lock
 from typing import Any, Literal, Protocol
-from uuid import UUID
 
 from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from psycopg.errors import QueryCanceled, TransactionTimeout
 from psycopg_pool import PoolTimeout
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
 from . import (
     api_accounts,
@@ -35,10 +34,19 @@ from . import (
 )
 from .accounts import normalize_display_name, normalize_group_name, normalize_username
 from .api_db import (
-    AccountContext,
     ApiDatabase,
-    OperationResult,
-    RequestBinding,
+)
+from .api_http import (
+    ALLOWED_PROVIDERS,
+    ApiError,
+    StrictBody,
+    authorize,
+    json_safe,
+    operation_response,
+    request_binding,
+    request_target,
+    safe_tag,
+    safe_uuid,
 )
 from .army_analytics import (
     ArmyAnalyticsSelection,
@@ -51,7 +59,6 @@ from .db import CONTRACT_VERSION
 from .domain import ranked_day_for
 from .hmac_proof import InvalidProof, VerifiedProof, verify_proof
 from .operating import ApiMetrics, elapsed
-from .profile import normalize_player_tag
 from .verification import (
     OfficialVerificationResponse,
     VerificationOutcome,
@@ -64,39 +71,6 @@ _MAX_SUPPORTED_BODY_BYTES = 16 * 1024 * 1024
 _DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024
 _DEFAULT_FRESHNESS_SECONDS = 900
 
-_PUBLIC_OPERATIONS = frozenset(
-    {
-        "analytics.read",
-        "crews.view",
-        "leaderboards.read",
-        "overlay.read",
-        "player.read",
-        "refresh.status",
-        "refresh.submit",
-        "status.read",
-        "user.read",
-    }
-)
-_ALLOWED_PROVIDERS = frozenset({"google", "discord"})
-_TYPESCRIPT_ACCOUNT_OPERATIONS = frozenset(
-    {
-        "account.create",
-        "account.read",
-        "account.update",
-        "crews.read",
-        "crews.write",
-        "groups.read",
-        "groups.write",
-        "player_links.verify",
-        "providers.link",
-        "providers.unlink",
-        "session.check",
-        "session.revoke",
-        "summary.read",
-    }
-)
-
-
 class OfficialVerifier(Protocol):
     def verify(
         self, normalized_tag: str, player_token: str
@@ -105,10 +79,6 @@ class OfficialVerifier(Protocol):
     def player(
         self, normalized_tag: str, *, timeout_seconds: float
     ) -> OfficialVerificationResponse: ...
-
-
-class StrictBody(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
 
 
 class AccountCreateBody(StrictBody):
@@ -166,22 +136,6 @@ class AttackAlertBody(StrictBody):
     # naming the player, or the account's dark attack alert picture.
     alert: Literal["attack", "day_summary", "dark_picture"] = "attack"
     tag: str | None = Field(default=None, min_length=1, max_length=16)
-
-
-class ApiError(Exception):
-    def __init__(
-        self,
-        status_code: int,
-        code: str,
-        *,
-        detail: str | None = None,
-        affected_days: list[int] | None = None,
-    ) -> None:
-        super().__init__(code)
-        self.status_code = status_code
-        self.code = code
-        self.detail = detail
-        self.affected_days = affected_days
 
 
 class RequestBodyTooLarge(ValueError):
@@ -304,7 +258,7 @@ def create_app(
                 proof = verify_proof(
                     headers=request.scope.get("headers", []),
                     method=request.method,
-                    raw_target=_request_target(request).encode("ascii"),
+                    raw_target=request_target(request).encode("ascii"),
                     body=body,
                     keys=keys,
                     now=int(clock()),
@@ -393,7 +347,7 @@ def create_app(
 
     @app.get("/v1/status")
     def update_status(request: Request) -> JSONResponse:
-        _authorize(request, "status.read", production_database)
+        authorize(request, "status.read", production_database)
         return JSONResponse(
             content=api_status.get_update_status(
                 production_database, now=current_time()
@@ -406,7 +360,7 @@ def create_app(
         q: str = Query(min_length=1, max_length=80),
         limit: int = Query(default=50, ge=1, le=50),
     ) -> JSONResponse:
-        _authorize(request, "player.read", production_database)
+        authorize(request, "player.read", production_database)
         return JSONResponse(
             status_code=200,
             content={
@@ -429,8 +383,8 @@ def create_app(
     def player(
         tag: str, request: Request, battles: bool = Query(default=True)
     ) -> JSONResponse:
-        _authorize(request, "player.read", production_database)
-        normalized_tag = _safe_tag(tag)
+        authorize(request, "player.read", production_database)
+        normalized_tag = safe_tag(tag)
         result = api_players.get_player_page(production_database,
             normalized_tag,
             now=current_time(),
@@ -439,12 +393,12 @@ def create_app(
         )
         if result is None:
             raise ApiError(404, "player_not_found")
-        return JSONResponse(status_code=200, content=_json_safe(result))
+        return JSONResponse(status_code=200, content=json_safe(result))
 
     @app.get("/v1/players/{tag}/clan")
     async def player_live_clan(tag: str, request: Request) -> JSONResponse:
-        await asyncio.to_thread(_authorize, request, "player.read", production_database)
-        normalized_tag = _safe_tag(tag)
+        await asyncio.to_thread(authorize, request, "player.read", production_database)
+        normalized_tag = safe_tag(tag)
         clan = await asyncio.to_thread(live_clans.read, normalized_tag)
         content: dict[str, Any] = {"tag": normalized_tag, "live": clan.live}
         if clan.live:
@@ -459,30 +413,30 @@ def create_app(
     def player_today(
         tag: str, request: Request, wait_for_board: bool = Query(default=False)
     ) -> JSONResponse:
-        _authorize(request, "player.read", production_database)
+        authorize(request, "player.read", production_database)
         if not dashboard_enabled:
             raise ApiError(404, "dashboard_disabled")
         result = api_dashboard.get_player_today(
             production_database,
             dashboard_board,
-            _safe_tag(tag),
+            safe_tag(tag),
             now=current_time(),
             board_wait=api_dashboard.BOARD_WAIT_SECONDS if wait_for_board else 0,
         )
         if result is None:
             raise ApiError(404, "player_not_found")
-        return JSONResponse(content=_json_safe(result))
+        return JSONResponse(content=json_safe(result))
 
     @app.get("/v1/players/{tag}/bases")
     def player_bases(
         tag: str, request: Request, day: int = Query(ge=1, le=28)
     ) -> JSONResponse:
-        _authorize(request, "player.read", production_database)
+        authorize(request, "player.read", production_database)
         if not dashboard_enabled:
             raise ApiError(404, "dashboard_disabled")
         try:
             result = api_dashboard.get_player_bases(
-                production_database, dashboard_board, _safe_tag(tag),
+                production_database, dashboard_board, safe_tag(tag),
                 day_number=day, now=current_time(),
             )
         except ValueError:
@@ -491,7 +445,7 @@ def create_app(
             raise ApiError(503, "busy") from None
         if result is None:
             raise ApiError(404, "player_not_found")
-        return JSONResponse(content=_json_safe(result))
+        return JSONResponse(content=json_safe(result))
 
     @app.get("/v1/players/{tag}/armies")
     def player_armies(
@@ -500,7 +454,7 @@ def create_app(
         lens: Literal["offense", "defense"] = Query(),
         days: int | Literal["season"] = Query(),
     ) -> JSONResponse:
-        _authorize(request, "player.read", production_database)
+        authorize(request, "player.read", production_database)
         if not dashboard_enabled:
             raise ApiError(404, "dashboard_disabled")
         allowed = (
@@ -510,43 +464,43 @@ def create_app(
         if not allowed:
             raise ApiError(422, "invalid_request")
         result = api_dashboard.get_player_armies(
-            production_database, dashboard_army_days, _safe_tag(tag),
+            production_database, dashboard_army_days, safe_tag(tag),
             lens=lens, days=days, now=current_time(),
         )
         if result is None:
             raise ApiError(404, "player_not_found")
-        return JSONResponse(content=_json_safe(result))
+        return JSONResponse(content=json_safe(result))
 
     @app.get("/v1/players/{tag}/lookup")
     def player_lookup(tag: str, request: Request) -> JSONResponse:
-        _authorize(request, "player.read", production_database)
+        authorize(request, "player.read", production_database)
         return JSONResponse(content=api_player_lookup.get_lookup(
-            production_database, _safe_tag(tag)
+            production_database, safe_tag(tag)
         ))
 
     @app.post("/v1/players/{tag}/lookup")
     async def start_player_lookup(tag: str, request: Request) -> JSONResponse:
         context = await asyncio.to_thread(
-            _authorize, request, "refresh.submit", production_database
+            authorize, request, "refresh.submit", production_database
         )
         if await request.body():
             raise ApiError(422, "invalid_request")
-        normalized_tag = _safe_tag(tag)
+        normalized_tag = safe_tag(tag)
         result = await asyncio.to_thread(
             api_player_lookup.submit_lookup,
             production_database,
-            _binding(request, context, "refresh.submit", {"tag": normalized_tag}),
+            request_binding(request, context, "refresh.submit", {"tag": normalized_tag}),
             normalized_tag=normalized_tag,
         )
-        return _operation_response(result)
+        return operation_response(result)
 
     @app.get("/v1/players/{tag}/seasons")
     def player_seasons(tag: str, request: Request) -> JSONResponse:
-        _authorize(request, "player.read", production_database)
-        normalized_tag = _safe_tag(tag)
+        authorize(request, "player.read", production_database)
+        normalized_tag = safe_tag(tag)
         return JSONResponse(
             status_code=200,
-            content=_json_safe(
+            content=json_safe(
                 {
                     "tag": normalized_tag,
                     "seasons": api_players.list_player_seasons(production_database, normalized_tag),
@@ -556,18 +510,18 @@ def create_app(
 
     @app.get("/v1/players/{tag}/past-seasons")
     def player_past_seasons(tag: str, request: Request) -> JSONResponse:
-        _authorize(request, "player.read", production_database)
+        authorize(request, "player.read", production_database)
         result = get_past_seasons(
-            production_database, clashking, _safe_tag(tag), now=current_time()
+            production_database, clashking, safe_tag(tag), now=current_time()
         )
         if result is None:
             raise ApiError(404, "player_not_found")
-        return JSONResponse(status_code=200, content=_json_safe(result))
+        return JSONResponse(status_code=200, content=json_safe(result))
 
     @app.get("/v1/players/{tag}/seasons/{season_id}")
     def player_season(tag: str, season_id: str, request: Request) -> JSONResponse:
-        _authorize(request, "player.read", production_database)
-        normalized_tag = _safe_tag(tag)
+        authorize(request, "player.read", production_database)
+        normalized_tag = safe_tag(tag)
         if not 1 <= len(season_id) <= 128:
             raise ApiError(422, "invalid_request")
         result = api_players.get_player_season_summary(production_database,
@@ -575,17 +529,17 @@ def create_app(
         )
         if result is None:
             raise ApiError(404, "season_not_found")
-        return JSONResponse(status_code=200, content=_json_safe(result))
+        return JSONResponse(status_code=200, content=json_safe(result))
 
     @app.post("/v1/players/{tag}/refresh")
     async def refresh(tag: str, request: Request) -> JSONResponse:
         context = await asyncio.to_thread(
-            _authorize, request, "refresh.submit", production_database
+            authorize, request, "refresh.submit", production_database
         )
         if await request.body():
             raise ApiError(422, "invalid_request")
-        normalized_tag = _safe_tag(tag)
-        binding = _binding(
+        normalized_tag = safe_tag(tag)
+        binding = request_binding(
             request,
             context,
             "refresh.submit",
@@ -598,12 +552,12 @@ def create_app(
             normalized_tag=normalized_tag,
             cooldown_seconds=30,
         )
-        return _operation_response(result)
+        return operation_response(result)
 
     @app.get("/v1/refreshes/{refresh_id}")
     def refresh_status(refresh_id: str, request: Request) -> JSONResponse:
-        _authorize(request, "refresh.status", production_database)
-        _safe_uuid(refresh_id)
+        authorize(request, "refresh.status", production_database)
+        safe_uuid(refresh_id)
         result = api_accounts.get_refresh_status(production_database, refresh_id)
         if result is None:
             raise ApiError(404, "refresh_not_found")
@@ -614,7 +568,7 @@ def create_app(
         request: Request,
         q: str = Query(min_length=1, max_length=80),
     ) -> JSONResponse:
-        _authorize(request, "leaderboards.read", production_database)
+        authorize(request, "leaderboards.read", production_database)
         if not q.strip():
             raise ApiError(422, "invalid_request")
         return JSONResponse(
@@ -633,7 +587,7 @@ def create_app(
         season_day_number: int | None = Query(default=None, ge=1, le=28),
         focus_tag: str | None = Query(default=None, max_length=16),
     ) -> JSONResponse:
-        _authorize(request, "leaderboards.read", production_database)
+        authorize(request, "leaderboards.read", production_database)
         if offset % limit or (official_season_id is None) != (
             season_day_number is None
         ):
@@ -645,7 +599,7 @@ def create_app(
                 limit=limit,
                 offset=offset,
                 now=current_time(),
-                focus_tag=None if focus_tag is None else _safe_tag(focus_tag),
+                focus_tag=None if focus_tag is None else safe_tag(focus_tag),
                 cache=live_board,
             )
         else:
@@ -676,7 +630,7 @@ def create_app(
         type_id: int | None = Query(default=None, ge=1, le=32_767),
         variant_id: int | None = Query(default=None, ge=0, le=32_767),
     ) -> JSONResponse:
-        _authorize(request, "analytics.read", production_database)
+        authorize(request, "analytics.read", production_database)
         try:
             selection = ArmyAnalyticsSelection.parse(
                 lens=lens,
@@ -719,11 +673,11 @@ def create_app(
             raise ApiError(503, "timeout") from timeout
         if result is None:
             raise ApiError(404, "army_analytics_unavailable")
-        return JSONResponse(status_code=200, content=_json_safe(result))
+        return JSONResponse(status_code=200, content=json_safe(result))
 
     @app.get("/v1/analytics/armies/seasons")
     def army_seasons(request: Request) -> JSONResponse:
-        _authorize(request, "analytics.read", production_database)
+        authorize(request, "analytics.read", production_database)
         return JSONResponse(
             status_code=200,
             content={"seasons": api_analytics.list_army_seasons(production_database)},
@@ -739,7 +693,7 @@ def create_app(
         offset: int = Query(default=0, ge=0, le=1_000_000),
         population: str = Query(default="top-1000", pattern=r"^top-\d{1,5}$"),
     ) -> JSONResponse:
-        _authorize(request, "analytics.read", production_database)
+        authorize(request, "analytics.read", production_database)
         # Historical army reads cover the whole season only: no day range
         # is accepted. Unit usage counts every tracked player, so only army
         # types read the population, a Top N of each day's board.
@@ -761,11 +715,11 @@ def create_app(
         )
         if result is None:
             raise ApiError(404, "army_analytics_unavailable")
-        return JSONResponse(status_code=200, content=_json_safe(result))
+        return JSONResponse(status_code=200, content=json_safe(result))
 
     @app.get("/v1/users/{username}")
     def public_user(username: str, request: Request) -> JSONResponse:
-        _authorize(request, "user.read", production_database)
+        authorize(request, "user.read", production_database)
         try:
             normalized_username = normalize_username(username)
         except ValueError as error:
@@ -782,7 +736,7 @@ def create_app(
 
     @app.get("/v1/users/{username}/days")
     def public_user_days(username: str, request: Request) -> JSONResponse:
-        _authorize(request, "user.read", production_database)
+        authorize(request, "user.read", production_database)
         try:
             normalized_username = normalize_username(username)
         except ValueError as error:
@@ -796,7 +750,7 @@ def create_app(
 
     @app.post("/v1/account")
     def create_account(body: AccountCreateBody, request: Request) -> JSONResponse:
-        context = _authorize(
+        context = authorize(
             request,
             "account.create",
             production_database,
@@ -810,7 +764,7 @@ def create_app(
             display_name = normalize_display_name(body.display_name)
         except ValueError as error:
             raise ApiError(422, "invalid_request") from error
-        binding = _binding(
+        binding = request_binding(
             request,
             context,
             "account.create",
@@ -822,11 +776,11 @@ def create_app(
             normalized_username=username,
             display_name=display_name,
         )
-        return _operation_response(result)
+        return operation_response(result)
 
     @app.get("/v1/account")
     def get_account(request: Request) -> JSONResponse:
-        context = _authorize(request, "account.read", production_database)
+        context = authorize(request, "account.read", production_database)
         assert production_database is not None and context.account is not None
         result = api_accounts.get_account(production_database, context.account.internal_id)
         if result is None:
@@ -838,7 +792,7 @@ def create_app(
     # sign-in connection was removed.
     @app.post("/v1/account/session/check")
     def check_login_session(body: LoginSessionCheckBody, request: Request) -> JSONResponse:
-        context = _authorize(
+        context = authorize(
             request, "session.check", production_database, allow_unresolved_identity=True
         )
         assert production_database is not None
@@ -854,7 +808,7 @@ def create_app(
 
     @app.post("/v1/account/session/revoke")
     def revoke_login_session(body: LoginSessionBody, request: Request) -> JSONResponse:
-        _authorize(
+        authorize(
             request, "session.revoke", production_database, allow_unresolved_identity=True
         )
         assert production_database is not None
@@ -863,7 +817,7 @@ def create_app(
 
     @app.patch("/v1/account")
     def update_account(body: AccountUpdateBody, request: Request) -> JSONResponse:
-        context = _authorize(request, "account.update", production_database)
+        context = authorize(request, "account.update", production_database)
         assert production_database is not None and context.account is not None
         try:
             username = normalize_username(body.username)
@@ -873,7 +827,7 @@ def create_app(
         if len(json.dumps(body.preferences, separators=(",", ":")).encode()) > 4096:
             raise ApiError(422, "invalid_request")
         result = api_accounts.update_account(production_database,
-            _binding(
+            request_binding(
                 request,
                 context,
                 "account.update",
@@ -888,11 +842,11 @@ def create_app(
             display_name=display_name,
             preferences=body.preferences,
         )
-        return _operation_response(result)
+        return operation_response(result)
 
     @app.get("/v1/account/groups")
     def groups(request: Request) -> JSONResponse:
-        context = _authorize(request, "groups.read", production_database)
+        context = authorize(request, "groups.read", production_database)
         assert production_database is not None and context.account is not None
         now = current_time()
         return JSONResponse(
@@ -907,12 +861,12 @@ def create_app(
 
     @app.post("/v1/account/groups")
     def create_group(body: GroupBody, request: Request) -> JSONResponse:
-        context = _authorize(request, "groups.write", production_database)
+        context = authorize(request, "groups.write", production_database)
         assert production_database is not None
         name, normalized_name, tags = _group_values(body)
         tags = tags or []
         result = api_accounts.create_group(production_database,
-            _binding(
+            request_binding(
                 request,
                 context,
                 "groups.create",
@@ -922,16 +876,16 @@ def create_app(
             normalized_name=normalized_name,
             normalized_tags=tags,
         )
-        return _operation_response(result)
+        return operation_response(result)
 
     @app.patch("/v1/account/groups/{group_id}")
     def update_group(group_id: str, body: GroupBody, request: Request) -> JSONResponse:
-        context = _authorize(request, "groups.write", production_database)
+        context = authorize(request, "groups.write", production_database)
         assert production_database is not None
-        _safe_uuid(group_id)
+        safe_uuid(group_id)
         name, normalized_name, tags = _group_values(body)
         result = api_accounts.update_group(production_database,
-            _binding(
+            request_binding(
                 request,
                 context,
                 "groups.update",
@@ -942,45 +896,45 @@ def create_app(
             normalized_name=normalized_name,
             normalized_tags=tags,
         )
-        return _operation_response(result)
+        return operation_response(result)
 
     @app.delete("/v1/account/groups/{group_id}")
     def delete_group(group_id: str, request: Request) -> JSONResponse:
-        context = _authorize(request, "groups.write", production_database)
+        context = authorize(request, "groups.write", production_database)
         assert production_database is not None
-        _safe_uuid(group_id)
+        safe_uuid(group_id)
         result = api_accounts.delete_group(production_database,
-            _binding(request, context, "groups.delete", {"group_id": group_id}),
+            request_binding(request, context, "groups.delete", {"group_id": group_id}),
             group_id=group_id,
         )
-        return _operation_response(result)
+        return operation_response(result)
 
     @app.post("/v1/account/groups/{group_id}/players")
     def add_group_player(
         group_id: str, body: TagBody, request: Request
     ) -> JSONResponse:
-        context = _authorize(request, "groups.write", production_database)
+        context = authorize(request, "groups.write", production_database)
         assert production_database is not None
-        _safe_uuid(group_id)
-        tag = _safe_tag(body.tag)
+        safe_uuid(group_id)
+        tag = safe_tag(body.tag)
         result = api_accounts.add_group_player(production_database,
-            _binding(
+            request_binding(
                 request, context, "groups.add_player", {"group_id": group_id, "tag": tag}
             ),
             group_id=group_id,
             normalized_tag=tag,
             now=current_time(),
         )
-        return _operation_response(result)
+        return operation_response(result)
 
     @app.delete("/v1/account/groups/{group_id}/players/{tag}")
     def remove_group_player(group_id: str, tag: str, request: Request) -> JSONResponse:
-        context = _authorize(request, "groups.write", production_database)
+        context = authorize(request, "groups.write", production_database)
         assert production_database is not None
-        _safe_uuid(group_id)
-        normalized_tag = _safe_tag(tag)
+        safe_uuid(group_id)
+        normalized_tag = safe_tag(tag)
         result = api_accounts.remove_group_player(production_database,
-            _binding(
+            request_binding(
                 request,
                 context,
                 "groups.remove_player",
@@ -989,20 +943,20 @@ def create_app(
             group_id=group_id,
             normalized_tag=normalized_tag,
         )
-        return _operation_response(result)
+        return operation_response(result)
 
     @app.get("/v1/account/groups/{group_id}/comparison")
     def group_comparison(
         group_id: str, request: Request, days: int = Query(default=7)
     ) -> JSONResponse:
-        context = _authorize(request, "groups.read", production_database)
+        context = authorize(request, "groups.read", production_database)
         assert production_database is not None and context.account is not None
         if days not in api_groups.COMPARISON_DAYS:
             raise ApiError(422, "invalid_request")
         try:
             result = api_groups.get_group_comparison(production_database,
                 context.account.internal_id,
-                _safe_uuid(group_id),
+                safe_uuid(group_id),
                 days=days,
                 now=current_time(),
                 freshness_seconds=_DEFAULT_FRESHNESS_SECONDS,
@@ -1020,7 +974,7 @@ def create_app(
 
     @app.get("/v1/account/summary")
     def summary(request: Request) -> JSONResponse:
-        context = _authorize(request, "summary.read", production_database)
+        context = authorize(request, "summary.read", production_database)
         assert production_database is not None and context.account is not None
         result = api_accounts.get_multi_account_summary(production_database,
             context.account.internal_id
@@ -1031,29 +985,29 @@ def create_app(
 
     @app.post("/v1/account/default-player")
     def set_default_player(body: DefaultPlayerBody, request: Request) -> JSONResponse:
-        context = _authorize(request, "account.update", production_database)
+        context = authorize(request, "account.update", production_database)
         assert production_database is not None and context.account is not None
-        normalized_tag = _safe_tag(body.tag)
+        normalized_tag = safe_tag(body.tag)
         result = api_accounts.set_default_player(production_database,
-            _binding(request, context, "account.update", {"default_player": normalized_tag}),
+            request_binding(request, context, "account.update", {"default_player": normalized_tag}),
             normalized_tag=normalized_tag,
         )
-        return _operation_response(result)
+        return operation_response(result)
 
     @app.delete("/v1/account/players/{tag}")
     def unlink_player(tag: str, request: Request) -> JSONResponse:
-        context = _authorize(request, "account.update", production_database)
+        context = authorize(request, "account.update", production_database)
         assert production_database is not None and context.account is not None
-        normalized_tag = _safe_tag(tag)
+        normalized_tag = safe_tag(tag)
         result = api_accounts.unlink_player(production_database,
-            _binding(request, context, "account.update", {"unlink_player": normalized_tag}),
+            request_binding(request, context, "account.update", {"unlink_player": normalized_tag}),
             normalized_tag=normalized_tag,
         )
-        return _operation_response(result)
+        return operation_response(result)
 
     @app.get("/v1/account/discord-alerts")
     def attack_alerts(request: Request) -> JSONResponse:
-        context = _authorize(request, "account.read", production_database)
+        context = authorize(request, "account.read", production_database)
         assert production_database is not None and context.account is not None
         return JSONResponse(
             status_code=200,
@@ -1064,41 +1018,41 @@ def create_app(
 
     @app.post("/v1/account/discord-alerts")
     def set_attack_alert(body: AttackAlertBody, request: Request) -> JSONResponse:
-        context = _authorize(request, "account.update", production_database)
+        context = authorize(request, "account.update", production_database)
         assert production_database is not None and context.account is not None
         if body.alert == "dark_picture":
-            return _operation_response(api_discord_alerts.set_dark_picture(
+            return operation_response(api_discord_alerts.set_dark_picture(
                 production_database,
-                _binding(request, context, "account.update", {"dark_picture": body.on}),
+                request_binding(request, context, "account.update", {"dark_picture": body.on}),
                 on=body.on,
             ))
-        normalized_tag = _safe_tag(body.tag or "")
+        normalized_tag = safe_tag(body.tag or "")
         if body.alert == "day_summary":
-            return _operation_response(api_discord_alerts.set_day_summary(
+            return operation_response(api_discord_alerts.set_day_summary(
                 production_database,
-                _binding(request, context, "account.update",
+                request_binding(request, context, "account.update",
                          {"day_summary": normalized_tag, "on": body.on}),
                 normalized_tag=normalized_tag,
                 on=body.on,
             ))
         result = api_discord_alerts.set_attack_alert(production_database,
-            _binding(request, context, "account.update",
+            request_binding(request, context, "account.update",
                      {"attack_alert": normalized_tag, "on": body.on}),
             normalized_tag=normalized_tag,
             on=body.on,
         )
-        return _operation_response(result)
+        return operation_response(result)
 
     @app.post("/v1/account/providers/{provider}")
     def link_provider(
         provider: str, body: ProviderLinkBody, request: Request
     ) -> JSONResponse:
-        context = _authorize(request, "providers.link", production_database)
+        context = authorize(request, "providers.link", production_database)
         assert production_database is not None and context.account is not None
-        if provider not in _ALLOWED_PROVIDERS:
+        if provider not in ALLOWED_PROVIDERS:
             raise ApiError(404, "provider_not_found")
         result = provider_membership.link_provider(production_database,
-            _binding(
+            request_binding(
                 request,
                 context,
                 "providers.link",
@@ -1111,18 +1065,18 @@ def create_app(
             provider=provider,
             provider_subject=body.provider_subject,
         )
-        return _operation_response(result)
+        return operation_response(result)
 
     @app.delete("/v1/account/providers/{provider}")
     def unlink_provider(
         provider: str, body: ProviderUnlinkBody, request: Request
     ) -> JSONResponse:
-        context = _authorize(request, "providers.unlink", production_database)
+        context = authorize(request, "providers.unlink", production_database)
         assert production_database is not None and context.account is not None
-        if provider not in _ALLOWED_PROVIDERS:
+        if provider not in ALLOWED_PROVIDERS:
             raise ApiError(404, "provider_not_found")
         result = provider_membership.unlink_provider(production_database,
-            _binding(
+            request_binding(
                 request,
                 context,
                 "providers.unlink",
@@ -1137,16 +1091,16 @@ def create_app(
             provider_subject=body.provider_subject,
             ended_session=body.session,
         )
-        return _operation_response(result)
+        return operation_response(result)
 
     @app.post("/v1/players/{tag}/verifytoken")
     async def verify_player_token(tag: str, request: Request) -> JSONResponse:
         context = await asyncio.to_thread(
-            _authorize, request, "player_links.verify", production_database
+            authorize, request, "player_links.verify", production_database
         )
         assert production_database is not None and context.account is not None
-        normalized_tag = _safe_tag(tag)
-        binding = _binding(
+        normalized_tag = safe_tag(tag)
+        binding = request_binding(
             request,
             context,
             "player_links.verify",
@@ -1160,7 +1114,7 @@ def create_app(
         )
         if not reservation.fresh:
             assert reservation.result is not None
-            return _operation_response(reservation.result)
+            return operation_response(reservation.result)
         try:
             token = _strict_verification_token(await request.body(), request.headers)
         except ApiError:
@@ -1170,7 +1124,7 @@ def create_app(
                 binding,
                 completed_at=current_time(),
             )
-            return _operation_response(result)
+            return operation_response(result)
         if verification_client is None or official_credential_fingerprint is None:
             result = await asyncio.to_thread(
                 api_verification.complete_verification,
@@ -1181,7 +1135,7 @@ def create_app(
                 account_id=context.account.internal_id,
                 completed_at=current_time(),
             )
-            return _operation_response(result)
+            return operation_response(result)
         permit = await asyncio.to_thread(
             api_verification.acquire_official_permit,
             production_database,
@@ -1197,7 +1151,7 @@ def create_app(
                 account_id=context.account.internal_id,
                 completed_at=current_time(),
             )
-            return _operation_response(result)
+            return operation_response(result)
         try:
             official_response = await asyncio.to_thread(
                 verification_client.verify, normalized_tag, token
@@ -1227,7 +1181,7 @@ def create_app(
                 account_id=context.account.internal_id,
                 completed_at=current_time(),
             )
-            return _operation_response(result)
+            return operation_response(result)
         result = await asyncio.to_thread(
             api_verification.complete_verification,
             production_database,
@@ -1237,7 +1191,7 @@ def create_app(
             account_id=context.account.internal_id,
             completed_at=current_time(),
         )
-        return _operation_response(result)
+        return operation_response(result)
 
     # A local import: the crew routes reuse this module's request checks.
     from .api_crews_http import register_crew_routes
@@ -1257,101 +1211,13 @@ def create_app(
     return app
 
 
-class _AuthorizationContext:
-    __slots__ = ("account", "proof")
-
-    def __init__(self, proof: VerifiedProof, account: AccountContext | None) -> None:
-        self.proof = proof
-        self.account = account
-
-
-def _authorize(
-    request: Request,
-    operation: str,
-    database: ApiDatabase | None,
-    *,
-    allow_unresolved_identity: bool = False,
-) -> _AuthorizationContext:
-    proof: VerifiedProof = request.state.proof
-    if operation in _PUBLIC_OPERATIONS:
-        if proof.caller != "typescript-website":
-            raise ApiError(403, "caller_operation_not_authorized")
-        if (
-            proof.provider or proof.provider_subject
-        ) and proof.provider not in _ALLOWED_PROVIDERS:
-            raise ApiError(403, "caller_operation_not_authorized")
-        account = (
-            api_accounts.resolve_account(database, proof.provider, proof.provider_subject)
-            if database is not None and proof.provider in _ALLOWED_PROVIDERS
-            else None
-        )
-        return _AuthorizationContext(proof, account)
-    if (
-        proof.caller != "typescript-website"
-        or operation not in _TYPESCRIPT_ACCOUNT_OPERATIONS
-    ):
-        raise ApiError(403, "caller_operation_not_authorized")
-    if (
-        database is None
-        or proof.provider not in _ALLOWED_PROVIDERS
-        or not proof.provider_subject
-    ):
-        raise ApiError(403, "caller_operation_not_authorized")
-    account = api_accounts.resolve_account(database, proof.provider, proof.provider_subject)
-    if account is None and not allow_unresolved_identity:
-        raise ApiError(403, "account_not_found")
-    return _AuthorizationContext(proof, account)
-
-
-def _binding(
-    request: Request,
-    context: _AuthorizationContext,
-    operation: str,
-    identity: dict[str, Any],
-) -> RequestBinding:
-    return RequestBinding(
-        request_id=context.proof.request_id,
-        caller=context.proof.caller,
-        provider=context.proof.provider,
-        provider_subject=context.proof.provider_subject,
-        account_id=None if context.account is None else context.account.internal_id,
-        operation=operation,
-        method=request.method,
-        request_target=_request_target(request),
-        identity=identity,
-    )
-
-
-def _operation_response(result: OperationResult) -> JSONResponse:
-    return JSONResponse(
-        status_code=result.status_code, content=_json_safe(result.payload)
-    )
-
-
 def _group_values(body: GroupBody) -> tuple[str, str, list[str] | None]:
     try:
         name = normalize_group_name(body.name)
-        tags = None if body.tags is None else sorted({_safe_tag(tag) for tag in body.tags})
+        tags = None if body.tags is None else sorted({safe_tag(tag) for tag in body.tags})
     except ValueError as error:
         raise ApiError(422, "invalid_request") from error
     return name, name.casefold(), tags
-
-
-def _safe_tag(tag: str) -> str:
-    try:
-        return normalize_player_tag(tag)
-    except ValueError as error:
-        raise ApiError(422, "invalid_tag") from error
-
-
-def _safe_uuid(value: str) -> str:
-    try:
-        parsed = UUID(value)
-    except ValueError as error:
-        raise ApiError(422, "invalid_request") from error
-    if str(parsed) != value.lower():
-        raise ApiError(422, "invalid_request")
-    return str(parsed)
 
 
 def _strict_verification_token(body: bytes, headers: Mapping[str, str]) -> str:
@@ -1408,22 +1274,3 @@ async def _read_limited_body(request: Request, limit: int) -> bytes:
         body.extend(chunk)
     request._body = bytes(body)
     return bytes(body)
-
-
-def _request_target(request: Request) -> str:
-    raw_path = request.scope.get("raw_path", request.url.path.encode("ascii"))
-    query = request.scope.get("query_string", b"")
-    target = raw_path
-    if query:
-        target += b"?" + query
-    return target.decode("ascii")
-
-
-def _json_safe(value: Any) -> Any:
-    if isinstance(value, datetime):
-        return value.astimezone(UTC).isoformat()
-    if isinstance(value, dict):
-        return {key: _json_safe(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_json_safe(item) for item in value]
-    return value

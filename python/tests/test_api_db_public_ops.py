@@ -14,6 +14,7 @@ from clashlens import (
     api,
     api_accounts,
     api_db,
+    api_http,
     api_leaderboard,
     api_players,
 )
@@ -1337,7 +1338,7 @@ def test_busiest_player_page_stays_well_under_the_response_limit(
                         [*day["offense_events"], *day["defense_events"]])
                 for day in screen["days"]
             )
-            size = len(JSONResponse(content=api._json_safe(player)).body)
+            size = len(JSONResponse(content=api_http.json_safe(player)).body)
             assert size < 0.6 * api._DEFAULT_MAX_RESPONSE_BYTES
         finally:
             database.close()

@@ -19,7 +19,7 @@ from uuid import UUID
 
 from . import api_db, api_discord_alerts
 from .api_db import ApiDatabase, OperationResult, RequestBinding, _text
-from .login_sessions import _record_identity_removal, _record_logout
+from .login_sessions import record_identity_removal, record_logout
 
 
 class ProviderMembership(StrEnum):
@@ -209,9 +209,9 @@ def unlink_provider(
                     operator_identity=None,
                     reason="unlinked after fresh provider authentication",
                 )
-                _record_identity_removal(connection, provider, provider_subject)
+                record_identity_removal(connection, provider, provider_subject)
                 if ended_session is not None:
-                    _record_logout(connection, ended_session)
+                    record_logout(connection, ended_session)
                 result = OperationResult(
                     200, {"providers": _account_providers(connection, account_id)}
                 )

@@ -23,81 +23,18 @@ from .army_decoder import SIEGE_TROOP_IDS, DecodedArmy, decode_army_share_code
 from .catalog import unit_label
 from .domain import (
     SEASON_DURATION,
-    DomainRuleError,
     awaits_season_reset,
     ranked_day_for,
     season_opening_reset,
-    validate_legend_season_start,
 )
+from .season_history import official_history_rows
 from .season_reset_sql import (
     frozen_trophies_sql,
     opening_day_battles_sql,
     season_reset_waiting_sql,
 )
 from .season_summaries import reset_board_ranks, season_final_rank
-from .shared_copy import SharedCopy, _start_thread
-
-_LEGEND_I_TIER_ID = 105000036
-
-
-def _official_history_rows(
-    connection: Any,
-    normalized_tag: str,
-    *,
-    season_id: str | None = None,
-) -> list[dict[str, Any]]:
-    filters = ["player.normalized_tag = %s", "history.league_tier_id = %s"]
-    parameters: list[Any] = [normalized_tag, _LEGEND_I_TIER_ID]
-    if season_id is not None:
-        if not (season_id.isascii() and season_id.isdigit()):
-            return []
-        filters.append("history.league_season_id = %s")
-        parameters.append(
-            str(int(season_id) + int(SEASON_DURATION.total_seconds()))
-        )
-    rows = connection.execute(
-        f"""
-        SELECT history.league_season_id, history.observed_at,
-               history.league_trophies, history.placement
-        FROM player_league_history_entries AS history
-        JOIN players AS player ON player.id = history.player_id
-        WHERE {" AND ".join(filters)}
-        ORDER BY history.league_season_id DESC
-        """,
-        parameters,
-    ).fetchall()
-    valid = []
-    for row in rows:
-        observed_at = row[1].astimezone(UTC)
-        # League history names a Season by the Reset that ended it, which is
-        # the next Season's start: the row for 5 Oct 2026 05:00 holds the
-        # results of the Season that started 7 Sep 2026.
-        try:
-            season_end = validate_legend_season_start(
-                _text(row[0]), observed_at=observed_at
-            )
-        except DomainRuleError:
-            # Old rows predate reader-side validation. They stay retained as
-            # evidence, but an invalid boundary never reaches a season page.
-            continue
-        season_start = season_end - SEASON_DURATION
-        trophies = None if row[2] is None else int(row[2])
-        placement = None if row[3] is None else int(row[3])
-        valid.append(
-            {
-                "official_season_id": str(int(season_start.timestamp())),
-                "observed_at": observed_at,
-                "season_start": season_start,
-                "season_end": season_end,
-                "eod_trophies": trophies
-                if trophies is not None and trophies >= 0
-                else None,
-                "final_placement": (
-                    placement if placement is not None and placement >= 1 else None
-                ),
-            }
-        )
-    return valid
+from .shared_copy import SharedCopy
 
 
 def _official_history_payload(history: dict[str, Any]) -> dict[str, Any]:
@@ -112,7 +49,7 @@ def _official_history_payload(history: dict[str, Any]) -> dict[str, Any]:
 def _current_history_season(
     connection: Any, normalized_tag: str, now: datetime
 ) -> dict[str, Any] | None:
-    rows = _official_history_rows(connection, normalized_tag)
+    rows = official_history_rows(connection, normalized_tag)
     if not rows:
         return None
     latest = max(rows, key=lambda item: item["season_start"])
@@ -806,7 +743,7 @@ def list_player_seasons(
             }
             for row in rows
         }
-        for history in _official_history_rows(connection, normalized_tag):
+        for history in official_history_rows(connection, normalized_tag):
             season_id = history["official_season_id"]
             if season_id in seasons:
                 seasons[season_id]["official_history"] = _official_history_payload(
@@ -870,7 +807,7 @@ def get_player_season_summary(
             (normalized_tag, official_season_id),
         )
         row = cursor.fetchone()
-        history_rows = _official_history_rows(
+        history_rows = official_history_rows(
             connection, normalized_tag, season_id=official_season_id
         )
         history = history_rows[0] if history_rows else None
@@ -1058,7 +995,7 @@ class KnownPlayerNames(SharedCopy[tuple[str, list[tuple[Any, ...]]]]):
         seconds: float = 60,
         *,
         clock: Callable[[], float] = time.monotonic,
-        start: Callable[[Callable[[], None]], None] = _start_thread,
+        start: Callable[[Callable[[], None]], None] | None = None,
     ) -> None:
         super().__init__(
             _read_known_players,
