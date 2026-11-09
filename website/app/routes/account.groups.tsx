@@ -458,7 +458,7 @@ export default function GroupsRoute() {
         <button
           type="submit"
           className="button button-primary"
-          disabled={creating || atLimit || !loaderData.limits}
+          disabled={creating || atLimit}
         >
           {creating ? "Creating watchlist…" : "Create watchlist"}
         </button>

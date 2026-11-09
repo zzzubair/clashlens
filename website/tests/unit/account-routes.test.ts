@@ -656,6 +656,30 @@ describe("account routes", () => {
       expect(data.fieldErrors.name).toContain("the most an account can have");
     });
 
+    it("keeps Create watchlist usable when the watchlists could not be read", async () => {
+      client.listGroups = vi.fn(async () => {
+        throw new PythonApiError(503, { error: "unavailable" });
+      });
+      const handler = createStaticHandler([
+        {
+          path: "/account/watchlists",
+          Component: GroupsRoute,
+          loader: groupsLoader as never,
+        },
+      ]);
+      const context = await handler.query(new Request(`${ORIGIN}/account/watchlists`));
+      if (context instanceof Response) throw new Error("unexpected route response");
+      const html = renderToString(
+        createElement(StaticRouterProvider, {
+          router: createStaticRouter(handler.dataRoutes, context),
+          context,
+        }),
+      );
+      expect(html).toMatch(
+        /<button type="submit" class="button button-primary">Create watchlist/,
+      );
+    });
+
     it("requires a confirmation before deleting a watchlist", async () => {
       const unconfirmed = await groupsAction({
         request: formRequest("/account/watchlists", {

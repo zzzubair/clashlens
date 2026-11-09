@@ -20,6 +20,23 @@ describe("supplied Season membership", () => {
         expect(gapLabel(shape!, gap)).toMatch(/Not in Legend I|not signed up/);
     });
   }
+  it("words a Monday exit and a Wednesday sign-up as before", () => {
+    // Days 1-7 in Legend I, dropped at the 12 October Reset, promoted back at
+    // the 19 October Reset, signed up Wednesday 21 October (shared example 6).
+    const raw = cases.filter((c) => c.rule === "shape_of")[6].expected as {
+      last_legend_day_start: string;
+      kinds: string[];
+    };
+    const shape = mapShape(raw, [{ start: raw.last_legend_day_start }])!;
+    expect(runLines(shape)).toEqual([
+      "Days 1–7 · dropped to Legend II at the Mon 12 Oct Reset",
+      "From Day 15 · promoted at the Mon 19 Oct Reset · signed up Wed 21 Oct (Day 17)",
+    ]);
+    expect(logGaps(shape).map((gap) => gapLabel(shape, gap))).toEqual([
+      "Mon 12 Oct – Sun 18 Oct · Not in Legend I, not tracked",
+      "Mon 19 Oct – Tue 20 Oct · In Legend I, not signed up yet · 5,000",
+    ]);
+  });
   it("keeps no Season context distinct from an empty Season", () => {
     expect(mapShape(null, [])).toBeNull();
     expect(() => mapShape(undefined, [])).toThrow();
