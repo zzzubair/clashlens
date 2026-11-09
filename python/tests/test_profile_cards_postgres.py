@@ -393,9 +393,9 @@ def test_profile_days_read_every_linked_player_at_once_up_to_the_cards_limit(
 
     assert days is not None
     print(f"public user days: players={len(days['players'])}, bytes={len(json.dumps(days, separators=(',', ':')).encode())}, statements={counted.reads}")
-    # Read the account, its players, their days and Reset places, and their
-    # weeks in at most five reads, however many players are linked.
-    assert counted.reads <= 5
+    # The account, its players, their days and Reset places, and their weeks:
+    # the same four reads for any number of players.
+    assert counted.reads == 4
     players = days["players"]
     assert [player["tag"] for player in players] == sorted(["#2PP", *more])[:500]
     assert days["season_start"] == "2026-07-13T05:00:00+00:00"

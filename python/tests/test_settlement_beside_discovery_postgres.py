@@ -200,7 +200,7 @@ def test_settlement_checks_start_while_the_discovery_queue_is_full(
     # 1,000 discovery checks take about 40 s through the two keys; the
     # settlement checks need 24 requests, so they finish in a few seconds
     # only if they get their own slots meanwhile.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = _monday_queue(connection_info, discovery_checks=1000)
         elapsed = _run_until_finished(
             database, connection_info, tmp_path, ("reset_settlement",), 20
@@ -214,7 +214,7 @@ def test_a_slow_discovery_admission_never_stops_the_collector(
 ) -> None:
     # Every admission outlasts the statement limit, as on 9 November.
     monkeypatch.setattr(collector_liveness, "STATEMENT_TIMEOUT", "1s")
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = _monday_queue(connection_info, discovery_checks=5)
         with psycopg.connect(connection_info) as connection:
             connection.execute(
