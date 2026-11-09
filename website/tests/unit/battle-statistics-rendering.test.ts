@@ -79,6 +79,34 @@ describe("supplied Season summary rendering", () => {
     expect(html).toContain("Trophies when they left</dt><dd>4,920");
     expect(html).not.toContain("No finished day yet");
   });
+  it("keeps a dropped player's last Legend I rank and total", () => {
+    // Days 1-7 in Legend I, dropped at the 12 October Reset and still out.
+    const day = ended("2026-10-11T05:00:00Z", 4684, 12411);
+    const facts = { ...stats(), daysExpected: 7, daysSaved: 7, resetDayStart: day.start };
+    const html = renderToStaticMarkup(
+      createElement(BattleStatistics, {
+        player: {
+          ...PLAYER,
+          seasonShape: {
+            seasonStart: Date.parse(facts.start),
+            today: 24,
+            kinds: [],
+            runs: [],
+            partial: true,
+            outsideNow: true,
+            legendDays: { expected: 7, saved: 7 },
+            lastLegendDay: day,
+          },
+          recentDays: [day],
+          battleStatistics: { "7": facts, "14": facts, season: facts },
+        },
+        now: 0,
+      }),
+    );
+    expect(html).toContain("7 Legend I days");
+    expect(html).toMatch(/Rank when they left<\/dt><dd[^>]*>12,411/);
+    expect(html).toMatch(/Trophies when they left<\/dt><dd[^>]*>4,684/);
+  });
   it("renders one summary with dates and unavailable rates and averages", () => {
     const html = render();
     expect(html).toContain("27 days missing · Some battles may be missing");
