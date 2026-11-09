@@ -256,7 +256,9 @@ def player_facts(page: dict[str, Any], now: datetime, *, battles: bool) -> tuple
         number = (datetime.fromisoformat(day["ranked_day_start"]) - start) // RANKED_DAY_DURATION + 1
         if 1 <= number <= SEASON_DAY_COUNT:
             numbered.setdefault(number, day)
-    ready["season_shape"] = shape_of(start, today, ready["season_weeks"], numbered) if context or numbered or ready["season_weeks"] else None
+    # Always the Season's 28 days, as the website's seasonShape drew them,
+    # even right after the Season Reset before anything is saved.
+    ready["season_shape"] = shape_of(start, today, ready["season_weeks"], numbered)
     below = {datetime.fromisoformat(week["week_start"]) for week in ready["season_weeks"] if week["league"] == "below_legend_i"}
     ready["stats_day_starts"] = None if context is None else [
         (datetime.fromisoformat(context["start"]) + offset * RANKED_DAY_DURATION).isoformat()
