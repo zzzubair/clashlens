@@ -19,9 +19,15 @@ describe("player trophy trends from Python", () => {
       else
         for (const key of ["7", "14"] as const) {
           const { total, counted, span } = trophyTrends[key];
-          expect(html).toContain(`<dd>${counted} of ${span}</dd>`);
-          expect(html).toContain(
-            total === null ? "Unavailable" : `${total > 0 ? "+" : ""}${total}`,
+          // Each window's numbers sit in its own card, under its own heading.
+          const title = `Last ${key} days${span < Number(key) ? ` (${span} so far)` : ""}`;
+          const card = html.split(`<h3>${title}</h3>`)[1]?.split("</article>")[0];
+          expect(card, title).toBeDefined();
+          expect(card).toContain(`<dd>${counted} of ${span}</dd>`);
+          expect(card).toContain(
+            total === null
+              ? "<dd>Unavailable</dd>"
+              : `<dd>${total > 0 ? "+" : ""}${total.toLocaleString("en-GB")}</dd>`,
           );
         }
     });

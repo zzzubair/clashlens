@@ -21,6 +21,23 @@ describe("Python's day labels", () => {
       );
     });
   }
+  it("gives every cause of an end reading that could not be judged, not one guess", () => {
+    const base = cases.find((c) => c.rule === "day_presentation")!.expected as Record<
+      string,
+      unknown
+    >;
+    const presentation = mapPresentation({
+      ...base,
+      status: "calculated",
+      is_current: false,
+      reason_codes: ["end_reading_unverified"],
+    });
+    const day = dayPresentation({ presentation, state: "Complete" });
+    expect(day.status).toBe("Calculated");
+    expect(day.reasons).toEqual([
+      "No trophy reading after this day could confirm its end: a battle may still have been landing, an attack's trophies may have shown late, part of a battle log could not be read, or the weekly raise to 5,000 hid the automatic defense loss.",
+    ]);
+  });
   it("rejects missing status and unknown statuses", () => {
     for (const value of [null, {}, { status: "Complete" }])
       expect(() => mapPresentation(value)).toThrow();
