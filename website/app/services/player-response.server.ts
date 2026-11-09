@@ -290,7 +290,11 @@ export function mapHistoricalSeason(payload: unknown): HistoricalSeasonSummary {
   };
 }
 
-export function mapPlayerPage(payload: unknown, battles = true): PlayerPage {
+export function mapPlayerPage(
+  payload: unknown,
+  battles = true,
+  dashboard = false,
+): PlayerPage {
   if (
     !isRecord(payload) ||
     !isCanonicalPlayerTag(payload.tag) ||
@@ -337,16 +341,10 @@ export function mapPlayerPage(payload: unknown, battles = true): PlayerPage {
       !isUtcTimestamp(value.ranked_day_start) ||
       !isNullableString(value.ranked_day_end) ||
       !isOneOf(value.state, ["Live", "Complete", "Partial"] as const) ||
-      !(
-        value.confidence === null ||
-        isOneOf(value.confidence, ["exact", "inferred", "partial", "uncertain"] as const)
-      ) ||
       !isRecord(value.completeness) ||
       !isOneOf(value.completeness.state, ["complete", "partial", "uncertain"] as const) ||
       !isString(value.completeness.reason) ||
       !isOneOf(value.public_confidence, ["high", "partial", "uncertain"] as const) ||
-      !Array.isArray(value.uncertainty_reasons) ||
-      !value.uncertainty_reasons.every(isString) ||
       !(value.season_day_number === null || isInteger(value.season_day_number)) ||
       !(
         value.start_trophies == null ||
@@ -404,10 +402,6 @@ export function mapPlayerPage(payload: unknown, battles = true): PlayerPage {
       displayEnd: battles ? mapDisplayEnd(value.display_end) : null,
       label: "Ranked day",
       state: value.state,
-      confidence: (value.confidence as RankedDaySummary["confidence"]) ?? null,
-      logCoverage: isOneOf(value.coverage, ["complete", "partial"] as const)
-        ? value.coverage
-        : undefined,
       startTrophies: display ? display.trophies : (value.start_trophies as number | null),
       startTrophiesCalculation: display?.calculation,
       startTrophiesSource:
@@ -443,14 +437,14 @@ export function mapPlayerPage(payload: unknown, battles = true): PlayerPage {
         state: value.completeness.state as "complete" | "partial" | "uncertain",
         reason: value.completeness.reason as string,
       },
-      uncertainty: value.uncertainty_reasons as string[],
     };
   };
   if (
     !Array.isArray(screen.days) ||
     !isNullableString(screen.current_day_start) ||
     !Array.isArray(screen.recent_day_starts) ||
-    !Array.isArray(screen.season_day_starts)
+    !Array.isArray(screen.season_day_starts) ||
+    !isSnakeProvenance(screen.provenance)
   )
     malformed();
   const days = new Map(
@@ -477,11 +471,13 @@ export function mapPlayerPage(payload: unknown, battles = true): PlayerPage {
     screen.current_day_start === null ? null : dayAt(screen.current_day_start, "current");
   const calendar = parseCalendar(screen.calendar);
   if (!calendar) malformed();
-  const dashboardSeason = battles
-    ? mapDashboardSeason(screen.dashboard_season, calendar.day_count)
-    : null;
-  const rivalSeason = mapRivalSeason(screen.rival_season);
-  if (dashboardSeason) {
+  // Only the Dashboard asks for its Season and rival facts.
+  const dashboardSeason =
+    battles && dashboard
+      ? mapDashboardSeason(screen.dashboard_season, calendar.day_count)
+      : null;
+  const rivalSeason = dashboard ? mapRivalSeason(screen.rival_season) : null;
+  if (dashboardSeason && rivalSeason) {
     dashboardSeason.windows = mapDashboardWindows(
       screen.dashboard_windows,
       dashboardSeason,
@@ -570,7 +566,6 @@ export function mapPlayerPage(payload: unknown, battles = true): PlayerPage {
       eligibility: payload.eligibility === "eligible" ? "legend-i" : "uncertain",
     },
     season: mapSeason(screen.season),
-    seasonWeeks: mapSeasonWeeks(screen.season_weeks),
     currentDay,
     currentDayPublishedAt: isUtcTimestamp(screen.current_day_published_at)
       ? screen.current_day_published_at
@@ -579,7 +574,6 @@ export function mapPlayerPage(payload: unknown, battles = true): PlayerPage {
     seasonDays,
     armyUnits: mapArmyUnits(screen.army_units),
     dataQuality: mapDataQuality(screen.data_quality),
-    provenance: mapSnakeProvenanceRequired(screen.provenance),
   };
   // Most days are in two or three lists. A day that came out the same in each
   // is one object, so the page data carries it once instead of once per list.
@@ -605,18 +599,6 @@ export function mapArmyUnits(value: unknown): ArmyUnitNames {
         : [],
     ),
   );
-}
-
-function mapSnakeProvenanceRequired(value: unknown) {
-  if (!isSnakeProvenance(value)) malformed();
-  return {
-    source: value.source as string,
-    observedAt: value.observed_at as string,
-    freshness: value.freshness as "fresh" | "stale" | "unknown",
-    confidence: value.confidence as "high" | "partial" | "uncertain",
-    coverage: value.coverage as "complete" | "partial" | "missing" | "unknown",
-    version: value.version as string,
-  };
 }
 
 function mapSeason(value: unknown): PlayerPage["season"] {

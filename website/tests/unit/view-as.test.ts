@@ -275,7 +275,7 @@ describe("who can View as", () => {
     ];
     for (const init of channels)
       expect((await load(`${ORIGIN}/`, init)).data).toEqual(plain.data);
-    expect(client.getPlayer).not.toHaveBeenCalledWith(VIEWED);
+    expect(client.getPlayer.mock.calls.map(([tag]) => tag)).not.toContain(VIEWED);
   });
 
   it("saves a posted view_as field only as the signed-in account's own settings", async () => {
@@ -378,8 +378,8 @@ describe("the owner's View as", () => {
     if (data.kind !== "signed-in") throw new Error("expected signed in");
     expect(Object.keys(data.cards)).toEqual(["goal"]);
     await Promise.all(Object.values(data.cards));
-    expect(client.getPlayer).toHaveBeenCalledWith(VIEWED, true, 50);
-    expect(client.getPlayer).not.toHaveBeenCalledWith(MINE);
+    expect(client.getPlayer).toHaveBeenCalledWith(VIEWED, true, true, 50);
+    expect(client.getPlayer.mock.calls.map(([tag]) => tag)).not.toContain(MINE);
     expect(client.listGroups).not.toHaveBeenCalled();
     // Python is asked as the owner's own account.
     expect(mocks.createPythonClient).toHaveBeenCalledWith(OWNER);

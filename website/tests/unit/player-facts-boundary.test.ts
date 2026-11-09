@@ -126,7 +126,16 @@ describe("player facts response boundary", () => {
   ])("rejects a full reply missing %s", (key) => {
     const raw = reply();
     delete (raw.screen_ready as Record<string, unknown>)[key];
-    expect(() => mapPlayerPage(raw)).toThrow();
+    expect(() => mapPlayerPage(raw, true, true)).toThrow();
+  });
+  it("leaves out the Dashboard's facts unless the Dashboard asked for them", () => {
+    const raw = reply();
+    for (const key of ["dashboard_season", "rival_season"])
+      delete (raw.screen_ready as Record<string, unknown>)[key];
+    const page = mapPlayerPage(raw);
+    expect(page.dashboardSeason).toBeNull();
+    expect(page.rivalSeason).toBeNull();
+    expect(mapPlayerPage(reply(), true, true).rivalSeason).not.toBeNull();
   });
   it("accepts lightweight replies without full battle-derived sections", () => {
     const raw = reply();

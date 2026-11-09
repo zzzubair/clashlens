@@ -58,7 +58,6 @@ const TODAY: RankedDaySummary = {
   offenseEvents: [],
   defenseEvents: [],
   completeness: { state: "partial", reason: WAITING.join("; ") },
-  uncertainty: WAITING,
 };
 
 // Renders the page as the server would, with the page's clock at `now`.
@@ -123,14 +122,6 @@ function page(
       { code: "partial", label: "Incomplete ranked-day data", detail: codes.join("; ") },
       ...warnings,
     ],
-    provenance: {
-      source: "api_player_daily_logs",
-      observedAt: now,
-      freshness: "fresh",
-      confidence: "high",
-      coverage: "partial",
-      version: "v1",
-    },
   } satisfies PlayerPage;
   const data = {
     requestedTag: TAG,
@@ -173,8 +164,6 @@ const ended = (day: number, extra: Partial<RankedDaySummary>): RankedDaySummary 
   presentation: VERIFIED,
   displayEnd: { ...UNKNOWN_END, status: "verified" },
   state: "Complete",
-  confidence: "exact",
-  uncertainty: [],
   ...extra,
 });
 const cell = (html: string, key: string, label: string) =>
@@ -196,7 +185,6 @@ describe("today's Legend day wording", () => {
       state: "Complete",
       trophyChange: 35,
       completeness: { state: "complete", reason: "Complete evidence." },
-      uncertainty: [],
     };
     const html = await page(WAITING, "2026-10-08T12:00:00Z", [previousSeasonDay], [], {
       historyDays: [TODAY],
@@ -436,7 +424,6 @@ describe("today's Legend day wording", () => {
         startTrophies: 5200,
         trophyChange: 0,
         presentation: { ...VERIFIED, show_in_player_log: false },
-        uncertainty: ["player_not_eligible"],
       }),
       ended(6, { displayEnd: endFact(3), startTrophies: 5150, trophyChange: 50 }),
     ]);
