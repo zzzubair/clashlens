@@ -345,7 +345,9 @@ def _maybe_emit_boundary_signal(
             ).fetchone()[0])
             source = connection.execute(
                 """
-                SELECT sweep_id, generation + 1
+                SELECT sweep_id, generation + 1, ordering_rule_version,
+                       freshness_rule_version, membership_rule_version,
+                       snapshot_rule_version, army_rule_version, target_rule, target_at
                 FROM boundary_publication_generations
                 WHERE id = %s
                 FOR UPDATE
@@ -364,7 +366,8 @@ def _maybe_emit_boundary_signal(
                 generation=int(source[1]), supersedes_id=generation_id,
                 pending_inputs=pending_inputs,
                 ordering_rule_version=SNAPSHOT_ORDERING_RULE_VERSION if "snapshot" in affected else None,
-                inherit_rules=True, affected_artifacts=affected, correction_id=int(queued[0]),
+                inherited_rules=tuple(source[2:]), affected_artifacts=affected,
+                correction_id=int(queued[0]),
             )
             for artifact in ("snapshot", "army"):
                 if artifact not in affected:

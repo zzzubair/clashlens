@@ -175,7 +175,7 @@ def create_generation(
     supersedes_id: int | None,
     pending_inputs: list[dict[str, Any]] | None = None,
     ordering_rule_version: str | None = None,
-    inherit_rules: bool = False,
+    inherited_rules: tuple[Any, ...] | None = None,
     affected_artifacts: list[str] | None = None,
     correction_id: int | None = None,
 ) -> tuple[int, int]:
@@ -188,15 +188,10 @@ def create_generation(
     rules = (ordering_rule_version or SNAPSHOT_ORDERING_RULE_VERSION,
              FRESHNESS_RULE_VERSION, "active-members-v1", ANALYTICS_RULE_VERSION,
              ARMY_ANALYTICS_RULE_VERSION, "boundary-delay-v1", target_at)
-    if inherit_rules:
-        source = connection.execute(
-            """SELECT ordering_rule_version, freshness_rule_version, membership_rule_version,
-                      snapshot_rule_version, army_rule_version, target_rule, target_at
-               FROM boundary_publication_generations WHERE id = %s FOR UPDATE""",
-            (supersedes_id,),
-        ).fetchone()
-        assert source is not None
-        rules = (ordering_rule_version or source[0], *source[1:])
+    if inherited_rules is not None:
+        # The replaced generation's rules, which the caller read and locked:
+        # ordering, freshness, membership, snapshot, army, target rule and time.
+        rules = (ordering_rule_version or inherited_rules[0], *inherited_rules[1:])
     row = connection.execute(
         """
         INSERT INTO boundary_publication_generations (
