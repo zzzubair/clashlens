@@ -6,13 +6,12 @@ from unittest.mock import MagicMock
 
 import psycopg
 import pytest
-from army_analytics_publication_postgres_support import _army_job
+from army_analytics_publication_postgres_support import _army_job, _processor
 from domain_test_support import (
     _processor as _real_processor,
 )
 from domain_test_support import (
     domain_database,
-    enable_direct_army_fixture,
     store_observation,
 )
 from fastapi.testclient import TestClient
@@ -23,7 +22,6 @@ from psycopg.types.json import Jsonb
 from clashlens import api_analytics, army_ingestion, boundary_publication
 from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
-from clashlens.archive import S3ArchiveReader
 from clashlens.army_analytics import (
     ArmyAnalyticsSelection,
     ArmyAnalyticsUnavailable,
@@ -32,7 +30,6 @@ from clashlens.army_analytics import (
     new_army_totals,
 )
 from clashlens.db import Database
-from clashlens.worker import ObservationProcessor
 
 DAY_START = datetime(2026, 8, 4, 5, tzinfo=UTC)
 SEASON_ID = "1783918800"
@@ -295,23 +292,6 @@ def test_consistent_top_follows_saved_positions_on_every_day(
             # P5 has no day-2 entry; P6 is sixth on day 1.
             assert members(5) == {"#P1", "#P2", "#P3", "#P4"}
             assert members(10) == {"#P1", "#P2", "#P3", "#P4", "#P6"}
-
-
-def _processor(connection_info: str, archive_server, monkeypatch):
-    database = Database(connection_info)
-    enable_direct_army_fixture(database, monkeypatch)
-    processor = ObservationProcessor(
-        database,
-        S3ArchiveReader(
-            endpoint=archive_server[0],
-            bucket="evidence",
-            access_key="test",
-            secret_key="test",
-            secure=False,
-            allow_insecure_test_origin=True,
-        ),
-    )
-    return database, processor
 
 
 def _battle_row(

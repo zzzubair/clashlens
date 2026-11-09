@@ -435,15 +435,6 @@ def test_a_held_player_never_delays_another_players_reset_or_regular_checks(
     assert client.tags.index("#2P2G") < client.tags.index("#2Q2G")
 
 
-def _handoff_for(collector: collector_module.Collector, tag: str, now: datetime) -> ResponseHandoff:
-    body = tag.encode()
-    return collector._make_handoff(
-        CollectorWork(1, tag, now),
-        FetchedResponse("profile", body, 200, now, now, "regular-1", {}),
-        hashlib.sha256(body).hexdigest(),
-    )
-
-
 def test_a_save_left_at_stop_keeps_later_saves_from_committing_first() -> None:
     spool = _Spool()
     store = _Store(spool)
