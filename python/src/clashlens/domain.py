@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from functools import cache
 
 # v1 gave a 2-star attack at exactly 55% 18 trophies; Supercell's formula
 # gives 17. v1 stays for results already saved under it.
@@ -316,6 +317,12 @@ def battle_window(day_start: datetime) -> tuple[datetime, datetime]:
     return start, start + RANKED_DAY_DURATION
 
 
+@cache
+def _bootstrap_anchor() -> SeasonAnchor:
+    """The built-in Season anchor, checked once: it is a constant."""
+    return validate_season_anchor(BOOTSTRAP_CURRENT_SEASON_ID, BOOTSTRAP_PREVIOUS_SEASON_ID)
+
+
 def ranked_day_for(
     timestamp: datetime,
     *,
@@ -325,9 +332,7 @@ def ranked_day_for(
         raise DomainRuleError(
             "invalid_event_timestamp", "battle timestamp must include a UTC offset"
         )
-    confirmed = anchor or validate_season_anchor(
-        BOOTSTRAP_CURRENT_SEASON_ID, BOOTSTRAP_PREVIOUS_SEASON_ID
-    )
+    confirmed = anchor or _bootstrap_anchor()
     observed = timestamp.astimezone(UTC)
     elapsed = observed - confirmed.current_start
     season_offset = elapsed // SEASON_DURATION
