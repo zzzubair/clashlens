@@ -26,9 +26,9 @@ from .db import (
     PROCESSING_VERSION,
     PYTHON_BACKFILL_PRIORITY,
     Database,
-    _text_value,
     ended_day_priority,
 )
+from .db_rows import text_value
 from .domain import SEASON_START_TROPHIES, RankedDay
 from .reconciliation import (
     BATTLE_LOG_MAX_ROWS,
@@ -73,7 +73,7 @@ def coverage_start(
         return None
     window_start, window_end = domain.battle_window(ranked_day.start)
     if int(first[3]) >= BATTLE_LOG_MAX_ROWS:
-        parser_version = _text_value(first[4])
+        parser_version = text_value(first[4])
         times = []
         for (source,) in connection.execute(
             "SELECT source_json FROM battle_log_observation_source_rows WHERE battle_log_observation_id = %s",

@@ -167,7 +167,7 @@ def claim_background(
     apply, asks for none. ``held`` and ``reset_first`` are
     ``reset_first_claim``'s.
     """
-    from .db import SUPPORTED_WORK_TYPES
+    from .job_contracts import SUPPORTED_WORK_TYPES
 
     # Only a claim that may take daily results, off a Reset turn, has a floor.
     floor = not reset_first and "reconcile_ranked_day" in (work_types or SUPPORTED_WORK_TYPES)
@@ -191,7 +191,7 @@ def reset_first_claim(
 ) -> tuple[bool, bool | None]:
     """Whether this claim holds background work back, and its ``reset_first``:
     in the Reset-first window, True for a lane that claims no responses."""
-    from .db import RESPONSE_WORK_TYPES
+    from .job_contracts import RESPONSE_WORK_TYPES
 
     if not reset_first_window(connection):
         return False, reset_first
@@ -283,12 +283,10 @@ def background_allowance(
         PYTHON_BACKFILL_PRIORITY,
         PYTHON_LIVE_PRIORITY,
         PYTHON_RESET_PRIORITY,
-        _supported_claim_filter,
     )
+    from .job_contracts import supported_job_filter
 
-    supported_filter, params = _supported_claim_filter(
-        "job",
-    )
+    supported_filter, params = supported_job_filter("job", claim=True)
     tries = "job.attempt_count < job.max_attempts"
 
     def live_waiting(seconds: str) -> str:

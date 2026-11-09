@@ -2,30 +2,32 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from psycopg.types.json import Jsonb
 
 from . import (
     army_ingestion,
+    claimed_jobs,
     first_battle_log,
-    job_outcomes,
     queue_refresh,
     reconciliation_db,
     reset_baselines,
+    source_storage,
 )
 from .battle import ParsedBattleLog, ParsedBattleRow
 from .db import (
     RESET_LOCK_WAIT,
     Claim,
     Database,
-    _text_value,
     enqueue_discovered_players,
 )
+from .db_rows import text_value
 from .domain import (
     RANKED_DAY_DURATION,
     SEASON_ANCHOR_RULE_VERSION,
+    SEASON_DURATION,
     DomainRuleError,
     ranked_day_for,
 )
@@ -37,10 +39,10 @@ def _battle_log_reset_baseline(
     """The (collector work id, player, Reset) whose baseline this battle log records."""
     if claim.observation_id is None:
         return None
-    context = reset_baselines._load_reset_baseline_context(
+    context = reset_baselines.load_reset_baseline_context(
         connection, claim.observation_id
     )
-    return None if context is None else (int(context[0]), int(context[1]), context[4])
+    return None if context is None else (context.work_id, context.player_id, context.boundary_at)
 
 
 def supersede_battle_log(
@@ -110,7 +112,7 @@ def supersede_battle_log(
         ).fetchone()
         return row is not None and bool(row[0])
 
-    return job_outcomes.complete_superseded(database, claim, covered)
+    return claimed_jobs.complete_superseded(database, claim, covered)
 
 
 def complete_battle_log(
@@ -123,13 +125,13 @@ def complete_battle_log(
         _observed_at,
         endpoint,
         schema_version,
-    ) = job_outcomes._observation_source(claim)
-    with database._timed_connection() as connection:
+    ) = claimed_jobs.observation_source(claim)
+    with database.connection() as connection:
         with connection.transaction():
             from .season_retirement import acquire_retirement_reader
 
             acquire_retirement_reader(connection)
-            job = database._lock_live_claim(connection, claim)
+            job = claimed_jobs.lock_live_claim(connection, claim)
             all_battle_rows = [row for row in battle_log.rows if row.battle is not None]
             valid_rows = _guard_battle_rows(connection, all_battle_rows)
             if all_battle_rows and not valid_rows:
@@ -138,7 +140,7 @@ def complete_battle_log(
                     "battle log contains only retired-season detail",
                 )
             _recheck_battle_rows(connection, valid_rows)
-            parsed_payload_id = job_outcomes._record_parsed_payload(
+            parsed_payload_id = source_storage.record_parsed_payload(
                 connection,
                 endpoint=endpoint,
                 response_hash=response_hash,
@@ -169,7 +171,7 @@ def complete_battle_log(
                 """,
                 (sorted(player_tags),),
             ).fetchall()
-            player_ids = {_text_value(row[1]): int(row[0]) for row in player_rows}
+            player_ids = {text_value(row[1]): int(row[0]) for row in player_rows}
             reporter_id = player_ids[battle_log.normalized_tag]
             log_row = connection.execute(
                 """
@@ -344,14 +346,14 @@ def complete_battle_log(
                     {
                         "evidence_id": int(row[0]),
                         "battle_id": int(row[1]),
-                        "perspective": _text_value(row[2]),
+                        "perspective": text_value(row[2]),
                         "source_observed_at": row[3].isoformat(),
                     }
                     for row in evidence_rows
                 ]
                 affected_battle_ids.update(int(row[1]) for row in evidence_rows)
                 previous_disagreement_states = {
-                    int(row[0]): _text_value(row[1])
+                    int(row[0]): text_value(row[1])
                     for row in connection.execute(
                         """
                         SELECT id, disagreement_state
@@ -401,7 +403,7 @@ def complete_battle_log(
                     sorted(affected_battle_ids),
                 )
                 current_disagreement_states = {
-                    int(row[0]): _text_value(row[1])
+                    int(row[0]): text_value(row[1])
                     for row in connection.execute(
                         """
                         SELECT id, disagreement_state
@@ -426,8 +428,7 @@ def complete_battle_log(
             )
 
             outcome = "processed_with_gaps" if battle_log.has_row_gap else "processed"
-            job_outcomes._record_processing_outcome(
-                database,
+            claimed_jobs.record_processing_outcome(
                 connection,
                 claim,
                 outcome=outcome,
@@ -495,7 +496,7 @@ def complete_battle_log(
                     claim,
                     (item["player_id"] for item in discoveries),
                 )
-            database._finish_claim(
+            claimed_jobs.finish_claim(
                 connection, claim, job, state="complete", outcome=outcome
             )
 
@@ -601,16 +602,16 @@ def _guard_battle_rows(connection: Any, rows: list[Any]) -> list[Any]:
         current_start, previous_start = anchor[2], anchor[3]
         canonical_bounds.append(
             (
-                _text_value(anchor[0]),
+                text_value(anchor[0]),
                 current_start,
-                current_start + timedelta(days=28),
+                current_start + SEASON_DURATION,
             )
         )
         canonical_bounds.append(
             (
-                _text_value(anchor[1]),
+                text_value(anchor[1]),
                 previous_start,
-                previous_start + timedelta(days=28),
+                previous_start + SEASON_DURATION,
             )
         )
     days = {item.battle.ranked_day_start for item in rows if item.battle is not None}
@@ -635,7 +636,7 @@ def _guard_battle_rows(connection: Any, rows: list[Any]) -> list[Any]:
             """,
             (day_end, day_end, day),
         ).fetchall()
-        seasons.update(_text_value(row[0]) for row in season_rows)
+        seasons.update(text_value(row[0]) for row in season_rows)
         retired_rows = []
         retired_rows = connection.execute(
             """
@@ -645,7 +646,7 @@ def _guard_battle_rows(connection: Any, rows: list[Any]) -> list[Any]:
             """,
             (day, day),
         ).fetchall()
-        seasons.update(_text_value(row[0]) for row in retired_rows)
+        seasons.update(text_value(row[0]) for row in retired_rows)
     for season_id in sorted(seasons):
         acquire_season_lock_shared(connection, season_id)
     # The first read only discovers lock keys. Re-read after blocking on

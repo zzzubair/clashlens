@@ -7,7 +7,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import boundary
+from . import boundary, claimed_jobs
 from .analytics import (
     FRESHNESS_RULE_VERSION,
     PROFILE_FRESHNESS_SECONDS,
@@ -30,9 +30,9 @@ from .db import (
     PYTHON_LIVE_PRIORITY,
     Claim,
     Database,
-    _text_value,
     ended_day_priority,
 )
+from .db_rows import text_value
 from .domain import RANKED_DAY_DURATION, ranked_day_for
 from .past_reset_pacing import operator_generation
 from .profile import normalize_player_tag
@@ -60,7 +60,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
     profile_effect_id = "effect.id"
     with database.pool.connection() as connection:
         with connection.transaction():
-            job = database._lock_live_claim(connection, claim, build=True)
+            job = claimed_jobs.lock_live_claim(connection, claim, build=True)
             boundary_text = claim.input_json.get("boundary_at")
             if boundary_text is None:
                 raise ValueError("snapshot boundary is required")
@@ -85,8 +85,8 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     raise ValueError(
                         "boundary publication generation does not exist"
                     )
-                if _text_value(generation_row[1]) in {"superseded", "published"}:
-                    database._finish_claim(
+                if text_value(generation_row[1]) in {"superseded", "published"}:
+                    claimed_jobs.finish_claim(
                         connection,
                         claim,
                         job,
@@ -94,12 +94,12 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                         outcome="stale_superseded",
                     )
                     return
-                if _text_value(generation_row[1]) != "ready":
+                if text_value(generation_row[1]) != "ready":
                     raise ValueError("boundary snapshot is not ready")
                 target_at = generation_row[5]
-                if _text_value(generation_row[6]) != "boundary-delay-v1":
+                if text_value(generation_row[6]) != "boundary-delay-v1":
                     raise ValueError("unsupported boundary target rule")
-                if _text_value(generation_row[7]) != ANALYTICS_RULE_VERSION:
+                if text_value(generation_row[7]) != ANALYTICS_RULE_VERSION:
                     raise ValueError("unsupported boundary snapshot rule")
                 now_row = connection.execute("SELECT clock_timestamp()").fetchone()
                 assert now_row is not None
@@ -122,13 +122,13 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     "SELECT digest FROM boundary_publication_manifests WHERE id = %s",
                     (manifest_id,),
                 ).fetchone()
-                if manifest_digest is None or _text_value(
+                if manifest_digest is None or text_value(
                     manifest_digest[0]
                 ) != claim.input_json.get("manifest_digest"):
                     raise ValueError(
                         "boundary snapshot manifest digest does not match"
                     )
-                manifest_digest_value = _text_value(manifest_digest[0])
+                manifest_digest_value = text_value(manifest_digest[0])
                 official_identity = connection.execute(
                     """
                     SELECT DISTINCT input_identity->>'official_top200_version_id'
@@ -290,19 +290,19 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                 profile_rows = [
                     (
                         int(row[0]),
-                        _text_value(row[1]["tag"]),
+                        text_value(row[1]["tag"]),
                         int(row[1]["trophies"]),
                         int(row[1]["observation_id"]),
                         datetime.fromisoformat(
                             str(row[1]["observed_at"])
                         ).astimezone(UTC),
-                        _text_value(row[1]["eligibility_state"]),
+                        text_value(row[1]["eligibility_state"]),
                         bool(row[1].get("read_after_reset")),
                     )
                     for row in manifest_profiles
                     if isinstance(row[1], dict)
-                    and _text_value(row[1].get("eligibility_state")) == "eligible"
-                    and _text_value(row[3]) == "eligible"
+                    and text_value(row[1].get("eligibility_state")) == "eligible"
+                    and text_value(row[3]) == "eligible"
                 ]
                 # The trophies at the Reset, before the automatic defense
                 # loss, from each reading and the ended day.
@@ -381,7 +381,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                 if frozen_changes
                 else SEASON_DESTRUCTION_ORDERING_RULE_VERSION
                 if frozen_attacks
-                else _text_value(generation_row[8])
+                else text_value(generation_row[8])
             )
             older_order = ordering_rule_version not in {
                 SNAPSHOT_ORDERING_RULE_VERSION,
@@ -409,7 +409,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                 entries.append(
                     {
                         "player_id": int(row[0]),
-                        "tag": _text_value(row[1]),
+                        "tag": text_value(row[1]),
                         "trophies": trophies,
                         "observation_id": int(row[3]),
                         "profile_version_id": profile_version_ids.get(int(row[0])),
@@ -419,10 +419,10 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                         "confidence": "confirmed" if proven else "uncertain",
                         "tie_hash": (
                             hashlib.sha256(
-                                normalize_player_tag(_text_value(row[1])).encode("ascii")
+                                normalize_player_tag(text_value(row[1])).encode("ascii")
                             ).hexdigest()
                             if older_order
-                            else deterministic_tag_hash(_text_value(row[1]))
+                            else deterministic_tag_hash(text_value(row[1]))
                         ),
                         "official": official_by_player.get(int(row[0])),
                         "season_attacks": season_attacks.get(int(row[0]), (0, 0)),
@@ -585,8 +585,8 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                 by_quality: dict[str, int] = {}
                 excluded_quality: dict[str, int] = {}
                 for player_id, classification, snapshot_quality in manifest_quality:
-                    name = _text_value(classification)
-                    quality_name = _text_value(snapshot_quality)
+                    name = text_value(classification)
+                    quality_name = text_value(snapshot_quality)
                     by_classification[name] = by_classification.get(name, 0) + 1
                     by_quality[quality_name] = by_quality.get(quality_name, 0) + 1
                     if int(player_id) not in included_players:
@@ -687,7 +687,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     "rule_versions": {
                         "ordering_rule_version": ordering_rule_version,
                         "freshness_rule_version": FRESHNESS_RULE_VERSION,
-                        "analytics_rule_version": _text_value(generation_row[7]),
+                        "analytics_rule_version": text_value(generation_row[7]),
                     },
                     "entries": hash_entries,
                     "quality": quality,
@@ -697,7 +697,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     "boundary_at": boundary_at.astimezone(UTC).isoformat(),
                     "source_ranked_day_version_id": ranked_day_version_id,
                     "source_ranked_day_version": int(ranked_day[3]),
-                    "source_ranked_day_input_hash": _text_value(ranked_day[2]),
+                    "source_ranked_day_input_hash": text_value(ranked_day[2]),
                     "ordering_rule_version": ordering_rule_version,
                     "freshness_rule_version": FRESHNESS_RULE_VERSION,
                     "entries": hash_entries,
@@ -769,7 +769,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     int(generation_row[4]) if generation_row is not None else None
                 ),
                 manifest_digest=(
-                    _text_value(
+                    text_value(
                         connection.execute(
                             "SELECT digest FROM boundary_publication_manifests WHERE id = %s",
                             (generation_row[4],),
@@ -782,7 +782,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                 period_start=ranked_day[0],
                 period_end=ranked_day[1],
             )
-            database._finish_claim(
+            claimed_jobs.finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
             )
 
@@ -828,7 +828,7 @@ def _publish_snapshot_kind(
         """,
         (snapshot_kind, boundary_at, input_hash),
     ).fetchone()
-    if existing is not None and _text_value(existing[2]) != "building":
+    if existing is not None and text_value(existing[2]) != "building":
         return int(existing[0]), int(existing[1])
 
     prior = connection.execute(

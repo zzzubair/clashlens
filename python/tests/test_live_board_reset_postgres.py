@@ -38,7 +38,13 @@ from test_reset_scenarios_postgres import (
     defenses,
 )
 
-from clashlens import api_accounts, api_crew_boards, api_leaderboard, api_players
+from clashlens import (
+    api_accounts,
+    api_crew_boards,
+    api_leaderboard,
+    api_players,
+    live_board,
+)
 from clashlens.api_db import ApiDatabase
 from clashlens.domain import ranked_day_for
 
@@ -57,7 +63,7 @@ def _live(story: Story, now, focus_tag: str | None = None) -> dict[str, tuple]:
     Reset, today so far, and its recent days as (Season day, result)). Every
     row agrees with the player's page at ``now``."""
     with psycopg.connect(story.connection_info) as connection:
-        api_leaderboard.save_live_unplayed(connection, now)
+        live_board.save_live_unplayed(connection, now)
     api = ApiDatabase(as_api_role(story.connection_info))
     try:
         board = api_leaderboard.get_live_leaderboard(

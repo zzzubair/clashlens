@@ -26,6 +26,7 @@ from test_reset_scenarios_postgres import (
 
 from clashlens import alerts, domain_repair, queue_refresh, reconcile_pass
 from clashlens.db import Database
+from clashlens.stage_metrics import StageMetrics
 
 # One player per planted error, and one with none.
 LATE, JOINED, LEDGER, CHAIN, COPIES, BOARD, STUCK, CLEAN = (
@@ -51,6 +52,8 @@ def _run_pass(story, monkeypatch, now: datetime, slot: str | None = None,
     clock = [now]
     monkeypatch.setattr(reconcile_pass, "_now", lambda: clock[0])
     database, processor = _processor(_as_worker(story.connection_info), story.archive_server)
+    metrics = StageMetrics()
+    processor.stage_metrics = metrics
     judge = reconcile_pass.judge
 
     def slow_judge(*args):
@@ -68,6 +71,9 @@ def _run_pass(story, monkeypatch, now: datetime, slot: str | None = None,
                 ran += 1
     finally:
         database.close()
+    if ran:
+        # A real pass from saved days through its worker records each job's duration.
+        assert metrics.snapshot()["python_reconcile_pass"]["count"] == ran
     return ran
 
 

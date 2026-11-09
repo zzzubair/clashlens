@@ -33,13 +33,12 @@ from test_claim_jobs_postgres import (
 from clashlens import boundary, reset_baselines
 from clashlens.collector_db import CollectorDatabase
 from clashlens.db import (
-    POPULATION_BUILD_WORK_TYPES,
     PYTHON_LIVE_PRIORITY,
     PYTHON_RESET_PRIORITY,
-    RESPONSE_WORK_TYPES,
     Database,
     ended_day_priority,
 )
+from clashlens.job_contracts import POPULATION_BUILD_WORK_TYPES, RESPONSE_WORK_TYPES
 from clashlens.worker import DERIVED_WITHOUT_BUILDS, ObservationProcessor
 
 # One more member than the tail, plus room to keep results shared.

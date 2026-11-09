@@ -12,14 +12,16 @@ from test_claim_jobs_postgres import (
 )
 
 from clashlens.db import (
-    POPULATION_BUILD_WORK_TYPES,
     PYTHON_BACKFILL_PRIORITY,
     PYTHON_LIVE_PRIORITY,
     PYTHON_RESET_PRIORITY,
-    RESPONSE_WORK_TYPES,
     Database,
     _claim_select_statement,
-    _supported_job_filter,
+)
+from clashlens.job_contracts import (
+    POPULATION_BUILD_WORK_TYPES,
+    RESPONSE_WORK_TYPES,
+    supported_job_filter,
 )
 from clashlens.worker import DERIVED_WITHOUT_BUILDS, MAX_CONCURRENCY
 
@@ -336,7 +338,7 @@ def test_claim_plan_at_production_depth_is_bounded(database_url: str) -> None:
                 f"claim took {millis:.1f} ms at production depth, want < 100 ms"
             )
 
-            supported_filter, supported_params = _supported_job_filter("job")
+            supported_filter, supported_params = supported_job_filter("job")
             maintenance_plan = connection.execute(
                 f"""
                 EXPLAIN (ANALYZE, COSTS OFF)

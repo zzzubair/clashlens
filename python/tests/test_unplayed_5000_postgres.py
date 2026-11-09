@@ -36,10 +36,10 @@ from test_reconciliation_postgres import _processor, _profile
 from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
 from clashlens import (
-    api_leaderboard,
     api_player_lookup,
     boundary_manifest,
     domain_repair,
+    live_board,
     reset_baselines,
 )
 from clashlens.api_db import ApiDatabase
@@ -140,7 +140,7 @@ def _run(connection_info, archive_server, jobs) -> None:
 
 def _live(connection, now):
     """The Live board after the worker saves who it ranks at 5,000."""
-    api_leaderboard.save_live_unplayed(connection, now)
+    live_board.save_live_unplayed(connection, now)
     return _read_live_board(connection, now)
 
 
@@ -541,19 +541,15 @@ def test_the_live_board_reads_only_saved_days_of_players_at_5000(
                 {"start": season.season_start, "days": days},
             )
             connection.execute("ANALYZE")
-        with psycopg.connect(connection_info) as connection:
-            # The worker's search, measured in a transaction it rolls back.
-            search = connection.execute(
-                "EXPLAIN (ANALYZE, FORMAT JSON) " + api_leaderboard._REFRESH_UNPLAYED_SQL,
-                api_leaderboard._season_params(now),
-            ).fetchone()[0]
-            connection.rollback()
         queries: list[tuple[str, dict]] = []
+        refresh_queries: list[tuple[str, dict]] = []
         execute = psycopg.Connection.execute
 
         def record(connection, query, params=None, **kwargs):
             if "candidates AS MATERIALIZED" in str(query):
                 queries.append((str(query), params))
+            if "INSERT INTO live_unplayed_profiles" in str(query):
+                refresh_queries.append((str(query), params))
             return execute(connection, query, params, **kwargs)
 
         # The worker's refresh, as the production worker role.
@@ -561,9 +557,10 @@ def test_the_live_board_reads_only_saved_days_of_players_at_5000(
         worker = Database(make_conninfo(
             connection_info, options=f"{options} -c role=clashlens_python_worker"
         ))
-        monkeypatch.setattr(api_leaderboard, "_next_unplayed_refresh_at", float("-inf"))
+        monkeypatch.setattr(live_board, "_next_unplayed_refresh_at", float("-inf"))
+        monkeypatch.setattr(psycopg.Connection, "execute", record)
         try:
-            api_leaderboard.refresh_live_unplayed(worker, now=now)
+            live_board.refresh_live_unplayed(worker, now=now)
         finally:
             worker.close()
         monkeypatch.setattr(psycopg.Connection, "execute", record)
@@ -571,7 +568,12 @@ def test_the_live_board_reads_only_saved_days_of_players_at_5000(
             live = _read_live_board(connection, now)
         monkeypatch.undo()
         (query, params), = queries
+        (refresh_query, refresh_params), = refresh_queries
         with psycopg.connect(connection_info) as connection:
+            search = connection.execute(
+                "EXPLAIN (ANALYZE, FORMAT JSON) " + refresh_query, refresh_params
+            ).fetchone()[0]
+            connection.rollback()
             board = connection.execute(
                 "EXPLAIN (ANALYZE, FORMAT JSON) " + query, params
             ).fetchone()[0]

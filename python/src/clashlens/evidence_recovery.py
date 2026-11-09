@@ -19,7 +19,7 @@ class Evidence(StrEnum):
     A successful local or recovered archive read hands on an
     ``ArchiveReadResult``. These failures raise ``ArchiveReadError`` for the
     job, whose queue state
-    (``job_outcomes.fail_claim``) then decides what a failure means:
+    (``claimed_jobs.fail_claim``) then decides what a failure means:
 
     - ``NO_LOCAL_READER``: this worker has no spool reader; fails for good.
     - ``LOCAL_READ_FAILED``: the disk read failed; waits as a dependency,

@@ -91,7 +91,8 @@ from psycopg.types.json import Jsonb
 
 from . import domain
 from .army_decoder import DECODER_VERSION
-from .db import PYTHON_BACKFILL_PRIORITY, Database, _text_value
+from .db import PYTHON_BACKFILL_PRIORITY, Database
+from .db_rows import text_value
 from .domain import (
     BATTLE_DAY_GRACE,
     HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION,
@@ -474,7 +475,7 @@ def _stale_players(connection: Any, season_id: str) -> tuple[int, list[int]]:
     ).fetchall()
     for player_id, digest in rows:
         projected = _project(int(player_id), season_id, connection)
-        if projected is None or _digest(projected) != _text_value(digest):
+        if projected is None or _digest(projected) != text_value(digest):
             stale.append(int(player_id))
     return len(rows), stale
 
@@ -497,13 +498,13 @@ def _repair_jobs(
 
 def _job_states(rows: list[Any], limit: int) -> dict[str, Any]:
     """How many of the jobs are unfinished, and the failed ones."""
-    failed = [row for row in rows if _text_value(row[1]) == "failed"]
+    failed = [row for row in rows if text_value(row[1]) == "failed"]
     return {
-        "unfinished": sum(_text_value(row[1]) in _UNFINISHED_JOB_STATES for row in rows),
+        "unfinished": sum(text_value(row[1]) in _UNFINISHED_JOB_STATES for row in rows),
         "failed": len(failed),
         "failed_blockers": [
             {"job_id": int(row[0]), "player_id": int(row[3]),
-             "failure_category": _text_value(row[2]) if row[2] else None}
+             "failure_category": text_value(row[2]) if row[2] else None}
             for row in failed[:limit]
         ],
     }
@@ -705,7 +706,7 @@ def _day_counts(connection: Any, start: datetime) -> dict[str, Any]:
         entry = days.setdefault(
             day.astimezone(UTC).isoformat(), {"states": {}, "reasons": {}}
         )
-        entry["states"][_text_value(state)] = entry["states"].get(_text_value(state), 0) + count
+        entry["states"][text_value(state)] = entry["states"].get(text_value(state), 0) + count
         for reason in reasons:
             entry["reasons"][reason] = entry["reasons"].get(reason, 0) + count
     return dict(sorted(days.items()))
@@ -718,7 +719,7 @@ def _board_counts(connection: Any, start: datetime) -> dict[str, Any]:
     return {
         boundary_at.astimezone(UTC).isoformat(): {
             "snapshot_id": int(snapshot_id), "version": int(version),
-            "rule": _text_value(rule), "confirmed": int(confirmed),
+            "rule": text_value(rule), "confirmed": int(confirmed),
             "uncertain": int(uncertain),
         }
         for boundary_at, snapshot_id, version, rule, confirmed, uncertain
@@ -965,7 +966,7 @@ VALUES (%s, {", ".join(["%s"] * len(_COLUMNS))},
 
 def _inventory(connection: Any, season_id: str, start: datetime, now: datetime) -> list[dict]:
     finalized = {
-        _text_value(row[0])
+        text_value(row[0])
         for row in connection.execute(
             "SELECT official_season_id FROM season_detail_retirements"
         ).fetchall()
@@ -981,8 +982,8 @@ def _inventory(connection: Any, season_id: str, start: datetime, now: datetime) 
     query = _INVENTORY.format(unfinished_moves=UNFINISHED_MOVES)
     for row in connection.execute(query, parameters).fetchall():
         item = dict(zip(_COLUMNS, row, strict=True))
-        item.update(kind=_text_value(item["kind"]),
-                    reasons=sorted({_text_value(value) for value in item["reasons"]}))
+        item.update(kind=text_value(item["kind"]),
+                    reasons=sorted({text_value(value) for value in item["reasons"]}))
         if item["battle_ids"] is not None:
             item["battle_ids"] = sorted(item["battle_ids"])
         # A moved battle can reach the previous Season's last day, and day
@@ -991,7 +992,7 @@ def _inventory(connection: Any, season_id: str, start: datetime, now: datetime) 
             item["boundary_at"] - RANKED_DAY_DURATION if item["boundary_at"] else start
         )
         own_start = start + SEASON_DURATION * ((day - start) // SEASON_DURATION)
-        season = _text_value(item["official_season_id"]) or (
+        season = text_value(item["official_season_id"]) or (
             season_id if own_start == start else None
         )
         if item["exclusion"] is None and season in finalized:
@@ -1100,8 +1101,8 @@ def register(database: Database, season_id: str, *, now: datetime | None = None)
             " WHERE official_season_id = %s FOR UPDATE",
             (season_id,),
         ).fetchone()
-        if _text_value(state) != CampaignState.REGISTERED:
-            raise CampaignRefused(f"season {season_id} campaign is {_text_value(state)}")
+        if text_value(state) != CampaignState.REGISTERED:
+            raise CampaignRefused(f"season {season_id} campaign is {text_value(state)}")
         connection.execute(
             "DELETE FROM domain_repair_items WHERE campaign_id = %s", (campaign_id,)
         )

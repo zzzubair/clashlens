@@ -24,7 +24,7 @@ from domain_test_support import (
 )
 from test_league_history import _entry, _payload
 
-from clashlens import boundary, job_outcomes, late_battle_sweep, reconciliation_db
+from clashlens import boundary, claimed_jobs, late_battle_sweep, reconciliation_db
 from clashlens.db import (
     ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
@@ -398,7 +398,7 @@ def test_sweep_waits_for_the_reset_and_every_response_fetched_before_it_finished
                 claim = database.claim_job(owner="retry-test", job_id=waiting_job)
                 assert claim is not None
                 assert (
-                    job_outcomes.fail_claim(
+                    claimed_jobs.fail_claim(
                         database,
                         claim,
                         category="test_failure",

@@ -10,7 +10,13 @@ from typing import Any
 from psycopg.errors import LockNotAvailable
 from psycopg.types.json import Jsonb
 
-from . import army_types, battle_day_repair, boundary, boundary_publication
+from . import (
+    army_types,
+    battle_day_repair,
+    boundary,
+    boundary_publication,
+    claimed_jobs,
+)
 from .army_decoder import (
     CURRENT_DECODES,
     DECODER_VERSION,
@@ -24,7 +30,8 @@ from .army_season_summaries import (
     store_army_day_totals,
 )
 from .catalog import CATALOG_HASH, CATALOG_VERSION
-from .db import Claim, Database, _text_value
+from .db import Claim, Database
+from .db_rows import text_value
 from .domain import SEASON_ANCHOR_RULE_VERSION, DomainRuleError, anchored_ranked_day
 from .publication_states import DecodeVerdict, decode_verdict
 
@@ -66,10 +73,10 @@ def _upsert_army_decodes(
         else:
             decoded = decode_army_share_code(raw_code)
         decoded_rows.append(
-            (battle_id, evidence_id, _text_value(perspective), raw_code, decoded)
+            (battle_id, evidence_id, text_value(perspective), raw_code, decoded)
         )
     current = {
-        (int(row[0]), _text_value(row[1])): row[2:]
+        (int(row[0]), text_value(row[1])): row[2:]
         for row in connection.execute(
             f"""
             SELECT battle_id, perspective,
@@ -156,7 +163,7 @@ def _upsert_army_decodes(
             "SELECT set_config('lock_timeout', %s, true)", (previous_wait,)
         )
     current_evidence = {
-        (int(battle_id), _text_value(perspective)): int(evidence_id)
+        (int(battle_id), text_value(perspective)): int(evidence_id)
         for battle_id, perspective, evidence_id in connection.execute(
             """
             SELECT battle_id, perspective, evidence_id
@@ -334,7 +341,7 @@ def _upsert_army_decodes(
 def complete_army_analytics(database: Database, claim: Claim) -> None:
     with database.pool.connection() as connection:
         with connection.transaction():
-            job = database._lock_live_claim(connection, claim, build=True)
+            job = claimed_jobs.lock_live_claim(connection, claim, build=True)
             generation_input = claim.input_json.get("generation")
             generation_row = None
             season_id_row = None
@@ -354,8 +361,8 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                 ).fetchone()
                 if generation_row is None:
                     raise ValueError("boundary publication generation does not exist")
-                if _text_value(generation_row[2]) in {"superseded", "published"}:
-                    database._finish_claim(
+                if text_value(generation_row[2]) in {"superseded", "published"}:
+                    claimed_jobs.finish_claim(
                         connection,
                         claim,
                         job,
@@ -363,9 +370,9 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                         outcome="stale_superseded",
                     )
                     return
-                if _text_value(generation_row[2]) not in {"ready", "building"}:
+                if text_value(generation_row[2]) not in {"ready", "building"}:
                     raise ValueError("boundary army generation is stale or superseded")
-                if _text_value(generation_row[1]) == "superseded":
+                if text_value(generation_row[1]) == "superseded":
                     raise ValueError("boundary publication generation is superseded")
                 manifest_id = (
                     int(generation_row[3]) if generation_row[3] is not None else None
@@ -379,19 +386,19 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                     "SELECT digest FROM boundary_publication_manifests WHERE id = %s",
                     (manifest_id,),
                 ).fetchone()
-                if manifest_digest is None or _text_value(
+                if manifest_digest is None or text_value(
                     manifest_digest[0]
                 ) != claim.input_json.get("manifest_digest"):
                     raise ValueError("boundary army manifest digest does not match")
-                if _text_value(generation_row[4]) != claim.analytics_rule_version:
+                if text_value(generation_row[4]) != claim.analytics_rule_version:
                     raise ValueError("boundary army rule version does not match")
-                if _text_value(generation_row[6]) != "boundary-delay-v1":
+                if text_value(generation_row[6]) != "boundary-delay-v1":
                     raise ValueError("unsupported boundary target rule")
                 now_row = connection.execute("SELECT clock_timestamp()").fetchone()
                 assert now_row is not None
                 if now_row[0] < generation_row[5]:
                     raise ValueError("army publication target dependency is not ready")
-                manifest_digest_value = _text_value(manifest_digest[0])
+                manifest_digest_value = text_value(manifest_digest[0])
                 pending_members = connection.execute(
                     """
                     SELECT 1
@@ -423,7 +430,7 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                         connection, boundary_at - timedelta(days=1)
                     )
                 else:
-                    season_id = _text_value(season_id_row[0])
+                    season_id = text_value(season_id_row[0])
             else:
                 ranked_day_str = claim.input_json.get("ranked_day_start")
                 season_id = claim.input_json.get("official_season_id")
@@ -474,14 +481,14 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
             )
             # A build of this generation that held the lock may have
             # published it meanwhile.
-            if generation_row is not None and _text_value(
+            if generation_row is not None and text_value(
                 connection.execute(
                     "SELECT army_state FROM boundary_publication_generations"
                     " WHERE id = %s",
                     (generation_row[0],),
                 ).fetchone()[0]
             ) in {"superseded", "published"}:
-                database._finish_claim(
+                claimed_jobs.finish_claim(
                     connection, claim, job, state="complete", outcome="stale_superseded"
                 )
                 return
@@ -514,12 +521,12 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                         {
                             "manifest_digest": manifest_digest_value,
                             "rule_versions": {
-                                "army_rule_version": _text_value(generation_row[4]),
+                                "army_rule_version": text_value(generation_row[4]),
                                 "decoder_version": DECODER_VERSION,
                             },
                             "output": {
                                 "day_fact_input_hash": (
-                                    _text_value(marker[0])
+                                    text_value(marker[0])
                                     if marker is not None
                                     else None
                                 ),
@@ -574,7 +581,7 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                 boundary_publication._maybe_emit_boundary_signal(
                     database, connection, int(generation_row[0])
                 )
-            database._finish_claim(
+            claimed_jobs.finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
             )
 
@@ -612,7 +619,7 @@ def _ensure_army_day_dependency(
         if not allow_empty:
             raise ValueError("dependency_not_ready: ranked day is not complete")
         return official_season_id
-    return _text_value(completed[0])
+    return text_value(completed[0])
 
 
 def _build_army_facts(
@@ -890,7 +897,7 @@ def _finish_army_fact_day(
             """,
             (
                 ranked_day_start,
-                _text_value(marker_day[0]),
+                text_value(marker_day[0]),
                 int(marker_day[1]),
                 ranked_day_start,
             ),
@@ -898,9 +905,9 @@ def _finish_army_fact_day(
         store_army_day_totals(
             connection,
             ranked_day_start,
-            _text_value(marker_day[0]),
+            text_value(marker_day[0]),
             int(marker_day[1]),
-            _text_value(marker[0]),
+            text_value(marker[0]),
         )
         # A late correction refreshes an already-summarized season.
         # Seasons without summaries (live seasons stay on explicit
@@ -910,7 +917,7 @@ def _finish_army_fact_day(
         # skipped when digests match).
         # Each lens refreshes in a savepoint so a projection failure
         # warns without rolling back the day facts/marker above.
-        _refresh_army_season_summaries(database, connection, _text_value(marker_day[0]))
+        _refresh_army_season_summaries(database, connection, text_value(marker_day[0]))
 
 
 def _build_army_fact_batch(
@@ -1002,7 +1009,7 @@ def _build_army_fact_batch(
     decodes = {
         (
             int(row[0]),
-            "offense" if _text_value(row[1]) == "attacker" else "defense",
+            "offense" if text_value(row[1]) == "attacker" else "defense",
         ): row
         for row in decode_rows
     }
@@ -1040,7 +1047,7 @@ def _build_army_fact_batch(
     evidence = {
         (
             int(row[0]),
-            "offense" if _text_value(row[1]) == "attacker" else "defense",
+            "offense" if text_value(row[1]) == "attacker" else "defense",
         ): row
         for row in evidence_rows
     }
@@ -1061,12 +1068,12 @@ def _build_army_fact_batch(
         (battle_id_values, lens_values),
     ).fetchall()
     fact_history = {
-        (int(row[0]), _text_value(row[1])): {
+        (int(row[0]), text_value(row[1])): {
             "latest_version": int(row[2]),
             "current": (
                 {
                     "id": int(row[3]),
-                    "input_hash": _text_value(row[4]),
+                    "input_hash": text_value(row[4]),
                 }
                 if row[3] is not None
                 else None
@@ -1093,16 +1100,16 @@ def _build_army_fact_batch(
                 continue
             decode = decodes.get(key)
             state = (
-                _text_value(decode[5])
-                if decode and _text_value(decode[4]) == "failed" and decode[5]
-                else _text_value(decode[4])
+                text_value(decode[5])
+                if decode and text_value(decode[4]) == "failed" and decode[5]
+                else text_value(decode[4])
                 if decode
                 else "decode_missing"
             )
             disagreement = (
                 event.get("disagreement") is True
                 if evidence_ids is not None
-                else _text_value(evidence_row[3]) == "disagreement"
+                else text_value(evidence_row[3]) == "disagreement"
             )
             payload = {
                 "source_ranked_day_version_id": int(version_id),
@@ -1135,7 +1142,7 @@ def _build_army_fact_batch(
                     "evidence_id": int(evidence_row[2]),
                     "decode_id": int(decode[2]) if decode else None,
                     "source_ranked_day_version_id": int(version_id),
-                    "official_season_id": _text_value(season_id),
+                    "official_season_id": text_value(season_id),
                     "season_day_number": int(day_number),
                     "lens": lens,
                     "population_player_id": int(player_id),
@@ -1146,7 +1153,7 @@ def _build_army_fact_batch(
                     ),
                     "army_state": state,
                     "failure_reason": (
-                        _text_value(decode[5]) if decode and decode[5] else None
+                        text_value(decode[5]) if decode and decode[5] else None
                     ),
                     "perspective_disagreement": disagreement,
                     "input_hash": input_hash,
@@ -1298,7 +1305,7 @@ def _season_metadata_for_ranked_day(
         raise ValueError("dependency_not_ready: confirmed season anchor is unavailable")
     try:
         day = anchored_ranked_day(
-            ranked_day_start, _text_value(anchor[0]), _text_value(anchor[1])
+            ranked_day_start, text_value(anchor[0]), text_value(anchor[1])
         )
     except DomainRuleError as error:
         raise ValueError("dependency_not_ready: confirmed season anchor is off phase") from error
@@ -1352,7 +1359,7 @@ def _redecode_group(
     with database.pool.connection() as connection:
         with connection.transaction():
             connection.execute(f"SET LOCAL lock_timeout = '{REDECODE_LOCK_WAIT}'")
-            job = database._lock_live_claim(connection, claim)
+            job = claimed_jobs.lock_live_claim(connection, claim)
             connection.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                 (f"army-redecode:{claim.job_id}",),
@@ -1364,7 +1371,7 @@ def _redecode_group(
             )
 
             seasons = [
-                _text_value(row[0])
+                text_value(row[0])
                 for row in connection.execute(
                     """
                     SELECT DISTINCT ranked.official_season_id
@@ -1387,6 +1394,6 @@ def _redecode_group(
                     )
             _upsert_army_decodes(database, connection, battle_ids)
             if finish:
-                database._finish_claim(
+                claimed_jobs.finish_claim(
                     connection, claim, job, state="complete", outcome="processed"
                 )

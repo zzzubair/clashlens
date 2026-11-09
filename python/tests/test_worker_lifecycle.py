@@ -13,13 +13,14 @@ from unittest.mock import patch
 
 import pytest
 
-from clashlens import cli, ingestion, job_outcomes, reconciliation_db, worker
+from clashlens import claimed_jobs, cli, ingestion, reconciliation_db, worker
 from clashlens.db import (
+    ANALYTICS_RULE_VERSION,
     DOMAIN_RULE_VERSION,
-    POPULATION_BUILD_WORK_TYPES,
     PROCESSING_VERSION,
 )
 from clashlens.domain import DomainRuleError
+from clashlens.job_contracts import POPULATION_BUILD_WORK_TYPES
 from clashlens.league_history import (
     LEAGUE_HISTORY_ENDPOINT_VERSION,
     LEAGUE_HISTORY_PARSER_VERSION,
@@ -86,6 +87,7 @@ def test_worker_finishes_a_claim_call_despite_rejected_newest_jobs(
                 work_type="reconcile_ranked_day",
                 processing_version=PROCESSING_VERSION,
                 domain_rule_version=DOMAIN_RULE_VERSION,
+                analytics_rule_version=ANALYTICS_RULE_VERSION,
             )
 
         def renew_claim(self, claim, *, lease_seconds, **_kwargs):
@@ -121,6 +123,7 @@ def test_worker_keeps_every_fourth_claim_oldest_first(monkeypatch) -> None:
                 work_type="reconcile_ranked_day",
                 processing_version=PROCESSING_VERSION,
                 domain_rule_version=DOMAIN_RULE_VERSION,
+                analytics_rule_version=ANALYTICS_RULE_VERSION,
             )
 
         def renew_claim(self, claim, *, lease_seconds, **_kwargs):
@@ -193,6 +196,7 @@ def test_worker_terminalizes_race_to_retired_season() -> None:
             "work_type": "reconcile_ranked_day",
             "processing_version": PROCESSING_VERSION,
             "domain_rule_version": DOMAIN_RULE_VERSION,
+            "analytics_rule_version": ANALYTICS_RULE_VERSION,
         },
     )()
     database = RetiredDatabase()
@@ -200,7 +204,7 @@ def test_worker_terminalizes_race_to_retired_season() -> None:
         patch.object(
             reconciliation_db, "complete_reconciliation", complete_reconciliation
         ),
-        patch.object(job_outcomes, "complete_terminal", complete_terminal),
+        patch.object(claimed_jobs, "complete_terminal", complete_terminal),
     ):
         result = ObservationProcessor(database, archive=object())._process_claim(
             claim, lease_seconds=30
@@ -254,6 +258,7 @@ def test_new_observation_reads_only_the_local_spool() -> None:
         work_type="process_observation",
         processing_version=PROCESSING_VERSION,
         domain_rule_version=DOMAIN_RULE_VERSION,
+                analytics_rule_version=ANALYTICS_RULE_VERSION,
         endpoint="profile",
         endpoint_version="profile-v1",
         schema_version="profile-schema-v1",
@@ -304,6 +309,7 @@ def test_league_history_processing_produces_a_bounded_worker_snapshot() -> None:
         work_type="replay_observation",
         processing_version=PROCESSING_VERSION,
         domain_rule_version=DOMAIN_RULE_VERSION,
+                analytics_rule_version=ANALYTICS_RULE_VERSION,
         endpoint="league_history",
         endpoint_version=LEAGUE_HISTORY_ENDPOINT_VERSION,
         schema_version=LEAGUE_HISTORY_SCHEMA_VERSION,
@@ -366,6 +372,7 @@ def test_missing_new_observation_without_an_archived_copy_fails_as_missing_proof
         work_type="process_observation",
         processing_version=PROCESSING_VERSION,
         domain_rule_version=DOMAIN_RULE_VERSION,
+                analytics_rule_version=ANALYTICS_RULE_VERSION,
         endpoint="profile",
         endpoint_version="profile-v1",
         schema_version="profile-schema-v1",
@@ -379,7 +386,7 @@ def test_missing_new_observation_without_an_archived_copy_fails_as_missing_proof
     archive = Archive()
 
     with (
-        patch.object(job_outcomes, "fail_claim", fail_claim),
+        patch.object(claimed_jobs, "fail_claim", fail_claim),
         patch("clashlens.collector_uploads.archived_copy", lambda *_a, **_k: None),
     ):
         result = ObservationProcessor(Database(), archive)._process_claim(
@@ -421,6 +428,7 @@ def test_replay_observation_can_use_archive_fallback() -> None:
         work_type="replay_observation",
         processing_version=PROCESSING_VERSION,
         domain_rule_version=DOMAIN_RULE_VERSION,
+                analytics_rule_version=ANALYTICS_RULE_VERSION,
         endpoint="profile",
         endpoint_version="profile-v1",
         schema_version="profile-schema-v1",
@@ -1372,3 +1380,44 @@ def test_worker_terminal_refused_when_heartbeat_stuck(
         # inside the next test's captured output.
         for thread in set(_threading.enumerate()) - threads_before:
             thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("failed_task", [
+    "publication", "late_battles", "daily_recheck", "army_rank_bands",
+    "army_types", "projected_place", "live_attacks", "live_unplayed",
+])
+def test_independent_maintenance_continues_after_one_task_fails(
+    failed_task, monkeypatch, capsys
+) -> None:
+    from clashlens import worker
+
+    completed = []
+    database = SimpleNamespace(
+        pool=SimpleNamespace(conninfo="test"),
+        maintain_queue=lambda **_kwargs: completed.append("queue"),
+    )
+    targets = [
+        (worker.boundary_publication, "reevaluate_boundary_publications", "publication"),
+        (worker.late_battle_sweep.LateBattleSweep, "run_when_due", "late_battles"),
+        (worker.queue_refresh.DailyRecheck, "run_when_due", "daily_recheck"),
+        (worker.army_rank_bands, "refresh_rank_band_totals", "army_rank_bands"),
+        (worker.army_types, "refresh_army_types", "army_types"),
+        (worker.projected_place, "refresh_remaining_changes", "projected_place"),
+        (worker.analytics, "refresh_live_attack_tallies", "live_attacks"),
+        (worker.live_board, "refresh_live_unplayed", "live_unplayed"),
+    ]
+    def task(name):
+        def run(*_args, **_kwargs):
+            if name == failed_task:
+                raise RuntimeError("secret details must not be logged")
+            completed.append(name)
+        return run
+    for target, attribute, name in targets:
+        monkeypatch.setattr(target, attribute, task(name))
+    maintenance = worker.TimedMaintenance(database, StageMetrics())
+    try:
+        maintenance.run_due()
+    finally:
+        maintenance.close()
+    assert completed == [name for _, _, name in targets if name != failed_task] + ["queue"]
+    assert failed_task in capsys.readouterr().out

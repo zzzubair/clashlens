@@ -14,7 +14,7 @@ from test_reconciliation_postgres import _profile
 from test_reset_reading_before_loss_postgres import DAY_B, DAY_C, DAY_D
 from test_reset_settlement_state_postgres import TAG, _process, _reset_work
 
-from clashlens import job_outcomes, queue_refresh, reconciliation_db
+from clashlens import claimed_jobs, queue_refresh, reconciliation_db
 from clashlens.background_pacing import DAY_RECHECK_PRIORITY
 from clashlens.collector_db import CollectorDatabase
 from clashlens.db import Database
@@ -790,7 +790,7 @@ def test_evidence_for_a_day_whose_recheck_failed_queues_another(database_url: st
             with psycopg.connect(connection_info) as connection:
                 queue_refresh.queue_for_reading(connection, player, "log:1", read_at)
             [claim] = database.claim_jobs(owner="worker")
-            assert job_outcomes.fail_claim(
+            assert claimed_jobs.fail_claim(
                 database, claim, category="calculation_error", detail="test",
                 retryable=True) == "waiting_retry"
             with psycopg.connect(connection_info) as connection:

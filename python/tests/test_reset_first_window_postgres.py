@@ -29,7 +29,7 @@ from clashlens import (
     reset_baselines,
     snapshots,
 )
-from clashlens.db import POPULATION_BUILD_WORK_TYPES, RESPONSE_WORK_TYPES
+from clashlens.job_contracts import POPULATION_BUILD_WORK_TYPES, RESPONSE_WORK_TYPES
 from clashlens.worker import DERIVED_WITHOUT_BUILDS
 
 TAGS = ("#2PP", "#8PP", "#9PP", "#PPP")

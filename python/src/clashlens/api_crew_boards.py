@@ -31,8 +31,9 @@ from .api_db import (
     _screen_events,
     _text,
 )
-from .api_leaderboard import _LIVE_ORDER_SQL, _LIVE_PLAYERS_SQL, _season_params
+from .api_leaderboard import _LIVE_ORDER_SQL, _LIVE_PLAYERS_SQL
 from .domain import RANKED_DAY_DURATION, ranked_day_for
+from .live_board import season_params
 
 PERIODS = ("today", "week", "season")
 _WEEK_DAYS = 7
@@ -164,7 +165,7 @@ def get_crew_boards(
             WHERE normalized_tag = ANY(%(tags)s)
             ORDER BY {_LIVE_ORDER_SQL}
             """,
-            {"tags": tags, **_season_params(now)},
+            {"tags": tags, **season_params(now)},
         ).fetchall()
         saved: dict[str, dict[datetime, _Day]] = {}
         for row in connection.execute(

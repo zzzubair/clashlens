@@ -21,7 +21,7 @@ from domain_test_support import (
 )
 from psycopg import sql
 
-from clashlens import api_leaderboard, job_outcomes
+from clashlens import api_leaderboard, claimed_jobs
 from clashlens.api_db import ApiDatabase
 from clashlens.db import PYTHON_RESET_PRIORITY
 from clashlens.domain import ranked_day_for
@@ -52,7 +52,7 @@ def _profile(
     )
 
 
-def _job_outcomes(connection_info: str, job_ids: list[int]) -> list[tuple[str, str]]:
+def _claimed_jobs(connection_info: str, job_ids: list[int]) -> list[tuple[str, str]]:
     with psycopg.connect(connection_info) as connection:
         rows = connection.execute(
             """
@@ -132,7 +132,7 @@ def test_one_pass_shows_every_players_newest_profile_and_skips_older_copies(
             )
             assert sorted(result.job_id for result in rest) == older_jobs
             assert {result.outcome for result in rest} == {"superseded"}
-            assert _job_outcomes(connection_info, older_jobs) == [
+            assert _claimed_jobs(connection_info, older_jobs) == [
                 ("complete", "superseded")
             ] * len(older_jobs)
 
@@ -637,7 +637,7 @@ def test_collector_owned_observations_cannot_be_finished_as_superseded(
             for job_id in job_ids:
                 claim = database.claim_job(owner="owned", job_id=job_id)
                 assert claim is not None
-                assert not job_outcomes.complete_superseded(
+                assert not claimed_jobs.complete_superseded(
                     database, claim, lambda _: True
                 )
             with database.pool.connection() as connection:

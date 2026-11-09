@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import base64
 import getpass
 import hashlib
 import json
@@ -43,7 +42,7 @@ from .collector import Collector
 from .collector_db import CollectorDatabase
 from .collector_http import ApiKey, KeyPool, OfficialApiClient, ProviderFailure
 from .db import CONTRACT_VERSION, Database
-from .hmac_proof import SigningInput, load_secret_file, sign
+from .hmac_proof import load_secret_file, request_headers
 from .operating import (
     WORKER_SNAPSHOT_INTERVAL_SECONDS,
     WorkerMetrics,
@@ -1436,33 +1435,11 @@ def _probe(arguments: argparse.Namespace) -> str:
     if target.query:
         raw_target += "?" + target.query
     key = load_secret_file(arguments.secret_file)
-    request_id = str(uuid4())
-    issued_at = int(time())
-    value = SigningInput(
-        proof_version="clashlens-hmac-v1",
-        caller_b64url=_encode_text(arguments.caller),
-        key_id_b64url=_encode_text(arguments.key_id),
-        audience="clashlens-python-private-api",
-        method="GET",
-        target_b64url=_encode_bytes(raw_target.encode("ascii")),
-        body_sha256=hashlib.sha256(b"").hexdigest(),
-        issued_at=str(issued_at),
-        expires_at=str(issued_at + 10),
-        request_id=request_id,
-        provider_b64url="",
-        provider_subject_b64url="",
+    headers = request_headers(
+        key, caller=arguments.caller, key_id=arguments.key_id, method="GET",
+        raw_target=raw_target.encode("ascii"), body=b"", issued_at=int(time()),
+        request_id=str(uuid4()),
     )
-    headers = {
-        "X-ClashLens-Proof-Version": value.proof_version,
-        "X-ClashLens-Caller": value.caller_b64url,
-        "X-ClashLens-Key-Id": value.key_id_b64url,
-        "X-ClashLens-Issued-At": value.issued_at,
-        "X-ClashLens-Expires-At": value.expires_at,
-        "X-ClashLens-Request-Id": value.request_id,
-        "X-ClashLens-Provider": "",
-        "X-ClashLens-Provider-Subject": "",
-        "X-ClashLens-Signature": sign(key, value),
-    }
     request = urllib.request.Request(arguments.url, headers=headers, method="GET")
     try:
         with urllib.request.urlopen(
@@ -1471,14 +1448,6 @@ def _probe(arguments: argparse.Namespace) -> str:
             return response.read().decode("utf-8")
     except (OSError, UnicodeDecodeError) as error:
         raise RuntimeError("saved-data probe failed") from error
-
-
-def _encode_text(value: str) -> str:
-    return _encode_bytes(value.encode("utf-8"))
-
-
-def _encode_bytes(value: bytes) -> str:
-    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
 
 
 if __name__ == "__main__":

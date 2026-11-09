@@ -7,12 +7,14 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from . import (
-    job_outcomes,
+    claimed_jobs,
     queue_refresh,
     reset_baselines,
     season_anchors,
+    source_storage,
 )
-from .db import Claim, Database, _text_value, enqueue_discovered_players
+from .db import Claim, Database, enqueue_discovered_players
+from .db_rows import text_value
 from .domain import ranked_day_for
 from .profile import ParsedProfile
 from .rankings import ParsedOfficialRankings
@@ -61,7 +63,7 @@ def supersede_profile(database: Database, claim: Claim) -> bool:
             (claim.normalized_tag, claim.observed_at, day_end),
         ).fetchone()[0]
 
-    return job_outcomes.complete_superseded(database, claim, covered)
+    return claimed_jobs.complete_superseded(database, claim, covered)
 
 
 def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -> None:
@@ -77,15 +79,15 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
         _observed_at,
         endpoint,
         schema_version,
-    ) = job_outcomes._observation_source(claim)
+    ) = claimed_jobs.observation_source(claim)
     fingerprint = content_fingerprint(
         "profile", json.dumps(profile.profile_json).encode(),
         http_status=http_status, response_hash=response_hash,
     )
-    with database._timed_connection() as connection:
+    with database.connection() as connection:
         with connection.transaction():
-            job = database._lock_live_claim(connection, claim)
-            parsed_payload_id = job_outcomes._record_parsed_payload(
+            job = claimed_jobs.lock_live_claim(connection, claim)
+            parsed_payload_id = source_storage.record_parsed_payload(
                 connection,
                 endpoint=endpoint,
                 response_hash=response_hash,
@@ -175,7 +177,7 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                     (profile_version_id,),
                 ).fetchone()
                 anchor_outcome = (
-                    AnchorOutcome(_text_value(retained_anchor[0]))
+                    AnchorOutcome(text_value(retained_anchor[0]))
                     if retained_anchor is not None
                     else (
                         AnchorOutcome.CONFLICT
@@ -183,7 +185,7 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                         else AnchorOutcome.NOT_APPLICABLE
                     )
                 )
-            processing_id = job_outcomes._record_processing_outcome(database,
+            processing_id = claimed_jobs.record_processing_outcome(
                 connection,
                 claim,
                 outcome="processed",
@@ -266,7 +268,7 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
             # Tracking follows the weekly league record, decided from this
             # answer within seconds (``league_days.track``).
             reset_baselines._refresh_reset_baseline_evidence(database, connection, claim)
-            database._finish_claim(
+            claimed_jobs.finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
             )
 
@@ -283,11 +285,11 @@ def complete_rankings(
         observed_at,
         endpoint,
         schema_version,
-    ) = job_outcomes._observation_source(claim)
+    ) = claimed_jobs.observation_source(claim)
     with database.pool.connection() as connection:
         with connection.transaction():
-            job = database._lock_live_claim(connection, claim)
-            parsed_payload_id = job_outcomes._record_parsed_payload(
+            job = claimed_jobs.lock_live_claim(connection, claim)
+            parsed_payload_id = source_storage.record_parsed_payload(
                 connection,
                 endpoint=endpoint,
                 response_hash=response_hash,
@@ -348,7 +350,7 @@ def complete_rankings(
                     (normalized_tags,),
                 ).fetchall()
                 player_ids = {
-                    _text_value(tag): int(player_id) for player_id, tag in rows
+                    text_value(tag): int(player_id) for player_id, tag in rows
                 }
                 connection.execute(
                     """
@@ -503,7 +505,7 @@ def complete_rankings(
                         parsed_payload_id,
                     ),
                 )
-            job_outcomes._record_processing_outcome(database,
+            claimed_jobs.record_processing_outcome(
                 connection,
                 claim,
                 outcome="processed",
@@ -517,7 +519,7 @@ def complete_rankings(
             enqueue_discovered_players(
                 connection, database, claim, player_ids.values()
             )
-            database._finish_claim(
+            claimed_jobs.finish_claim(
                 connection,
                 claim,
                 job,
@@ -545,17 +547,17 @@ def get_player(database: Database, normalized_tag: str) -> dict[str, Any] | None
         if row is None:
             return None
         return {
-            "normalized_tag": _text_value(row[0]),
+            "normalized_tag": text_value(row[0]),
             "active": row[1],
-            "eligibility_state": _text_value(row[2]),
-            "name": _text_value(row[3]),
+            "eligibility_state": text_value(row[2]),
+            "name": text_value(row[3]),
             "trophies": row[4],
             "league_tier_id": row[5],
-            "league_tier_name": _text_value(row[6]),
+            "league_tier_name": text_value(row[6]),
             "observed_at": row[7],
-            "endpoint_version": _text_value(row[8]),
-            "schema_version": _text_value(row[9]),
-            "parser_version": _text_value(row[10]),
+            "endpoint_version": text_value(row[8]),
+            "schema_version": text_value(row[9]),
+            "parser_version": text_value(row[10]),
             "source_http_status": row[11],
         }
 

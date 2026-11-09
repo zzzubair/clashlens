@@ -41,8 +41,8 @@ from .db import (
     PYTHON_BACKFILL_PRIORITY,
     PYTHON_LIVE_PRIORITY,
     Database,
-    _text_value,
 )
+from .db_rows import text_value
 from .domain import SEASON_ANCHOR_RULE_VERSION, SEASON_DURATION
 from .reconciliation import RECONCILIATION_RULE_VERSION
 
@@ -86,7 +86,7 @@ def merged_battles(
         """,
         (evidence_ids, battle_ids, evidence_ids),
     ).fetchall():
-        lens = "offense" if _text_value(perspective) == "attacker" else "defense"
+        lens = "offense" if text_value(perspective) == "attacker" else "defense"
         moved[(int(from_id), lens)] = int(to_id)
         if not listed:
             unlisted.append(int(report))
@@ -287,7 +287,7 @@ def enqueue_rebuilds(
                             "last_ranked_day_start": last_day.astimezone(
                                 UTC
                             ).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                            "recalculate_season": season_id or _text_value(day_season),
+                            "recalculate_season": season_id or text_value(day_season),
                             "trigger": (
                                 "season_repair" if season_id else "battle_day_repair"
                             ),
@@ -314,7 +314,7 @@ def enqueue_rebuilds(
                 "player_id": int(player_id),
                 "ranked_day_start": job_day,
                 "failure_category": (
-                    _text_value(failure_category) if failure_category else None
+                    text_value(failure_category) if failure_category else None
                 ),
             }
             for player_id, _, _, _, job_id, failure_category, job_day
@@ -566,7 +566,7 @@ def enqueue_current_season_republication(
                             {
                                 "player_id": int(player_id),
                                 "ranked_day_start": ranked_day_start_text,
-                                "official_season_id": _text_value(
+                                "official_season_id": text_value(
                                     official_season_id
                                 ),
                                 "trigger": "current_season_republication",
@@ -650,7 +650,7 @@ def _enqueue_false_shield_rebuilds(connection: Any, max_jobs: int) -> list[int]:
                         "player_id": int(player_id),
                         "ranked_day_start": day_text,
                         "last_ranked_day_start": day_text,
-                        "recalculate_season": _text_value(official_season_id),
+                        "recalculate_season": text_value(official_season_id),
                         "trigger": "false_shield_rebuild",
                     }
                 ),
@@ -777,7 +777,7 @@ def _enqueue_ended_live_rebuilds(
                     "job_id": int(job_id),
                     "player_id": int(player_id),
                     "ranked_day_start": day_text,
-                    "failure_category": _text_value(category) if category else None,
+                    "failure_category": text_value(category) if category else None,
                 }
             )
             continue
@@ -801,7 +801,7 @@ def _enqueue_ended_live_rebuilds(
                         "player_id": int(player_id),
                         "ranked_day_start": day_text,
                         "last_ranked_day_start": day_text,
-                        "recalculate_season": _text_value(season_id),
+                        "recalculate_season": text_value(season_id),
                         "trigger": "ended_live_rebuild",
                     }
                 ),

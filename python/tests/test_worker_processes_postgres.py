@@ -21,13 +21,12 @@ from test_worker_reserved_capacity_postgres import (
     _wait_for_statuses,
 )
 
-from clashlens import army_ingestion
+from clashlens import army_ingestion, claimed_jobs
 from clashlens.db import (
-    POPULATION_BUILD_WORK_TYPES,
-    RESPONSE_WORK_TYPES,
     Database,
     LeaseLost,
 )
+from clashlens.job_contracts import POPULATION_BUILD_WORK_TYPES, RESPONSE_WORK_TYPES
 from clashlens.maintenance_permit import MaintenancePermit, PermitState
 from clashlens.past_reset_pacing import build_permit_busy
 from clashlens.worker import ObservationProcessor, process_until_stopped
@@ -147,7 +146,7 @@ def test_only_one_build_runs_across_worker_processes(
             assert second.claim_job(owner="process-2", work_types=POPULATION_BUILD_WORK_TYPES) is None
             with first.pool.connection() as connection, connection.transaction():
                 # A running build keeps it even after its lease runs out.
-                first._lock_live_claim(connection, build, build=True)
+                claimed_jobs.lock_live_claim(connection, build, build=True)
                 time.sleep(1.1)
                 assert second.claim_job(
                     owner="process-2", work_types=POPULATION_BUILD_WORK_TYPES

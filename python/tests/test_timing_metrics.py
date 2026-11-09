@@ -11,6 +11,12 @@ from test_collector import _Client, _collector, _Spool, _Store
 from clashlens import stage_metrics, worker
 from clashlens.archive import ArchiveReadResult
 from clashlens.collector_db import CollectorWork
+from clashlens.db import (
+    ANALYTICS_RULE_VERSION,
+    ARMY_ANALYTICS_RULE_VERSION,
+    DOMAIN_RULE_VERSION,
+    PROCESSING_VERSION,
+)
 from clashlens.league_history import (
     LEAGUE_HISTORY_ENDPOINT_VERSION,
     LEAGUE_HISTORY_PARSER_VERSION,
@@ -113,12 +119,12 @@ def test_worker_jobs_expose_elapsed_and_thread_computation(
     claim = SimpleNamespace(
         job_id=1,
         work_type=work_type,
-        processing_version=worker.PROCESSING_VERSION,
-        domain_rule_version=worker.DOMAIN_RULE_VERSION,
+        processing_version=PROCESSING_VERSION,
+        domain_rule_version=DOMAIN_RULE_VERSION,
         analytics_rule_version=(
-            worker.ARMY_ANALYTICS_RULE_VERSION
+            ARMY_ANALYTICS_RULE_VERSION
             if "army" in work_type
-            else worker.ANALYTICS_RULE_VERSION
+            else ANALYTICS_RULE_VERSION
         ),
         endpoint="league_history",
         endpoint_version=LEAGUE_HISTORY_ENDPOINT_VERSION,

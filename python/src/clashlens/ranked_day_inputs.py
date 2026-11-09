@@ -8,7 +8,8 @@ from typing import Any
 
 from . import battle, domain, reading_rule
 from .day_result import shield_run_length
-from .db import PROCESSING_VERSION, Database, _text_value
+from .db import PROCESSING_VERSION, Database
+from .db_rows import text_value
 from .domain import CHAIN_BREAK_REASONS, MAX_DAILY_DEFENSES, RankedDay
 from .reconciliation import (
     BATTLE_LOG_MAX_ROWS,
@@ -183,10 +184,10 @@ def load_coverage(
             malformed_row_count=int(row[6]),
             unclassified_row_count=int(row[7]),
             valid=bool(row[8]),
-            response_hash=_text_value(row[9]),
-            parser_version=_text_value(row[10]),
+            response_hash=text_value(row[9]),
+            parser_version=text_value(row[10]),
             processing_version=(
-                _text_value(row[11]) if row[11] is not None else None
+                text_value(row[11]) if row[11] is not None else None
             ),
         )
         for row in coverage_rows
@@ -255,18 +256,18 @@ def load_contributions(
             battle_identity=str(row[0]),
             lens=(
                 "offense"
-                if _text_value(row[1]) == "attacker"
+                if text_value(row[1]) == "attacker"
                 else "defense"
             ),
             trophy_amount=int(
-                row[10] if _text_value(row[1]) == "attacker" else row[11]
+                row[10] if text_value(row[1]) == "attacker" else row[11]
             ),
-            source_rule_version=_text_value(row[12]),
-            valid=_text_value(row[14]) == "valid_legend",
+            source_rule_version=text_value(row[12]),
+            valid=text_value(row[14]) == "valid_legend",
             failure_reason=(
-                _text_value(row[15]) if row[15] is not None else None
+                text_value(row[15]) if row[15] is not None else None
             ),
-            disagreement=_text_value(row[13]) == "disagreement",
+            disagreement=text_value(row[13]) == "disagreement",
             source_observation_id=int(row[4]),
             source_evidence_id=int(row[2]),
             source_row_id=int(row[3]),
@@ -274,14 +275,14 @@ def load_contributions(
             battle_timestamp=row[6],
             stars=int(row[7]),
             destruction_percentage=int(row[8]),
-            army_share_code=_text_value(row[9]),
+            army_share_code=text_value(row[9]),
             attacker_gain=int(row[10]),
             defender_loss=int(row[11]),
             opponent_tag=(
-                _text_value(row[16]) if row[16] is not None else None
+                text_value(row[16]) if row[16] is not None else None
             ),
             opponent_name=(
-                _text_value(row[17]) if row[17] is not None else None
+                text_value(row[17]) if row[17] is not None else None
             ),
             battle_seconds=(
                 int(row[18]) if row[18] is not None and str(row[18]).isdigit() else None
@@ -331,7 +332,7 @@ def load_previous_day(
     if previous_row is None:
         return None
     reasons = previous_row[14] if isinstance(previous_row[14], list) else []
-    state = _text_value(previous_row[1])
+    state = text_value(previous_row[1])
     # Continuous logs, a saved Legend day, no 9th attack or defense and no
     # disputed battle: every battle of that day is known, whether or not its
     # readings were usable or agreed. Of 564 days this Season whose
@@ -348,22 +349,22 @@ def load_previous_day(
     # the next day, as does a reading that disagreed.
     slots = int(previous_row[3]) + int(previous_row[11])
     end_known = battles_known and (state == "Complete" or state == "Partial" and 0 < slots and not (
-        slots < MAX_DAILY_DEFENSES and _text_value(previous_row[17]) == "not_applicable"))
+        slots < MAX_DAILY_DEFENSES and text_value(previous_row[17]) == "not_applicable"))
     return (
         PreviousRankedDay(
             complete=state == "Complete" and bool(previous_row[5]),
             observed_defense_count=int(previous_row[3]),
             observed_defense_loss=int(previous_row[4]),
             shield_run_length=shield_run_length(
-                _text_value(previous_row[6]), previous_row[7]),
+                text_value(previous_row[6]), previous_row[7]),
             coverage_complete=bool(previous_row[5]),
-            shield_state=_text_value(previous_row[6]),
+            shield_state=text_value(previous_row[6]),
             version_id=int(previous_row[0]),
             ranked_day_start=ranked_day.start - timedelta(days=1),
             state=state,
-            confidence=_text_value(previous_row[2]),
+            confidence=text_value(previous_row[2]),
             input_hash=(
-                _text_value(previous_row[8])
+                text_value(previous_row[8])
                 if previous_row[8] is not None
                 else None
             ),
@@ -406,9 +407,9 @@ def load_next_day_start(
         """,
         (player_id, ranked_day.end, RECONCILIATION_RULE_VERSION),
     ).fetchone()
-    if row is None or row[0] is None or _text_value(row[1]) != "Complete" or (
+    if row is None or row[0] is None or text_value(row[1]) != "Complete" or (
             row[3] != end_baseline_id or row[4] == "previous_day_end") or not (
-            _text_value(row[2]) == "exact" or row[5] == "true"):
+            text_value(row[2]) == "exact" or row[5] == "true"):
         return None
     return int(row[0])
 
@@ -763,7 +764,7 @@ def later_end_proven(
     contributions, loss_state, loss, defense_slots, end_log, boundary_kind = row
     if defense_slots >= MAX_DAILY_DEFENSES:
         losses: tuple[int, ...] = ()
-    elif _text_value(loss_state) in {"calculated", "confirmed"}:
+    elif text_value(loss_state) in {"calculated", "confirmed"}:
         losses = (int(loss),) if loss else ()
     else:
         return False
@@ -791,5 +792,5 @@ def later_end_proven(
             for item in contributions if item.get("included") is True
         ),
         unknown_from=load_unshown_reports(connection, player_id, ranked_day)[1],
-        floor=5000 if _text_value(boundary_kind) == "weekly" else None,
+        floor=5000 if text_value(boundary_kind) == "weekly" else None,
     )

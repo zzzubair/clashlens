@@ -16,8 +16,6 @@ from . import api_player_lookup
 from .api_db import (
     ApiDatabase,
     _battles_so_far_complete,
-    _frozen_trophies_sql,
-    _opening_day_battles_sql,
     _screen_daily_log,
     _screen_events,
     _shown_total,
@@ -25,6 +23,7 @@ from .api_db import (
 )
 from .api_players import left_legend_i
 from .domain import awaits_season_reset, ranked_day_for, season_opening_reset
+from .season_reset_sql import frozen_trophies_sql, opening_day_battles_sql
 from .season_retirement import retired_day_ranges
 
 # A comparison is for a group of 10-20 players. Saving refuses larger groups;
@@ -100,8 +99,8 @@ def get_group_comparison(
                 SELECT player.id, player.active, profile.name, profile.trophies,
                        player.current_observed_at, player.current_profile_confirmed_at,
                        profile.current_league_season_id,
-                       {_frozen_trophies_sql("player.id", "%s")},
-                       {_opening_day_battles_sql("player.id", "%s")}
+                       {frozen_trophies_sql("player.id", "%s")},
+                       {opening_day_battles_sql("player.id", "%s")}
                 FROM players AS player
                 LEFT JOIN player_profile_versions AS profile
                     ON profile.id = player.current_profile_version_id

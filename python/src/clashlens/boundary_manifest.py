@@ -33,8 +33,8 @@ from .db import (
     DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
-    _text_value,
 )
+from .db_rows import text_value
 from .domain import (
     RANKED_DAY_DURATION,
     SEASON_START_TROPHIES,
@@ -96,7 +96,7 @@ def freeze_boundary_manifest(
         (generation_id, artifact_kind),
     ).fetchone()
     if existing is not None:  # ManifestStage.REUSED
-        return int(existing[0]), _text_value(existing[1])
+        return int(existing[0]), text_value(existing[1])
     generation = connection.execute(
         """
         SELECT boundary_at, generation, ordering_rule_version, freshness_rule_version,
@@ -193,12 +193,12 @@ def _freeze(
     )
     timing["stages"].append(("store", time.monotonic()))
     rule_versions = {
-        "ordering_rule_version": _text_value(generation[2]),
-        "freshness_rule_version": _text_value(generation[3]),
+        "ordering_rule_version": text_value(generation[2]),
+        "freshness_rule_version": text_value(generation[3]),
         "analytics_rule_version": (
-            _text_value(generation[5])
+            text_value(generation[5])
             if artifact_kind == "army"
-            else _text_value(generation[4])
+            else text_value(generation[4])
         ),
         **({"season_inputs": season_inputs} if season_inputs is not None else {}),
     }
@@ -357,9 +357,9 @@ def manifest_contents(connection: Any, manifest_id: int) -> tuple[str, dict[str,
         """,
         (manifest_id,),
     ).fetchall()
-    return _text_value(row[0]), {
+    return text_value(row[0]), {
         "generation": int(row[1]),
-        "artifact_kind": _text_value(row[2]),
+        "artifact_kind": text_value(row[2]),
         "rule_versions": rule_versions,
         "rows": [identity for (identity,) in rows],
     }
@@ -509,8 +509,8 @@ def _member(row: Any, artifact_kind: str) -> tuple[int, int | None, str | None, 
     return (
         int(row[0]),
         int(row[1]) if row[1] is not None else None,
-        _text_value(row[2]) if row[2] is not None else None,
-        _text_value(row[3] if artifact_kind == "snapshot" else row[4]),
+        text_value(row[2]) if row[2] is not None else None,
+        text_value(row[3] if artifact_kind == "snapshot" else row[4]),
     )
 
 
@@ -586,10 +586,10 @@ def _snapshot_rows(
         [
             player_id for player_id in player_ids
             if player_id not in profiles
-            or _text_value(profiles[player_id][7]) != "eligible"
+            or text_value(profiles[player_id][7]) != "eligible"
             or profiles[player_id][6] == SEASON_START_TROPHIES
             or not season_is_current(
-                _text_value(profiles[player_id][8]),
+                text_value(profiles[player_id][8]),
                 boundary_at - RANKED_DAY_DURATION,
             )
         ],
@@ -645,7 +645,7 @@ def _snapshot_rows(
         ).fetchall()
     } if unprofiled else {}
     ranked_states = {
-        (int(row[0]), int(row[1])): _text_value(row[2])
+        (int(row[0]), int(row[1])): text_value(row[2])
         for row in connection.execute(
             "SELECT id, player_id, state FROM ranked_day_versions WHERE id = ANY(%s::bigint[])",
             ([row[1] for row in members if row[1] is not None],),
@@ -703,11 +703,11 @@ def _snapshot_rows(
             ).hexdigest()
             identity["profile_snapshot"] = {
                 "observation_id": int(profile[1]),
-                "tag": _text_value(profile[4]),
+                "tag": text_value(profile[4]),
                 "name": profile[5],
                 "trophies": int(profile[6]),
                 "observed_at": profile[2].astimezone(UTC).isoformat(),
-                "eligibility_state": _text_value(profile[7]),
+                "eligibility_state": text_value(profile[7]),
                 "profile_json": profile[3],
             }
             if player_id in late:
@@ -715,10 +715,10 @@ def _snapshot_rows(
             # Whether the player was in Legend I is the board's membership
             # (boundary_members); a lower-league profile's trophies still
             # rank on no Legend I board.
-            if _text_value(profile[7]) != "eligible":
+            if text_value(profile[7]) != "eligible":
                 identity["snapshot_quality"] = "invalid"
             elif player_id not in unplayed and player_id not in late and not season_is_current(
-                _text_value(profile[8]), generation[0] - RANKED_DAY_DURATION
+                text_value(profile[8]), generation[0] - RANKED_DAY_DURATION
             ):
                 # Trophies from before this player's Season reset never
                 # stand for the ended day's Season.
@@ -738,8 +738,8 @@ def _snapshot_rows(
             identity["profile_version_id"] = None
             identity["profile_input_hash"] = None
             latest = failures.get(player_id)
-            source_state = _text_value(latest[0]) if latest and latest[0] else None
-            failure = _text_value(latest[1]) if latest and latest[1] else None
+            source_state = text_value(latest[0]) if latest and latest[0] else None
+            failure = text_value(latest[1]) if latest and latest[1] else None
             if failure in {
                 "malformed_json",
                 "unsupported_profile_schema",
@@ -1032,10 +1032,10 @@ def reset_trophies(
     later = set()
     for player_id, (version_id, _, _, trophies) in readings.items():
         day = days.get(player_id)
-        if season_end or day is None or (_text_value(day[0]) == "Complete" and day[3] is not None):
+        if season_end or day is None or (text_value(day[0]) == "Complete" and day[3] is not None):
             continue
         boundary_kind, usable, ambiguous, after_reading, end_unknown = (*day[5:9], day[11])
-        if _text_value(boundary_kind) == "season" or not usable or end_unknown:
+        if text_value(boundary_kind) == "season" or not usable or end_unknown:
             continue
         if ranked_day_inputs.later_end_proven(
             database, connection, player_id, version_id,
@@ -1066,21 +1066,21 @@ def _reset_total(
     total = reading + int(after_reading) if battles_proven or later else None
     if season_end and official is not None:
         return int(official), True
-    if _text_value(state) == "Complete" and final is not None:
+    if text_value(state) == "Complete" and final is not None:
         settled = int(final) + int(automatic_loss or 0)
         if season_end:
             return int(final), total == settled and (
-                _text_value(confidence) == "exact" or bool(read_clean)
+                text_value(confidence) == "exact" or bool(read_clean)
             )
         # The game resets trophies at a Season's end, and raises a total at
         # or below 5,000 at a weekly one, so that Reset's reading proves
         # nothing and the reading must agree, unless the weekly one was read
         # before the raise landed and matched the day's end (``clean``).
-        end_reset = _text_value(boundary_kind) == "season" or (
-            _text_value(boundary_kind) == "weekly" and int(final) <= 5000 and not read_clean
+        end_reset = text_value(boundary_kind) == "season" or (
+            text_value(boundary_kind) == "weekly" and int(final) <= 5000 and not read_clean
         )
         return settled - int(after_reset), (not end_reset or total == settled) and (
-            _text_value(confidence) == "exact" or bool(read_clean)
+            text_value(confidence) == "exact" or bool(read_clean)
         ) and not end_unknown
     if total is None:
         return reading, False
@@ -1130,7 +1130,7 @@ def _army_rows(
             else:
                 version = versions.get(version_id)
                 state = (
-                    _text_value(version[0]) if version is not None else "Malformed"
+                    text_value(version[0]) if version is not None else "Malformed"
                 )
                 classification = (
                     state
@@ -1244,7 +1244,7 @@ def _army_selections(
         ),
     ).fetchall():
         moved_decodes.setdefault(
-            (int(battle_id), _text_value(perspective)), []
+            (int(battle_id), text_value(perspective)), []
         ).append(int(decode_id))
     selections: dict[int, tuple[list[int], list[int], list[int]]] = {}
     for day, sides in sides_by_day.items():
@@ -1302,7 +1302,7 @@ def _repairs(
     ).fetchall():
         repairs.setdefault(int(from_id), []).append(
             (
-                "offense" if _text_value(perspective) == "attacker" else "defense",
+                "offense" if text_value(perspective) == "attacker" else "defense",
                 int(to_id),
                 {int(report) for report in side_reports},
             )
@@ -1332,7 +1332,7 @@ def _reports(connection: Any, battle_ids: list[int]) -> dict[tuple[int, str], in
     if not battle_ids:
         return {}
     return {
-        (int(row[0]), _text_value(row[1])): int(row[2])
+        (int(row[0]), text_value(row[1])): int(row[2])
         for row in connection.execute(
             """
             SELECT battle_id, perspective, evidence_id

@@ -22,7 +22,7 @@ from domain_test_support import as_api_role, domain_database
 from test_league_week_days_postgres import Climber
 from test_reset_scenarios_postgres import Story, attacks, day, defenses
 
-from clashlens import api_leaderboard
+from clashlens import api_leaderboard, live_board
 from clashlens.api_db import ApiDatabase
 
 STEADY, DROPPED, BACK, STALE_II, PROMOTED = "#9PP", "#2PP", "#8PP", "#PPP", "#2QQ"
@@ -32,7 +32,7 @@ def _live(story: Story, now) -> dict[str, int]:
     """The served Live board's players and trophies, after the worker's
     search for players at 5,000 who have not played yet."""
     with psycopg.connect(story.connection_info) as connection:
-        api_leaderboard.save_live_unplayed(connection, now)
+        live_board.save_live_unplayed(connection, now)
     api = ApiDatabase(as_api_role(story.connection_info))
     try:
         board = api_leaderboard.get_live_leaderboard(api, limit=100, now=now)
