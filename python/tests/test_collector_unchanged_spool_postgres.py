@@ -229,7 +229,7 @@ def test_collection_moves_on_while_the_worker_holds_its_player(
                 assert time.monotonic() - started < 5
                 assert len(spool.iter_handoffs()) == 1
                 assert _sightings(connection_info)[0] == 1
-            await asyncio.wait_for(_committed(spool), 15)
+            await asyncio.wait_for(asyncio.gather(*collector.commits._later), 15)
 
         try:
             asyncio.run(scenario())
@@ -290,7 +290,7 @@ def test_full_regular_check_moves_on_while_the_worker_holds_its_player(
                 check = collector.collect_player(work, lane="ordinary")
                 assert await asyncio.wait_for(check, 15) == ["recorded"]
                 assert time.monotonic() - started < 9
-            await asyncio.wait_for(_committed(spool), 15)
+            await asyncio.wait_for(asyncio.gather(*collector.commits._later), 15)
 
         try:
             asyncio.run(scenario())
@@ -506,7 +506,3 @@ def test_a_response_is_new_needs_its_own_proof_or_confirms_the_saved_one(
         finally:
             database.close()
 
-
-async def _committed(spool) -> None:
-    while await asyncio.to_thread(spool.iter_handoffs):
-        await asyncio.sleep(0.01)
