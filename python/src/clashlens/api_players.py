@@ -894,16 +894,9 @@ def get_player_season_summary(
                     datetime.fromtimestamp(int(official_season_id), UTC),
                 )
             ]
-            shape_start = record["season_start"]
-            if shape_start is None:
-                if history is not None:
-                    shape_start = history["season_start"]
-                else:
-                    from .season_lifecycle import canonical_season_bounds
-
-                    bounds = canonical_season_bounds(connection, official_season_id)
-                    shape_start = None if bounds is None else bounds[0]
-            historical_facts(result, season_start=shape_start)
+            # Shaped from the Season's dates, which come from its id as the
+            # website's pastSeasonShape did.
+            historical_facts(result)
             return result
         if history is None:
             return None
