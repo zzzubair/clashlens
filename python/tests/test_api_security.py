@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -303,3 +304,34 @@ def test_player_read_passes_a_totals_only_request_to_the_page(monkeypatch) -> No
             assert response.status_code == 200, response.text
 
     assert asked == [("#2PP", True), ("#2PP", False)]
+
+
+def test_player_freshness_counts_from_arrival_not_from_a_free_connection(
+    monkeypatch,
+) -> None:
+    instant = [NOW]
+    asked = []
+    database = FakeDatabase()
+
+    @contextmanager
+    def busy_pool():
+        instant[0] += 2
+        yield object()
+
+    def page(connection, tag, *, now, freshness_seconds, battles):
+        asked.append(now)
+        return {"tag": tag}
+
+    database.pool.connection = busy_pool
+    monkeypatch.setattr("clashlens.api_players.read_player_page", page)
+    app = create_app(
+        database=database,
+        keys={("typescript-website", "current"): KEY},
+        clock=lambda: instant[0],
+    )
+    target = "/v1/players/%232PP"
+    with TestClient(app) as client:
+        response = client.get(target, headers=_signed_headers(target))
+
+    assert response.status_code == 200, response.text
+    assert asked == [datetime.fromtimestamp(NOW, tz=UTC)]

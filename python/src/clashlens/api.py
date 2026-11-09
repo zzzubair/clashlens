@@ -375,11 +375,14 @@ def create_app(
     ) -> JSONResponse:
         authorize(request, "player.read", production_database)
         normalized_tag = safe_tag(tag)
+        # Read the clock before waiting for a connection, as freshness is
+        # measured from when the request arrived.
+        now = current_time()
         with production_database.pool.connection() as connection:
             result = api_players.read_player_page(
                 connection,
                 normalized_tag,
-                now=current_time(),
+                now=now,
                 freshness_seconds=_DEFAULT_FRESHNESS_SECONDS,
                 battles=battles,
             )
