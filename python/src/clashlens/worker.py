@@ -302,8 +302,8 @@ class TimedMaintenance:
                     try:
                         task()
                     except Exception as error:  # noqa: BLE001 - independent maintenance task
-                        print(json.dumps({"event": "worker_maintenance_task", "task": name,
-                                          "error": type(error).__name__}), flush=True)
+                        print(json.dumps({"event": "worker_maintenance", "status": "failed",
+                                          "task": name, "error": type(error).__name__}), flush=True)
             finally:
                 if derived_turns is not None:
                     derived_turns.release()
