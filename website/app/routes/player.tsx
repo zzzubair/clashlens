@@ -383,13 +383,18 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
   usePlayerLookupEvent(data.requestedTag, trackedPlayer, lookup);
   const loadedAt = player?.calendar.as_of;
   const now = useServerTime(loadedAt);
-  const seasonExpired = useSeasonReread(
+  // Python worked the page's facts out for one Legend day, so the page reads
+  // them again at its end, as its clock moved them on before; past the
+  // Season's last day they are withheld until that read lands.
+  const dayOver = useSeasonReread(
     loadedAt,
     minuteChecks || !!trackedPlayer?.profile.seasonResetPending,
     data.selectedSeason === null,
     !!data.lookup && !["checking", "tracking"].includes(data.lookup.state),
-    player?.calendar.season_end,
+    player?.calendar.day_end,
   );
+  const seasonExpired =
+    dayOver && player?.calendar.day_end === player?.calendar.season_end;
   const statisticsTime = now;
   const seasonMenu = (currentAvailable: boolean) =>
     data.requestedTag && (
@@ -835,7 +840,10 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           menu={seasonMenu(true)}
         />
       ) : seasonExpired ? (
-        <p className="section-note">No finished Legend days yet this Season</p>
+        <>
+          {seasonMenu(true)}
+          <p className="section-note">No finished Legend days yet this Season</p>
+        </>
       ) : (
         <BattleStatistics
           player={trackedPlayer}
