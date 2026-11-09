@@ -207,7 +207,8 @@ def test_day_one_goal_uses_5000_baseline(database_url, archive_server, monkeypat
         monkeypatch.setattr(api_players, "decode_army_share_code", lambda code: decoded.append(code))
         totals = served_player(story, tag, day(2) + timedelta(hours=1), battles=False)["screen_ready"]
         assert totals["army_units"] == {} and decoded == []
-        assert totals["rival_season"] == {"hit_rate": 1, "offense": 320, "defense": -240}
+        assert totals["rival_season"] == {"hit_rate": 1, "offense": 320, "defense": -240,
+                                          "net_per_day": 80, "finished_days": 1}
         assert totals["rival_season"] == full["rival_season"]
         assert all(not saved["offense_events"] and not saved["defense_events"] for saved in totals["days"])
 
@@ -238,7 +239,9 @@ def test_season_rival_excludes_shields_from_real_worker_days(database_url, archi
         assert before[2]["end"] == before[2]["start"] == 5114
         assert before[6]["end"] == before[6]["start"] == 5188
         ready = served_player(story, tag, day(9) + timedelta(hours=1), battles=False)["screen_ready"]
-        assert ready["rival_season"] == {"hit_rate": 37 / 48, "offense": 1810 / 6, "defense": -1536 / 6}
+        # The Watchlist's Whole Season row: 274 net over the six played days.
+        assert ready["rival_season"] == {"hit_rate": 37 / 48, "offense": 1810 / 6, "defense": -1536 / 6,
+                                         "net_per_day": 274 / 6, "finished_days": 8}
         assert "dashboard_season" not in ready and "battle_statistics" not in ready
         assert [story.saved_day(tag, day(number)) for number in range(1, 9)] == before
 
