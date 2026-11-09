@@ -1,7 +1,12 @@
 vi.mock("../../app/services/python-transport.server", () => ({
   requestJson: mocks.requestJson,
 }));
-import { createHmac } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
+
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
+  return { ...actual, randomBytes: vi.fn(actual.randomBytes) };
+});
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -44,22 +49,16 @@ function oauthTransaction(now = 1_750_000) {
 describe("login cookie values", () => {
   it("signs a canonical provider+subject payload with a 30-day lifetime", () => {
     expect(LOGIN_COOKIE_LIFETIME_SECONDS).toBe(30 * 86_400);
+    vi.mocked(randomBytes).mockImplementationOnce((size) => Buffer.alloc(size, 0x2a));
     const value = createLoginCookieValue(IDENTITY, KEY, 1_750_000_000);
     const [payloadPart, signaturePart] = value.split(".");
     const payload = Buffer.from(payloadPart, "base64url").toString("utf8");
-    expect(JSON.parse(payload)).toEqual({
-      v: 1,
-      p: "google",
-      s: "11223344556677889900",
-      i: 1_750_000,
-      m: 0,
-      e: 1_750_000 + LOGIN_COOKIE_LIFETIME_SECONDS,
-      n: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/),
-    });
-    const expected = createHmac("sha256", KEY)
-      .update(Buffer.from(payloadPart, "base64url"))
-      .digest("base64url");
-    expect(signaturePart).toBe(expected);
+    // HMAC vector computed once with OpenSSL, key bytes 00..1f and the exact
+    // UTF-8 JSON below: dgst -sha256 -mac HMAC -macopt hexkey:000102...1f.
+    expect(payload).toBe(
+      '{"v":1,"p":"google","s":"11223344556677889900","i":1750000,"m":0,"e":4342000,"n":"KioqKioqKioqKioqKioqKg"}',
+    );
+    expect(signaturePart).toBe("W2rFOihPbeR3mBjNMLo2OZKKSnxCSgcNvOayWJJ_cao");
     expect(value.length).toBeLessThan(512);
   });
 

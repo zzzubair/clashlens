@@ -944,8 +944,15 @@ describe("dashboard route", () => {
     );
     expect(status).toBe(200);
     expect(data.saved).toBe(true);
-    // The page shows the answer's settings without reading itself again.
-    expect(data.settings).toEqual(readSettings(settings));
+    // Saved settings are returned with the documented defaults for omitted fields.
+    expect(data.settings).toEqual({
+      layout: ["goal", "cutoffs"],
+      goal: 75,
+      cutoffs: [10, 50, 100, 200, 500, 1000, 5000],
+      group: null,
+      groupWindow: "7",
+      basesMode: "trophies",
+    });
     expect(client.updateAccount).toHaveBeenCalledWith(
       {
         username: "nova88",

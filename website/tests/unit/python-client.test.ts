@@ -750,6 +750,7 @@ describe("server-only Python client response boundary", () => {
         battle_id: "attack-7",
         battle_timestamp: "2026-08-06T15:45:00Z",
         opponent: { tag: "#2PY", name: "Opponent seven" },
+        army_share_code: 42,
         destruction_percentage: 99,
         stars: 3,
         trophy_change: 38,
@@ -1001,18 +1002,155 @@ describe("server-only Python client response boundary", () => {
     expect(mapped.currentDayPublishedAt).toBe("2026-08-06T11:30:00+00:00");
     const mappedCurrentDay = mapped.currentDay;
     if (mappedCurrentDay === null) throw new Error("expected active day");
-    const mapExpectedEvent = (event: (typeof offenseEvents)[number]) => ({
-      battleId: event.battle_id,
-      battleTimestamp: event.battle_timestamp,
-      opponent: { ...event.opponent, name: event.opponent.name || null },
-      destructionPercentage: event.destruction_percentage,
-      stars: event.stars,
-      trophyChange: event.trophy_change,
-      perspectiveDisagreement: false,
-      armyShareCode: event.army_share_code ?? null,
-    });
-    expect(mappedCurrentDay.offenseEvents).toEqual(offenseEvents.map(mapExpectedEvent));
-    expect(mappedCurrentDay.defenseEvents).toEqual(defenseEvents.map(mapExpectedEvent));
+    // Fixed decoded values for the wire example above. Null/empty names and
+    // missing/non-string army codes have no display value.
+    expect(mappedCurrentDay.offenseEvents).toEqual([
+      {
+        battleId: "attack-8",
+        battleTimestamp: "2026-08-06T16:30:00Z",
+        opponent: {
+          tag: "#2P8",
+          name: "Opponent eight",
+        },
+        destructionPercentage: 100,
+        stars: 3,
+        trophyChange: 40,
+        perspectiveDisagreement: false,
+        armyShareCode: "u1x0-2x1",
+      },
+      {
+        battleId: "attack-7",
+        battleTimestamp: "2026-08-06T15:45:00Z",
+        opponent: {
+          tag: "#2PY",
+          name: "Opponent seven",
+        },
+        destructionPercentage: 99,
+        stars: 3,
+        trophyChange: 38,
+        perspectiveDisagreement: false,
+        armyShareCode: null,
+      },
+      {
+        battleId: "attack-6",
+        battleTimestamp: "2026-08-06T14:30:00Z",
+        opponent: {
+          tag: "#2PL",
+          name: null,
+        },
+        destructionPercentage: 75,
+        stars: 2,
+        trophyChange: 30,
+        perspectiveDisagreement: false,
+        armyShareCode: null,
+      },
+      {
+        battleId: "attack-5",
+        battleTimestamp: "2026-08-06T13:15:00Z",
+        opponent: {
+          tag: "#2PG",
+          name: "Opponent five",
+        },
+        destructionPercentage: 50,
+        stars: 2,
+        trophyChange: 25,
+        perspectiveDisagreement: false,
+        armyShareCode: null,
+      },
+      {
+        battleId: "attack-4",
+        battleTimestamp: "2026-08-06T12:30:00Z",
+        opponent: {
+          tag: "#2PR",
+          name: "Opponent four",
+        },
+        destructionPercentage: 33,
+        stars: 1,
+        trophyChange: 16,
+        perspectiveDisagreement: false,
+        armyShareCode: null,
+      },
+      {
+        battleId: "attack-3",
+        battleTimestamp: "2026-08-06T11:30:00Z",
+        opponent: {
+          tag: "#2PJ",
+          name: "Opponent three",
+        },
+        destructionPercentage: 10,
+        stars: 1,
+        trophyChange: 5,
+        perspectiveDisagreement: false,
+        armyShareCode: null,
+      },
+      {
+        battleId: "attack-2",
+        battleTimestamp: "2026-08-06T10:00:00Z",
+        opponent: {
+          tag: "#2PC",
+          name: "Opponent two",
+        },
+        destructionPercentage: 9,
+        stars: 0,
+        trophyChange: 0,
+        perspectiveDisagreement: false,
+        armyShareCode: null,
+      },
+      {
+        battleId: "attack-1",
+        battleTimestamp: "2026-08-06T09:00:00Z",
+        opponent: {
+          tag: "#2PU",
+          name: "Opponent one",
+        },
+        destructionPercentage: 0,
+        stars: 0,
+        trophyChange: 0,
+        perspectiveDisagreement: false,
+        armyShareCode: null,
+      },
+    ]);
+    expect(mappedCurrentDay.defenseEvents).toEqual([
+      {
+        battleId: "defense-3",
+        battleTimestamp: "2026-08-06T16:00:00Z",
+        opponent: {
+          tag: "#2PV",
+          name: "Defender three",
+        },
+        destructionPercentage: 100,
+        stars: 3,
+        trophyChange: -40,
+        perspectiveDisagreement: false,
+        armyShareCode: null,
+      },
+      {
+        battleId: "defense-2",
+        battleTimestamp: "2026-08-06T14:00:00Z",
+        opponent: {
+          tag: "#2P9",
+          name: null,
+        },
+        destructionPercentage: 50,
+        stars: 1,
+        trophyChange: -5,
+        perspectiveDisagreement: false,
+        armyShareCode: null,
+      },
+      {
+        battleId: "defense-1",
+        battleTimestamp: "2026-08-06T12:00:00Z",
+        opponent: {
+          tag: "#28PP",
+          name: "Defender one",
+        },
+        destructionPercentage: 0,
+        stars: 0,
+        trophyChange: 0,
+        perspectiveDisagreement: false,
+        armyShareCode: null,
+      },
+    ]);
     await expect(
       (await import("../../app/services/players.server")).getPlayer("#2PP"),
     ).resolves.toMatchObject({
