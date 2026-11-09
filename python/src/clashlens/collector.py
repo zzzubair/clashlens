@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import math
 import time
 from contextlib import ExitStack
@@ -778,11 +779,31 @@ class Collector:
         scheduled_boundary: datetime | None = None
         next_rankings_at = datetime.min.replace(tzinfo=UTC)
         next_expiry_at = next_rankings_at
+        # Discovery admission runs beside the picks, one at a time: after the
+        # 9 Nov 2026 Monday Reset each took 30 to 60 s, so inside the pick it
+        # held every Reset and settlement check behind it, and three timed out
+        # in a row stopped the collector. A failed one is retried next pass.
+        admission: asyncio.Future[None] | None = None
         graceful = False
         try:
             while not stop_requested.is_set():
                 collector_liveness.mark(self, "intents")
                 now = datetime.now(UTC)
+                if admission is not None and admission.done():
+                    error = admission.exception()
+                    if not isinstance(error, (psycopg.Error, PoolTimeout)) and error is not None:
+                        raise error
+                    if error is not None:
+                        self._count("discovery_admission_failed")
+                        print(json.dumps({
+                            "event": "discovery_admission", "status": "failed",
+                            "error": type(error).__name__,
+                        }), flush=True)
+                    admission = None
+                if admission is None:
+                    admission = asyncio.ensure_future(
+                        asyncio.to_thread(self.database.admit_discovery_profiles, now)
+                    )
                 if rankings_enabled and now >= next_rankings_at:
                     await self.database_call(
                         self.database.schedule_rankings_cycle, now
@@ -823,7 +844,7 @@ class Collector:
                         continue
                     intents = await self.database_call(
                         self.database.pending_intents,
-                        limit=sum(slots[lane] for lane in lanes),
+                        limit=sum(slots[lane] for lane in lanes if lane != "reset"),
                         now=now,
                         interactive=is_interactive,
                         held=self.commits.held_work(),
@@ -849,6 +870,8 @@ class Collector:
                 await wait_or_stop(stop_requested, idle_seconds)
             graceful = True
         finally:
+            if admission is not None:
+                await drain_awaitable(asyncio.gather(admission, return_exceptions=True))
             if not graceful:
                 for _lane, task in active.values():
                     if not task.done():
