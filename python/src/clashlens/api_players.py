@@ -527,6 +527,9 @@ def read_player_page(
                 if day["ranked_day_start"] in dashboard_ends:
                     day["display_end"]["dashboard"] = dashboard_ends[day["ranked_day_start"]]
         ready["dashboard_windows"] = dashboard_windows(ready["dashboard_season"])
+    elif battles:
+        for day in ready["days"]:
+            day["display_end"].pop("dashboard", None)
     if battles and goal_rank is not None:
         ready["dashboard_goal"] = dashboard_goal(connection, result, goal_rank)
     if not battles:

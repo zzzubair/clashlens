@@ -2,28 +2,32 @@
 // than formatting with one, and pages format dozens of dates.
 const dateFormats = new Map<string, Intl.DateTimeFormat>();
 
-function dateFormat(options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+function formatDate(options: Intl.DateTimeFormatOptions, value: string | number | Date) {
+  const date = new Date(value);
+  // As toLocaleDateString does; a formatter throws on an invalid date.
+  if (Number.isNaN(date.getTime())) return "Invalid Date";
   const key = JSON.stringify(options);
   let format = dateFormats.get(key);
   if (!format) {
     format = new Intl.DateTimeFormat("en-GB", { ...options, timeZone: "UTC" });
     dateFormats.set(key, format);
   }
-  return format;
+  return format.format(date);
 }
 
 export function utcDate(
   value: string | number | Date,
   { weekday = false, year = false }: { weekday?: boolean; year?: boolean } = {},
 ): string {
-  return dateFormat({
-    ...(weekday ? { weekday: "short" } : {}),
-    day: "numeric",
-    month: "short",
-    ...(year ? { year: "numeric" } : {}),
-  })
-    .format(new Date(value))
-    .replace("Sept", "Sep");
+  return formatDate(
+    {
+      ...(weekday ? { weekday: "short" } : {}),
+      day: "numeric",
+      month: "short",
+      ...(year ? { year: "numeric" } : {}),
+    },
+    value,
+  ).replace("Sept", "Sep");
 }
 
 /** The days the bars cover, behind their ⓘ and in a chart's title:
@@ -34,7 +38,7 @@ export function dayRange(starts: string[]): string | null {
   if (first === undefined || last === undefined) return null;
   const day = (start: string) => new Date(start).getUTCDate();
   const month = (start: string) =>
-    dateFormat({ month: "short" }).format(new Date(start)).replace("Sept", "Sep");
+    formatDate({ month: "short" }, start).replace("Sept", "Sep");
   return month(first) === month(last)
     ? `${day(first)}–${day(last)} ${month(last)}`
     : `${day(first)} ${month(first)} – ${day(last)} ${month(last)}`;
