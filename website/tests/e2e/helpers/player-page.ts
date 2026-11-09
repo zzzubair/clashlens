@@ -6,7 +6,9 @@ import type { PlayerPage } from "../../../app/lib/contracts";
 // to value indexes, arrays list value indexes, -5 is null and -7 undefined.
 // A streamed value is ["P", its own index], resolved by a later "P<index>:"
 // line; it decodes to undefined, so past Seasons are left out.
-export function decodePageData(text: string) {
+export function decodePageData<T = Record<string, { data?: { player?: PlayerPage } }>>(
+  text: string,
+): T {
   const values: unknown[] = JSON.parse(text.split("\n")[0]);
   const decode = (index: number): unknown => {
     if (index < 0) return index === -5 ? null : undefined;
@@ -20,7 +22,7 @@ export function decodePageData(text: string) {
       ]),
     );
   };
-  return decode(0) as Record<string, { data?: { player?: PlayerPage } }>;
+  return decode(0) as T;
 }
 export function encodePageData(data: unknown) {
   const values: unknown[] = [];
@@ -39,7 +41,7 @@ export function encodePageData(data: unknown) {
   encode(data);
   return `${JSON.stringify(values)}\n`;
 }
-export function pagePlayer(data: ReturnType<typeof decodePageData>) {
+export function pagePlayer(data: Record<string, { data?: { player?: PlayerPage } }>) {
   const player = Object.values(data).find((route) => route.data?.player)?.data?.player;
   expect(player?.currentDay, "saved player has a current Legend day").toBeTruthy();
   return player!;

@@ -1,4 +1,4 @@
-import { EMPTY_PLAYER_FACTS } from "../fixtures/player-route-data";
+import { playerPage } from "../fixtures/player-route-data";
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
@@ -8,44 +8,12 @@ import {
   StaticRouterProvider,
 } from "react-router";
 
-import type {
-  PlayerPage,
-  RefreshState,
-  WebsiteErrorResponse,
-} from "../../app/lib/contracts";
+import type { RefreshState, WebsiteErrorResponse } from "../../app/lib/contracts";
 import PlayerRoute, { type loader as playerLoader } from "../../app/routes/player";
 
 const TAG = "#2PP";
 const OBSERVED_AT = "2026-08-06T12:00:00Z";
-const PLAYER = {
-  kind: "player-page",
-  ...EMPTY_PLAYER_FACTS,
-  tag: TAG,
-  trackingState: "tracking",
-  profile: {
-    tag: TAG,
-    name: "Nova",
-    clan: "Example",
-    trophies: 6000,
-    freshness: { state: "fresh", observedAt: OBSERVED_AT, ageSeconds: 0 },
-    confidence: "high",
-    coverage: "complete",
-    eligibility: "legend-i",
-  },
-  season: null,
-  currentDay: null,
-  recentDays: [],
-  seasonDays: [],
-  dataQuality: [],
-  provenance: {
-    source: "api_player_daily_logs",
-    observedAt: OBSERVED_AT,
-    freshness: "fresh",
-    confidence: "high",
-    coverage: "complete",
-    version: "v1",
-  },
-} satisfies PlayerPage;
+const PLAYER = playerPage({ observedAt: OBSERVED_AT });
 
 async function refreshMessage(
   state: RefreshState,

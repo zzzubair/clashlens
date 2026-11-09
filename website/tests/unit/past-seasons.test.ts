@@ -1,4 +1,4 @@
-import { EMPTY_PLAYER_FACTS } from "../fixtures/player-route-data";
+import { playerPage } from "../fixtures/player-route-data";
 vi.mock("../../app/services/players.server", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../app/services/players.server")>();
@@ -41,7 +41,7 @@ vi.mock("../../app/services/past-seasons.server", () => ({
   getPastSeasons: mocks.getPastSeasons,
 }));
 
-import type { PastSeasonFinish, PlayerPage } from "../../app/lib/contracts";
+import type { PastSeasonFinish } from "../../app/lib/contracts";
 import PlayerRoute, { loader as playerLoader } from "../../app/routes/player";
 import { PythonApiError } from "../../app/services/python-response.server";
 
@@ -70,35 +70,7 @@ const FINISHES: PastSeasonFinish[] = [
   },
 ];
 
-const PLAYER = {
-  kind: "player-page",
-  ...EMPTY_PLAYER_FACTS,
-  tag: TAG,
-  trackingState: "tracking",
-  profile: {
-    tag: TAG,
-    name: "Nova",
-    clan: "Example",
-    trophies: 6000,
-    freshness: { state: "fresh", observedAt: "2026-10-04T12:00:00Z", ageSeconds: 0 },
-    confidence: "high",
-    coverage: "complete",
-    eligibility: "legend-i",
-  },
-  season: null,
-  currentDay: null,
-  recentDays: [],
-  seasonDays: [],
-  dataQuality: [],
-  provenance: {
-    source: "api_player_daily_logs",
-    observedAt: "2026-10-04T12:00:00Z",
-    freshness: "fresh",
-    confidence: "high",
-    coverage: "complete",
-    version: "v1",
-  },
-} satisfies PlayerPage;
+const PLAYER = playerPage({ observedAt: "2026-10-04T12:00:00Z" });
 
 function loadPage() {
   return playerLoader({

@@ -7,31 +7,16 @@ import { CALENDAR } from "../fixtures/player-route-data";
 import { worstComparison } from "../fixtures/worst-case-accounts";
 import { expectNoPageErrors, trackPageErrors } from "./helpers/account";
 
-// Decode and encode the actual React Router single-fetch response. Streamed
-// past Seasons are omitted; these checks concern saved current data only.
-function decode(text: string) {
-  const values: unknown[] = JSON.parse(text.split("\n")[0]);
-  const item = (index: number): unknown => {
-    if (index < 0) return index === -5 ? null : undefined;
-    const value = values[index];
-    if (Array.isArray(value)) return value[0] === "P" ? undefined : value.map(item);
-    if (!value || typeof value !== "object") return value;
-    return Object.fromEntries(
-      Object.entries(value).map(([key, index]) => [
-        values[Number(key.slice(1))],
-        item(index as number),
-      ]),
-    );
-  };
-  return item(0) as Record<string, { data: FrontPageData & PlayerLoaderData }>;
-}
+import { decodePageData, encodePageData } from "./helpers/player-page";
 
 test("Live keeps its way to page 1 when Reset makes the open page unavailable", async ({
   page,
 }) => {
   const response = await page.request.get("/leaderboards/tracked.data?view=live&page=1");
   expect(response.ok()).toBe(true);
-  const saved = decode(await response.text());
+  const saved = decodePageData<
+    Record<string, { data: FrontPageData & PlayerLoaderData }>
+  >(await response.text());
   const route = Object.values(saved).find(({ data }) => data?.leaderboard)!;
   route.data.leaderboard!.generatedAt = BEFORE;
   route.data.leaderboard!.calendar = beforeCalendar;
@@ -45,7 +30,7 @@ test("Live keeps its way to page 1 when Reset makes the open page unavailable", 
       // React Router treats an error status without this header as a missing route.
       headers: { "X-Remix-Response": "yes" },
       contentType: "text/x-script",
-      body: encode(
+      body: encodePageData(
         expired
           ? Object.fromEntries(
               Object.entries(saved).map(([key, value]) => [
@@ -81,24 +66,6 @@ test("Live keeps its way to page 1 when Reset makes the open page unavailable", 
   );
   await expect(page.getByText("Loading the new Season's rankings…")).not.toBeVisible();
 });
-
-function encode(data: unknown) {
-  const values: unknown[] = [];
-  const item = (value: unknown): number => {
-    if (value === null) return -5;
-    if (value === undefined) return -7;
-    if (typeof value !== "object") return values.push(value) - 1;
-    const index = values.push(null) - 1;
-    values[index] = Array.isArray(value)
-      ? value.map(item)
-      : Object.fromEntries(
-          Object.entries(value).map(([key, value]) => [`_${item(key)}`, item(value)]),
-        );
-    return index;
-  };
-  item(data);
-  return `${JSON.stringify(values)}\n`;
-}
 
 const BEFORE = "2026-10-05T04:59:30Z";
 const AFTER = "2026-10-05T05:00:30Z";
@@ -191,7 +158,7 @@ for (const view of ["list", "comparison"] as const) {
       reads++;
       return route.fulfill({
         contentType: "text/x-script",
-        body: encode(saved),
+        body: encodePageData(saved),
       });
     });
     await page.goto("/blog");
@@ -234,7 +201,9 @@ for (const path of ["/", "/leaderboards/tracked?view=live&page=1", "/players/%23
       path === "/" ? "/_.data" : path.replace(/^([^?]*)(.*)$/, "$1.data$2");
     const response = await page.request.get(dataPath);
     expect(response.ok()).toBe(true);
-    const saved = decode(await response.text());
+    const saved = decodePageData<
+      Record<string, { data: FrontPageData & PlayerLoaderData }>
+    >(await response.text());
     const data = Object.values(saved).find(
       ({ data }) => data?.leaderboard || data?.player,
     )!.data;
@@ -256,7 +225,7 @@ for (const path of ["/", "/leaderboards/tracked?view=live&page=1", "/players/%23
       board!.entries[0].trophies = 6400;
       board!.seasonResetPending = 0;
     }
-    const initial = encode(saved);
+    const initial = encodePageData(saved);
     let stage = "before";
     let reads = 0;
     let release!: () => void;
@@ -280,7 +249,7 @@ for (const path of ["/", "/leaderboards/tracked?view=live&page=1", "/players/%23
         board!.seasonResetPending = waiting ? 1 : 0;
         board!.entries = waiting ? [] : [{ ...originalEntry!, trophies: 5000 }];
       }
-      return route.fulfill({ contentType: "text/x-script", body: encode(saved) });
+      return route.fulfill({ contentType: "text/x-script", body: encodePageData(saved) });
     });
     let refreshes = 0;
     await page.route("**/resources/players/*/refresh*", (route) => {

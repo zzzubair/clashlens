@@ -1,3 +1,5 @@
+import { renderStaticRoute, unwrap } from "../fixtures/static-route";
+import { loginConfig } from "../fixtures/login-config";
 vi.mock("../../app/services/python-transport.server", () => ({
   requestJson: mocks.requestJson,
 }));
@@ -48,7 +50,7 @@ import CrewBoardRoute, {
   loader as boardLoader,
 } from "../../app/routes/crews.$crewId.boards.$board";
 import { action as createAction, loader as newLoader } from "../../app/routes/crews.new";
-import { isCrewsEnabled, loadWebsiteConfig } from "../../app/server/config.server";
+import { isCrewsEnabled } from "../../app/server/config.server";
 import { PythonApiError } from "../../app/services/python-response.server";
 
 const ORIGIN = "https://clashlens.example";
@@ -81,11 +83,6 @@ function createRequest(fields: Record<string, string>): Args {
     params: {},
     context: { get: () => undefined },
   };
-}
-
-function unwrap<T>(result: unknown): { data: T; status: number } {
-  const wrapped = result as { data: T; init: { status?: number } | null };
-  return { data: wrapped.data, status: wrapped.init?.status ?? 200 };
 }
 
 const thrown = (run: () => Promise<unknown>) =>
@@ -172,30 +169,12 @@ async function render(
     },
   ]);
   const context = await handler.query(new Request(`${ORIGIN}${path}`));
-  if (context instanceof Response) throw new Error("unexpected response");
-  return renderToString(
-    createElement(StaticRouterProvider, {
-      router: createStaticRouter(handler.dataRoutes, context),
-      context,
-      hydrate: false,
-    }),
-  ).replaceAll("<!-- -->", "");
+  return renderStaticRoute(handler, context);
 }
 
 beforeEach(() => {
   vi.stubEnv("CLASHLENS_CREWS_ENABLED", "true");
-  mocks.getWebsiteConfig.mockReturnValue(
-    loadWebsiteConfig({
-      NODE_ENV: "test",
-      CLASHLENS_LOGIN_ENABLED: "true",
-      CLASHLENS_PUBLIC_ORIGIN: ORIGIN,
-      CLASHLENS_GOOGLE_CLIENT_ID: "test-client.apps.googleusercontent.com",
-      CLASHLENS_GOOGLE_CLIENT_SECRET: "test-client-secret",
-      CLASHLENS_DISCORD_CLIENT_ID: "1234567890123456789",
-      CLASHLENS_DISCORD_CLIENT_SECRET: "discord-test-secret",
-      CLASHLENS_LOGIN_SECRET_B64: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
-    }),
-  );
+  mocks.getWebsiteConfig.mockReturnValue(loginConfig(ORIGIN));
   mocks.requireLogin.mockResolvedValue(IDENTITY);
   mocks.readLoginIdentity.mockResolvedValue(null);
   mocks.requestJson.mockReset();

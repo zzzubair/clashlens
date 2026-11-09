@@ -1,3 +1,5 @@
+import { renderStaticRoute } from "../fixtures/static-route";
+import { loginConfig } from "../fixtures/login-config";
 import cases from "../../../testdata/w6-presentation-parity.json";
 import DOMAIN from "../../../testdata/w6-domain-contract.json";
 import {
@@ -16,12 +18,8 @@ import {
 } from "../fixtures/dashboard-player";
 import { CALENDAR } from "../fixtures/player-route-data";
 import { createElement } from "react";
-import { renderToStaticMarkup, renderToString } from "react-dom/server";
-import {
-  createStaticHandler,
-  createStaticRouter,
-  StaticRouterProvider,
-} from "react-router";
+import { renderToStaticMarkup } from "react-dom/server";
+import { createStaticHandler } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -44,7 +42,6 @@ import { CARDS, serializeSettings, type CardId } from "../../app/lib/dashboard";
 import { around, type CardDataSet, type CardReads } from "../../app/lib/dashboard-cards";
 import type { DashboardLoaderData } from "../../app/lib/dashboard-data";
 import DashboardRoute, { loader } from "../../app/routes/dashboard";
-import { loadWebsiteConfig } from "../../app/server/config.server";
 
 const ORIGIN = "https://clashlens.example";
 const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" } as const;
@@ -617,14 +614,7 @@ async function render(loaderData: DashboardLoaderData): Promise<string> {
     { path: "/dashboard", Component: DashboardRoute, loader: () => loaderData },
   ]);
   const context = await handler.query(new Request(`${ORIGIN}/dashboard`));
-  if (context instanceof Response) throw new Error("unexpected response");
-  return renderToString(
-    createElement(StaticRouterProvider, {
-      router: createStaticRouter(handler.dataRoutes, context),
-      context,
-      hydrate: false,
-    }),
-  ).replaceAll("<!-- -->", "");
+  return renderStaticRoute(handler, context);
 }
 
 const text = (html: string) =>
@@ -662,18 +652,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     vi.stubEnv("CLASHLENS_PYTHON_API_URL", "http://python-fixture.test/");
     vi.stubEnv("CLASHLENS_PYTHON_HMAC_SECRET_B64", TEST_SECRET);
     vi.stubEnv("CLASHLENS_PYTHON_HMAC_SECRET_FILE", "");
-    mocks.getWebsiteConfig.mockReturnValue(
-      loadWebsiteConfig({
-        NODE_ENV: "test",
-        CLASHLENS_LOGIN_ENABLED: "true",
-        CLASHLENS_PUBLIC_ORIGIN: ORIGIN,
-        CLASHLENS_GOOGLE_CLIENT_ID: "test-client.apps.googleusercontent.com",
-        CLASHLENS_GOOGLE_CLIENT_SECRET: "test-client-secret",
-        CLASHLENS_DISCORD_CLIENT_ID: "1234567890123456789",
-        CLASHLENS_DISCORD_CLIENT_SECRET: "discord-test-secret",
-        CLASHLENS_LOGIN_SECRET_B64: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
-      }),
-    );
+    mocks.getWebsiteConfig.mockReturnValue(loginConfig(ORIGIN));
     mocks.readLoginIdentity.mockResolvedValue(IDENTITY);
     Object.assign(python, {
       preferences: { dashboard: serializeSettings(defaultsWith(ALL_CARDS)) },

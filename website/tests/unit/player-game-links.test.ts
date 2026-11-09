@@ -1,4 +1,4 @@
-import { EMPTY_PLAYER_FACTS, UNKNOWN_END, VERIFIED } from "../fixtures/player-route-data";
+import { playerPage, UNKNOWN_END, VERIFIED } from "../fixtures/player-route-data";
 vi.mock("../../app/services/leaderboard.server", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../app/services/leaderboard.server")>();
@@ -74,36 +74,13 @@ const CLAN_LINK =
   "https://link.clashofclans.com/en?action=OpenClanProfile&amp;tag=%232CLAN";
 
 const page = (clan: string, clanTag: string | null) =>
-  ({
-    kind: "player-page",
-    ...EMPTY_PLAYER_FACTS,
+  playerPage({
     tag: TAG,
-    trackingState: "tracking",
-    profile: {
-      tag: TAG,
-      name: "VANGUARD",
-      clan,
-      clanTag,
-      trophies: 6000,
-      freshness: { state: "fresh", observedAt: "2026-10-23T12:00:00Z", ageSeconds: 0 },
-      confidence: "high",
-      coverage: "complete",
-      eligibility: "legend-i",
-    },
-    season: null,
-    currentDay: null,
-    recentDays: [],
-    seasonDays: [],
-    dataQuality: [],
-    provenance: {
-      source: "api_player_daily_logs",
-      observedAt: "2026-10-23T12:00:00Z",
-      freshness: "fresh",
-      confidence: "high",
-      coverage: "complete",
-      version: "v1",
-    },
-  }) satisfies PlayerPage;
+    name: "VANGUARD",
+    clan,
+    clanTag,
+    observedAt: "2026-10-23T12:00:00Z",
+  });
 
 // Only the first HTML sent, which is all a browser without JavaScript shows,
 // or with `streamed`, the page once everything streaming in has arrived.

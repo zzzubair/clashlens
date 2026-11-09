@@ -23,7 +23,15 @@
  *   never logged.
  */
 
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  MAX_BODY_BYTES,
+  envOr,
+  safeEqual,
+  jsonResponse,
+  authorizationRedirect,
+  readBoundedBody,
+} from "./provider-http";
+import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
@@ -38,7 +46,6 @@ const ID_TOKEN_TTL_SECONDS = 60;
 const ACCESS_TOKEN_TTL_SECONDS = 300;
 const MAX_CODE_ENTRIES = 5_000;
 const MAX_QUERY_BYTES = 8_192;
-const MAX_BODY_BYTES = 65_536;
 const MAX_HEADER_BYTES = 16_384;
 
 const CLIENT_ID = envOr("CLASHLENS_FIXTURE_OIDC_CLIENT_ID", "clashlens-browser-test");
@@ -77,18 +84,6 @@ interface AuthorizationCode {
 
 const codes = new Map<string, AuthorizationCode>();
 
-function envOr(name: string, fallback: string): string {
-  const value = process.env[name];
-  return value === undefined || value === "" ? fallback : value;
-}
-
-function safeEqual(left: string, right: string): boolean {
-  const leftBytes = Buffer.from(left, "utf8");
-  const rightBytes = Buffer.from(right, "utf8");
-  if (leftBytes.length !== rightBytes.length) return false;
-  return timingSafeEqual(leftBytes, rightBytes);
-}
-
 function isLoopbackClient(address: string | undefined): boolean {
   return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
 }
@@ -108,51 +103,8 @@ function pruneCodes(nowMs: number): void {
   }
 }
 
-function jsonResponse(response: ServerResponse, status: number, payload: unknown): void {
-  const body = JSON.stringify(payload);
-  response.writeHead(status, {
-    "Content-Type": "application/json",
-    "Content-Length": String(Buffer.byteLength(body)),
-    "Cache-Control": "no-store",
-  });
-  response.end(body);
-}
-
 function errorPage(response: ServerResponse, message: string): void {
   jsonResponse(response, 400, { error: "invalid_request", error_description: message });
-}
-
-function authorizationRedirect(
-  response: ServerResponse,
-  location: URL,
-  parameters: Record<string, string>,
-): void {
-  for (const [key, value] of Object.entries(parameters)) {
-    location.searchParams.set(key, value);
-  }
-  response.writeHead(302, {
-    Location: location.toString(),
-    "Cache-Control": "no-store",
-  });
-  response.end();
-}
-
-function readBoundedBody(request: IncomingMessage): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    request.on("data", (chunk: Buffer) => {
-      total += chunk.length;
-      if (total > MAX_BODY_BYTES) {
-        reject(new Error("body too large"));
-        request.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    request.on("end", () => resolve(Buffer.concat(chunks)));
-    request.on("error", reject);
-  });
 }
 
 function discoveryDocument(): Record<string, unknown> {

@@ -1,5 +1,5 @@
+import { playerPage } from "../fixtures/player-route-data";
 import {
-  EMPTY_PLAYER_FACTS,
   logFacts,
   EMPTY_SUMMARY_FACTS,
   RAW_SUMMARY_FACTS,
@@ -125,35 +125,7 @@ const SUMMARY: HistoricalSeasonSummary = {
   officialHistory: null,
 };
 
-const PLAYER = {
-  kind: "player-page",
-  ...EMPTY_PLAYER_FACTS,
-  tag: TAG,
-  trackingState: "tracking",
-  profile: {
-    tag: TAG,
-    name: "Nova",
-    clan: "Example",
-    trophies: 5000,
-    freshness: { state: "fresh", observedAt: "2026-10-05T05:10:00Z", ageSeconds: 0 },
-    confidence: "high",
-    coverage: "complete",
-    eligibility: "legend-i",
-  },
-  season: null,
-  currentDay: null,
-  recentDays: [],
-  seasonDays: [],
-  dataQuality: [],
-  provenance: {
-    source: "api_player_daily_logs",
-    observedAt: "2026-10-05T05:10:00Z",
-    freshness: "fresh",
-    confidence: "high",
-    coverage: "complete",
-    version: "v1",
-  },
-} satisfies PlayerPage;
+const PLAYER = playerPage({ observedAt: "2026-10-05T05:10:00Z", trophies: 5000 });
 
 const CURRENT_LINK = '<option value="">This Season</option>';
 

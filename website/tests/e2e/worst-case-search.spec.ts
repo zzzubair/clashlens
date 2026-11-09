@@ -1,3 +1,4 @@
+import { decodePageData, encodePageData } from "./helpers/player-page";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 // Real Clash names at their limits: styled letters, right-to-left, wide scripts,
@@ -17,30 +18,32 @@ async function serveWorstCaseSearch(page: Page) {
   await page.route(/\.data\?/, async (route) => {
     const response = await route.fetch();
     let index = 0;
-    // React Router packs the response into one flat array: each object maps
-    // "_<key position>" to its value's position. New values go on the end.
-    const values: unknown[] = JSON.parse(
-      (await response.text())
-        .replace(/"Synthetic Clasher \d{3}"/g, () =>
-          JSON.stringify(worstCaseNames[index++ % worstCaseNames.length]),
-        )
-        .replaceAll('"Synthetic Clan"', JSON.stringify("中华联盟总部永远第一名")),
+    const edit = (value: unknown): unknown => {
+      if (typeof value === "string") {
+        if (/^Synthetic Clasher \d{3}$/.test(value))
+          return worstCaseNames[index++ % worstCaseNames.length];
+        return value === "Synthetic Clan" ? "中华联盟总部永远第一名" : value;
+      }
+      if (Array.isArray(value)) return value.map(edit);
+      if (value === null || typeof value !== "object") return value;
+      const result = Object.fromEntries(
+        Object.entries(value).map(([key, item]) => [key, edit(item)]),
+      );
+      if (Array.isArray(result.users)) {
+        // Usernames allow 32 characters with no spaces.
+        result.users.unshift({
+          username: "m".repeat(32),
+          displayName: "M".repeat(80),
+          linkedPlayerCount: 1,
+        });
+      }
+      return result;
+    };
+    const data = edit(decodePageData<unknown>(await response.text()));
+    expect(index, "the response includes synthetic players to replace").toBeGreaterThan(
+      0,
     );
-    const add = (value: unknown) => values.push(value) - 1;
-    const usersKey = `_${values.indexOf("users")}`;
-    const search = values.find(
-      (value): value is Record<string, number> =>
-        typeof value === "object" && value !== null && usersKey in value,
-    )!;
-    // Usernames allow 32 characters with no spaces.
-    (values[search[usersKey]] as number[]).unshift(
-      add({
-        [`_${add("username")}`]: add("m".repeat(32)),
-        [`_${add("displayName")}`]: add("M".repeat(80)),
-        [`_${add("linkedPlayerCount")}`]: add(1),
-      }),
-    );
-    await route.fulfill({ response, body: JSON.stringify(values) });
+    await route.fulfill({ response, body: encodePageData(data) });
   });
 }
 

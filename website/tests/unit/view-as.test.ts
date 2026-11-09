@@ -1,3 +1,4 @@
+import { loginConfig } from "../fixtures/login-config";
 import { CALENDAR } from "../fixtures/player-route-data";
 vi.mock("../../app/services/python-transport.server", () => ({
   requestJson: mocks.requestJson,
@@ -91,7 +92,6 @@ import DashboardRoute, {
   loader,
   shouldRevalidate,
 } from "../../app/routes/dashboard";
-import { loadWebsiteConfig } from "../../app/server/config.server";
 import { readViewAs } from "../../app/server/view-as.server";
 import { PythonApiError } from "../../app/services/python-response.server";
 
@@ -145,18 +145,7 @@ afterEach(() => {
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"], now: Date.parse(CALENDAR.as_of) });
   vi.stubEnv("CLASHLENS_DASHBOARD_ENABLED", "true");
-  mocks.getWebsiteConfig.mockReturnValue(
-    loadWebsiteConfig({
-      NODE_ENV: "test",
-      CLASHLENS_LOGIN_ENABLED: "true",
-      CLASHLENS_PUBLIC_ORIGIN: ORIGIN,
-      CLASHLENS_GOOGLE_CLIENT_ID: "test-client.apps.googleusercontent.com",
-      CLASHLENS_GOOGLE_CLIENT_SECRET: "test-client-secret",
-      CLASHLENS_DISCORD_CLIENT_ID: "1234567890123456789",
-      CLASHLENS_DISCORD_CLIENT_SECRET: "discord-test-secret",
-      CLASHLENS_LOGIN_SECRET_B64: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
-    }),
-  );
+  mocks.getWebsiteConfig.mockReturnValue(loginConfig(ORIGIN));
   ownerSubject = OWNER.providerSubject;
   pinnedTag = null;
   follow = { attack: false, day_summary: false };

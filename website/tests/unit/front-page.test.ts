@@ -1,3 +1,4 @@
+import { renderStaticRoute } from "../fixtures/static-route";
 vi.mock("../../app/services/players.server", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../app/services/players.server")>();
@@ -69,14 +70,7 @@ async function renderHome(data: object, search: string) {
   ]);
   const path = search.startsWith("?q=") ? `/search${search}` : `/${search}`;
   const context = await handler.query(new Request(`https://clashlens.example${path}`));
-  if (context instanceof Response) throw new Error("unexpected response");
-  return renderToString(
-    createElement(StaticRouterProvider, {
-      router: createStaticRouter(handler.dataRoutes, context),
-      context,
-      hydrate: false,
-    }),
-  ).replaceAll("<!-- -->", "");
+  return renderStaticRoute(handler, context);
 }
 
 it("keeps the exact player tag link when another player's name matches the tag", async () => {
