@@ -13,6 +13,7 @@ from test_group_comparison_postgres import battle, link_player, seed_day
 
 from clashlens import api_accounts, api_leaderboard
 from clashlens.api_db import ApiDatabase
+from clashlens.api_player_presentation import calendar_payload
 from clashlens.domain import ranked_day_for
 
 
@@ -305,7 +306,7 @@ def test_profile_without_linked_players_does_not_read_the_live_board(
                 database, "groupowner", now=NOW, live_board=cache
             ) == {
                 "username": "groupowner", "display_name": "Group Owner",
-                "verified_players": [],
+                "verified_players": [], "calendar": calendar_payload(NOW),
             }
             seed_profile(database, "#2PP", 5300)
             # Neither profile read the board, so the first board page reads it.
