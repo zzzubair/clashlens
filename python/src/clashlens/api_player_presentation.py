@@ -5,8 +5,6 @@ from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
-from .army_decoder import with_unnamed_ids
-from .catalog import unit_label
 from .db_rows import text_value
 from .domain import (
     BATTLE_DAY_GRACE,
@@ -207,59 +205,6 @@ def public_snapshot_confidence(value: str) -> str:
     if value in {"inferred", "partial"}:
         return "partial"
     return "uncertain"
-
-
-def public_army(row: Any) -> dict[str, Any]:
-    army = with_unnamed_ids(
-        {
-            "status": text_value(row[2]),
-            **dict(zip(("home_troops", "spells", "siege", "cc_troops"), row[4:8])),
-            "heroes": row[8] if isinstance(row[8], list) else [],
-            "unresolved_components": row[9] if isinstance(row[9], list) else [],
-        }
-    )
-
-    def facts(value: Any) -> list[dict[str, Any]]:
-        if not isinstance(value, list):
-            return []
-        result = []
-        for fact in value:
-            if not isinstance(fact, (list, tuple)) or len(fact) < 3:
-                continue
-            typed_id, quantity, origin = str(fact[0]), int(fact[1]), str(fact[2])
-            result.append(
-                {
-                    "typed_id": typed_id,
-                    "name": unit_label(typed_id),
-                    "quantity": quantity,
-                    "origin": origin,
-                }
-            )
-        return result
-
-    components = []
-    for field in ("home_troops", "spells", "siege", "cc_troops"):
-        components.extend(facts(army[field]))
-    for hero in army["heroes"]:
-        if not isinstance(hero, Mapping):
-            continue
-        for typed_id in [hero.get("hero"), hero.get("pet"), *(hero.get("equipment") or [])]:
-            if isinstance(typed_id, str):
-                components.append(
-                    {
-                        "typed_id": typed_id,
-                        "name": unit_label(typed_id),
-                        "quantity": 1,
-                        "origin": "hero",
-                    }
-                )
-    return {
-        "state": army["status"],
-        "failure_reason": text_value(row[3]) if row[3] is not None else None,
-        "components": components,
-        "decoder_version": text_value(row[10]),
-        "catalog_version": text_value(row[11]),
-    }
 
 
 def screen_daily_log(day: dict[str, Any], profile_confidence: str) -> dict[str, Any]:

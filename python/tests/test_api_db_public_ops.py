@@ -25,7 +25,6 @@ from clashlens import (
 )
 from clashlens.api_db import ApiDatabase
 from clashlens.api_player_presentation import (
-    public_army,
     screen_daily_log_with_events,
     screen_events,
 )
@@ -383,30 +382,6 @@ def test_player_page_withholds_season_days_when_official_history_disagrees(
             "detail": "The official league history and ranked-day publication disagree, so season days are withheld.",
         }
     ]
-
-
-def test_public_army_shows_an_unknown_hero_once_as_unknown() -> None:
-    army = public_army(
-        (
-            1,
-            "attacker",
-            "partial",
-            None,
-            [],
-            [],
-            [],
-            [],
-            [{"hero": "hero:999", "pet": "pet:9", "equipment": []}],
-            [{"numeric_id": 999, "quantity": 1, "section": "h", "origin": "hero"}],
-            "army-decoder-v2",
-            "unit-catalog-v1",
-        )
-    )
-
-    assert [
-        (component["typed_id"], component["name"]) for component in army["components"]
-    ] == [("hero:999", "Unknown hero #999"), ("pet:9", "Frosty")]
-    assert army["state"] == "decoded"
 
 
 def test_screen_events_are_ordered_signed_normalized_and_malformed_safe() -> None:
