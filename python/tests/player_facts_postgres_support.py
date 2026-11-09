@@ -12,14 +12,14 @@ from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
 
 
-def served_player(story, tag, now, *, goal_rank=None, battles=True):
+def served_player(story, tag, now, *, goal_rank=None, battles=True, dashboard=True):
     api = ApiDatabase(as_api_role(story.connection_info))
     try:
         app = create_app(api, keys={("typescript-website", "current"): TS_CURRENT},
                          clock=lambda: NOW_SECONDS, now=lambda: now)
-        target = f"/v1/players/%23{tag[1:]}" + (f"?goal_rank={goal_rank}" if goal_rank is not None else "")
-        if not battles:
-            target += "?battles=false"
+        query = [*([f"goal_rank={goal_rank}"] if goal_rank is not None else []),
+                 *(["battles=false"] if not battles else []), *(["dashboard=true"] if dashboard else [])]
+        target = f"/v1/players/%23{tag[1:]}" + (f"?{'&'.join(query)}" if query else "")
         with TestClient(app) as client:
             response = client.get(target, headers=signed_headers(target))
         assert response.status_code == 200, response.text
@@ -33,9 +33,10 @@ def served_player(story, tag, now, *, goal_rank=None, battles=True):
                 before.pop(field)
                 size = lambda value: len(json.dumps(value, separators=(",", ":")).encode())
                 print(f"{field} bytes ({'full' if battles else 'light'}, {len(ready['days'])} saved days): +{size(ready) - size(before)}")
-        rival = ready["rival_season"]
-        without_rank = {key: value for key, value in rival.items() if key != "reset_rank"}
-        print(f"rival reset_rank bytes: +{size(rival) - size(without_rank)}")
+        if "rival_season" in ready:
+            rival = ready["rival_season"]
+            without_rank = {key: value for key, value in rival.items() if key != "reset_rank"}
+            print(f"rival reset_rank bytes: +{size(rival) - size(without_rank)}")
         if battles and ready["days"]:
             shown = ready["days"][0]["presentation"]
             before = {key: value for key, value in shown.items() if key != "heatmap_kind"}

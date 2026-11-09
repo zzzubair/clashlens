@@ -1121,7 +1121,7 @@ def test_busiest_player_page_stays_well_under_the_response_limit(
             with database.pool.connection() as page_connection:
                 counted = CountedRead(page_connection)
                 player = api_players.read_player_page(
-                    counted, "#2PP", now=NOW, freshness_seconds=900
+                    counted, "#2PP", now=NOW, freshness_seconds=900, dashboard=True
                 )
 
             assert player is not None
