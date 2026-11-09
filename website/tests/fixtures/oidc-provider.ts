@@ -30,7 +30,7 @@ import {
   jsonResponse,
   authorizationRedirect,
   readBoundedBody,
-} from "./provider-http";
+} from "./provider-http.ts";
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
