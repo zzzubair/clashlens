@@ -295,7 +295,6 @@ describe("the player page header", () => {
           offenseEvents: [],
           defenseEvents: [],
           completeness: { state: "complete", reason: "" },
-          uncertainty: [],
         },
       ],
     } satisfies PlayerPage;
@@ -356,10 +355,6 @@ describe("the player page header", () => {
     const dayOne = {
       ...page("Titans2.0", "#2CLAN"),
       profile: { ...page("Titans2.0", "#2CLAN").profile, freshness: fresh },
-      provenance: {
-        ...page("Titans2.0", "#2CLAN").provenance,
-        observedAt: fresh.observedAt,
-      },
       season: {
         id: "2026-11",
         anchor: "2026-11-02T05:00:00Z",
@@ -387,7 +382,6 @@ describe("the player page header", () => {
           offenseEvents: [],
           defenseEvents: [],
           completeness: { state: "complete", reason: "" },
-          uncertainty: [],
         },
       ],
     } satisfies PlayerPage;

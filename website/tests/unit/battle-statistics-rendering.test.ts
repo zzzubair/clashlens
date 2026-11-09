@@ -31,7 +31,6 @@ const ended = (
     before_reset: trophies,
     after_reset: trophies,
     player_log: trophies,
-    dashboard: trophies,
     status,
   },
 });

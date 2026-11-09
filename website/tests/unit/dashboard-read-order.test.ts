@@ -83,7 +83,7 @@ it("reads the Cutoffs card's live lines without waiting for the player page", as
       undefined,
     ),
   );
-  expect(client.getPlayer).toHaveBeenCalledWith(TAG);
+  expect(client.getPlayer).toHaveBeenCalledWith(TAG, true, true);
 });
 
 it("reads the Rivals card's live board without waiting for the player page", async () => {
@@ -143,14 +143,14 @@ it("reads other players' pages for Rivals and Watchlist once each, without their
   await Promise.all(Object.values(cards));
   const calls = client.getPlayer.mock.calls.map((call) => call.join(" "));
   expect(calls.sort()).toEqual([
-    "#LQ2V8PJ0",
-    "#P1 false",
-    "#P2 false",
-    "#P3 false",
-    "#P5 false",
-    "#P6 false",
-    "#P7 false",
-    "#Q9 false",
+    "#LQ2V8PJ0 true true",
+    "#P1 false true",
+    "#P2 false true",
+    "#P3 false true",
+    "#P5 false true",
+    "#P6 false true",
+    "#P7 false true",
+    "#Q9 false true",
   ]);
 });
 

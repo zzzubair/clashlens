@@ -825,7 +825,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     expect(python.requests).toContainEqual(frozen(199, 8));
     expect(python.requests).toContainEqual({
       path: `/v1/players/${MAIN}`,
-      query: { goal_rank: "200" },
+      query: { dashboard: "true", goal_rank: "200" },
     });
     expect(python.requests).toContainEqual({
       path: "/v1/leaderboards/live",

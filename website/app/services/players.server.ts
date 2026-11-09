@@ -41,13 +41,16 @@ export async function searchPlayers(query: string, limit = 50): Promise<SearchRe
   return mapSearch(payload, query);
 }
 
+/** A player's page. Only the Dashboard asks for its Season and rival facts. */
 export async function getPlayer(
   tag: string,
   battles = true,
+  dashboard = false,
   goalRank?: number,
 ): Promise<PlayerPage> {
   const query = new URLSearchParams();
   if (!battles) query.set("battles", "false");
+  if (dashboard) query.set("dashboard", "true");
   if (goalRank !== undefined) query.set("goal_rank", String(goalRank));
   const payload = await requestJson<unknown>(
     `/v1/players/${encodeURIComponent(tag)}${query.size ? `?${query}` : ""}`,
@@ -60,7 +63,7 @@ export async function getPlayer(
       !("dashboard_goal" in payload.screen_ready))
   )
     throw new PythonApiError(502, { error: "malformed" });
-  return mapPlayerPage(payload, battles);
+  return mapPlayerPage(payload, battles, dashboard);
 }
 
 export async function getPlayerSeasons(tag: string): Promise<SummarizedSeasonRef[]> {

@@ -180,7 +180,6 @@ const legendDay = (number: number): RankedDaySummary => {
     offenseEvents: [],
     defenseEvents: [],
     completeness: { state: "complete", reason: "Complete" },
-    uncertainty: [],
   };
 };
 

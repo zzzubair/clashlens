@@ -754,7 +754,7 @@ describe("dashboard route", () => {
       "rivals-watch": null,
       "heat-map": null,
     });
-    expect(client.getPlayer).toHaveBeenCalledWith(MAIN, true, 200);
+    expect(client.getPlayer).toHaveBeenCalledWith(MAIN, true, true, 200);
   });
 
   it("marks Legend day and Bases read before the shared board, and waits for it when asked again", async () => {
