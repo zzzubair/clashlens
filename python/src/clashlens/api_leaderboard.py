@@ -611,7 +611,8 @@ def linked_season_days(
             "entry": None if entry is None else text_value(entry),
         })
     for player in players.values():
-        player["heatmap_day_kinds"] = {str(kept[0]): heatmap_kind(kept[1], kept[2], kept[3]) for kept in player["days"]}
+        # One letter per day tuple, in the same order: played, shield or missing.
+        player["heatmap_day_kinds"] = "".join(heatmap_kind(kept[1], kept[2], kept[3])[0] for kept in player["days"])
         player["heatmap_day_numbers"] = heatmap_day_numbers(
             day.season_start, day.day_number, player["season_weeks"], player["days"]
         )

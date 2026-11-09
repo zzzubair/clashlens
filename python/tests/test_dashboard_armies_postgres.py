@@ -34,7 +34,10 @@ def _read(client: TestClient, tag: str, lens: str, days: int | str) -> dict:
     target = f"/v1/players/{tag.replace('#', '%23')}/armies?lens={lens}&days={days}"
     response = client.get(target, headers=_signed_headers(target))
     assert response.status_code == 200, response.text
-    return response.json()
+    result = response.json()
+    assert result["calendar"]["day_start"] == (DAY_START + timedelta(days=2)).isoformat()
+    assert result["calendar"]["day_end"] == (DAY_START + timedelta(days=3)).isoformat()
+    return result
 
 
 def _lost(battles: int, three_stars: int, trophies: int) -> dict:
