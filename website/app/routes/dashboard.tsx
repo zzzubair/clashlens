@@ -182,6 +182,14 @@ export async function loader({ request }: Route.LoaderArgs) {
     selected?.state === "not_in_legend" && selected.leftLegendI
       ? await getPlayer(selected.tag).catch(() => null)
       : null;
+  const emptyCalendar =
+    selected && Object.keys(cards).length === 0 && !leftPlayer
+      ? await import("../services/dashboard.server").then(({ getPlayerToday }) =>
+          getPlayerToday(selected.tag)
+            .then((read) => read.calendar)
+            .catch(() => null),
+        )
+      : null;
 
   const saved = query.get("saved");
   const idempotencyKey = freshIdempotencyKey();
@@ -215,7 +223,9 @@ export async function loader({ request }: Route.LoaderArgs) {
         }
         return leftPlayer
           ? Date.parse(leftPlayer.calendar.day_end)
-          : Number.POSITIVE_INFINITY;
+          : emptyCalendar
+            ? Date.parse(emptyCalendar.day_end)
+            : Number.POSITIVE_INFINITY;
       })(),
       leftPlayer,
       idempotencyKey,

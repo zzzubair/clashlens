@@ -772,14 +772,8 @@ export function readCards(
   const waiting = (read: PlayerToday | null, projecting = false) =>
     projecting || read?.boardComputedAtMs === null ? { boardPending: true as const } : {};
   const armies = async (lens: ArmyLens) => {
-    const [armies, read] = await Promise.all([
-      getPlayerArmies(ctx.selected.tag, lens, ARMY_DEFAULT_DAYS),
-      today(),
-    ]);
-    const suppliedCalendar = read?.calendar ?? calendar;
-    return suppliedCalendar
-      ? { tag: ctx.selected.tag, armies, calendar: suppliedCalendar }
-      : null;
+    const armies = await getPlayerArmies(ctx.selected.tag, lens, ARMY_DEFAULT_DAYS);
+    return { tag: ctx.selected.tag, armies, calendar: armies.calendar };
   };
   const readers: {
     [Card in keyof CardDataMap]: () => Promise<CardDataMap[Card] | null>;
@@ -914,7 +908,10 @@ export async function getPlayerArmies(
   )
     malformed();
   const span = payload.days as number;
+  const calendar = parseCalendar(payload.calendar);
+  if (calendar === null) malformed();
   return {
+    calendar,
     lens,
     days: span,
     season: days === "season",

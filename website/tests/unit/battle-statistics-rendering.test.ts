@@ -35,11 +35,16 @@ const ended = (
     status,
   },
 });
-const render = (facts = stats(), days: RankedDaySummary[] = []) =>
+const render = (
+  facts = stats(),
+  days: RankedDaySummary[] = [],
+  calendar = PLAYER.calendar,
+) =>
   renderToStaticMarkup(
     createElement(BattleStatistics, {
       player: {
         ...PLAYER,
+        calendar,
         recentDays: days,
         battleStatistics: { "7": facts, "14": facts, season: facts },
       },
@@ -48,6 +53,32 @@ const render = (facts = stats(), days: RankedDaySummary[] = []) =>
   );
 
 describe("supplied Season summary rendering", () => {
+  it("keeps a known departure total after waiting at 5,000 without enrolling", () => {
+    const day = ended("2026-10-06T05:00:00Z", 4920, null);
+    const facts = { ...stats(), daysExpected: 0, daysSaved: 0, resetDayStart: day.start };
+    const html = renderToStaticMarkup(
+      createElement(BattleStatistics, {
+        player: {
+          ...PLAYER,
+          seasonShape: {
+            seasonStart: Date.parse(facts.start),
+            today: 4,
+            kinds: [],
+            runs: [],
+            partial: true,
+            outsideNow: true,
+            legendDays: { expected: 0, saved: 0 },
+            lastLegendDay: day,
+          },
+          recentDays: [day],
+          battleStatistics: { "7": facts, "14": facts, season: facts },
+        },
+        now: 0,
+      }),
+    );
+    expect(html).toContain("Trophies when they left</dt><dd>4,920");
+    expect(html).not.toContain("No finished day yet");
+  });
   it("renders one summary with dates and unavailable rates and averages", () => {
     const html = render();
     expect(html).toContain("27 days missing · Some battles may be missing");
@@ -102,7 +133,11 @@ describe("supplied Season summary rendering", () => {
     expect(html).toContain("<dt>Per defense</dt><dd>−40.0</dd>");
   });
   it("offers no recent-days choice and says when no day has finished", () => {
-    const html = render({ ...stats(), daysExpected: 0 });
+    const html = render({ ...stats(), daysExpected: 0 }, [], {
+      ...PLAYER.calendar,
+      day_start: PLAYER.calendar.season_start,
+      day_number: 1,
+    });
     expect(html).not.toContain("Last 7 days");
     expect(html).toContain("No finished Legend days yet this Season");
     expect(html).toContain("No finished day yet");

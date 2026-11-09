@@ -398,6 +398,7 @@ function armies(lens: string, days: number) {
     ? {
         tag: MAIN,
         lens,
+        calendar: CALENDAR,
         days,
         covered_days,
         rows: [
@@ -420,6 +421,7 @@ function armies(lens: string, days: number) {
     : {
         tag: MAIN,
         lens,
+        calendar: CALENDAR,
         days,
         covered_days,
         rows: [

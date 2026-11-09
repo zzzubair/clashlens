@@ -61,7 +61,7 @@ export function BattleStatistics({
       ]}
       trophies={[
         left ? "Trophies when they left" : "Reset trophies",
-        expected === 0
+        !left && Date.parse(player.calendar.day_start) <= Date.parse(stats.start)
           ? "No finished day yet"
           : end?.trophies == null
             ? "Unavailable"

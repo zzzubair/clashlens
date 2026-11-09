@@ -38,7 +38,7 @@ export async function getArmyAnalytics(query: URLSearchParams): Promise<ArmyAnal
     }
     throw cause;
   }
-  return mapArmyAnalytics(payload);
+  return mapArmyAnalytics(payload, true);
 }
 
 export async function getArmySeasonSummary(
@@ -51,7 +51,7 @@ export async function getArmySeasonSummary(
     `/v1/analytics/armies/seasons/${encodeURIComponent(season)}?${query.toString()}`,
     { method: "GET" },
   );
-  return mapArmyAnalytics(payload);
+  return mapArmyAnalytics(payload, false);
 }
 
 // Finished seasons with saved attack summaries, newest first.
@@ -69,10 +69,7 @@ export async function getArmySeasons(): Promise<SeasonBounds[]> {
   if (!Array.isArray(payload.season_details))
     throw new PythonApiError(502, { error: "malformed" });
   const details = payload.season_details.map(mapSeasonBounds);
-  if (
-    details.some((detail) => detail === null) ||
-    !payload.seasons.every((id) => details.some((detail) => detail?.id === id))
-  )
+  if (details.some((detail) => detail === null))
     throw new PythonApiError(502, { error: "malformed" });
   return details as SeasonBounds[];
 }
@@ -90,7 +87,7 @@ export class NoCompletedLegendDaysError extends Error {
   }
 }
 
-function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
+function mapArmyAnalytics(payload: unknown, requireCalendar: boolean): ArmyAnalytics {
   if (
     !isRecord(payload) ||
     payload.kind !== "army-analytics" ||
@@ -207,6 +204,9 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
     }),
   );
   const pagination = payload.pagination;
+  const calendar = parseCalendar(payload.calendar);
+  if (requireCalendar && calendar === null)
+    throw new PythonApiError(502, { error: "malformed" });
   if (
     pagination !== undefined &&
     (!isRecord(pagination) ||
@@ -224,11 +224,7 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
         }
       : undefined,
     kind: "army-analytics",
-    calendar:
-      parseCalendar(payload.calendar) ??
-      (() => {
-        throw new PythonApiError(502, { error: "malformed" });
-      })(),
+    calendar,
     seasonBounds: mapSeasonBounds(payload.season_bounds),
     selection: {
       lens: selection.lens,

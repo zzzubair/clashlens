@@ -202,7 +202,7 @@ describe("army analytics route historical reads", () => {
   it("renders finalized quantity, usage and star counts", async () => {
     const getArmySeasonSummary = vi.fn().mockResolvedValue({
       kind: "army-analytics",
-      calendar: CALENDAR,
+      calendar: null,
       seasonBounds: SEASON_BOUNDS[SEASON],
       selection: {
         season: SEASON,

@@ -872,6 +872,21 @@ describe("dashboard route", () => {
     expect(client.listGroups).not.toHaveBeenCalled();
   });
 
+  it("expires player tabs at the supplied Reset when no cards are requested", async () => {
+    mocks.requestJson.mockResolvedValue({
+      calendar: CALENDAR,
+      tag: MAIN,
+      rank_range: null,
+      open_defenses: null,
+      automatic_defense_each: null,
+      opponents: null,
+      board_computed_at: null,
+    });
+    const data = await load(`${ORIGIN}/?cards=`);
+    expect(data.cards).toEqual({});
+    expect(data.dayEndsMs).toBe(Date.parse(CALENDAR.day_end));
+  });
+
   it("expires the day at Python's supplied Reset even when its reply arrives after", async () => {
     mocks.requestJson.mockResolvedValue({
       calendar: {

@@ -3,6 +3,10 @@ const reads = vi.hoisted(() => ({
   getPlayer: vi.fn(),
   getTrackedLeaderboard: vi.fn(),
   getPlayerSeasons: vi.fn(),
+  requestJson: vi.fn(),
+}));
+vi.mock("../../app/services/python-transport.server", () => ({
+  requestJson: reads.requestJson,
 }));
 vi.mock("../../app/services/players.server", () => ({
   getPlayer: reads.getPlayer,
@@ -20,6 +24,26 @@ import type { PythonClient } from "../../app/services/python.server";
 
 const TAG = "#LQ2V8PJ0";
 const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" } as const;
+
+it("serves an army-only layout from its army reply even when Today is down", async () => {
+  const { ctx } = slowPageContext();
+  reads.requestJson.mockReset().mockImplementation(async (path: string) => {
+    if (path.includes("/today")) throw new Error("Today down");
+    return {
+      tag: TAG,
+      lens: "defense",
+      days: 7,
+      calendar: CALENDAR,
+      covered_days: [],
+      rows: [],
+      total: { battles: 0, three_stars: 0, trophies: 0 },
+      legends_total: null,
+    };
+  });
+  const card = await readCards(["armies-defense"], ctx, IDENTITY)["armies-defense"];
+  expect(card).toMatchObject({ tag: TAG, calendar: CALENDAR, armies: { rows: [] } });
+  expect(reads.requestJson).toHaveBeenCalledTimes(1);
+});
 
 /**
  * A client whose player page never answers, so any other read seen must have

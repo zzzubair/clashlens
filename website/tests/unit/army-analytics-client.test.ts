@@ -260,6 +260,7 @@ describe("army analytics response boundary", () => {
   it("maps a whole-season army summary without day ranges or population filters", async () => {
     const payload = {
       ...armyAnalyticsPayload(),
+      calendar: undefined,
       history_usage_only: true,
       rows: [
         {
@@ -334,7 +335,7 @@ describe("army analytics response boundary", () => {
       .fn()
       .mockResolvedValueOnce(
         Response.json({
-          seasons: ["1785714000", "1783296000"],
+          seasons: ["1785714000", "legacy-unresolved", "1783296000"],
           season_details: [SEASON_BOUNDS["1785714000"], SEASON_BOUNDS["1783296000"]],
         }),
       )
