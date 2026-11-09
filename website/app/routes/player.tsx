@@ -384,17 +384,16 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
   const loadedAt = player?.calendar.as_of;
   const now = useServerTime(loadedAt);
   // Python worked the page's facts out for one Legend day, so the page reads
-  // them again at its end, as its clock moved them on before; past the
-  // Season's last day they are withheld until that read lands.
-  const dayOver = useSeasonReread(
+  // them again at its end, as its clock moved them on before; once the
+  // trusted clock passes Season Reset they are withheld until that read lands.
+  const seasonExpired = useSeasonReread(
     loadedAt,
     minuteChecks || !!trackedPlayer?.profile.seasonResetPending,
     data.selectedSeason === null,
     !!data.lookup && !["checking", "tracking"].includes(data.lookup.state),
     player?.calendar.day_end,
+    player?.calendar.season_end,
   );
-  const seasonExpired =
-    dayOver && player?.calendar.day_end === player?.calendar.season_end;
   const statisticsTime = now;
   const seasonMenu = (currentAvailable: boolean) =>
     data.requestedTag && (
