@@ -1,3 +1,4 @@
+import { legendDayDate, validDay } from "../lib/legend-log-data";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import {
   redirect,
@@ -9,41 +10,55 @@ import {
   type LoaderFunctionArgs,
   type ShouldRevalidateFunctionArgs,
 } from "react-router";
+import { getTrackedLeaderboard } from "../services/leaderboard.server";
+import {
+  getPlayer,
+  getPlayerSeason,
+  getPlayerSeasons,
+  getRefreshStatus,
+} from "../services/players.server";
 
 import { usePlayerLookupEvent } from "../components/Analytics";
 import { BattleStatistics } from "../components/BattleStatistics";
 import { ErrorNotice } from "../components/ErrorNotice";
-import {
-  DayBattles,
-  LegendLog,
-  LogBarsKey,
-  TodaySlots,
-  legendDayDate,
-  validDay,
-} from "../components/LegendLog";
 import { TrophyMark } from "../components/LeaderboardShared";
+import { DayBattles, LegendLog, LogBarsKey, TodaySlots } from "../components/LegendLog";
 import { LinkedBattle } from "../components/LinkedBattle";
+import { PastSeasons } from "../components/PastSeasons";
 import { PlayerActions } from "../components/PlayerActions";
 import { PlayerCrews } from "../components/PlayerCrews";
 import { LiveRank, PlayerHeading, type LiveRankRead } from "../components/PlayerHeading";
-import { RefreshProgress, refreshInProgress } from "../components/RefreshProgress";
-import { nextSeasonReset, useSeasonReread } from "../components/SeasonReread";
-import { PastSeasons } from "../components/PastSeasons";
-import { SeasonMenu } from "../components/SeasonMenu";
-import { SeasonStory } from "../components/SeasonStory";
-import { SelectedSeason } from "../components/SelectedSeason";
-import { SeasonHeatMap, heatDays } from "../components/SeasonSummary";
-import { TrophyLine } from "../components/TrophyLine";
-import { TagSearchAgain } from "../components/TagSearchAgain";
 import { LocalTimestamp, useCurrentTime, useServerTime } from "../components/Provenance";
+import { RefreshProgress, refreshInProgress } from "../components/RefreshProgress";
+import { SeasonMenu } from "../components/SeasonMenu";
+import { nextSeasonReset, useSeasonReread } from "../components/SeasonReread";
+import { SeasonStory } from "../components/SeasonStory";
+import { SeasonHeatMap, heatDays } from "../components/SeasonSummary";
+import { SelectedSeason } from "../components/SelectedSeason";
+import { TagSearchAgain } from "../components/TagSearchAgain";
+import { TrophyLine } from "../components/TrophyLine";
+import detailsStyles from "../details.css?url";
 import { pageMeta } from "../lib/blog";
+import type {
+  HistoricalSeasonSummary,
+  PastSeasonFinish,
+  PlayerLookup,
+  PlayerPage,
+  PlayerProfile,
+  RefreshError,
+  RefreshStatus,
+  RefreshWork,
+  SummarizedSeasonRef,
+  WebsiteErrorResponse,
+} from "../lib/contracts";
+import type { PlayerCrew } from "../lib/crew-contracts";
 import {
   dayEnd,
   dayEvidence,
   dayReasons,
   explainsNoResults,
-  liveDay,
   legendDayKey,
+  liveDay,
   liveDayNotice,
   lookupExplanation,
   lookupMessage,
@@ -61,8 +76,8 @@ import {
   playerRefreshStep,
   pollAnswer,
   pollThrew,
-  refreshSettled as settledRefresh,
   reloadedHere,
+  refreshSettled as settledRefresh,
   shownRefreshStatus,
   type AutomaticRefresh,
   type LookupWait,
@@ -75,21 +90,7 @@ import {
   seasonDayDate,
   seasonShape,
 } from "../lib/season-shape";
-import type {
-  HistoricalSeasonSummary,
-  PastSeasonFinish,
-  PlayerPage,
-  PlayerLookup,
-  PlayerProfile,
-  RefreshError,
-  RefreshStatus,
-  RefreshWork,
-  SummarizedSeasonRef,
-  WebsiteErrorResponse,
-} from "../lib/contracts";
-import type { PlayerCrew } from "../lib/crew-contracts";
 import type { LiveClan } from "../services/live-clan.server";
-import detailsStyles from "../details.css?url";
 import "../player.css";
 import "../player-hero.css";
 import "../season-tiles.css";
@@ -170,9 +171,6 @@ export async function loader({
   const selectedSeason = readSeasonParam(url.searchParams.get("season"));
   const workId = url.searchParams.get("refresh");
   const validWorkId = workId && /^[A-Za-z0-9_-]{1,128}$/.test(workId);
-  const client = import("../services/python.server").then(({ createPythonClient }) =>
-    createPythonClient(),
-  );
   const lookupClient = import("../services/player-lookup.server");
   const pastSeasons = import("../services/past-seasons.server")
     .then((api) => api.getPastSeasons(normalizedTag))
@@ -187,8 +185,7 @@ export async function loader({
     .catch(() => null);
   // The player's live place and their place on the last Reset's Daily board,
   // as Rankings shows them; nothing when the board can't be read.
-  const liveRank = client
-    .then((api) => api.getTrackedLeaderboard(1, "live", 0, undefined, normalizedTag))
+  const liveRank = getTrackedLeaderboard(1, "live", 0, undefined, normalizedTag)
     .then((board) => {
       const entry = board.entries.find((row) => row.tag === normalizedTag);
       return entry ? { now: entry.rank, atReset: entry.resetRank } : null;
@@ -202,14 +199,12 @@ export async function loader({
   );
   const [playerResult, seasonsResult, historicalResult, refreshResult, lookupResult] =
     await Promise.allSettled([
-      client.then((api) => api.getPlayer(normalizedTag)),
-      client.then((api) => api.getPlayerSeasons(normalizedTag)),
+      getPlayer(normalizedTag),
+      getPlayerSeasons(normalizedTag),
       selectedSeason === null
         ? Promise.resolve(null)
-        : client.then((api) => api.getPlayerSeason(normalizedTag, selectedSeason)),
-      validWorkId
-        ? client.then((api) => api.getRefreshStatus(workId, normalizedTag))
-        : Promise.resolve(null),
+        : getPlayerSeason(normalizedTag, selectedSeason),
+      validWorkId ? getRefreshStatus(workId, normalizedTag) : Promise.resolve(null),
       lookupClient.then(async (api) => {
         let lookup = await api.getPlayerLookup(normalizedTag);
         let error: WebsiteErrorResponse | null = null;
@@ -259,9 +254,7 @@ export async function loader({
   const [seasonResult] =
     daySeason === null
       ? [historicalResult]
-      : await Promise.allSettled([
-          client.then((api) => api.getPlayerSeason(normalizedTag, daySeason)),
-        ]);
+      : await Promise.allSettled([getPlayerSeason(normalizedTag, daySeason)]);
   const historical = seasonResult.status === "fulfilled" ? seasonResult.value : null;
   const historicalError =
     seasonResult.status === "rejected" ? await safeError(seasonResult.reason) : null;
@@ -431,7 +424,6 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         kind: gap.kind,
       }))
     : [];
-  // The Season summary's heat map, from the days the log shows.
   const heatMap = shape ? (
     <SeasonHeatMap
       days={heatDays(history, shape.seasonStart)}
@@ -532,7 +524,6 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     return () => clearTimeout(timer);
   }, [deadline, refreshSettled, resetRefresh]);
 
-  // Only `polling` reads the work's status.
   const workId = refresh.phase === "polling" ? refresh.status.workId : null;
   useEffect(() => {
     if (!workId || refreshResourcePath === null || deadline === null) return;
@@ -771,7 +762,6 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             <LiveRank rank={data.liveRank} tag={trackedPlayer.tag} />
           )}
         </div>
-        {/* When the count was saved, and Refresh, beside the count it acts on. */}
         <PlayerFreshness profile={trackedPlayer.profile} />
         <PlayerActions tag={trackedPlayer.tag}>
           <refreshFetcher.Form
@@ -810,7 +800,6 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             </button>
           </refreshFetcher.Form>
         </PlayerActions>
-        {/* Today's battles so far, under the trophies they moved. */}
         {today && !seasonExpired && !trackedPlayer.profile.seasonResetPending ? (
           <TodaySlots day={today} />
         ) : null}
@@ -1025,7 +1014,6 @@ function PlayerFreshness({ profile }: { profile: PlayerProfile }) {
   );
 }
 
-// An age in a few words: "just now", "15 min ago", "2 hours ago", "3 days ago".
 function ago(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
   if (minutes < 1) return "just now";

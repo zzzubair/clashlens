@@ -1,3 +1,5 @@
+import { signedNumber } from "./number-format";
+import { elapsedUnits } from "./age-format";
 /**
  * The OBS overlay itself, drawn into one element. It runs in OBS's browser
  * source through the private link, and in the account page's preview.
@@ -150,15 +152,15 @@ function ago(iso: string | undefined): { text: string; stale: boolean } | null {
   if (!iso) return null;
   const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
   if (s < 90) return { text: "Updated just now", stale: false };
-  const m = Math.round(s / 60);
+  const { minutes: m, hours } = elapsedUnits(s, "round");
   if (m < 60) return { text: `Updated ${m} min ago`, stale: m >= 15 };
-  return { text: `Updated ${Math.round(m / 60)} h ago`, stale: true };
+  return { text: `Updated ${hours} h ago`, stale: true };
 }
 
 const signed = (n: number | null, kind: "gain" | "loss") =>
   n === null ? "–" : kind === "gain" ? `+${fmt(n)}` : `−${fmt(n)}`;
 const netText = (n: number | null) =>
-  n === null ? "–" : n > 0 ? `+${fmt(n)}` : n < 0 ? `−${fmt(-n)}` : "±0";
+  n === null ? "–" : signedNumber(n || 0, { locale: "en-GB", zero: "±0" });
 
 function demoBattle(kind: OverlayBattle["kind"], i: number): OverlayBattle {
   const stars = [3, 3, 3, 2, 3, 1, 3, 2][(i * 3 + (kind === "attack" ? 0 : 5)) % 8];
@@ -181,7 +183,7 @@ function demoBattle(kind: OverlayBattle["kind"], i: number): OverlayBattle {
  * What the overlay shows, from its settings alone (`overlaySource`):
  *
  * - `none`: no player picked; it says "Pick a player".
- * - `player`: the picked player, read every 3 seconds. A failed read keeps
+ * - `player`: the picked player, read every 20 seconds. A failed read keeps
  *   the last view and marks it offline; the next read tries again.
  * - `demo`: a made-up day that plays a battle every 12 seconds, named after
  *   the picked player when one is read.

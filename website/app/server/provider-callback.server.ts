@@ -11,10 +11,14 @@
 
 import { randomUUID } from "node:crypto";
 
+import type { UNSAFE_DataWithResponseInit as DataWithResponseInit } from "react-router";
 import { data } from "react-router";
-
-import { parseCallbackParams, parseCookieHeader } from "./actions.server";
-import { isAccountNotFoundError } from "./actions.server";
+import {
+  isAccountNotFoundError,
+  parseCallbackParams,
+  parseCookieHeader,
+} from "./actions.server";
+import type { LoginSession } from "./auth-cookies.server";
 import {
   buildClearCookieHeader,
   buildSetCookieHeader,
@@ -26,7 +30,10 @@ import {
   parseLoginCookieValue,
   parseOAuthTransactionCookieValue,
 } from "./auth-cookies.server";
-import type { LoginSession } from "./auth-cookies.server";
+import type { LoginIdentity, OAuthTransaction } from "./auth.server";
+import { constantTimeEqual, OAuthCallbackError } from "./auth.server";
+import type { WebsiteConfig } from "./config.server";
+import { getWebsiteConfig } from "./config.server";
 import { isLoginRevoked } from "./login-session.server";
 import {
   accountSetupPath,
@@ -34,12 +41,6 @@ import {
   safeReturnPath,
   setupReturnPath,
 } from "./return-path.server";
-import { getWebsiteConfig } from "./config.server";
-import type { WebsiteConfig } from "./config.server";
-import { constantTimeEqual, OAuthCallbackError } from "./google-oidc.server";
-import type { OAuthTransaction } from "./google-oidc.server";
-import type { LoginProviderIdentity } from "../services/python.server";
-import type { UNSAFE_DataWithResponseInit as DataWithResponseInit } from "react-router";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
@@ -172,7 +173,7 @@ export async function completeProviderCallback(
   validate: (
     params: Record<string, string>,
     transaction: OAuthTransaction,
-  ) => Promise<LoginProviderIdentity>,
+  ) => Promise<LoginIdentity>,
 ): Promise<CallbackOutcome> {
   let config: WebsiteConfig;
   try {
@@ -198,7 +199,7 @@ export async function completeProviderCallback(
   if (returned.kind === "rejected") return returned.outcome;
   const { transaction } = returned;
 
-  let validated: LoginProviderIdentity;
+  let validated: LoginIdentity;
   try {
     validated = await validate(params, transaction);
   } catch (error) {

@@ -1,3 +1,4 @@
+import { utcDate } from "./date-format";
 /** When a player left Legend I this Season, and the total they left on. */
 export interface LeftLegendI {
   /** The Monday Reset they left at. */
@@ -29,14 +30,7 @@ export function parseLeftLegendI(value: unknown): LeftLegendI | null {
 
 /** "Mon 12 Oct", the Reset a player left Legend I at. */
 export function leftDate(left: LeftLegendI) {
-  return new Date(left.leftAt)
-    .toLocaleDateString("en-GB", {
-      weekday: "short",
-      day: "numeric",
-      month: "short",
-      timeZone: "UTC",
-    })
-    .replace("Sept", "Sep");
+  return utcDate(left.leftAt, { weekday: true });
 }
 
 /** "Left Legend I at the Mon 12 Oct Reset · last 4,684 trophies". */

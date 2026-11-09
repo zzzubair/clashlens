@@ -1,3 +1,21 @@
+vi.mock("../../app/services/players.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/players.server")>();
+  return {
+    ...actual,
+    getPlayer: async (...args: Parameters<typeof actual.getPlayer>) =>
+      mocks.createPythonClient().getPlayer(...args),
+  };
+});
+vi.mock("../../app/services/public-user.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/public-user.server")>();
+  return {
+    ...actual,
+    getPublicUser: async (...args: Parameters<typeof actual.getPublicUser>) =>
+      mocks.createPythonClient().getPublicUser(...args),
+  };
+});
 import { PassThrough } from "node:stream";
 import { createElement } from "react";
 import { renderToPipeableStream } from "react-dom/server";
@@ -57,7 +75,7 @@ vi.mock("../../app/services/public-user-days.server", () => ({
 }));
 
 import UserRoute, { loader } from "../../app/routes/users.$username";
-import { PythonApiError } from "../../app/services/python.server";
+import { PythonApiError } from "../../app/services/python-response.server";
 import { worstPublicUser } from "../fixtures/worst-case-accounts";
 
 const data = {
@@ -252,7 +270,11 @@ it("shows each linked account as one card linking to its player page", async () 
 });
 
 it("says a linked tag is unknown to the game without asking for a new search", async () => {
-  const lost = { ...data.user.verifiedPlayers[0], state: "not_found", today: null };
+  const lost = {
+    ...data.user.verifiedPlayers[0],
+    state: "not_found",
+    today: null,
+  };
   const html = await renderProfile("", {
     ...data,
     user: { ...data.user, verifiedPlayers: [lost] },
@@ -327,13 +349,14 @@ it("shows each linked player's Season heat map and their rank's move since the R
       },
     ],
   });
-  const loaded = (await loadProfile()) as { days?: Promise<Record<string, unknown>> };
+  const loaded = (await loadProfile()) as {
+    days?: Promise<Record<string, unknown>>;
+  };
   expect(Object.keys((await loaded.days) ?? {})).toEqual(["#2PP"]);
   // One read for every linked player, never a player page each.
   expect(mocks.getPublicUserDays).toHaveBeenCalledTimes(1);
   expect(mocks.getPublicUserDays).toHaveBeenCalledWith("nova88");
   expect(client.getPlayer).not.toHaveBeenCalled();
-
   const html = await renderProfile("", { ...data, days: loaded.days });
   const [card = "", other = ""] =
     html.match(/<article class="linked-player-card"[\s\S]*?<\/article>/g) ?? [];
@@ -364,7 +387,9 @@ it("shows each linked player's Season heat map and their rank's move since the R
 
   // When the read fails, every card still shows its numbers.
   mocks.getPublicUserDays.mockRejectedValue(new PythonApiError(503, { error: "x" }));
-  const failed = (await loadProfile()) as { days?: Promise<Record<string, unknown>> };
+  const failed = (await loadProfile()) as {
+    days?: Promise<Record<string, unknown>>;
+  };
   expect(await failed.days).toEqual({});
   const plain = await renderProfile("", { ...data, days: failed.days });
   expect(plain.match(/<article class="linked-player-card"/g)).toHaveLength(4);
@@ -390,7 +415,9 @@ it("shows no move, heat map or key on a Season's Day 1, before its first Reset",
       },
     ],
   });
-  const loaded = (await loadProfile()) as { days?: Promise<Record<string, unknown>> };
+  const loaded = (await loadProfile()) as {
+    days?: Promise<Record<string, unknown>>;
+  };
   const html = await renderProfile("", { ...data, days: loaded.days });
   const card =
     html.match(/<article class="linked-player-card"[\s\S]*?<\/article>/)?.[0] ?? "";
@@ -411,7 +438,10 @@ it("shows up to 500 linked players' cards at once, with one read for all their d
   expect(new Set(tags).size).toBe(500);
   client.getPublicUser.mockResolvedValue({
     ...data.user,
-    verifiedPlayers: tags.map((tag) => ({ ...data.user.verifiedPlayers[0], tag })),
+    verifiedPlayers: tags.map((tag) => ({
+      ...data.user.verifiedPlayers[0],
+      tag,
+    })),
   });
   // The read never answers: the cards don't wait for it.
   mocks.getPublicUserDays.mockReturnValue(new Promise(() => {}));
@@ -430,7 +460,6 @@ it("reads the owner's tool statuses only for the profile's signed-in owner", asy
   expect(own.user).toEqual(data.user);
   expect(own.owner).toEqual({ alerts: "On for 1 of 2 players", overlay: "Showing Nova" });
   expect(mocks.createPythonClient).toHaveBeenCalledWith(IDENTITY);
-
   mocks.getAttackAlerts.mockResolvedValue(alertsFor([true, true]));
   mocks.getOverlay.mockResolvedValue({ tag: null, players: [] });
   expect((await loadProfile()).owner).toEqual({ alerts: "On", overlay: "Not set up" });
@@ -492,7 +521,6 @@ it("gives the owner one small Edit button and their two tools, and no settings",
   expect(tools[1]).not.toContain("Not set up");
   for (const text of ["Make default", "Sign-in", "OBS overlay", "Default"])
     expect(html).not.toContain(text);
-  // The cards are the same ones every visitor sees.
   expect(html.match(/<article class="linked-player-card"/g)).toHaveLength(4);
 });
 

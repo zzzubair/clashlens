@@ -1,3 +1,15 @@
+const reads = vi.hoisted(() => ({
+  getPlayer: vi.fn(),
+  getTrackedLeaderboard: vi.fn(),
+  getPlayerSeasons: vi.fn(),
+}));
+vi.mock("../../app/services/players.server", () => ({
+  getPlayer: reads.getPlayer,
+  getPlayerSeasons: reads.getPlayerSeasons,
+}));
+vi.mock("../../app/services/leaderboard.server", () => ({
+  getTrackedLeaderboard: reads.getTrackedLeaderboard,
+}));
 import { expect, it, vi } from "vitest";
 
 import type { LinkedPlayerCard } from "../../app/lib/account-contracts";
@@ -15,9 +27,11 @@ const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" }
 function slowPageContext() {
   const waiting = () => new Promise<never>(() => undefined);
   const client = {
-    getPlayer: vi.fn(waiting),
-    getTrackedLeaderboard: vi.fn(waiting),
-    getPlayerSeasons: vi.fn(waiting),
+    getPlayer: reads.getPlayer.mockReset().mockImplementation(waiting),
+    getTrackedLeaderboard: reads.getTrackedLeaderboard
+      .mockReset()
+      .mockImplementation(waiting),
+    getPlayerSeasons: reads.getPlayerSeasons.mockReset().mockImplementation(waiting),
   };
   const ctx: CardContext = {
     client: client as unknown as PythonClient,
@@ -85,8 +99,10 @@ it("reads other players' pages for Rivals and Watchlist once each, without their
   });
   const board = { totalEntries: 7, entries: [1, 2, 3, 4, 5, 6, 7].map(entry) };
   const client = {
-    getPlayer: vi.fn<(tag: string, battles?: boolean) => Promise<null>>(async () => null),
-    getTrackedLeaderboard: vi.fn(async () => board),
+    getPlayer: reads.getPlayer.mockReset().mockImplementation(async () => null),
+    getTrackedLeaderboard: reads.getTrackedLeaderboard
+      .mockReset()
+      .mockImplementation(async () => board),
     listGroups: vi.fn(async () => ({
       groups: [{ groupId: "mates", name: "Mates", tags: ["#P1", "#Q9"], players: [] }],
       season: "1793595600",

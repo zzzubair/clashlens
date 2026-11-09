@@ -7,6 +7,23 @@ import {
   type RouteObject,
 } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loader as movedLoader } from "../../app/routes/account.moved";
+import UnlinkRoute, {
+  action as unlinkAction,
+  loader as unlinkLoader,
+} from "../../app/routes/account.players.$tag.unlink";
+import SettingsRoute, {
+  action as settingsAction,
+  headers as settingsHeaders,
+  loader as settingsLoader,
+} from "../../app/routes/account.settings";
+import {
+  createLoginCookieValue,
+  createLoginSessionBinding,
+  LOGIN_COOKIE_NAME,
+} from "../../app/server/auth-cookies.server";
+import { loadWebsiteConfig, type WebsiteConfig } from "../../app/server/config.server";
+import { PythonApiError } from "../../app/services/python-response.server";
 
 const mocks = vi.hoisted(() => ({
   getWebsiteConfig: vi.fn(),
@@ -43,24 +60,6 @@ vi.mock("../../app/services/unlink-player.server", () => ({
 vi.mock("../../app/services/crews.server", () => ({
   listCrews: mocks.listCrews,
 }));
-
-import {
-  LOGIN_COOKIE_NAME,
-  createLoginCookieValue,
-  createLoginSessionBinding,
-} from "../../app/server/auth-cookies.server";
-import { loadWebsiteConfig, type WebsiteConfig } from "../../app/server/config.server";
-import { PythonApiError } from "../../app/services/python.server";
-import { loader as movedLoader } from "../../app/routes/account.moved";
-import UnlinkRoute, {
-  action as unlinkAction,
-  loader as unlinkLoader,
-} from "../../app/routes/account.players.$tag.unlink";
-import SettingsRoute, {
-  action as settingsAction,
-  headers as settingsHeaders,
-  loader as settingsLoader,
-} from "../../app/routes/account.settings";
 
 const ORIGIN = "https://clashlens.example";
 const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" } as const;
@@ -195,7 +194,10 @@ describe("Settings", () => {
     expect(only).toContain("Not connected.");
     expect(only).toContain(">Connect</button>");
 
-    client.getAccount.mockResolvedValue({ ...ACCOUNT, providers: ["google", "discord"] });
+    client.getAccount.mockResolvedValue({
+      ...ACCOUNT,
+      providers: ["google", "discord"],
+    });
     const both = await settings();
     expect(both.match(/>Disconnect<\/button>/g)).toHaveLength(2);
     expect(both).not.toContain("disabled");
@@ -403,7 +405,10 @@ describe("Unlink player", () => {
     expect(onlyPage).toContain("Unlink #8PY?");
     expect(onlyPage).not.toContain("/stats uses");
     // Nor is one when every player left is one Clash Lens doesn't track.
-    client.getAccountSummary.mockResolvedValue({ ...SUMMARY, nextDefaultPlayer: null });
+    client.getAccountSummary.mockResolvedValue({
+      ...SUMMARY,
+      nextDefaultPlayer: null,
+    });
     const untrackedPage = await render(unlinkPage, new Request(defaultPath));
     expect(untrackedPage).toContain("Unlink #8PY?");
     expect(untrackedPage).not.toContain("/stats uses");

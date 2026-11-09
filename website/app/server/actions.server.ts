@@ -1,4 +1,4 @@
-/**
+import { MAX_CALLBACK_PARAMS, MAX_CALLBACK_PARAM_BYTES } from "./auth.server"; /**
  * Server-only HTTP helpers for account and login mutations: bounded cookie
  * and form parsing, same-origin request checks, fresh canonical idempotency
  * keys, and bounded OAuth callback query parsing.
@@ -19,7 +19,7 @@ import {
 } from "../lib/account-validation";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import { LOGIN_COOKIE_NAME, parseLoginCookieValue } from "./auth-cookies.server";
-import type { LoginIdentity } from "./auth-cookies.server";
+import type { LoginIdentity } from "./auth.server";
 import type { WebsiteConfig } from "./config.server";
 import { safeWebsiteError } from "./errors.server";
 import { isLoginRevoked } from "./login-session.server";
@@ -28,9 +28,6 @@ const MAX_COOKIE_HEADER_BYTES = 8192;
 const MAX_COOKIE_PAIRS = 64;
 const MAX_COOKIE_NAME_BYTES = 128;
 const MAX_COOKIE_VALUE_BYTES = 4096;
-
-export const MAX_CALLBACK_PARAMS = 32;
-export const MAX_CALLBACK_PARAM_BYTES = 8192;
 
 export interface FormLimits {
   maxFields: number;
@@ -190,7 +187,6 @@ export async function parseBoundedFormData(
   return values;
 }
 
-/** Fresh canonical idempotency UUID for one form render or action target. */
 export function freshIdempotencyKey(): string {
   return randomUUID();
 }
@@ -210,7 +206,6 @@ export function followUpIdempotencyKey(key: string, step: string): string {
   ].join("-");
 }
 
-/** Strict canonical lowercase UUID check for idempotency keys. */
 export function isIdempotencyKey(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -329,7 +324,7 @@ export function mapAccountNameError(error: unknown): AccountNameErrorOutcome {
   return { kind: "general", generalError: safeWebsiteError(error) };
 }
 
-/** True only for the documented unresolved Google-account response. */
+/** True only for the private API's documented account_not_found response. */
 export function isAccountNotFoundError(error: unknown): boolean {
   if (!isPythonApiErrorLike(error)) return false;
   if (error.status !== 403 && error.status !== 404) return false;

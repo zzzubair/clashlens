@@ -24,10 +24,9 @@ type BattleGroup = Pick<
 // This preview never treats the capture as a complete daily publication.
 const capture = captured as unknown as {
   fetchedAt: string;
-  rankingFetchedAt: string;
   playerCount: number;
   sourceSha256: string;
-  groups: Record<string, Record<"offense" | "defense", BattleGroup>>;
+  groups: Record<string, Record<"offense", BattleGroup>>;
 };
 
 const sortFields = {
@@ -39,7 +38,6 @@ const sortFields = {
 } as const;
 
 export function recentArmyAnalytics(source: URLSearchParams) {
-  // The page shows attacks only; the capture's defense side stays unused.
   const lens = "offense";
   const requestedPopulation = source.get("population") ?? "top-100";
   if (!Object.hasOwn(capture.groups, requestedPopulation)) return null;

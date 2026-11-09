@@ -1,3 +1,4 @@
+import { isSafeReturnPath, MAX_RETURN_PATH_LENGTH } from "./auth.server";
 /**
  * Same-origin return-path validation for login redirects.
  *
@@ -14,11 +15,7 @@
  * the browser to the raw data instead of the page.
  */
 
-export const MAX_RETURN_PATH_LENGTH = 200;
 export const DEFAULT_RETURN_PATH = "/account";
-
-// Plain path characters, and %23 for the # of a player tag such as /account/watchlists/add/%232PP.
-const RETURN_PATH_CHARS = /^(?:[A-Za-z0-9._~/-]|%23)+$/;
 
 /**
  * Validate a same-origin return path against the exact public origin.
@@ -32,11 +29,7 @@ export function safeReturnPath(
   if (typeof value !== "string") return null;
   if (value.length === 0 || value.length > MAX_RETURN_PATH_LENGTH) return null;
   value = pagePathOfDataRequest(value);
-  if (!value.startsWith("/") || value.startsWith("//")) return null;
-  if (!RETURN_PATH_CHARS.test(value)) return null;
-  if (value.split("/").some((segment) => segment === "." || segment === "..")) {
-    return null;
-  }
+  if (!isSafeReturnPath(value)) return null;
   let parsed: URL;
   try {
     parsed = new URL(value, origin);

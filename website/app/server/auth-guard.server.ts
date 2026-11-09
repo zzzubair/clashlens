@@ -1,7 +1,7 @@
 /**
  * Server-only auth guard for account loaders and actions.
  *
- * The guard reads the signed login cookie and yields the validated Google
+ * The guard reads the signed login cookie and yields the validated provider
  * identity for the private Python client. A page opened without a login
  * answers 401 with the current page as a validated same-origin return path,
  * and the site shows that page's "needs an account" box in place. A form
@@ -14,8 +14,8 @@
 import { data, redirect } from "react-router";
 
 import type { NeedsAccountData } from "../components/NeedsAccount";
-import type { LoginIdentity } from "./auth-cookies.server";
 import { readLoginIdentity } from "./actions.server";
+import type { LoginIdentity } from "./auth.server";
 import type { WebsiteConfig } from "./config.server";
 import { getWebsiteConfig } from "./config.server";
 import {

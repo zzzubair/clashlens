@@ -3,7 +3,7 @@ import { useFetcher } from "react-router";
 
 import { battles, formatRate, starRate, type ArmyRow } from "../lib/army-stats";
 import type { ArmyVariantExamples } from "../lib/contracts";
-import type { VariantExamplesResponse } from "../routes/army-variant-examples";
+import type { VariantExamplesResponse } from "../lib/variant-examples-data";
 import { ArmyPortraits } from "./ArmyPortraits";
 
 /**

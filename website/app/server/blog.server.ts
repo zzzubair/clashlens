@@ -257,7 +257,7 @@ export async function readBlogFolder(
 let cached:
   { directory: string | null; readAt: number; folder: Promise<BlogFolder> } | undefined;
 
-/** The configured blog checkout, or null when this site has no blog folder. */
+/** Read each time so a changed checkout invalidates the folder cache immediately. */
 export function blogDirectory(): string | null {
   const directory = process.env.CLASHLENS_BLOG_DIR?.trim();
   return directory ? resolve(directory) : null;
@@ -290,12 +290,10 @@ export function blogFolder(now = Date.now(), changedAt = -Infinity): Promise<Blo
   return cached.folder;
 }
 
-/** Posts everyone may see, newest first. Drafts are never included. */
 export async function publishedBlogPosts(): Promise<BlogPost[]> {
   return (await blogFolder()).posts.filter((post) => !post.draft);
 }
 
-/** Posts this request may see: drafts too when the site owner is signed in. */
 export async function visibleBlogPosts(request: Request): Promise<BlogPost[]> {
   const { posts } = await blogFolder();
   if (!posts.some((post) => post.draft) || (await isBlogOwner(request))) return posts;
@@ -326,13 +324,11 @@ export async function isBlogOwner(request: Request): Promise<boolean> {
   }
 }
 
-/** A post without its body, for the list page. */
 export function summarizeBlogPost(post: BlogPost): BlogPostSummary {
   const { slug, title, date, summary, author, cover, coverAlt, draft } = post;
   return { slug, title, date, summary, author, cover, coverAlt, draft };
 }
 
-/** The site's public origin for absolute links in previews and the feed. */
 export async function blogOrigin(request: Request): Promise<string> {
   return (await configuredOrigin()) ?? new URL(request.url).origin;
 }
@@ -340,8 +336,8 @@ export async function blogOrigin(request: Request): Promise<string> {
 /** The configured public origin, or null when the site settings cannot be read. */
 async function configuredOrigin(): Promise<string | null> {
   try {
-    const { getWebsiteConfig } = await import("./config.server");
-    return getWebsiteConfig().publicOrigin.origin;
+    const { getPublicOrigin } = await import("./public-origin.server");
+    return getPublicOrigin().origin;
   } catch {
     return null;
   }
@@ -389,7 +385,6 @@ const PUBLIC_PAGES = [
   "/privacy",
 ];
 
-/** A sitemap of the public pages and every published post, dated by its publication day. */
 export function siteMap(posts: BlogPostSummary[], origin: string): string {
   const pages = [
     ...PUBLIC_PAGES.map((path) => ({ path, date: null })),
@@ -411,19 +406,16 @@ export function siteMap(posts: BlogPostSummary[], origin: string): string {
   ].join("\n");
 }
 
-/** A front matter value without its quotes or a trailing `# comment`. */
 function frontMatterValue(value: string): string {
   const quoted = /^"(.*?)"(?:\s+#.*)?$/.exec(value) ?? /^'(.*?)'(?:\s+#.*)?$/.exec(value);
   return quoted ? quoted[1] : value.replace(/\s+#.*$/, "");
 }
 
-/** Regular files directly in a folder; a missing folder has none. */
 async function listFiles(directory: string): Promise<string[]> {
   const entries = await ifMissing(readdir(directory, { withFileTypes: true }), []);
   return entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
 }
 
-/** The result of reading a file or folder, or `missing` when it does not exist. */
 async function ifMissing<T, M>(read: Promise<T>, missing: M): Promise<T | M> {
   try {
     return await read;
@@ -433,7 +425,6 @@ async function ifMissing<T, M>(read: Promise<T>, missing: M): Promise<T | M> {
   }
 }
 
-/** The media/ file an address on this site's /blog/media/ points at, if any. */
 function mediaFile(address: string, origin: string | null): string | null {
   const base = new URL(origin ?? "https://site.invalid");
   try {

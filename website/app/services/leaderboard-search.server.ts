@@ -1,6 +1,5 @@
 import type { LeaderboardSearch } from "../lib/contracts";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
-import { requestJson } from "./python.server";
 import {
   PythonApiError,
   isCanonicalPlayerTag,
@@ -8,15 +7,14 @@ import {
   isRecord,
   isString,
 } from "./python-response.server";
+import { requestJson } from "./python-transport.server";
 
 export async function searchLeaderboard(query: string): Promise<LeaderboardSearch> {
   if (!query.trim() || query.length > MAX_SEARCH_QUERY_LENGTH)
     throw new PythonApiError(400, { error: "invalid_input" });
   const payload = await requestJson<unknown>(
     `/v1/leaderboards/live/search?${new URLSearchParams({ q: query })}`,
-    "GET",
-    undefined,
-    undefined,
+    { method: "GET" },
   );
   if (
     !isRecord(payload) ||

@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { createDiscordOAuthService } from "../../app/server/discord-oauth.server";
+import { OAuthCallbackError } from "../../app/server/auth.server";
 import { loadWebsiteConfig } from "../../app/server/config.server";
-import { OAuthCallbackError } from "../../app/server/google-oidc.server";
+
+import { createDiscordOAuthService } from "../../app/server/discord-oauth.server";
 
 const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 
@@ -69,7 +70,10 @@ describe("Discord OAuth service", () => {
 
   it("asks only to identify the user when unlinking, without adding the bot", async () => {
     const service = await createDiscordOAuthService(config());
-    const url = service.authorizationUrl({ ...transaction(), intent: "unlink" });
+    const url = service.authorizationUrl({
+      ...transaction(),
+      intent: "unlink",
+    });
     expect(url.searchParams.get("scope")).toBe("identify");
     expect(url.searchParams.has("integration_type")).toBe(false);
   });

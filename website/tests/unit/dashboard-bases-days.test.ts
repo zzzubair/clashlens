@@ -1,3 +1,6 @@
+vi.mock("../../app/services/python-transport.server", () => ({
+  requestJson: mocks.requestJson,
+}));
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
@@ -21,12 +24,6 @@ vi.mock("../../app/server/config.server", async (importOriginal) => {
 vi.mock("../../app/server/actions.server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../app/server/actions.server")>();
   return { ...actual, readLoginIdentity: mocks.readLoginIdentity };
-});
-
-vi.mock("../../app/services/python.server", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../app/services/python.server")>();
-  return { ...actual, requestJson: mocks.requestJson };
 });
 
 import { OpponentsCard, type BasesDay } from "../../app/components/OpponentsCard";
@@ -85,16 +82,10 @@ describe("Bases you attacked on earlier Legend days", () => {
   it("reads an earlier day's bases with that day's comparisons", async () => {
     mocks.requestJson.mockResolvedValueOnce(DAY_3);
     const read = await getPlayerBases(TAG, 3);
-    expect(mocks.requestJson).toHaveBeenCalledWith(
-      "/v1/players/%232PP/bases?day=3",
-      "GET",
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      15_000,
-    );
+    expect(mocks.requestJson).toHaveBeenCalledWith("/v1/players/%232PP/bases?day=3", {
+      method: "GET",
+      timeoutMs: 15_000,
+    });
     expect(read.dayNumber).toBe(3);
     expect(read.rows?.[0]).toMatchObject({
       name: "Typical",

@@ -1,4 +1,6 @@
+import type { DashboardLoaderData, DashboardActionData } from "../lib/dashboard-data";
 import { useEffect, useRef, useState } from "react";
+import type { ShouldRevalidateFunctionArgs } from "react-router";
 import {
   Link,
   data,
@@ -8,24 +10,20 @@ import {
   useNavigation,
   useSearchParams,
 } from "react-router";
-import type { ShouldRevalidateFunctionArgs } from "react-router";
+import { BattleStatistics } from "../components/BattleStatistics";
+import { getTrackedLeaderboard } from "../services/leaderboard.server";
+import { getPlayer } from "../services/players.server";
+import { getPublicUser } from "../services/public-user.server";
 
 import { Dashboard } from "../components/DashboardGrid";
 import { DashboardIcon } from "../components/DashboardIcon";
 import { ErrorNotice } from "../components/ErrorNotice";
-import {
-  FRONT_PAGE_PLAYERS,
-  FrontPage,
-  type FrontPageData,
-} from "../components/FrontPage";
-import { BattleStatistics } from "../components/BattleStatistics";
+import { FRONT_PAGE_PLAYERS, FrontPage } from "../components/FrontPage";
 import { SeasonStory } from "../components/SeasonStory";
-import { ViewAsBar, ViewAsForm, type OwnerChoices } from "../components/ViewAs";
+import { ViewAsBar, ViewAsForm } from "../components/ViewAs";
 import type { LinkedPlayerCard } from "../lib/account-contracts";
-import type { PlayerPage, WebsiteErrorResponse } from "../lib/contracts";
-import { leftDate, leftLine, type LeftLegendI } from "../lib/left-legend";
-import { seasonShape } from "../lib/season-shape";
 import { publicPageMeta } from "../lib/blog";
+import type { PlayerPage, WebsiteErrorResponse } from "../lib/contracts";
 import type { DashboardSettings } from "../lib/dashboard";
 import {
   ACCOUNT_CARDS,
@@ -39,10 +37,11 @@ import {
   shownCards,
 } from "../lib/dashboard";
 import type { CardReads } from "../lib/dashboard-cards";
+import { leftDate, leftLine, type LeftLegendI } from "../lib/left-legend";
 import { LOOKUP_MESSAGES } from "../lib/player-lookup-text";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
+import { seasonShape } from "../lib/season-shape";
 import type { Route } from "./+types/dashboard";
-
 import "../dashboard.css";
 import "../dashboard-cards.css";
 import "../dashboard-day.css";
@@ -57,41 +56,6 @@ import "../view-as.css";
 const NO_STORE = { "Cache-Control": "private, no-store" };
 // Cards read within this go out with the page; slower ones stream in.
 const CARD_WAIT_MS = 250;
-
-export type DashboardLoaderData =
-  | ({ kind: "signed-out" } & FrontPageData)
-  | { kind: "error"; error: WebsiteErrorResponse }
-  | {
-      kind: "signed-in";
-      players: LinkedPlayerCard[];
-      playersUnavailable: boolean;
-      selectedTag: string | null;
-      settings: DashboardSettings;
-      /** Each card's read, sent on as it finishes. */
-      cards: CardReads;
-      /** The Reset that ends the Legend day the cards were read for. */
-      dayEndsMs: number;
-      /** The selected account's player page, when it left Legend I this Season. */
-      leftPlayer: PlayerPage | null;
-      idempotencyKey: string;
-      /** The signed-in account is the site owner, who may View as any player. */
-      canViewAs?: boolean;
-      /**
-       * The player the owner views the dashboard as, read only, which is then
-       * `players`' only one; "not-found" when no player has the tag asked for.
-       */
-      viewAs?: { tag: string; name: string | null } | "not-found" | null;
-      /** The owner's own pin and Discord switches; null for anyone else. */
-      ownerChoices?: OwnerChoices | null;
-    };
-
-export interface DashboardActionData {
-  saved: boolean;
-  error: string | null;
-  idempotencyKey: string;
-  /** The settings as saved, which the page shows without reading itself again. */
-  settings: DashboardSettings | null;
-}
 
 export function meta({ loaderData, matches }: Route.MetaArgs) {
   return loaderData?.kind === "signed-out"
@@ -138,7 +102,6 @@ export async function loader({ request }: Route.LoaderArgs) {
       ? await readLoginIdentity(request, config).catch(() => null)
       : null;
   if (identity === null) return frontPage(config.loginEnabled);
-
   const { createPythonClient } = await import("../services/python.server");
   const client = createPythonClient(identity);
   let account;
@@ -162,7 +125,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   let players: LinkedPlayerCard[] = [];
   let playersUnavailable = false;
   try {
-    players = (await client.getPublicUser(account.username)).verifiedPlayers;
+    players = (await getPublicUser(account.username)).verifiedPlayers;
   } catch {
     playersUnavailable = true;
   }
@@ -205,7 +168,12 @@ export async function loader({ request }: Route.LoaderArgs) {
           ? CARD_IDS.filter((card) => only.includes(card))
           : shownCards(settings.layout)
         ).filter((card) => viewing === undefined || !ACCOUNT_CARDS.includes(card)),
-        { client, selected, settings, waitForBoard: query.get("board") === "wait" },
+        {
+          client,
+          selected,
+          settings,
+          waitForBoard: query.get("board") === "wait",
+        },
         identity,
       ),
       CARD_WAIT_MS,
@@ -215,7 +183,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   // An account that left Legend I keeps this Season's Legend I part, read-only.
   const leftPlayer =
     selected?.state === "not_in_legend" && selected.leftLegendI
-      ? await client.getPlayer(selected.tag).catch(() => null)
+      ? await getPlayer(selected.tag).catch(() => null)
       : null;
 
   const saved = query.get("saved");
@@ -258,11 +226,7 @@ async function frontPage(loginAvailable: boolean) {
   let leaderboard = null;
   let error: WebsiteErrorResponse | null = null;
   try {
-    const { createPythonClient } = await import("../services/python.server");
-    leaderboard = await createPythonClient().getTrackedLeaderboard(
-      FRONT_PAGE_PLAYERS,
-      "live",
-    );
+    leaderboard = await getTrackedLeaderboard(FRONT_PAGE_PLAYERS, "live");
   } catch (cause) {
     const { safeWebsiteError } = await import("../server/errors.server");
     error = safeWebsiteError(cause);

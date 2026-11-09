@@ -1,22 +1,9 @@
 import type {
-  LeaderboardSearch,
-  ArmyAnalytics,
-  HistoricalSeasonSummary,
-  PlayerPage,
-  RefreshStatus,
-  RefreshWork,
-  SearchResponse,
-  SummarizedSeasonRef,
-  TrackedLeaderboard,
-} from "../lib/contracts";
-import { searchLeaderboard } from "./leaderboard-search.server";
-import type {
   AccountSummary,
   ClashLensAccount,
   GroupDeleteResult,
   GroupList,
   PrivateGroup,
-  PublicUser,
   VerificationResult,
 } from "../lib/account-contracts";
 import {
@@ -24,8 +11,6 @@ import {
   mapGroupDeleteResult,
   mapGroupResult,
   mapGroups,
-  mapPublicUser,
-  mapPublicUserResults,
   mapSummary,
   mapVerificationResult,
 } from "../lib/account-contracts";
@@ -36,69 +21,17 @@ import {
   normalizeSubmittedPlayerTag,
   normalizeUsername,
 } from "../lib/account-validation";
-import { normalizePlayerTag } from "../lib/player-tag";
-import { isCanonicalUuid, MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
-import { isProviderSubject } from "../server/google-oidc.server";
+import { isCanonicalUuid } from "../lib/validation";
+import type { LoginIdentity } from "../server/auth.server";
+import { isProvider, isProviderSubject } from "../server/auth.server";
+import { isRecord, isString, PythonApiError } from "./python-response.server";
 import {
-  createProofHeaders,
-  decodeSecretValue,
-  loadSecretFile,
-} from "../server/signer.server";
-import {
-  mapHistoricalSeason,
-  mapPlayerPage,
-  mapPlayerSeasons,
-} from "./player-response.server";
-import {
-  PythonApiError,
-  isCanonicalPlayerTag,
-  isFiniteNumber,
-  isInteger,
-  isNullableString,
-  isOneOf,
-  isRecord,
-  isResetTimestamp,
-  isString,
-  isUtcTimestamp,
-  mapRecentDays,
-} from "./python-response.server";
-
-export { PythonApiError } from "./python-response.server";
-
-const DEFAULT_CALLER = "typescript-website";
-const DEFAULT_KEY_ID = "current";
-const REQUEST_TIMEOUT_MS = 5_000;
-const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
-const FOCUS_NEIGHBORS = 5;
-
-interface ClientConfig {
-  baseUrl: URL;
-  caller: string;
-  keyId: string;
-  key: Buffer;
-}
-
-let cachedConfig: ClientConfig | undefined;
+  REQUEST_TIMEOUT_MS,
+  requestJson,
+  requestJsonRaw,
+} from "./python-transport.server";
 
 export interface PythonClient {
-  getTrackedLeaderboard(
-    limit?: number,
-    view?: "live" | "daily",
-    offset?: number,
-    selector?: { officialSeasonId: string; dayNumber: number },
-    focusTag?: string,
-  ): Promise<TrackedLeaderboard>;
-  searchLeaderboard(query: string): Promise<LeaderboardSearch>;
-  searchPlayers(query: string, limit?: number): Promise<SearchResponse>;
-  /** Without `battles`, each day keeps its totals but lists no battles. */
-  getPlayer(tag: string, battles?: boolean): Promise<PlayerPage>;
-  getPlayerSeasons(tag: string): Promise<SummarizedSeasonRef[]>;
-  getPlayerSeason(tag: string, seasonId: string): Promise<HistoricalSeasonSummary>;
-  getArmyAnalytics(query: URLSearchParams): Promise<ArmyAnalytics>;
-  getArmySeasonSummary(season: string, query: URLSearchParams): Promise<ArmyAnalytics>;
-  getArmySeasons(): Promise<string[]>;
-  requestRefresh(tag: string, idempotencyKey: string): Promise<RefreshWork>;
-  getRefreshStatus(workId: string, tag: string): Promise<RefreshStatus>;
   createAccount(
     input: AccountNameInput,
     idempotencyKey: string,
@@ -129,25 +62,12 @@ export interface PythonClient {
     idempotencyKey: string,
     endedLogin?: string,
   ): Promise<{ providers: string[] }>;
-  getPublicUser(username: string): Promise<PublicUser>;
   verifyPlayerToken(
     tag: string,
     token: string,
     idempotencyKey: string,
   ): Promise<VerificationResult>;
 }
-
-/** A validated browser login identity for one of the two Phase 1 providers. */
-export interface LoginProviderIdentity {
-  provider: "google" | "discord";
-  providerSubject: string;
-}
-
-/**
- * Backward-compatible alias for the login identity type. The private Python
- * client signs every account operation with exactly one provider identity.
- */
-export type GoogleAccountIdentity = LoginProviderIdentity;
 
 export interface PythonClientOptions {
   accountReadTimeoutMs?: number;
@@ -163,35 +83,6 @@ export interface GroupInput {
   name: string;
 }
 
-/**
- * Create the private Python API client. Pass the validated Google identity
- * (from the login cookie) when account operations are needed; public
- * operations stay anonymous either way.
- */
-export function createPythonClient(
-  identity?: GoogleAccountIdentity,
-  options: PythonClientOptions = {},
-): PythonClient {
-  const accountOperations = createAccountOperations(
-    identity,
-    boundedAccountReadTimeout(options.accountReadTimeoutMs),
-  );
-  return {
-    getTrackedLeaderboard,
-    searchLeaderboard,
-    searchPlayers,
-    getPlayer: getPlayerPage,
-    getPlayerSeasons,
-    getPlayerSeason,
-    getArmyAnalytics,
-    getArmySeasonSummary,
-    getArmySeasons,
-    requestRefresh: requestPlayerRefresh,
-    getRefreshStatus,
-    ...accountOperations,
-  };
-}
-
 function boundedAccountReadTimeout(value: number | undefined): number {
   if (value === undefined) return REQUEST_TIMEOUT_MS;
   if (!Number.isInteger(value) || value < 50 || value > REQUEST_TIMEOUT_MS) {
@@ -200,930 +91,13 @@ function boundedAccountReadTimeout(value: number | undefined): number {
   return value;
 }
 
-async function getTrackedLeaderboard(
-  limit = 25,
-  view: "live" | "daily" = "live",
-  offset = 0,
-  selector?: { officialSeasonId: string; dayNumber: number },
-  focusTag?: string,
-): Promise<TrackedLeaderboard> {
-  const query = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-  if (focusTag) query.set("focus_tag", focusTag);
-  if (selector) {
-    query.set("official_season_id", selector.officialSeasonId);
-    query.set("season_day_number", String(selector.dayNumber));
-  }
-  const payload = await requestJson<unknown>(
-    `/v1/leaderboards/${view === "live" ? "live" : "frozen"}?${query.toString()}`,
-    "GET",
-    undefined,
-    undefined,
-  );
-  return mapLeaderboard(payload, view, focusTag);
-}
-
-async function searchPlayers(query: string, limit = 50): Promise<SearchResponse> {
-  if (
-    query.length > MAX_SEARCH_QUERY_LENGTH ||
-    !Number.isInteger(limit) ||
-    limit < 1 ||
-    limit > 50
-  ) {
-    throw new PythonApiError(400, { error: "invalid_input" });
-  }
-  const payload = await requestJson<unknown>(
-    `/v1/players/search?q=${encodeURIComponent(query)}&limit=${limit}`,
-    "GET",
-    undefined,
-    undefined,
-  );
-  return mapSearch(payload, query);
-}
-
-async function getArmyAnalytics(query: URLSearchParams): Promise<ArmyAnalytics> {
-  let payload: unknown;
-  try {
-    payload = await requestJson<unknown>(
-      `/v1/analytics/armies?${query.toString()}`,
-      "GET",
-      undefined,
-      undefined,
-    );
-  } catch (cause) {
-    if (
-      cause instanceof PythonApiError &&
-      cause.status === 404 &&
-      isRecord(cause.payload) &&
-      cause.payload.error === "no_completed_legend_days"
-    ) {
-      // The current season has no completed Legend day yet; keep the previous
-      // season reference so the page can link to it honestly.
-      throw new NoCompletedLegendDaysError(
-        isString(cause.payload.previous_season_id)
-          ? cause.payload.previous_season_id
-          : null,
-      );
-    }
-    throw cause;
-  }
-  return mapArmyAnalytics(payload);
-}
-
-async function getArmySeasonSummary(
-  season: string,
-  query: URLSearchParams,
-): Promise<ArmyAnalytics> {
-  // Historical army reads cover the whole season only: the query carries
-  // lens/category/sort, never a day range or population filter.
-  const payload = await requestJson<unknown>(
-    `/v1/analytics/armies/seasons/${encodeURIComponent(season)}?${query.toString()}`,
-    "GET",
-    undefined,
-    undefined,
-  );
-  return mapArmyAnalytics(payload);
-}
-
-// Finished seasons with saved attack summaries, newest first.
-async function getArmySeasons(): Promise<string[]> {
-  const payload = await requestJson<unknown>(
-    "/v1/analytics/armies/seasons",
-    "GET",
-    undefined,
-    undefined,
-  );
-  if (
-    !isRecord(payload) ||
-    !Array.isArray(payload.seasons) ||
-    !payload.seasons.every(isString)
-  ) {
-    throw new PythonApiError(502, { error: "malformed" });
-  }
-  return payload.seasons;
-}
-
-export class NoCompletedLegendDaysError extends Error {
-  readonly previousSeasonId: string | null;
-
-  constructor(previousSeasonId: string | null) {
-    super("no completed Legend days this season");
-    this.name = "NoCompletedLegendDaysError";
-    this.previousSeasonId = previousSeasonId;
-  }
-}
-
-async function getPlayerPage(tag: string, battles = true): Promise<PlayerPage> {
-  const payload = await requestJson<unknown>(
-    `/v1/players/${encodeURIComponent(tag)}${battles ? "" : "?battles=false"}`,
-    "GET",
-    undefined,
-    undefined,
-  );
-  return mapPlayerPage(payload);
-}
-
-async function getPlayerSeasons(tag: string): Promise<SummarizedSeasonRef[]> {
-  const payload = await requestJson<unknown>(
-    `/v1/players/${encodeURIComponent(tag)}/seasons`,
-    "GET",
-    undefined,
-    undefined,
-  );
-  return mapPlayerSeasons(payload);
-}
-
-async function getPlayerSeason(
-  tag: string,
-  seasonId: string,
-): Promise<HistoricalSeasonSummary> {
-  const payload = await requestJson<unknown>(
-    `/v1/players/${encodeURIComponent(tag)}/seasons/${encodeURIComponent(seasonId)}`,
-    "GET",
-    undefined,
-    undefined,
-  );
-  return mapHistoricalSeason(payload);
-}
-
-async function requestPlayerRefresh(
-  tag: string,
-  idempotencyKey: string,
-): Promise<RefreshWork> {
-  if (!isCanonicalUuid(idempotencyKey)) {
-    throw new PythonApiError(400, { error: "invalid_input" });
-  }
-  const payload = await requestJson<unknown>(
-    `/v1/players/${encodeURIComponent(tag)}/refresh`,
-    "POST",
-    undefined,
-    undefined,
-    idempotencyKey,
-  );
-  return mapRefresh(payload, "refresh-work");
-}
-
-async function getRefreshStatus(workId: string, tag: string): Promise<RefreshStatus> {
-  const payload = await requestJson<unknown>(
-    `/v1/refreshes/${encodeURIComponent(workId)}`,
-    "GET",
-    undefined,
-    undefined,
-  );
-  const status = mapRefresh(payload, "refresh-status") as RefreshStatus;
-  if (status.tag !== tag) {
-    throw new PythonApiError(409, { error: "conflict" });
-  }
-  if (status.state === "complete") {
-    return { ...status, player: await getPlayerPage(tag) };
-  }
-  return status;
-}
-
-export async function requestJson<T>(
-  target: string,
-  method: "GET" | "POST" | "PATCH" | "DELETE",
-  body: Buffer | undefined,
-  expectedKind: string | string[] | undefined,
-  requestId?: string,
-  identity?: GoogleAccountIdentity,
-  allowedStatuses?: readonly number[],
-  timeoutMs = REQUEST_TIMEOUT_MS,
-): Promise<T> {
-  const { status, payload } = await requestJsonRaw(
-    target,
-    method,
-    body,
-    requestId,
-    identity,
-    timeoutMs,
-  );
-  if (!(status >= 200 && status < 300) && !allowedStatuses?.includes(status)) {
-    throw new PythonApiError(status, payload);
-  }
-  if (expectedKind === undefined) return payload as T;
-  const acceptedKinds = Array.isArray(expectedKind) ? expectedKind : [expectedKind];
-  if (
-    !isRecord(payload) ||
-    typeof payload.kind !== "string" ||
-    !acceptedKinds.includes(payload.kind)
-  ) {
-    throw new PythonApiError(502, { error: "unavailable" });
-  }
-  return payload as T;
-}
-
-async function requestJsonRaw(
-  target: string,
-  method: "GET" | "POST" | "PATCH" | "DELETE",
-  body: Buffer | undefined,
-  requestId?: string,
-  identity?: GoogleAccountIdentity,
-  timeoutMs = REQUEST_TIMEOUT_MS,
-): Promise<{ status: number; payload: unknown }> {
-  const config = getConfig();
-  const proof = createProofHeaders({
-    key: config.key,
-    caller: config.caller,
-    keyId: config.keyId,
-    method,
-    rawTarget: target,
-    body,
-    provider: identity?.provider,
-    providerSubject: identity?.providerSubject,
-    requestId,
-    lifetimeSeconds: 10,
-  });
-  let response: Response | undefined;
-  let payload: unknown;
-  try {
-    response = await fetch(new URL(target, config.baseUrl), {
-      method,
-      headers: {
-        ...proof.headers,
-        ...(body === undefined ? {} : { "content-type": "application/json" }),
-      },
-      body: body === undefined ? undefined : Uint8Array.from(body),
-      cache: "no-store",
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    payload = await readPayload(response);
-  } catch (cause) {
-    if (cause instanceof DOMException && cause.name === "TimeoutError") {
-      throw new PythonApiError(503, { error: "timeout" });
-    }
-    throw response === undefined
-      ? new PythonApiError(503, { error: "unavailable" })
-      : new PythonApiError(502, { error: "malformed" });
-  }
-  return { status: response.status, payload };
-}
-
-async function readPayload(response: Response): Promise<unknown> {
-  const contentLength = response.headers.get("content-length");
-  if (
-    contentLength !== null &&
-    (!/^\d+$/.test(contentLength) || Number(contentLength) > MAX_RESPONSE_BYTES)
-  ) {
-    return { error: "malformed" };
-  }
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.byteLength > MAX_RESPONSE_BYTES) return { error: "malformed" };
-  let text: string;
-  try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
-    return { error: "malformed" };
-  }
-  if (text === "") return {};
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { error: "malformed" };
-  }
-}
-
-function getConfig(): ClientConfig {
-  if (cachedConfig !== undefined) return cachedConfig;
-  const rawBaseUrl = process.env.CLASHLENS_PYTHON_API_URL?.trim();
-  const configuredCaller = process.env.CLASHLENS_PYTHON_HMAC_CALLER?.trim();
-  const configuredKeyId = process.env.CLASHLENS_PYTHON_HMAC_KEY_ID?.trim();
-  const production = process.env.NODE_ENV === "production";
-  if (production && (!configuredCaller || !configuredKeyId)) {
-    throw new PythonApiError(503, { error: "unavailable" });
-  }
-  const caller = configuredCaller || DEFAULT_CALLER;
-  const keyId = configuredKeyId || DEFAULT_KEY_ID;
-  if (!rawBaseUrl) throw new PythonApiError(503, { error: "unavailable" });
-  let baseUrl: URL;
-  try {
-    baseUrl = new URL(rawBaseUrl);
-    if (
-      !/^https?:$/.test(baseUrl.protocol) ||
-      baseUrl.pathname !== "/" ||
-      baseUrl.search ||
-      baseUrl.hash
-    ) {
-      throw new Error("invalid base URL");
-    }
-  } catch {
-    throw new PythonApiError(503, { error: "unavailable" });
-  }
-  let key: Buffer;
-  try {
-    const secretFile = process.env.CLASHLENS_PYTHON_HMAC_SECRET_FILE?.trim();
-    const testSecret = process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64;
-    if (secretFile) key = loadSecretFile(secretFile);
-    else if (process.env.NODE_ENV !== "production" && testSecret) {
-      key = decodeSecretValue(testSecret);
-    } else throw new Error("missing private API secret");
-  } catch {
-    throw new PythonApiError(503, { error: "unavailable" });
-  }
-  cachedConfig = { baseUrl, caller, keyId, key };
-  return cachedConfig;
-}
-
-function mapRefresh(
-  payload: unknown,
-  kind: "refresh-work" | "refresh-status",
-): RefreshWork | RefreshStatus {
-  if (
-    !isRecord(payload) ||
-    !isString(payload.refresh_id) ||
-    !isCanonicalUuid(payload.refresh_id) ||
-    !isCanonicalPlayerTag(payload.tag) ||
-    !isOneOf(payload.status, [
-      "pending",
-      "leased",
-      "waiting_retry",
-      "complete",
-      "failed",
-      "cancelled",
-    ] as const) ||
-    !isString(payload.outcome)
-  ) {
-    throw new PythonApiError(502, { error: "malformed" });
-  }
-  const raw = payload as {
-    refresh_id: string;
-    tag: string;
-    status: "pending" | "leased" | "waiting_retry" | "complete" | "failed" | "cancelled";
-    outcome: string;
-  };
-  const state =
-    raw.status === "pending" || raw.status === "waiting_retry"
-      ? "queued"
-      : raw.status === "leased"
-        ? "running"
-        : raw.status === "complete"
-          ? "complete"
-          : "failed";
-  const value = {
-    kind,
-    workId: raw.refresh_id,
-    tag: raw.tag,
-    state,
-    progressPercent: state === "queued" ? 0 : state === "running" ? 50 : 100,
-    message: raw.outcome,
-    publishedAt: null,
-  } as const;
-  return kind === "refresh-status"
-    ? ({ ...value, kind: "refresh-status", player: null } as RefreshStatus)
-    : ({ ...value, kind: "refresh-work" } as RefreshWork);
-}
-
-function mapLeaderboard(
-  payload: unknown,
-  view: "live" | "daily",
-  focusTag?: string,
-): TrackedLeaderboard {
-  if (
-    !isRecord(payload) ||
-    !isOneOf(payload.kind, ["live", "frozen"] as const) ||
-    (view === "live" ? payload.kind !== "live" : payload.kind !== "frozen") ||
-    !Array.isArray(payload.entries) ||
-    !isUtcTimestamp(payload.generated_at) ||
-    !isInteger(payload.tracked_population) ||
-    !isInteger(payload.total_entries) ||
-    !isInteger(payload.page) ||
-    !isInteger(payload.page_size) ||
-    !isInteger(payload.page_count) ||
-    typeof payload.has_previous !== "boolean" ||
-    typeof payload.has_next !== "boolean" ||
-    !isSnakeCoverage(payload.coverage) ||
-    (payload.kind === "live"
-      ? !isLiveLeaderboardProvenance(payload.provenance, payload.source_observations)
-      : !isSnakeProvenance(payload.provenance)) ||
-    !Array.isArray(payload.quality_states) ||
-    !payload.quality_states.every((state) =>
-      isOneOf(state, [
-        "missing",
-        "partial",
-        "stale",
-        "malformed",
-        "unclassified",
-        "uncertain",
-        "rate-limited",
-        "unavailable",
-      ] as const),
-    )
-  )
-    throw new PythonApiError(502, { error: "malformed" });
-  const expectedPageCount = Math.ceil(payload.total_entries / payload.page_size);
-  const pageFirstPosition = (payload.page - 1) * payload.page_size + 1;
-  const pageEntries = Math.max(
-    0,
-    Math.min(payload.page_size, payload.total_entries - pageFirstPosition + 1),
-  );
-  const firstEntry: unknown = payload.entries[0];
-  const firstPosition =
-    focusTag && isRecord(firstEntry) && isInteger(firstEntry.position)
-      ? firstEntry.position
-      : pageFirstPosition;
-  const neighborsBefore = pageFirstPosition - firstPosition;
-  const neighborsAfter = payload.entries.length - pageEntries - neighborsBefore;
-  if (
-    payload.tracked_population < 0 ||
-    payload.total_entries < 0 ||
-    payload.page < 1 ||
-    payload.page_size < 1 ||
-    payload.page_count !== expectedPageCount ||
-    payload.page > Math.max(1, payload.page_count) ||
-    payload.has_previous !== payload.page > 1 ||
-    payload.has_next !== payload.page < payload.page_count ||
-    neighborsBefore < 0 ||
-    neighborsAfter < 0 ||
-    Math.max(neighborsBefore, neighborsAfter) > FOCUS_NEIGHBORS ||
-    firstPosition + payload.entries.length - 1 > payload.total_entries ||
-    (focusTag
-      ? !payload.entries.some((entry) => isRecord(entry) && entry.tag === focusTag)
-      : neighborsBefore + neighborsAfter > 0)
-  )
-    throw new PythonApiError(502, { error: "malformed" });
-  const sourceObservations =
-    payload.kind === "live" ? mapSourceObservations(payload.source_observations) : null;
-  const entries = payload.entries.map((entry, index) => {
-    if (
-      !isRecord(entry) ||
-      !isInteger(entry.position) ||
-      entry.position !== firstPosition + index ||
-      !isCanonicalPlayerTag(entry.tag) ||
-      !isNullableString(entry.name) ||
-      !isNullableString(entry.clan) ||
-      !isInteger(entry.trophies) ||
-      !isString(entry.observed_at) ||
-      !isFiniteNumber(entry.age_seconds) ||
-      entry.age_seconds < 0 ||
-      !isOneOf(entry.freshness, ["fresh", "stale"] as const) ||
-      (payload.kind === "live"
-        ? !isOneOf(entry.confidence, [
-            "unknown",
-            "eligible",
-            "ineligible",
-            "uncertain",
-          ] as const)
-        : !isOneOf(entry.confidence, ["exact", "confirmed", "uncertain"] as const)) ||
-      !isOneOf(entry.public_confidence, ["high", "partial", "uncertain"] as const) ||
-      !(entry.official_rank === null || isInteger(entry.official_rank)) ||
-      !(entry.tied === undefined || typeof entry.tied === "boolean") ||
-      !(entry.reset_position == null || isInteger(entry.reset_position)) ||
-      !(entry.today_change == null || isInteger(entry.today_change)) ||
-      !(entry.recent_days === undefined || mapRecentDays(entry.recent_days))
-    )
-      throw new PythonApiError(502, { error: "malformed" });
-    return {
-      rank: entry.position ?? index + 1,
-      tag: entry.tag,
-      name: entry.name ?? "Unknown",
-      clan: entry.clan ?? "Unknown",
-      trophies: entry.trophies,
-      freshness: {
-        state: entry.freshness,
-        observedAt: entry.observed_at,
-        ageSeconds: entry.age_seconds,
-      },
-      state:
-        entry.public_confidence === "uncertain"
-          ? "uncertain"
-          : entry.freshness === "stale"
-            ? "stale"
-            : "available",
-      confidence: entry.public_confidence,
-      tied: entry.tied === true,
-      // Missing from an older API, or on a Daily board.
-      resetRank: isInteger(entry.reset_position) ? entry.reset_position : null,
-      todayChange: isInteger(entry.today_change) ? entry.today_change : null,
-      recentDays: mapRecentDays(entry.recent_days) ?? [],
-    };
-  });
-  const mapSelector = (value: unknown) => {
-    if (
-      !isRecord(value) ||
-      !isString(value.official_season_id) ||
-      value.official_season_id.length === 0 ||
-      !isInteger(value.season_day_number) ||
-      value.season_day_number < 1 ||
-      value.season_day_number > 28
-    )
-      throw new PythonApiError(502, { error: "malformed" });
-    return {
-      officialSeasonId: value.official_season_id,
-      dayNumber: value.season_day_number,
-    };
-  };
-  const daily =
-    payload.kind === "frozen"
-      ? {
-          ...mapSelector(payload),
-          resetAt: isResetTimestamp(payload.reset_at)
-            ? payload.reset_at
-            : (() => {
-                throw new PythonApiError(502, { error: "malformed" });
-              })(),
-          seasonStartAt: isResetTimestamp(payload.season_start_at)
-            ? payload.season_start_at
-            : (() => {
-                throw new PythonApiError(502, { error: "malformed" });
-              })(),
-          seasonEndAt: isResetTimestamp(payload.season_end_at)
-            ? payload.season_end_at
-            : (() => {
-                throw new PythonApiError(502, { error: "malformed" });
-              })(),
-          previousSnapshot:
-            payload.previous_snapshot === null
-              ? null
-              : mapSelector(payload.previous_snapshot),
-          nextSnapshot:
-            payload.next_snapshot === null ? null : mapSelector(payload.next_snapshot),
-        }
-      : null;
-  if (
-    daily &&
-    (Date.parse(daily.seasonEndAt) - Date.parse(daily.seasonStartAt) !==
-      28 * 24 * 60 * 60 * 1000 ||
-      Date.parse(daily.resetAt) - Date.parse(daily.seasonStartAt) !==
-        daily.dayNumber * 24 * 60 * 60 * 1000)
-  )
-    throw new PythonApiError(502, { error: "malformed" });
-  return {
-    kind: "tracked-leaderboard",
-    view,
-    entries: entries as TrackedLeaderboard["entries"],
-    totalTracked: payload.tracked_population,
-    seasonResetPending: Number(payload.season_reset_pending) || 0,
-    totalEntries: payload.total_entries,
-    page: payload.page,
-    pageSize: payload.page_size,
-    pageCount: payload.page_count,
-    generatedAt: payload.generated_at,
-    hasPrevious: payload.has_previous,
-    hasNext: payload.has_next,
-    daily,
-    coverage: mapSnakeCoverage(payload.coverage),
-    provenance:
-      payload.kind === "live"
-        ? mapLiveLeaderboardProvenance(payload.provenance, payload.source_observations)
-        : mapSnakeProvenance(payload.provenance as Record<string, unknown>),
-    sourceObservations,
-    qualityStates: payload.quality_states as TrackedLeaderboard["qualityStates"],
-  };
-}
-
-function mapSearch(payload: unknown, submittedQuery: string): SearchResponse {
-  if (
-    !isRecord(payload) ||
-    !isString(payload.query) ||
-    !Array.isArray(payload.results) ||
-    !Array.isArray(payload.users) ||
-    typeof payload.known_only !== "boolean"
-  )
-    throw new PythonApiError(502, { error: "malformed" });
-  const users = mapPublicUserResults(payload.users);
-  if (users === null) throw new PythonApiError(502, { error: "malformed" });
-  const results = payload.results.map((item) => {
-    if (
-      !isRecord(item) ||
-      !isCanonicalPlayerTag(item.tag) ||
-      !isString(item.name) ||
-      !(isInteger(item.trophies) || item.trophies === null) ||
-      !isOneOf(item.freshness, ["fresh", "stale"] as const) ||
-      !isFiniteNumber(item.age_seconds) ||
-      !isString(item.observed_at) ||
-      !isOneOf(item.public_confidence, ["high", "partial", "uncertain"] as const)
-    )
-      throw new PythonApiError(502, { error: "malformed" });
-    return {
-      tag: item.tag,
-      name: item.name,
-      clan: isString(item.clan) ? item.clan : "Unknown",
-      trophies: item.trophies,
-      freshness: {
-        state: item.freshness,
-        observedAt: item.observed_at,
-        ageSeconds: item.age_seconds,
-      },
-      state:
-        item.public_confidence === "uncertain"
-          ? "uncertain"
-          : item.freshness === "stale"
-            ? "stale"
-            : "available",
-      context: "Known Clash Lens player",
-    };
-  });
-  return {
-    kind: "player-search",
-    query: payload.query,
-    exactTag: normalizePlayerTag(submittedQuery),
-    results: results as SearchResponse["results"],
-    users,
-    knownOnly: payload.known_only,
-  };
-}
-
-function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
-  if (
-    !isRecord(payload) ||
-    payload.kind !== "army-analytics" ||
-    !isRecord(payload.selection) ||
-    !Array.isArray(payload.rows) ||
-    !isInteger(payload.total_attacks) ||
-    !isInteger(payload.usable_army_sample) ||
-    !isRecord(payload.army_states) ||
-    !Object.values(payload.army_states).every(isInteger) ||
-    typeof payload.army_states_sum_confirmed !== "boolean" ||
-    !isInteger(payload.unknown_affected_attacks) ||
-    !isInteger(payload.unknown_component_occurrences) ||
-    !isInteger(payload.perspective_disagreement_count) ||
-    !isInteger(payload.missing_trophy_membership_evidence) ||
-    !isRecord(payload.cohort_evidence) ||
-    !isInteger(payload.cohort_evidence.cohort_players) ||
-    !isInteger(payload.cohort_evidence.stale_or_uncertain_cohort_members) ||
-    !isInteger(payload.cohort_evidence.streak_excluded_players) ||
-    !isInteger(payload.cohort_evidence.shielded_player_days) ||
-    !isRecord(payload.collection_coverage) ||
-    !isString(payload.collection_coverage.state) ||
-    !isInteger(payload.collection_coverage.completed_days) ||
-    (payload.collection_coverage.covered_days !== undefined &&
-      (!Array.isArray(payload.collection_coverage.covered_days) ||
-        !payload.collection_coverage.covered_days.every(isInteger))) ||
-    (payload.collection_coverage.streak_gap_days !== undefined &&
-      (!Array.isArray(payload.collection_coverage.streak_gap_days) ||
-        !payload.collection_coverage.streak_gap_days.every(isInteger))) ||
-    !isRecord(payload.freshness) ||
-    !isString(payload.freshness.state) ||
-    !isRecord(payload.reproducibility) ||
-    !isString(payload.reproducibility.official_season_id) ||
-    !Array.isArray(payload.reproducibility.legend_days) ||
-    payload.reproducibility.legend_days.length !== 2 ||
-    !payload.reproducibility.legend_days.every(isInteger) ||
-    !Array.isArray(payload.reproducibility.snapshot_versions) ||
-    !payload.reproducibility.snapshot_versions.every(isInteger) ||
-    !isRecord(payload.versions) ||
-    !isString(payload.publication_identity)
-  )
-    throw new PythonApiError(502, { error: "malformed" });
-  const selection = payload.selection;
-  if (
-    !isOneOf(selection.lens, ["offense", "defense"] as const) ||
-    !isString(selection.season) ||
-    !isInteger(selection.start_day) ||
-    !isInteger(selection.end_day) ||
-    !isString(selection.population) ||
-    !isString(selection.category) ||
-    !isString(selection.sort) ||
-    !isString(payload.versions.decoder) ||
-    !isString(payload.versions.catalog) ||
-    !isString(payload.versions.analytics)
-  )
-    throw new PythonApiError(502, { error: "malformed" });
-  const usageOnly = payload.history_usage_only === true;
-  const parseRow = (row: unknown): ArmyAnalytics["rows"][number] => {
-    if (!isRecord(row)) throw new PythonApiError(502, { error: "malformed" });
-    if (
-      !isString(row.key) ||
-      !isString(row.label) ||
-      !isInteger(row.usage_count) ||
-      !isInteger(row.usage_denominator) ||
-      !isFiniteNumber(row.usage_rate) ||
-      (usageOnly
-        ? !isInteger(row.quantity) ||
-          !isInteger(row.one_star_count) ||
-          !isInteger(row.two_star_count) ||
-          !isInteger(row.three_star_count)
-        : !Array.isArray(row.star_counts) ||
-          row.star_counts.length !== 4 ||
-          !row.star_counts.every(isInteger) ||
-          !Array.isArray(row.star_rates) ||
-          row.star_rates.length !== 4 ||
-          !row.star_rates.every(isFiniteNumber) ||
-          !isFiniteNumber(row.three_star_rate) ||
-          !isFiniteNumber(row.average_stars) ||
-          !isFiniteNumber(row.average_destruction) ||
-          (row.average_trophies !== undefined && !isFiniteNumber(row.average_trophies)) ||
-          (row.average_miss_trophies != null &&
-            !isFiniteNumber(row.average_miss_trophies)) ||
-          !isInteger(row.unknown_excluded_attacks)) ||
-      (row.variants !== undefined && !Array.isArray(row.variants))
-    )
-      throw new PythonApiError(502, { error: "malformed" });
-    return {
-      key: row.key,
-      label: row.label,
-      usageCount: row.usage_count,
-      usageDenominator: row.usage_denominator,
-      usageRate: row.usage_rate,
-      quantity: usageOnly ? (row.quantity as number) : undefined,
-      oneStarCount: usageOnly ? (row.one_star_count as number) : undefined,
-      twoStarCount: usageOnly ? (row.two_star_count as number) : undefined,
-      threeStarCount: usageOnly ? (row.three_star_count as number) : undefined,
-      starCounts: row.star_counts as [number, number, number, number] | undefined,
-      starRates: row.star_rates as [number, number, number, number] | undefined,
-      threeStarRate: row.three_star_rate as number | undefined,
-      averageStars: row.average_stars as number | undefined,
-      averageDestruction: row.average_destruction as number | undefined,
-      averageTrophies: row.average_trophies as number | undefined,
-      averageMissTrophies: row.average_miss_trophies as number | null | undefined,
-      unknownExcludedAttacks: row.unknown_excluded_attacks as number | undefined,
-      variants: (row.variants as unknown[] | undefined)?.map(parseRow),
-      typeId: isInteger(row.type_id) ? row.type_id : undefined,
-      variantId: isInteger(row.variant_id) ? row.variant_id : undefined,
-    };
-  };
-  const rows = payload.rows.map(parseRow);
-  const armyStates = Object.fromEntries(
-    Object.entries(payload.army_states).map(([state, count]) => {
-      if (!isInteger(count)) throw new PythonApiError(502, { error: "malformed" });
-      return [state, count];
-    }),
-  );
-  const pagination = payload.pagination;
-  if (
-    pagination !== undefined &&
-    (!isRecord(pagination) ||
-      !isInteger(pagination.offset) ||
-      !isInteger(pagination.total_rows) ||
-      !(pagination.next_offset === null || isInteger(pagination.next_offset)))
-  )
-    throw new PythonApiError(502, { error: "malformed" });
-  return {
-    pagination: isRecord(pagination)
-      ? {
-          offset: pagination.offset as number,
-          totalRows: pagination.total_rows as number,
-          nextOffset: pagination.next_offset as number | null,
-        }
-      : undefined,
-    kind: "army-analytics",
-    selection: {
-      lens: selection.lens,
-      season: selection.season,
-      startDay: selection.start_day,
-      endDay: selection.end_day,
-      population: selection.population,
-      category: selection.category,
-      sort: selection.sort,
-    },
-    totalAttacks: payload.total_attacks,
-    usableArmySample: payload.usable_army_sample,
-    armyStates,
-    armyStatesSumConfirmed: payload.army_states_sum_confirmed,
-    unknownAffectedAttacks: payload.unknown_affected_attacks,
-    unknownComponentOccurrences: payload.unknown_component_occurrences,
-    perspectiveDisagreementCount: payload.perspective_disagreement_count,
-    missingTrophyMembershipEvidence: payload.missing_trophy_membership_evidence,
-    cohortEvidence: {
-      cohortPlayers: payload.cohort_evidence.cohort_players,
-      staleOrUncertainCohortMembers:
-        payload.cohort_evidence.stale_or_uncertain_cohort_members,
-      streakExcludedPlayers: payload.cohort_evidence.streak_excluded_players,
-      shieldedPlayerDays: payload.cohort_evidence.shielded_player_days,
-    },
-    collectionCoverage: {
-      state: payload.collection_coverage.state,
-      completedDays: payload.collection_coverage.completed_days,
-      coveredDays: payload.collection_coverage.covered_days as number[] | undefined,
-      streakGapDays: payload.collection_coverage.streak_gap_days as number[] | undefined,
-    },
-    freshness: { state: payload.freshness.state },
-    reproducibility: {
-      officialSeasonId: payload.reproducibility.official_season_id,
-      legendDays: payload.reproducibility.legend_days as [number, number],
-      snapshotVersions: payload.reproducibility.snapshot_versions,
-    },
-    versions: {
-      decoder: payload.versions.decoder,
-      catalog: payload.versions.catalog,
-      analytics: payload.versions.analytics,
-    },
-    publicationIdentity: payload.publication_identity,
-    rows,
-  };
-}
-
-function isSnakeCoverage(value: unknown): value is Record<string, unknown> {
-  return (
-    isRecord(value) &&
-    isOneOf(value.state, ["complete", "partial", "missing", "unknown"] as const) &&
-    isInteger(value.tracked_players) &&
-    value.tracked_players >= 0 &&
-    isFiniteNumber(value.measured_percent) &&
-    value.measured_percent >= 0 &&
-    value.measured_percent <= 100 &&
-    isString(value.note)
-  );
-}
-
-function mapSnakeCoverage(
-  value: Record<string, unknown>,
-): TrackedLeaderboard["coverage"] {
-  return {
-    state: value.state as TrackedLeaderboard["coverage"]["state"],
-    trackedPlayers: value.tracked_players as number,
-    measuredPercent: value.measured_percent as number,
-    note: value.note as string,
-  };
-}
-
-function isSnakeProvenance(value: unknown): value is Record<string, unknown> {
-  return (
-    isRecord(value) &&
-    isString(value.source) &&
-    isUtcTimestamp(value.observed_at) &&
-    isOneOf(value.freshness, ["fresh", "stale", "unknown"] as const) &&
-    isOneOf(value.confidence, ["high", "partial", "uncertain"] as const) &&
-    isOneOf(value.coverage, ["complete", "partial", "missing", "unknown"] as const) &&
-    isString(value.version)
-  );
-}
-
-function isLiveLeaderboardProvenance(
-  value: unknown,
-  sourceObservations: unknown,
-): value is Record<string, unknown> {
-  if (isSnakeProvenance(value)) return true;
-  return (
-    isRecord(value) &&
-    value.observed_at === null &&
-    isString(value.source) &&
-    isOneOf(value.freshness, ["fresh", "stale", "unknown"] as const) &&
-    isOneOf(value.confidence, ["high", "partial", "uncertain"] as const) &&
-    isOneOf(value.coverage, ["complete", "partial", "missing", "unknown"] as const) &&
-    isString(value.version) &&
-    isRecord(sourceObservations) &&
-    sourceObservations.oldest_observed_at === null &&
-    sourceObservations.newest_observed_at === null &&
-    sourceObservations.stale_count === 0
-  );
-}
-
-function mapSnakeProvenance(value: Record<string, unknown>) {
-  return {
-    source: value.source as string,
-    observedAt: value.observed_at as string,
-    freshness: value.freshness as "fresh" | "stale" | "unknown",
-    confidence: value.confidence as "high" | "partial" | "uncertain",
-    coverage: value.coverage as "complete" | "partial" | "missing" | "unknown",
-    version: value.version as string,
-  };
-}
-
-function mapLiveLeaderboardProvenance(value: unknown, sourceObservations: unknown) {
-  if (!isLiveLeaderboardProvenance(value, sourceObservations))
-    throw new PythonApiError(502, { error: "malformed" });
-  return {
-    source: value.source as string,
-    observedAt: value.observed_at as string | null,
-    freshness: value.freshness as "fresh" | "stale" | "unknown",
-    confidence: value.confidence as "high" | "partial" | "uncertain",
-    coverage: value.coverage as "complete" | "partial" | "missing" | "unknown",
-    version: value.version as string,
-  };
-}
-
-function mapSourceObservations(value: unknown): TrackedLeaderboard["sourceObservations"] {
-  if (
-    !isRecord(value) ||
-    !(value.oldest_observed_at === null || isUtcTimestamp(value.oldest_observed_at)) ||
-    !(value.newest_observed_at === null || isUtcTimestamp(value.newest_observed_at)) ||
-    !isInteger(value.stale_count) ||
-    value.stale_count < 0
-  )
-    throw new PythonApiError(502, { error: "malformed" });
-  return {
-    oldestObservedAt: value.oldest_observed_at,
-    newestObservedAt: value.newest_observed_at,
-    staleCount: value.stale_count,
-  };
-}
-
-type AccountOperations = Pick<
-  PythonClient,
-  | "createAccount"
-  | "getAccount"
-  | "updateAccount"
-  | "listGroups"
-  | "createGroup"
-  | "updateGroup"
-  | "deleteGroup"
-  | "getAccountSummary"
-  | "setDefaultPlayer"
-  | "linkProvider"
-  | "unlinkProvider"
-  | "getPublicUser"
-  | "verifyPlayerToken"
->;
-
-function createAccountOperations(
-  identity: GoogleAccountIdentity | undefined,
-  accountReadTimeoutMs: number,
-): AccountOperations {
+export function createPythonClient(
+  identity?: LoginIdentity,
+  options: PythonClientOptions = {},
+): PythonClient {
+  const accountReadTimeoutMs = boundedAccountReadTimeout(options.accountReadTimeoutMs);
   if (identity !== undefined) {
-    if (
-      (identity.provider !== "google" && identity.provider !== "discord") ||
-      !isProviderSubject(identity.providerSubject)
-    ) {
+    if (!isProvider(identity.provider) || !isProviderSubject(identity.providerSubject)) {
       throw new Error("account client requires a bounded provider identity");
     }
   }
@@ -1153,15 +127,14 @@ function createAccountOperations(
         identity,
         endedLogin,
       ),
-    getPublicUser,
     verifyPlayerToken: (tag, token, idempotencyKey) =>
       verifyPlayerToken(tag, token, idempotencyKey, identity),
   };
 }
 
 function requireIdentity(
-  identity: GoogleAccountIdentity | undefined,
-): asserts identity is GoogleAccountIdentity {
+  identity: LoginIdentity | undefined,
+): asserts identity is LoginIdentity {
   if (identity === undefined) {
     throw new PythonApiError(403, { error: "forbidden" });
   }
@@ -1190,7 +163,7 @@ function mappedOrMalformed<T>(mapped: T | null): T {
 async function createAccount(
   input: AccountNameInput,
   idempotencyKey: string,
-  identity: GoogleAccountIdentity | undefined,
+  identity: LoginIdentity | undefined,
 ): Promise<ClashLensAccount> {
   requireIdentity(identity);
   if (!isCanonicalUuid(idempotencyKey)) {
@@ -1201,39 +174,32 @@ async function createAccount(
   if (username === null || displayName === null) {
     throw new PythonApiError(422, { error: "invalid_request" });
   }
-  const payload = await requestJson<unknown>(
-    "/v1/account",
-    "POST",
-    jsonBody({ username, display_name: displayName }),
-    undefined,
-    idempotencyKey,
-    identity,
-  );
+  const payload = await requestJson<unknown>("/v1/account", {
+    method: "POST",
+    body: jsonBody({ username, display_name: displayName }),
+    requestId: idempotencyKey,
+    identity: identity,
+  });
   return mappedOrMalformed(mapAccount(payload));
 }
 
 async function getAccount(
-  identity: GoogleAccountIdentity | undefined,
+  identity: LoginIdentity | undefined,
   timeoutMs = REQUEST_TIMEOUT_MS,
 ): Promise<ClashLensAccount> {
   requireIdentity(identity);
-  const payload = await requestJson<unknown>(
-    "/v1/account",
-    "GET",
-    undefined,
-    undefined,
-    undefined,
-    identity,
-    undefined,
-    timeoutMs,
-  );
+  const payload = await requestJson<unknown>("/v1/account", {
+    method: "GET",
+    identity: identity,
+    timeoutMs: timeoutMs,
+  });
   return mappedOrMalformed(mapAccount(payload));
 }
 
 async function updateAccount(
   input: AccountNameInput & { preferences: Record<string, unknown> },
   idempotencyKey: string,
-  identity: GoogleAccountIdentity | undefined,
+  identity: LoginIdentity | undefined,
 ): Promise<ClashLensAccount> {
   requireIdentity(identity);
   if (!isCanonicalUuid(idempotencyKey)) {
@@ -1252,36 +218,28 @@ async function updateAccount(
   ) {
     throw new PythonApiError(422, { error: "invalid_request" });
   }
-  const payload = await requestJson<unknown>(
-    "/v1/account",
-    "PATCH",
-    jsonBody({ username, display_name: displayName, preferences }),
-    undefined,
-    idempotencyKey,
-    identity,
-  );
+  const payload = await requestJson<unknown>("/v1/account", {
+    method: "PATCH",
+    body: jsonBody({ username, display_name: displayName, preferences }),
+    requestId: idempotencyKey,
+    identity: identity,
+  });
   return mappedOrMalformed(mapAccount(payload));
 }
 
-async function listGroups(
-  identity: GoogleAccountIdentity | undefined,
-): Promise<GroupList> {
+async function listGroups(identity: LoginIdentity | undefined): Promise<GroupList> {
   requireIdentity(identity);
-  const payload = await requestJson<unknown>(
-    "/v1/account/groups",
-    "GET",
-    undefined,
-    undefined,
-    undefined,
-    identity,
-  );
+  const payload = await requestJson<unknown>("/v1/account/groups", {
+    method: "GET",
+    identity: identity,
+  });
   return mappedOrMalformed(mapGroups(payload));
 }
 
 async function createGroup(
   input: GroupInput,
   idempotencyKey: string,
-  identity: GoogleAccountIdentity | undefined,
+  identity: LoginIdentity | undefined,
 ): Promise<PrivateGroup> {
   requireIdentity(identity);
   if (!isCanonicalUuid(idempotencyKey)) {
@@ -1291,14 +249,12 @@ async function createGroup(
   if (name === null) {
     throw new PythonApiError(422, { error: "invalid_request" });
   }
-  const payload = await requestJson<unknown>(
-    "/v1/account/groups",
-    "POST",
-    jsonBody({ name }),
-    undefined,
-    idempotencyKey,
-    identity,
-  );
+  const payload = await requestJson<unknown>("/v1/account/groups", {
+    method: "POST",
+    body: jsonBody({ name }),
+    requestId: idempotencyKey,
+    identity: identity,
+  });
   return mappedOrMalformed(mapGroupResult(payload));
 }
 
@@ -1306,7 +262,7 @@ async function updateGroup(
   groupId: string,
   input: GroupInput,
   idempotencyKey: string,
-  identity: GoogleAccountIdentity | undefined,
+  identity: LoginIdentity | undefined,
 ): Promise<PrivateGroup> {
   requireIdentity(identity);
   if (!isCanonicalUuid(idempotencyKey) || !isCanonicalUuid(groupId)) {
@@ -1316,49 +272,40 @@ async function updateGroup(
   if (name === null) {
     throw new PythonApiError(422, { error: "invalid_request" });
   }
-  const payload = await requestJson<unknown>(
-    `/v1/account/groups/${groupId}`,
-    "PATCH",
-    jsonBody({ name }),
-    undefined,
-    idempotencyKey,
-    identity,
-  );
+  const payload = await requestJson<unknown>(`/v1/account/groups/${groupId}`, {
+    method: "PATCH",
+    body: jsonBody({ name }),
+    requestId: idempotencyKey,
+    identity: identity,
+  });
   return mappedOrMalformed(mapGroupResult(payload));
 }
 
 async function deleteGroup(
   groupId: string,
   idempotencyKey: string,
-  identity: GoogleAccountIdentity | undefined,
+  identity: LoginIdentity | undefined,
 ): Promise<GroupDeleteResult> {
   requireIdentity(identity);
   if (!isCanonicalUuid(idempotencyKey) || !isCanonicalUuid(groupId)) {
     throw new PythonApiError(400, { error: "invalid_input" });
   }
-  const payload = await requestJson<unknown>(
-    `/v1/account/groups/${groupId}`,
-    "DELETE",
-    undefined,
-    undefined,
-    idempotencyKey,
-    identity,
-  );
+  const payload = await requestJson<unknown>(`/v1/account/groups/${groupId}`, {
+    method: "DELETE",
+    requestId: idempotencyKey,
+    identity: identity,
+  });
   return mappedOrMalformed(mapGroupDeleteResult(payload));
 }
 
 async function getAccountSummary(
-  identity: GoogleAccountIdentity | undefined,
+  identity: LoginIdentity | undefined,
 ): Promise<AccountSummary> {
   requireIdentity(identity);
-  const payload = await requestJson<unknown>(
-    "/v1/account/summary",
-    "GET",
-    undefined,
-    undefined,
-    undefined,
-    identity,
-  );
+  const payload = await requestJson<unknown>("/v1/account/summary", {
+    method: "GET",
+    identity: identity,
+  });
   return mappedOrMalformed(mapSummary(payload));
 }
 
@@ -1366,23 +313,19 @@ async function getAccountSummary(
 async function setDefaultPlayer(
   tag: string,
   idempotencyKey: string,
-  identity: GoogleAccountIdentity | undefined,
+  identity: LoginIdentity | undefined,
 ): Promise<void> {
   requireIdentity(identity);
   if (!isCanonicalUuid(idempotencyKey)) {
     throw new PythonApiError(400, { error: "invalid_input" });
   }
-  await requestJson<unknown>(
-    "/v1/account/default-player",
-    "POST",
-    jsonBody({ tag }),
-    undefined,
-    idempotencyKey,
-    identity,
-  );
+  await requestJson<unknown>("/v1/account/default-player", {
+    method: "POST",
+    body: jsonBody({ tag }),
+    requestId: idempotencyKey,
+    identity: identity,
+  });
 }
-
-const ALLOWED_PROVIDERS: readonly ("google" | "discord")[] = ["google", "discord"];
 
 /**
  * Link or unlink one provider identity. The subject comes from the fresh
@@ -1394,27 +337,25 @@ async function changeProviderIdentity(
   provider: "google" | "discord",
   providerSubject: string,
   idempotencyKey: string,
-  identity: LoginProviderIdentity | undefined,
+  identity: LoginIdentity | undefined,
   endedLogin?: string,
 ): Promise<{ providers: string[] }> {
   requireIdentity(identity);
   if (!isCanonicalUuid(idempotencyKey)) {
     throw new PythonApiError(400, { error: "invalid_input" });
   }
-  if (!ALLOWED_PROVIDERS.includes(provider) || !isProviderSubject(providerSubject)) {
+  if (!isProvider(provider) || !isProviderSubject(providerSubject)) {
     throw new PythonApiError(422, { error: "invalid_request" });
   }
-  const payload = await requestJson<unknown>(
-    `/v1/account/providers/${provider}`,
-    action === "link" ? "POST" : "DELETE",
-    jsonBody({
+  const payload = await requestJson<unknown>(`/v1/account/providers/${provider}`, {
+    method: action === "link" ? "POST" : "DELETE",
+    body: jsonBody({
       provider_subject: providerSubject,
       ...(endedLogin === undefined ? {} : { session: endedLogin }),
     }),
-    undefined,
-    idempotencyKey,
-    identity,
-  );
+    requestId: idempotencyKey,
+    identity: identity,
+  });
   if (
     !isRecord(payload) ||
     !Array.isArray(payload.providers) ||
@@ -1423,21 +364,6 @@ async function changeProviderIdentity(
     throw new PythonApiError(502, { error: "malformed" });
   }
   return { providers: [...payload.providers] };
-}
-
-async function getPublicUser(username: string): Promise<PublicUser> {
-  const normalized = normalizeUsername(username);
-  if (normalized === null) {
-    throw new PythonApiError(404, { error: "user_not_found" });
-  }
-  const payload = await requestJson<unknown>(
-    `/v1/users/${encodeURIComponent(normalized)}`,
-    "GET",
-    undefined,
-    undefined,
-    undefined,
-  );
-  return mappedOrMalformed(mapPublicUser(payload));
 }
 
 /** Exact Python token rule: 1-512 printable ASCII characters, no whitespace. */
@@ -1457,7 +383,7 @@ async function verifyPlayerToken(
   tag: string,
   token: string,
   idempotencyKey: string,
-  identity: GoogleAccountIdentity | undefined,
+  identity: LoginIdentity | undefined,
 ): Promise<VerificationResult> {
   requireIdentity(identity);
   if (!isCanonicalUuid(idempotencyKey)) {
@@ -1472,10 +398,12 @@ async function verifyPlayerToken(
   }
   const { status, payload } = await requestJsonRaw(
     `/v1/players/${encodeURIComponent(normalized)}/verifytoken`,
-    "POST",
-    jsonBody({ token }),
-    idempotencyKey,
-    identity,
+    {
+      method: "POST",
+      body: jsonBody({ token }),
+      requestId: idempotencyKey,
+      identity: identity,
+    },
   );
   if (status >= 200 && status < 300) {
     return mappedOrMalformed(mapVerificationResult(payload));

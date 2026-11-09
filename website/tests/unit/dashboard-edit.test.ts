@@ -14,9 +14,9 @@ import {
 import { defaultSettings, type CardId } from "../../app/lib/dashboard";
 import type { CardReads } from "../../app/lib/dashboard-cards";
 import type {
-  DashboardActionData,
   DashboardLoaderData,
-} from "../../app/routes/dashboard";
+  DashboardActionData,
+} from "../../app/lib/dashboard-data";
 
 const edit = (events: DashboardEditEvent[], from: DashboardEdit = DASHBOARD_VIEWING) =>
   events.reduce(dashboardEditStep, from);
@@ -98,7 +98,6 @@ describe("Customise", () => {
     expect(edit([{ type: "closeSettings" }], open)).toMatchObject({
       sheet: { kind: "none" },
     });
-    // A save answer does not close Add a card.
     const adding = edit([{ type: "openAdd" }]);
     expect(edit([{ type: "saved" }], adding)).toBe(adding);
   });
@@ -110,7 +109,6 @@ describe("Customise", () => {
     ]);
     const over = edit([{ type: "dragOver", over: "legend-day", before: true }], dragging);
     expect(over).toMatchObject({ draft: ["heat-map", "legend-day", "goal"] });
-    // Already in place: nothing changes.
     expect(edit([{ type: "dragOver", over: "legend-day", before: true }], over)).toBe(
       over,
     );
@@ -133,7 +131,6 @@ describe("card data after a save", () => {
       { type: "outdated", cards: ["goal", "cutoffs"] },
     ]);
     expect(stale.stale).toEqual(["goal", "cutoffs"]);
-    // A stale card shows as loading.
     const page = { goal: null, cutoffs: null, "heat-map": null } as CardReads;
     expect(Object.keys(cardReads(page, stale) ?? {})).toEqual(["heat-map"]);
 

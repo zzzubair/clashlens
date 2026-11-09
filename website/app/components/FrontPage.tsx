@@ -1,22 +1,20 @@
+import { StandingsCells } from "./StandingsCells";
 import { Link, useRouteLoaderData, useSearchParams } from "react-router";
 
-import type { RootLoaderData } from "../root";
+import type { RootLoaderData } from "../lib/root-data";
 import { UnitArt } from "./ArmyPortraits";
 
 import { DashboardTeaser } from "./DashboardTeaser";
 import { ErrorNotice } from "./ErrorNotice";
-import { TrophyMark, latestObservation } from "./LeaderboardShared";
+import { latestObservation } from "./LeaderboardShared";
 import { PageSearch } from "./PageSearch";
 import {
   comparesWithReset,
   hasRecentDays,
   hasToday,
-  RankMove,
-  RecentDays,
   RecentDaysHead,
-  shortAge,
-  TodayChange,
 } from "./ResetChange";
+import { shortAge } from "../lib/age-format";
 import { SavedLine } from "./SavedLine";
 import { formatTimestamp, OLD_UPDATE_SECONDS, useServerTime } from "./Provenance";
 import { useBackState } from "./BackLink";
@@ -27,7 +25,6 @@ import type {
   TrackedPlayerEntry,
   WebsiteErrorResponse,
 } from "../lib/contracts";
-import { canonicalPlayerPath } from "../lib/player-tag";
 
 export const FRONT_PAGE_PLAYERS = 10;
 const RANKINGS_PATH = "/leaderboards/tracked?view=live&page=1";
@@ -215,16 +212,6 @@ function TopPlayers({
   );
 }
 
-/** The website reads a profile without a clan as "Unknown"; it shows as no
- *  clan. */
-function clanName(clan: string) {
-  return clan === "Unknown" ? (
-    <span className="no-clan">No clan</span>
-  ) : (
-    <bdi>{clan}</bdi>
-  );
-}
-
 // The Top 10 as one list in Rankings' row style, under the same headings:
 // plate, places moved since Reset, name, clan (under the name on a phone),
 // the last 7 days, trophies since Reset and trophies.
@@ -279,47 +266,13 @@ function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
               data-testid="tracked-player-row"
               data-podium-rank={entry.rank <= 3 ? entry.rank : undefined}
             >
-              <td className="rank-cell" data-label="Rank">
-                <span className="rank-mark">{entry.rank}</span>
-              </td>
-              {compared ? (
-                <td className="move-cell">
-                  <RankMove entry={entry} />
-                </td>
-              ) : null}
-              <th scope="row" className="player-cell" data-label="Player">
-                <span className="player-id">
-                  <Link
-                    className="player-name"
-                    to={canonicalPlayerPath(entry.tag)}
-                    state={backState}
-                  >
-                    <bdi>{entry.name}</bdi>
-                  </Link>
-                </span>
-                {/* A phone puts the clan on a smaller line under the name, as
-                    on Rankings; wider screens give it the Clan column. */}
-                <span className="player-sub">
-                  <span className="player-clan">{clanName(entry.clan)}</span>
-                </span>
-                {/* Left to screen readers, to tell two players of one name apart. */}
-                <span className="sr-only"> {entry.tag}</span>
-              </th>
-              <td className="clan-cell">{clanName(entry.clan)}</td>
-              {showsDays ? (
-                <td className="recent-cell">
-                  <RecentDays entry={entry} />
-                </td>
-              ) : null}
-              {showsToday ? (
-                <td className="today-cell">
-                  <TodayChange entry={entry} />
-                </td>
-              ) : null}
-              <td className="trophy-cell" data-label="Trophies">
-                <TrophyMark />
-                <strong>{entry.trophies.toLocaleString()}</strong>
-              </td>
+              <StandingsCells
+                entry={entry}
+                compared={compared}
+                showsDays={showsDays}
+                showsToday={showsToday}
+                backState={backState}
+              />
             </tr>
           ))}
         </tbody>

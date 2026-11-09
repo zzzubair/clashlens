@@ -1,9 +1,10 @@
 import { data } from "react-router";
+import type { RefreshError } from "../lib/contracts";
+import { normalizePlayerTag } from "../lib/player-tag";
+import { isCanonicalUuid } from "../lib/validation";
+import { getRefreshStatus, requestRefresh } from "../services/players.server";
 
 import type { Route } from "./+types/refresh";
-import { normalizePlayerTag } from "../lib/player-tag";
-import type { RefreshError } from "../lib/contracts";
-import { isCanonicalUuid } from "../lib/validation";
 
 const NO_STORE_HEADERS = { "Cache-Control": "no-store" };
 const MAX_FORM_BODY_BYTES = 4_096;
@@ -148,10 +149,7 @@ export async function action({ request, params, context }: Route.ActionArgs) {
   }
 
   try {
-    const client = await import("../services/python.server");
-    const work = await client
-      .createPythonClient()
-      .requestRefresh(normalized, form.idempotencyKey);
+    const work = await requestRefresh(normalized, form.idempotencyKey);
     return data(work, { status: 202, headers: NO_STORE_HEADERS });
   } catch (error) {
     return safeErrorResponse(error);
@@ -168,8 +166,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     return safeStatusErrorResponse({ status: 400, payload: { error: "invalid_input" } });
   }
   try {
-    const client = await import("../services/python.server");
-    const work = await client.createPythonClient().getRefreshStatus(workId, normalized);
+    const work = await getRefreshStatus(workId, normalized);
     return data(work, { headers: NO_STORE_HEADERS });
   } catch (error) {
     return safeStatusErrorResponse(error);

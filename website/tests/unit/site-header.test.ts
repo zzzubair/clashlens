@@ -8,7 +8,8 @@ import {
 import { expect, it } from "vitest";
 
 import { DISCORD_INVITE_URL } from "../../app/lib/discord";
-import App, { type RootLoaderData } from "../../app/root";
+import type { RootLoaderData } from "../../app/lib/root-data";
+import App from "../../app/root";
 
 const SIGNED_OUT: RootLoaderData = {
   loggedIn: false,
@@ -89,7 +90,6 @@ it("on a sign-in page, Sign in passes on where the Clasher was going", async () 
   ).toContain(
     'href="/login?returnPath=%2Fcrews%2Fjoin%2Fabc" data-discover="true">Sign in</a>',
   );
-  // The sign-in page itself is where that link goes, so it has none.
   expect(await renderHeader(SIGNED_OUT, "/login?returnPath=%2Fcrews")).not.toContain(
     ">Sign in</a>",
   );
@@ -104,7 +104,6 @@ it("on phones shows everyone the same four tabs and the rest in More, the accoun
   expect(labelsOf(bottomOf(signedOut).replace(more, ""))).toEqual(tabs);
   expect(labelsOf(more)).toEqual(pages);
   expect(more).toContain(DISCORD_INVITE_URL);
-  // Sign in is in the top bar only.
   expect(signedOut.replace(more, "")).toContain('href="/login?returnPath=%2Fblog"');
 
   const signedIn = await renderHeader({
@@ -118,10 +117,8 @@ it("on phones shows everyone the same four tabs and the rest in More, the accoun
   const signedInMore = moreOf(signedIn);
   expect(labelsOf(bottomOf(signedIn).replace(signedInMore, ""))).toEqual(tabs);
   expect(labelsOf(signedInMore)).toEqual(pages);
-  // Your profile, Settings and Sign out are in the top bar's account menu only.
   for (const word of ["Lens Scout", "/users/lens_scout", "/logout", "Sign"])
     expect(signedInMore).not.toContain(word);
-  // The dashboard is Home in both bars.
   expect(tabsOf(/<nav class="primary-nav"[\s\S]*?<\/nav>/.exec(signedIn)![0])[0]).toBe(
     "Home",
   );
@@ -152,14 +149,12 @@ it("marks More while one of its pages is open, and no tab on a player's page", a
   // nothing in the bottom bar.
   for (const path of ["/account/settings", "/users/lens_scout", "/account"])
     expect(bottomOf(await renderHeader(signedIn, path))).not.toContain("aria-current");
-  // A watchlist lights More and its Watchlists link.
   const watchlist = await renderHeader(signedIn, "/account/watchlists/g1");
   expect(toggleOf(watchlist)).toContain('aria-current="page"');
   expect(bottomOf(watchlist).match(/<a [^>]*aria-current="page"[^>]*>/g)).toEqual([
     expect.stringContaining('href="/account/watchlists"'),
   ]);
 
-  // A player's page lights no tab, in either bar.
   const player = await renderHeader(
     { ...signedIn, dashboardEnabled: true, crewsEnabled: true },
     "/players/%232PP",
@@ -198,7 +193,6 @@ it("signed in puts your profile, tools, Settings and Sign out behind the account
   expect(panel).toContain('action="/logout"');
   expect(panel).toContain('value="logout-key"');
   expect(panel).toContain(">Sign out</button>");
-  // Sign out lives in the account menu only, on phones too.
   expect(nav.replace(panel, "")).not.toContain("Sign out");
   expect(nav).not.toContain(">Sign in<");
 });

@@ -1,12 +1,14 @@
+import {
+  WebsiteConfigError,
+  isLocalHostname,
+  loadPublicOrigin,
+} from "./public-origin.server";
 /**
- * Server-only website configuration for Google login.
- *
- * Configuration is read from the environment exactly once. Startup fails with
- * a safe WebsiteConfigError when production login is enabled but a required
- * value is missing or malformed. Error messages never echo secret values or
- * environment contents. The Google issuer override is honored only outside
- * production; production rejects it outright so tests can never leak into
- * live traffic.
+ * Login credentials and the public origin cache successful validation for this process.
+ * Private API settings validate separately on first use, preserving public-page availability.
+ * Feature switches and analytics settings read on demand; trusted proxy settings are
+ * captured when HTTP context is created. Blog directory/owner settings read on demand,
+ * with folder contents refreshed by the blog cache. Secret errors never echo values.
  */
 
 import { readFileSync } from "node:fs";
@@ -17,16 +19,9 @@ import { decodeSecretValue, loadSecretFile } from "./signer.server";
 export const GOOGLE_ISSUER = "https://accounts.google.com";
 export const DISCORD_API_BASE_URL = "https://discord.com";
 export const MAX_GOOGLE_CLIENT_ID_LENGTH = 256;
-/** Discord application (user) IDs are fixed-width numeric snowflakes. */
+/** Discord application IDs accept 17 to 20 decimal digits. */
 export const MAX_DISCORD_CLIENT_ID_LENGTH = 20;
 export const MAX_CLIENT_SECRET_LENGTH = 512;
-
-export class WebsiteConfigError extends Error {
-  constructor(reason: string) {
-    super(`website login configuration is invalid: ${reason}`);
-    this.name = "WebsiteConfigError";
-  }
-}
 
 export interface WebsiteConfig {
   production: boolean;
@@ -148,41 +143,6 @@ export function loadWebsiteConfig(
     discordApiBaseUrl,
     cookieSecure,
   };
-}
-
-function loadPublicOrigin(raw: string | undefined, production: boolean): URL {
-  if (raw === undefined || raw.trim() === "") {
-    throw new WebsiteConfigError("missing public origin");
-  }
-  let origin: URL;
-  try {
-    origin = new URL(raw.trim());
-  } catch {
-    throw new WebsiteConfigError("malformed public origin");
-  }
-  if (origin.protocol !== "https:" && origin.protocol !== "http:") {
-    throw new WebsiteConfigError("public origin must use http or https");
-  }
-  if (origin.pathname !== "/" || origin.search !== "" || origin.hash !== "") {
-    throw new WebsiteConfigError(
-      "public origin must not carry a path, query, or fragment",
-    );
-  }
-  if (origin.protocol === "http:") {
-    if (production) {
-      throw new WebsiteConfigError("production requires an https public origin");
-    }
-    if (!isLocalHostname(origin.hostname)) {
-      throw new WebsiteConfigError(
-        "an http public origin is allowed only for explicit local test origins",
-      );
-    }
-  }
-  return origin;
-}
-
-function isLocalHostname(hostname: string): boolean {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
 }
 
 function loadGoogleClientId(raw: string | undefined): string {

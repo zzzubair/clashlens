@@ -15,6 +15,14 @@ import type {
   RankRange,
 } from "../lib/dashboard";
 import { nextResetMs } from "../lib/dashboard";
+import type {
+  ArmyDays,
+  ArmyHits,
+  ArmyLens,
+  ArmyOutcome,
+  PlayerArmies,
+} from "../lib/dashboard-armies";
+import { ARMY_DEFAULT_DAYS, ARMY_MAX_DAYS, isArmyDays } from "../lib/dashboard-armies";
 import {
   DAILY_BATTLES,
   GOAL_PACE_DAYS,
@@ -35,21 +43,11 @@ import {
   type SeasonData,
   type SeasonDay,
 } from "../lib/dashboard-cards";
-import type {
-  ArmyHits,
-  ArmyLens,
-  ArmyOutcome,
-  PlayerArmies,
-} from "../lib/dashboard-armies";
-import type { ArmyDays } from "../lib/dashboard-armies";
-import { ARMY_DEFAULT_DAYS, ARMY_MAX_DAYS, isArmyDays } from "../lib/dashboard-armies";
 import type { ComparedPlayer } from "../lib/group-comparison";
+import { type LoginIdentity } from "../server/auth.server";
 import { getGroupComparison } from "./group-comparison.server";
-import {
-  requestJson,
-  type GoogleAccountIdentity,
-  type PythonClient,
-} from "./python.server";
+import { getTrackedLeaderboard } from "./leaderboard.server";
+import { getPlayer, getPlayerSeasons } from "./players.server";
 import {
   PythonApiError,
   isCanonicalPlayerTag,
@@ -57,6 +55,8 @@ import {
   isRecord,
   isString,
 } from "./python-response.server";
+import { requestJson } from "./python-transport.server";
+import { type PythonClient } from "./python.server";
 
 /** One player's dashboard numbers for today, from GET /v1/players/{tag}/today. */
 export interface PlayerToday {
@@ -164,9 +164,7 @@ export async function getPlayerToday(
   if (!isCanonicalPlayerTag(tag)) throw new PythonApiError(422, { error: "invalid_tag" });
   const payload = await requestJson<unknown>(
     `/v1/players/${encodeURIComponent(tag)}/today${waitForBoard ? "?wait_for_board=true" : ""}`,
-    "GET",
-    undefined,
-    undefined,
+    { method: "GET" },
   );
   if (!isRecord(payload) || payload.tag !== tag) malformed();
   const range = payload.rank_range;
@@ -207,20 +205,13 @@ export async function getPlayerBases(tag: string, day: number): Promise<PastBase
     throw new PythonApiError(422, { error: "invalid_request" });
   const payload = await requestJson<unknown>(
     `/v1/players/${encodeURIComponent(tag)}/bases?day=${day}`,
-    "GET",
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    BASES_TIMEOUT_MS,
+    { method: "GET", timeoutMs: BASES_TIMEOUT_MS },
   );
   if (!isRecord(payload) || payload.tag !== tag || payload.season_day_number !== day)
     malformed();
   return { dayNumber: day, rows: nullable(payload.opponents, opponents) };
 }
 
-/** What the card reads need to know about the signed-in user. */
 export interface CardContext {
   client: PythonClient;
   /** The account the cards follow; always in Legend I. */
@@ -308,11 +299,6 @@ export function seasonData(page: PlayerPage): SeasonData {
   return { today: season.currentDayNumber, startMs: anchor, days };
 }
 
-/**
- * The selected account's Legend day for the Legend day card: the player
- * page's battles and totals, and the automatic defense loss from today's
- * read.
- */
 function legendDay(page: PlayerPage, today: PlayerToday | null): PlayerDay {
   const day = page.currentDay;
   const complete = day?.battlesComplete === true;
@@ -352,8 +338,14 @@ function clockData(page: PlayerPage): ClockData {
   const day = page.currentDay;
   const battles = day
     ? [
-        ...day.offenseEvents.map((event) => ({ event, kind: "attack" as const })),
-        ...day.defenseEvents.map((event) => ({ event, kind: "defense" as const })),
+        ...day.offenseEvents.map((event) => ({
+          event,
+          kind: "attack" as const,
+        })),
+        ...day.defenseEvents.map((event) => ({
+          event,
+          kind: "defense" as const,
+        })),
       ]
         .map(({ event, kind }) => ({
           at: Date.parse(event.battleTimestamp),
@@ -368,10 +360,12 @@ function clockData(page: PlayerPage): ClockData {
   const published = page.currentDayPublishedAt
     ? Date.parse(page.currentDayPublishedAt)
     : NaN;
-  return { battles, observedAtMs: Number.isFinite(published) ? published : null };
+  return {
+    battles,
+    observedAtMs: Number.isFinite(published) ? published : null,
+  };
 }
 
-/** The selected account's Season, with the board selector for its last Reset. */
 async function lastReset(ctx: CardContext, pages: PageReader) {
   const page = await pages(ctx.selected.tag);
   if (page === null) return null;
@@ -394,14 +388,12 @@ function unlessMissing<T>(read: Promise<T>): Promise<T | null> {
   });
 }
 
-/** The trophies at one rank of a board; null when the board or the rank is missing. */
 async function trophiesAt(
-  ctx: CardContext,
   rank: number,
   selector?: { officialSeasonId: string; dayNumber: number },
 ) {
   const board = await unlessMissing(
-    ctx.client.getTrackedLeaderboard(1, selector ? "daily" : "live", rank - 1, selector),
+    getTrackedLeaderboard(1, selector ? "daily" : "live", rank - 1, selector),
   );
   const entry = board?.entries[0];
   return entry && entry.rank === rank ? entry : null;
@@ -419,7 +411,7 @@ async function boardTrophies(
 ) {
   const rank = day?.rank ?? null;
   if (seasonId === null || !day || rank === null) return null;
-  const entry = await trophiesAt(ctx, rank, {
+  const entry = await trophiesAt(rank, {
     officialSeasonId: seasonId,
     dayNumber: day.day,
   });
@@ -445,7 +437,6 @@ function rivalPlaces(rank: number, total: number): number[] {
   return Array.from({ length: stop - start + 1 }, (_, index) => start + index);
 }
 
-/** The rows at `places` in `entries`, each player once. */
 function rowsAt(entries: TrackedPlayerEntry[], places: number[]): TrackedPlayerEntry[] {
   const tags = new Set<string>();
   return places.flatMap((place) => {
@@ -476,7 +467,6 @@ async function rivalEntries(
   );
 }
 
-/** The rows around `tag` that one `board` reply holds, or null when `tag` is off it. */
 function rivalsIn(board: TrackedLeaderboard, tag: string): TrackedPlayerEntry[] | null {
   const rank = board.entries.find((entry) => entry.tag === tag)?.rank;
   return rank === undefined
@@ -497,7 +487,7 @@ async function goalData(ctx: CardContext, pages: PageReader): Promise<GoalData |
   const lineOn = async (day: number) => {
     if (day === 0) return SEASON_START_TROPHIES;
     if (seasonId === null) return null;
-    const entry = await trophiesAt(ctx, ctx.settings.goal, {
+    const entry = await trophiesAt(ctx.settings.goal, {
       officialSeasonId: seasonId,
       dayNumber: day,
     });
@@ -542,7 +532,7 @@ async function cutoffsData(
   // The live lines need nothing from the player page, so both reads start at once.
   const [reset, live] = await Promise.all([
     lastReset(ctx, pages),
-    Promise.all(lines.map((top) => trophiesAt(ctx, top))),
+    Promise.all(lines.map((top) => trophiesAt(top))),
   ]);
   const selector =
     reset && reset.finished > 0 && reset.seasonId
@@ -550,7 +540,7 @@ async function cutoffsData(
       : null;
   const [saved, youSaved] = selector
     ? await Promise.all([
-        Promise.all(lines.map((top) => trophiesAt(ctx, top, selector))),
+        Promise.all(lines.map((top) => trophiesAt(top, selector))),
         boardTrophies(ctx, selector.officialSeasonId, reset?.you),
       ])
     : [null, null];
@@ -626,9 +616,7 @@ async function rivalsData(
     // side, so all 7 rows everywhere but the board's last place. There, a read
     // focused on the fourth row it holds is used only if it alone holds all 7.
     const focused = (on: string) =>
-      unlessMissing(
-        ctx.client.getTrackedLeaderboard(RIVAL_ROWS, "live", 0, undefined, on),
-      );
+      unlessMissing(getTrackedLeaderboard(RIVAL_ROWS, "live", 0, undefined, on));
     const whole = (board: TrackedLeaderboard | null) => {
       if (board === null) return null;
       const rows = rivalsIn(board, tag);
@@ -669,7 +657,7 @@ async function rivalsData(
     if (reset === null || rank === null || reset.seasonId === null) return null;
     const selector = { officialSeasonId: reset.seasonId, dayNumber: reset.finished };
     const read = (offset: number) =>
-      ctx.client.getTrackedLeaderboard(BOARD_PAGE, "daily", offset, selector);
+      getTrackedLeaderboard(BOARD_PAGE, "daily", offset, selector);
     const first = await unlessMissing(
       read(Math.floor((rank - 1) / BOARD_PAGE) * BOARD_PAGE),
     );
@@ -709,10 +697,9 @@ function comparedRow(player: ComparedPlayer, name: string | null): GroupRow {
 async function groupWatchData(
   ctx: CardContext,
   pages: PageReader,
-  identity: GoogleAccountIdentity,
+  identity: LoginIdentity,
 ): Promise<GroupWatchData | null> {
   const { groups } = await ctx.client.listGroups();
-  // Oldest first; a group without a creation time sorts last, by name.
   const made = (item: ListedGroup) =>
     item.createdAt ? Date.parse(item.createdAt) : Number.POSITIVE_INFINITY;
   const ordered = [...groups].sort(
@@ -806,19 +793,18 @@ async function lastSeasonFinish(
 export function readCards(
   cards: readonly CardId[],
   ctx: CardContext,
-  identity: GoogleAccountIdentity,
+  identity: LoginIdentity,
 ): CardReads {
   const read = new Map<string, Promise<PlayerPage | null>>();
   const pages: PageReader = (tag) => {
-    if (!read.has(tag)) read.set(tag, unlessMissing(ctx.client.getPlayer(tag)));
+    if (!read.has(tag)) read.set(tag, unlessMissing(getPlayer(tag)));
     return read.get(tag)!;
   };
   // Other players' cards show their days' totals, never their battles.
   const totalsRead = new Map<string, Promise<PlayerPage | null>>();
   const totals: PageReader = (tag) => {
     if (tag === ctx.selected.tag) return pages(tag);
-    if (!totalsRead.has(tag))
-      totalsRead.set(tag, unlessMissing(ctx.client.getPlayer(tag, false)));
+    if (!totalsRead.has(tag)) totalsRead.set(tag, unlessMissing(getPlayer(tag, false)));
     return totalsRead.get(tag)!;
   };
   const season = async () => {
@@ -877,7 +863,7 @@ export function readCards(
     cutoffs: () => cutoffsData(ctx, pages),
     "season-graph": async () => {
       // Read the Season list alongside the page instead of after it.
-      const seasonsRead = ctx.client.getPlayerSeasons(ctx.selected.tag).catch(() => null);
+      const seasonsRead = getPlayerSeasons(ctx.selected.tag).catch(() => null);
       const page = await pages(ctx.selected.tag);
       if (page === null) return null;
       const lastSeason = await lastSeasonFinish(page, seasonsRead);
@@ -939,9 +925,7 @@ export async function getPlayerArmies(
     throw new PythonApiError(422, { error: "invalid_request" });
   const payload = await requestJson<unknown>(
     `/v1/players/${encodeURIComponent(tag)}/armies?lens=${lens}&days=${days}`,
-    "GET",
-    undefined,
-    undefined,
+    { method: "GET" },
   );
   if (
     !isRecord(payload) ||

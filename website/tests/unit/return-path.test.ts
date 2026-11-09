@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  DEFAULT_RETURN_PATH,
-  MAX_RETURN_PATH_LENGTH,
-  safeReturnPath,
-} from "../../app/server/return-path.server";
+import { MAX_RETURN_PATH_LENGTH } from "../../app/server/auth.server";
+import { DEFAULT_RETURN_PATH, safeReturnPath } from "../../app/server/return-path.server";
 
 const ORIGIN = new URL("https://clashlens.example");
 

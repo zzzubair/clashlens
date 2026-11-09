@@ -1,3 +1,12 @@
+vi.mock("../../app/services/players.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/players.server")>();
+  return {
+    ...actual,
+    searchPlayers: async (...args: Parameters<typeof actual.searchPlayers>) =>
+      mocks.createPythonClient().searchPlayers(...args),
+  };
+});
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
@@ -9,6 +18,18 @@ import {
   useLoaderData,
 } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TeaserBoard } from "../../app/components/DashboardTeaser";
+import { FrontPage, type FrontPageData } from "../../app/components/FrontPage";
+import { SearchSuggestions } from "../../app/components/PlayerSearch";
+import { TagSearchAgain } from "../../app/components/TagSearchAgain";
+import { loader as oldGroups } from "../../app/routes/account.groups.redirect";
+import { loader as frontLoader } from "../../app/routes/dashboard";
+import { loader as oldDashboard } from "../../app/routes/dashboard.redirect";
+import { loader as suggestionLoader } from "../../app/routes/player-search";
+import Search, { loader as searchLoader } from "../../app/routes/search";
+import { clearPublicRefreshLimits } from "../../app/server/abuse.server";
+import { clientAddressContext } from "../../app/server/client-address.server";
+import { PythonApiError } from "../../app/services/python-response.server";
 
 const mocks = vi.hoisted(() => ({
   createPythonClient: vi.fn(),
@@ -25,19 +46,6 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
     await importOriginal<typeof import("../../app/services/python.server")>();
   return { ...actual, createPythonClient: mocks.createPythonClient };
 });
-
-import { PythonApiError } from "../../app/services/python.server";
-import Search, { loader as searchLoader } from "../../app/routes/search";
-import { loader as suggestionLoader } from "../../app/routes/player-search";
-import { clearPublicRefreshLimits } from "../../app/server/abuse.server";
-import { clientAddressContext } from "../../app/server/client-address.server";
-import { loader as frontLoader } from "../../app/routes/dashboard";
-import { loader as oldDashboard } from "../../app/routes/dashboard.redirect";
-import { loader as oldGroups } from "../../app/routes/account.groups.redirect";
-import { FrontPage, type FrontPageData } from "../../app/components/FrontPage";
-import { SearchSuggestions } from "../../app/components/PlayerSearch";
-import { TagSearchAgain } from "../../app/components/TagSearchAgain";
-import { TeaserBoard } from "../../app/components/DashboardTeaser";
 
 const search = {
   kind: "player-search",
@@ -584,7 +592,10 @@ it("submitting a normalized exact tag opens its automatic lookup page", async ()
 
 it("asks the game again when the not-found box sends back the same tag", async () => {
   const handler = createStaticHandler([
-    { path: "/", Component: () => createElement(TagSearchAgain, { tag: "#LQQP" }) },
+    {
+      path: "/",
+      Component: () => createElement(TagSearchAgain, { tag: "#LQQP" }),
+    },
   ]);
   const context = await handler.query(new Request("https://clashlens.example/"));
   if (context instanceof Response) throw new Error("unexpected response");

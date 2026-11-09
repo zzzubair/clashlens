@@ -1,4 +1,4 @@
-import { Link, useLoaderData } from "react-router";
+import { ProviderCallbackError } from "../components/ProviderCallbackError";
 
 import type { Route } from "./+types/auth.discord.callback";
 
@@ -46,22 +46,5 @@ export function headers() {
 }
 
 export default function CallbackErrorRoute() {
-  const data = useLoaderData<typeof loader>() as {
-    error: { code: string; message: string } | null;
-  };
-  return (
-    <main
-      id="main-content"
-      tabIndex={-1}
-      className="page-shell narrow-shell"
-      role="alert"
-    >
-      <p className="eyebrow">Clash Lens</p>
-      <h1>Sign-in could not be completed</h1>
-      <p>{data.error?.message ?? "Discord sign-in could not be completed. Try again."}</p>
-      <Link className="button button-primary" to="/login">
-        Try signing in again
-      </Link>
-    </main>
-  );
+  return <ProviderCallbackError provider="Discord" />;
 }

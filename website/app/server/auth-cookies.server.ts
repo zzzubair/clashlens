@@ -1,5 +1,5 @@
-/**
- * Server-only signed browser cookies for Google login sessions and one-time
+import { isSafeReturnPath, type LoginIdentity } from "./auth.server"; /**
+ * Server-only signed browser cookies for Google and Discord logins and one-time
  * OAuth transactions.
  *
  * Values are canonical JSON bound by an HMAC-SHA256 signature using the
@@ -12,7 +12,7 @@
  * connection it came through, ends every copy of that login. Cookies from
  * before the 30-day lifetime keep their 24 hours. OAuth transaction cookies
  * carry only the provider they belong to, the state, nonce, PKCE verifier and
- * challenge, and same-origin return path with a ten-minute lifetime. No Google
+ * challenge, and same-origin return path with a ten-minute lifetime. No provider
  * tokens, email, or other personal data ever appears in a cookie value, and
  * every value stays far below the 4 KB cookie limit.
  *
@@ -24,14 +24,8 @@
 
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
-import {
-  isPlausibleTransaction,
-  isProvider,
-  isProviderSubject,
-  MAX_PROVIDER_SUBJECT_LENGTH,
-  OAUTH_TRANSACTION_LIFETIME_SECONDS,
-} from "./google-oidc.server";
-import type { OAuthIntent, OAuthTransaction } from "./google-oidc.server";
+import type { OAuthIntent, OAuthTransaction } from "./auth.server";
+import { isPlausibleTransaction, isProvider, isProviderSubject } from "./auth.server";
 
 export const LOGIN_COOKIE_NAME = "clashlens_login";
 export const OAUTH_COOKIE_NAME = "clashlens_oauth";
@@ -44,16 +38,6 @@ const SESSION_BINDING = /^[A-Za-z0-9_-]{43}$/;
 const COOKIE_VERSION = 1;
 /** Hard cap for any cookie value; real values are a few hundred bytes. */
 const MAX_COOKIE_VALUE_BYTES = 4096;
-const MAX_RETURN_PATH_LENGTH = 200;
-// Plain path characters, and %23 for the # of a player tag such as /account/watchlists/add/%232PP.
-const RETURN_PATH_CHARS = /^(?:[A-Za-z0-9._~/-]|%23)+$/;
-
-const LOGIN_PROVIDERS: ReadonlySet<string> = new Set(["google", "discord"]);
-
-export interface LoginIdentity {
-  provider: "google" | "discord";
-  providerSubject: string;
-}
 
 /** A verified login cookie: who signed in and when, in Unix milliseconds. */
 export interface LoginSession extends LoginIdentity {
@@ -72,17 +56,6 @@ interface ContinuedLogin {
 function isBoundedIntent(value: unknown): value is OAuthIntent {
   return (
     value === "login" || value === "signup" || value === "link" || value === "unlink"
-  );
-}
-
-function isBoundedReturnPath(value: string): boolean {
-  return (
-    value.length > 0 &&
-    value.length <= MAX_RETURN_PATH_LENGTH &&
-    value.startsWith("/") &&
-    !value.startsWith("//") &&
-    RETURN_PATH_CHARS.test(value) &&
-    !value.split("/").some((segment) => segment === "." || segment === "..")
   );
 }
 
@@ -188,10 +161,7 @@ export function createLoginCookieValue(
   login?: ContinuedLogin,
 ): string {
   assertKey(key);
-  if (
-    !LOGIN_PROVIDERS.has(identity.provider) ||
-    !isProviderSubject(identity.providerSubject)
-  ) {
+  if (!isProvider(identity.provider) || !isProviderSubject(identity.providerSubject)) {
     throw new Error("login identity must be a bounded provider subject");
   }
   if (!Number.isSafeInteger(nowMs) || nowMs < 0) {
@@ -238,7 +208,7 @@ export function parseLoginCookieValue(
   if (
     parsed.v !== COOKIE_VERSION ||
     typeof parsed.p !== "string" ||
-    !LOGIN_PROVIDERS.has(parsed.p) ||
+    !isProvider(parsed.p) ||
     !isProviderSubject(parsed.s) ||
     !isSafeInteger(parsed.i) ||
     !isSafeInteger(parsed.e) ||
@@ -312,10 +282,7 @@ export function createOAuthTransactionCookieValue(
   key: Buffer,
 ): string {
   assertKey(key);
-  if (
-    !isPlausibleTransaction(transaction) ||
-    !isBoundedReturnPath(transaction.returnPath)
-  ) {
+  if (!isPlausibleTransaction(transaction) || !isSafeReturnPath(transaction.returnPath)) {
     throw new Error("OAuth transaction cookie requires a plausible bounded transaction");
   }
   return encodeValue(canonicalOAuthPayload(transaction), key);
@@ -347,7 +314,7 @@ export function parseOAuthTransactionCookieValue(
     typeof parsed.ch !== "string" ||
     typeof parsed.rp !== "string" ||
     !isBoundedIntent(parsed.in) ||
-    !isBoundedReturnPath(parsed.rp)
+    !isSafeReturnPath(parsed.rp)
   ) {
     return null;
   }
@@ -405,7 +372,6 @@ export function cookieAttributes(secure: boolean): string {
   return `Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`;
 }
 
-/** Build a full Set-Cookie header value for a signed cookie value. */
 export function buildSetCookieHeader(
   name: string,
   value: string,
@@ -415,9 +381,6 @@ export function buildSetCookieHeader(
   return `${name}=${value}; Max-Age=${maxAgeSeconds}; ${cookieAttributes(secure)}`;
 }
 
-/** Build a Set-Cookie header value that clears a login cookie immediately. */
 export function buildClearCookieHeader(name: string, secure: boolean): string {
   return `${name}=; Max-Age=0; ${cookieAttributes(secure)}`;
 }
-
-export { MAX_PROVIDER_SUBJECT_LENGTH, OAUTH_TRANSACTION_LIFETIME_SECONDS };

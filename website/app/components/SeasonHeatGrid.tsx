@@ -85,7 +85,6 @@ export function SeasonHeatGrid({
                     } as React.CSSProperties)
               }
             >
-              {/* Each row is a week, named by its first day. */}
               {cell.day % 7 === 1 ? (
                 <span className="season-heat-week" aria-hidden="true">
                   D<span>ay </span>

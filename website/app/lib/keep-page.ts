@@ -9,8 +9,8 @@ import {
 } from "react-router";
 
 import type { WebsiteErrorResponse } from "./contracts";
-import type { RootLoaderData } from "../root";
-import type { PlayerSearchLoaderData } from "../routes/player-search";
+import type { RootLoaderData } from "../lib/root-data";
+import type { PlayerSearchLoaderData } from "../lib/player-search-data";
 
 // What the header shows when the account cannot be read.
 export const LOGGED_OUT: RootLoaderData = {

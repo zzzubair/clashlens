@@ -1,6 +1,6 @@
 import { allowLiveClanRead } from "../server/abuse.server";
-import { PythonApiError, requestJson } from "./python.server";
-import { isRecord, isString } from "./python-response.server";
+import { isRecord, isString, PythonApiError } from "./python-response.server";
+import { requestJson } from "./python-transport.server";
 
 /** The player's clan in the game right now; `clan` is null when they are in none. */
 export interface LiveClan {
@@ -22,16 +22,10 @@ export async function getLiveClan(
   if (!identity || !allowLiveClanRead(identity)) return null;
   let payload: unknown;
   try {
-    payload = await requestJson<unknown>(
-      `/v1/players/${encodeURIComponent(tag)}/clan`,
-      "GET",
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      LIVE_CLAN_TIMEOUT_MS,
-    );
+    payload = await requestJson<unknown>(`/v1/players/${encodeURIComponent(tag)}/clan`, {
+      method: "GET",
+      timeoutMs: LIVE_CLAN_TIMEOUT_MS,
+    });
   } catch (cause) {
     const timedOut =
       cause instanceof PythonApiError &&

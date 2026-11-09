@@ -1,9 +1,7 @@
+import type { VariantExamplesResponse } from "../lib/variant-examples-data";
 import { data } from "react-router";
 
-import type { ArmyVariantExamples } from "../lib/contracts";
 import type { Route } from "./+types/army-variant-examples";
-
-export type VariantExamplesResponse = { examples: ArmyVariantExamples | null };
 
 const NO_STORE = { "Cache-Control": "no-store" };
 

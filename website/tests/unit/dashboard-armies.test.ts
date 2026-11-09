@@ -1,3 +1,6 @@
+vi.mock("../../app/services/python-transport.server", () => ({
+  requestJson: mocks.requestJson,
+}));
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
@@ -23,12 +26,6 @@ vi.mock("../../app/server/actions.server", async (importOriginal) => {
   return { ...actual, readLoginIdentity: mocks.readLoginIdentity };
 });
 
-vi.mock("../../app/services/python.server", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../app/services/python.server")>();
-  return { ...actual, requestJson: mocks.requestJson };
-});
-
 import { ArmiesOnDefenseCard, ArmiesOnOffenseCard } from "../../app/components/ArmyCards";
 import type { PlayerArmies } from "../../app/lib/dashboard-armies";
 import { loader } from "../../app/routes/player-armies";
@@ -45,7 +42,10 @@ const outcome = (battles: number, three_stars: number, trophies: number) => ({
   three_stars,
   trophies,
 });
-const hits = (battles: number, three_stars: number) => ({ battles, three_stars });
+const hits = (battles: number, three_stars: number) => ({
+  battles,
+  three_stars,
+});
 
 /** What GET /v1/players/{tag}/armies returned for the saved battles in
  * python/tests/test_dashboard_armies_postgres.py. */
@@ -107,9 +107,7 @@ describe("Armies on defense", () => {
     const armies = await read(DEFENSE, "defense", 3);
     expect(mocks.requestJson).toHaveBeenCalledWith(
       `/v1/players/${encodeURIComponent(TAG)}/armies?lens=defense&days=3`,
-      "GET",
-      undefined,
-      undefined,
+      { method: "GET" },
     );
     const plain = await render(
       createElement(ArmiesOnDefenseCard, { data: { tag: TAG, armies: armies } }),
@@ -208,7 +206,13 @@ describe("Armies on defense", () => {
       legends,
     }));
     const armies = await read(
-      { ...DEFENSE, days: 7, rows, total: outcome(50, 25, 1520), legends_total: legends },
+      {
+        ...DEFENSE,
+        days: 7,
+        rows,
+        total: outcome(50, 25, 1520),
+        legends_total: legends,
+      },
       "defense",
       7,
     );
@@ -250,7 +254,10 @@ describe("Armies on defense", () => {
     await expect(getPlayerArmies(TAG, "defense", 3)).rejects.toMatchObject({
       status: 502,
     });
-    mocks.requestJson.mockResolvedValueOnce({ ...DEFENSE, total: outcome(1, 2, 0) });
+    mocks.requestJson.mockResolvedValueOnce({
+      ...DEFENSE,
+      total: outcome(1, 2, 0),
+    });
     await expect(getPlayerArmies(TAG, "defense", 3)).rejects.toMatchObject({
       status: 502,
     });
@@ -325,9 +332,7 @@ describe("Armies on offense", () => {
     );
     expect(mocks.requestJson).toHaveBeenCalledWith(
       `/v1/players/${encodeURIComponent(TAG)}/armies?lens=offense&days=season`,
-      "GET",
-      undefined,
-      undefined,
+      { method: "GET" },
     );
     const plain = await render(
       createElement(ArmiesOnOffenseCard, { data: { tag: TAG, armies } }),
@@ -406,7 +411,11 @@ describe("army card switches", () => {
       (await status("/resources/players/%232PP/armies?lens=defense&days=3")).data,
     ).toEqual({ armies: null });
 
-    mocks.requestJson.mockResolvedValueOnce({ ...OFFENSE, days: 24, season: true });
+    mocks.requestJson.mockResolvedValueOnce({
+      ...OFFENSE,
+      days: 24,
+      season: true,
+    });
     expect(
       await status("/resources/players/%232PP/armies?lens=offense&days=season"),
     ).toMatchObject({ status: 200, data: { armies: { days: 24, season: true } } });

@@ -1,3 +1,4 @@
+import { signedNumber } from "../lib/number-format";
 import { useState } from "react";
 
 import type { PlayerPage, RankedDaySummary } from "../lib/contracts";
@@ -15,8 +16,6 @@ const date = new Intl.DateTimeFormat("en-GB", {
   timeZone: "UTC",
 });
 const count = (value: number) => value.toLocaleString("en-GB");
-const signed = (value: number) =>
-  value > 0 ? `+${count(value)}` : value < 0 ? `−${count(-value)}` : "±0";
 
 /**
  * The Season so far as one line, read like a stock chart: each finished
@@ -108,7 +107,6 @@ export function TrophyLine({
   };
   // A Refresh can bring fewer Resets than the one picked; then nothing is.
   const shown = active === null || active >= marks.length ? null : resetText(active);
-  // The nearest Reset to a pointer across the chart.
   const nearest = (event: React.PointerEvent<HTMLDivElement>) => {
     const box = event.currentTarget.getBoundingClientRect();
     const slot = ((event.clientX - box.left) / box.width) * last;
@@ -205,7 +203,6 @@ export function TrophyLine({
             aria-hidden="true"
           />
         )}
-        {/* A dot at each Reset; the last, now, is filled. */}
         {marks.map(([slot, value], i) => (
           <span
             key={slot}
@@ -241,7 +238,7 @@ export function TrophyLine({
                       : undefined
                 }
               >
-                {signed(shown.change)}
+                {signedNumber(shown.change, { locale: "en-GB", zero: "±0" })}
               </span>
             )}
           </span>
@@ -276,7 +273,9 @@ export function TrophyLine({
           return (
             <li key={slot}>
               {when}: {count(value)}
-              {change === null ? "" : `, ${signed(change)}`}
+              {change === null
+                ? ""
+                : `, ${signedNumber(change, { locale: "en-GB", zero: "±0" })}`}
             </li>
           );
         })}

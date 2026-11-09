@@ -1,4 +1,36 @@
-/**
+vi.mock("../../app/services/python-transport.server", () => ({
+  requestJson: mocks.requestJson,
+}));
+vi.mock("../../app/services/leaderboard.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/leaderboard.server")>();
+  return {
+    ...actual,
+    getTrackedLeaderboard: async (
+      ...args: Parameters<typeof actual.getTrackedLeaderboard>
+    ) => mocks.createPythonClient().getTrackedLeaderboard(...args),
+  };
+});
+vi.mock("../../app/services/players.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/players.server")>();
+  return {
+    ...actual,
+    getPlayer: async (...args: Parameters<typeof actual.getPlayer>) =>
+      mocks.createPythonClient().getPlayer(...args),
+    getPlayerSeasons: async (...args: Parameters<typeof actual.getPlayerSeasons>) =>
+      mocks.createPythonClient().getPlayerSeasons(...args),
+  };
+});
+vi.mock("../../app/services/public-user.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/public-user.server")>();
+  return {
+    ...actual,
+    getPublicUser: async (...args: Parameters<typeof actual.getPublicUser>) =>
+      mocks.createPythonClient().getPublicUser(...args),
+  };
+}); /**
  * View as: the site owner, and only the owner, opens the dashboard as any
  * player, read only. The Python service decides who the owner is; these
  * tests stand in for its answer and prove what the website does with it.
@@ -14,6 +46,9 @@ import {
   type ServerBuild,
 } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { LinkedPlayerCard } from "../../app/lib/account-contracts";
+import { sanitizeEvent } from "../../app/lib/analytics";
+import { middleware as rootMiddleware } from "../../app/root";
 
 const mocks = vi.hoisted(() => ({
   getWebsiteConfig: vi.fn(),
@@ -43,25 +78,21 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
   return {
     ...actual,
     createPythonClient: mocks.createPythonClient,
-    requestJson: mocks.requestJson,
   };
 });
 
 import routes from "../../app/routes";
-import { middleware as rootMiddleware } from "../../app/root";
-import type { LinkedPlayerCard } from "../../app/lib/account-contracts";
-import { sanitizeEvent } from "../../app/lib/analytics";
+import { action as ownerAction } from "../../app/routes/account.view-as";
+import type { DashboardLoaderData } from "../../app/lib/dashboard-data";
 import DashboardRoute, {
   action,
   headers,
   loader,
   shouldRevalidate,
-  type DashboardLoaderData,
 } from "../../app/routes/dashboard";
-import { action as ownerAction } from "../../app/routes/account.view-as";
 import { loadWebsiteConfig } from "../../app/server/config.server";
 import { readViewAs } from "../../app/server/view-as.server";
-import { PythonApiError } from "../../app/services/python.server";
+import { PythonApiError } from "../../app/services/python-response.server";
 
 const ORIGIN = "https://clashlens.example";
 const OWNER = { provider: "google", providerSubject: "11223344556677889900" } as const;
@@ -129,7 +160,10 @@ beforeEach(() => {
   // The Python service's answer: the owner check first, from the signed-in
   // account alone; then, for the owner only, the player the tag names.
   mocks.requestJson.mockImplementation(
-    async (path: string, method, _body, _kind, _id, identity?: typeof OWNER) => {
+    async (
+      path: string,
+      { method, identity }: { method: string; identity?: typeof OWNER },
+    ) => {
       if (!path.startsWith("/v1/account/view-as"))
         throw new PythonApiError(503, { error: "unavailable" });
       const owner = identity?.providerSubject === ownerSubject;
@@ -209,11 +243,13 @@ describe("who can View as", () => {
     expect(plain.data.kind).toBe("signed-out");
     expect(mocks.requestJson).not.toHaveBeenCalledWith(
       expect.stringContaining("/v1/account/view-as"),
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
+      {
+        method: expect.anything(),
+        body: expect.anything(),
+        expectedKind: expect.anything(),
+        requestId: expect.anything(),
+        identity: expect.anything(),
+      },
     );
   });
 
@@ -287,7 +323,11 @@ describe("who can View as", () => {
     expect(await readViewAs(OWNER, VIEWED)).toEqual({ owner: false });
     for (const payload of [
       { kind: "view-as", owner: "true", player: VIEWED_PAYLOAD },
-      { kind: "view-as", owner: true, player: { ...VIEWED_PAYLOAD, tag: MINE } },
+      {
+        kind: "view-as",
+        owner: true,
+        player: { ...VIEWED_PAYLOAD, tag: MINE },
+      },
       { kind: "view-as", owner: true, player: { tag: VIEWED } },
     ]) {
       mocks.requestJson.mockResolvedValue(payload);
@@ -296,7 +336,11 @@ describe("who can View as", () => {
   });
 
   it("sends Python only a well-formed tag, with or without its #", async () => {
-    mocks.requestJson.mockResolvedValue({ kind: "view-as", owner: false, player: null });
+    mocks.requestJson.mockResolvedValue({
+      kind: "view-as",
+      owner: false,
+      player: null,
+    });
     await readViewAs(OWNER, " 2pp8qly0 ");
     await readViewAs(OWNER, "<script>");
     await readViewAs(OWNER, null);
@@ -306,7 +350,8 @@ describe("who can View as", () => {
       "/v1/account/view-as",
     ]);
     // Always as the signed-in account, never as anyone the address names.
-    for (const call of mocks.requestJson.mock.calls) expect(call[5]).toEqual(OWNER);
+    for (const call of mocks.requestJson.mock.calls)
+      expect(call[1].identity).toEqual(OWNER);
   });
 });
 
@@ -603,13 +648,15 @@ describe("the owner's choices are saved for the owner alone", () => {
       context: {},
     } as unknown as Parameters<typeof ownerAction>[0]);
   const saves = () =>
-    mocks.requestJson.mock.calls.map(([path, method, body, , key, identity]) => ({
-      path,
-      method,
-      body: JSON.parse((body as Buffer).toString("utf8")) as unknown,
-      key,
-      identity,
-    }));
+    mocks.requestJson.mock.calls.map(
+      ([path, { method, body, requestId: key, identity }]) => ({
+        path,
+        method,
+        body: JSON.parse((body as Buffer).toString("utf8")) as unknown,
+        key,
+        identity,
+      }),
+    );
   const CHOICES: Record<string, string>[] = [
     { intent: "pin" },
     { intent: "unpin" },

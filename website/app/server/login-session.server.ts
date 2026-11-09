@@ -9,9 +9,11 @@
  * including every later renewal of that login's cookie.
  */
 
+import { PythonApiError } from "../services/python-response.server";
+import { requestJson } from "../services/python-transport.server";
+import type { LoginSession } from "./auth-cookies.server";
 import { createLoginSessionBinding } from "./auth-cookies.server";
-import type { LoginIdentity, LoginSession } from "./auth-cookies.server";
-import { PythonApiError, requestJson } from "../services/python.server";
+import type { LoginIdentity } from "./auth.server";
 
 /**
  * True when this login has logged out or its sign-in connection was removed
@@ -23,16 +25,12 @@ export async function isLoginRevoked(
   loginCookieValue: string,
   timeoutMs?: number,
 ): Promise<boolean> {
-  const payload = await requestJson<{ revoked?: unknown }>(
-    "/v1/account/session/check",
-    "POST",
-    sessionBody(loginCookieValue, session.signedInAtMs),
-    undefined,
-    undefined,
-    session,
-    undefined,
-    timeoutMs,
-  );
+  const payload = await requestJson<{ revoked?: unknown }>("/v1/account/session/check", {
+    method: "POST",
+    body: sessionBody(loginCookieValue, session.signedInAtMs),
+    identity: session,
+    timeoutMs: timeoutMs,
+  });
   if (typeof payload?.revoked !== "boolean") {
     throw new PythonApiError(502, { error: "malformed" });
   }
@@ -44,14 +42,11 @@ export async function revokeLogin(
   identity: LoginIdentity,
   loginCookieValue: string,
 ): Promise<void> {
-  await requestJson<unknown>(
-    "/v1/account/session/revoke",
-    "POST",
-    sessionBody(loginCookieValue),
-    undefined,
-    undefined,
-    identity,
-  );
+  await requestJson<unknown>("/v1/account/session/revoke", {
+    method: "POST",
+    body: sessionBody(loginCookieValue),
+    identity: identity,
+  });
 }
 
 function sessionBody(loginCookieValue: string, issuedAtMs?: number): Buffer {

@@ -1,3 +1,4 @@
+import { CARDS } from "../lib/dashboard";
 import { useReducer, useRef, useState } from "react";
 
 import type { ArmiesData } from "../lib/dashboard-cards";
@@ -18,7 +19,7 @@ import {
 import { UnitArt } from "./ArmyPortraits";
 import { CardHead, CardNote, InfoTip, Name, Switch } from "./DashboardParts";
 import { TrophyIcon } from "./GameIcons";
-import { signed } from "./LegendClock";
+import { signedNumber as signed } from "../lib/number-format";
 
 /**
  * The days chosen on an Armies card and their numbers:
@@ -386,6 +387,7 @@ export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
       aria-busy={loading}
     >
       <CardHead
+        icon={CARDS["armies-defense"].icon}
         title="Armies on defense"
         // The short headings in full, and the one colouring rule.
         info={
@@ -489,6 +491,7 @@ export function ArmiesOnOffenseCard({ data }: { data: ArmiesData }) {
   return (
     <div className={`army-card${loading ? " is-loading" : ""}`} aria-busy={loading}>
       <CardHead
+        icon={CARDS["armies-offense"].icon}
         title="Armies on offense"
         meta={<DaySwitch days={days} choose={choose} custom={false} />}
       />

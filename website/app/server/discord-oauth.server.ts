@@ -1,3 +1,4 @@
+import { constantTimeEqual } from "./auth.server";
 /**
  * Server-only Discord OAuth2 service (Authorization Code + PKCE S256).
  *
@@ -15,11 +16,9 @@
  * Discord origins.
  */
 
-import { timingSafeEqual } from "node:crypto";
+import { isProviderSubject, OAuthCallbackError, type OAuthIntent } from "./auth.server";
 
 import type { WebsiteConfig } from "./config.server";
-import { OAuthCallbackError, type OAuthIntent } from "./google-oidc.server";
-import { isProviderSubject } from "./google-oidc.server";
 
 export const DISCORD_CALLBACK_PATH = "/auth/discord/callback";
 
@@ -68,14 +67,6 @@ const defaultFetchJson: JsonFetcher = async (url, init) => {
   return { status: response.status, json };
 };
 
-/** Constant-time string comparison shared with the Google flow. */
-function safeEqual(left: string, right: string): boolean {
-  const leftBytes = Buffer.from(left, "utf8");
-  const rightBytes = Buffer.from(right, "utf8");
-  if (leftBytes.length !== rightBytes.length) return false;
-  return timingSafeEqual(leftBytes, rightBytes);
-}
-
 export function redirectUriFor(publicOrigin: URL): string {
   return new URL(DISCORD_CALLBACK_PATH, publicOrigin).toString();
 }
@@ -115,7 +106,7 @@ export async function createDiscordOAuthService(
 
     async validateCallback(callbackParams, transaction) {
       const state = callbackParams["state"];
-      if (state === undefined || !safeEqual(state, transaction.state)) {
+      if (state === undefined || !constantTimeEqual(state, transaction.state)) {
         throw new OAuthCallbackError("invalid_state");
       }
       if (callbackParams["error"] !== undefined) {

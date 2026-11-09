@@ -1,22 +1,23 @@
+import type { RootLoaderData } from "./lib/root-data";
 import { useContext, useEffect, useRef, type MouseEvent, type ReactNode } from "react";
 import { preload, preloadModule } from "react-dom";
 import {
   Link,
-  NavLink,
-  isRouteErrorResponse,
-  useLoaderData,
-  useRouteLoaderData,
-  useLocation,
-  useMatches,
-  useNavigation,
-  type LoaderFunctionArgs,
-  type ShouldRevalidateFunctionArgs,
-  UNSAFE_FrameworkContext,
   Links,
   Meta,
+  NavLink,
   Outlet,
   Scripts,
   ScrollRestoration,
+  UNSAFE_FrameworkContext,
+  isRouteErrorResponse,
+  useLoaderData,
+  useLocation,
+  useMatches,
+  useNavigation,
+  useRouteLoaderData,
+  type LoaderFunctionArgs,
+  type ShouldRevalidateFunctionArgs,
 } from "react-router";
 
 import type { Route } from "./+types/root";
@@ -33,8 +34,6 @@ import { HeaderSearch } from "./components/PlayerSearch";
 import { SiteMenu } from "./components/SiteMenu";
 import { ThemeToggle, themeInitialization } from "./components/ThemeToggle";
 import { UpdatesNotice } from "./components/UpdatesNotice";
-import type { AnalyticsSettings } from "./lib/analytics";
-import type { UpdateStatus } from "./lib/contracts";
 import { isDashboardSave } from "./lib/dashboard";
 import { DISCORD_INVITE_URL } from "./lib/discord";
 import {
@@ -54,20 +53,6 @@ import "./brand.css";
 import "./quiet-glass.css";
 import "./account-menu.css";
 
-export interface RootLoaderData {
-  loggedIn: boolean;
-  accountLabel: string | null;
-  accountUsername: string | null;
-  logoutIdempotencyKey: string | null;
-  loginKey: string | null;
-  updateStatus: UpdateStatus | null;
-  dashboardEnabled?: boolean;
-  crewsEnabled?: boolean;
-  analytics?: AnalyticsSettings | null;
-  /** The site's public origin, for each page's canonical address; null when unreadable. */
-  origin?: string | null;
-}
-
 /**
  * Root loader for the navigation bar and the delayed-updates notice. The
  * notice reads one shared, briefly cached status from the private Python
@@ -86,8 +71,8 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<RootLoade
       analytics: loadAnalyticsSettings(),
     }))
     .catch(() => ({ dashboardEnabled: false, crewsEnabled: false, analytics: null }));
-  const origin = import("./server/config.server")
-    .then(({ getWebsiteConfig }) => getWebsiteConfig().publicOrigin.origin)
+  const origin = import("./server/public-origin.server")
+    .then(({ getPublicOrigin }) => getPublicOrigin().origin)
     .catch(() => null);
   try {
     const { loadRootNavigation } = await import("./server/root-navigation.server");

@@ -1,13 +1,8 @@
+import type { PlayerSearchLoaderData } from "../lib/player-search-data";
 import type { LoaderFunctionArgs } from "react-router";
+import { searchPlayers } from "../services/players.server";
 
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
-import type { SearchResponse, WebsiteErrorResponse } from "../lib/contracts";
-
-export interface PlayerSearchLoaderData {
-  query: string;
-  search: SearchResponse | null;
-  error: WebsiteErrorResponse | null;
-}
 
 export async function loader({
   request,
@@ -44,10 +39,9 @@ export async function loader({
   }
 
   try {
-    const { createPythonClient } = await import("../services/python.server");
     return noStoreJson({
       query,
-      search: await createPythonClient().searchPlayers(query, 5),
+      search: await searchPlayers(query, 5),
       error: null,
     });
   } catch (cause) {

@@ -1,3 +1,12 @@
+vi.mock("../../app/services/players.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/players.server")>();
+  return {
+    ...actual,
+    requestRefresh: async (...args: Parameters<typeof actual.requestRefresh>) =>
+      (() => ({ requestRefresh: mocks.requestRefresh }))().requestRefresh(...args),
+  };
+});
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

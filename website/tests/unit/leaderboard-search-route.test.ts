@@ -1,5 +1,26 @@
+vi.mock("../../app/services/leaderboard.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/leaderboard.server")>();
+  return {
+    ...actual,
+    getTrackedLeaderboard: async (
+      ...args: Parameters<typeof actual.getTrackedLeaderboard>
+    ) => (() => mocks)().getTrackedLeaderboard(...args),
+  };
+});
+vi.mock("../../app/services/leaderboard-search.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/leaderboard-search.server")>();
+  return {
+    ...actual,
+    searchLeaderboard: async (...args: Parameters<typeof actual.searchLeaderboard>) =>
+      (() => mocks)().searchLeaderboard(...args),
+  };
+});
 import type { LoaderFunctionArgs } from "react-router";
 import { beforeEach, expect, it, vi } from "vitest";
+import { loader } from "../../app/routes/tracked-leaderboard";
+import { PythonApiError } from "../../app/services/python-response.server";
 
 const mocks = vi.hoisted(() => ({
   searchLeaderboard: vi.fn(),
@@ -10,8 +31,6 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
     await importOriginal<typeof import("../../app/services/python.server")>();
   return { ...actual, createPythonClient: () => mocks };
 });
-import { loader } from "../../app/routes/tracked-leaderboard";
-import { PythonApiError } from "../../app/services/python.server";
 
 const load = async (query: string) =>
   (await loader({

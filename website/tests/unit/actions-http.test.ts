@@ -8,7 +8,6 @@ vi.mock("../../app/server/login-session.server", () => ({
 
 import {
   DEFAULT_FORM_LIMITS,
-  MAX_CALLBACK_PARAMS,
   freshIdempotencyKey,
   isAccountNotFoundError,
   isIdempotencyKey,
@@ -25,8 +24,9 @@ import {
   LOGIN_COOKIE_NAME,
   createLoginCookieValue,
 } from "../../app/server/auth-cookies.server";
+import { MAX_CALLBACK_PARAMS } from "../../app/server/auth.server";
 import { loadWebsiteConfig, type WebsiteConfig } from "../../app/server/config.server";
-import { PythonApiError } from "../../app/services/python.server";
+import { PythonApiError } from "../../app/services/python-response.server";
 
 const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" } as const;
@@ -253,7 +253,9 @@ describe("isSameOrigin", () => {
   it("rejects requests with neither Origin nor Referer", () => {
     expect(
       isSameOrigin(
-        new Request("https://clashlens.example/account/setup", { method: "POST" }),
+        new Request("https://clashlens.example/account/setup", {
+          method: "POST",
+        }),
         origin,
       ),
     ).toBe(false);

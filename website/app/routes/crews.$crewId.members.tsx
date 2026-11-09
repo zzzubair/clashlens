@@ -1,10 +1,11 @@
 import { data, Form, Link, redirect, useActionData, useLoaderData } from "react-router";
 
 import { type BackHandle, useBackState } from "../components/BackLink";
-import { ConfirmForm, FormResult } from "../components/CrewForms";
 import { crewCount, RoleChip } from "../components/CrewBoards";
+import { ConfirmForm, FormResult } from "../components/CrewForms";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { Crest, TrophyIcon } from "../components/GameIcons";
+import "../crews.css";
 import {
   canJoin,
   type Crew,
@@ -15,7 +16,6 @@ import {
 import { leftDate } from "../lib/left-legend";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import type { Route } from "./+types/crews.$crewId.members";
-import "../crews.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 /** Each account picked to add is its own form field, named by this and its tag. */
@@ -24,7 +24,6 @@ const INTENTS = ["remove", "add", "promote", "demote", "leave"] as const;
 /** The row's remove button says what it does; its name adds whose account. */
 const REMOVE_ICON = <span aria-hidden="true">Remove</span>;
 
-/** Back leads to the crew. */
 export const handle: BackHandle = {
   back: (match) => {
     const crew = (match.loaderData as { crew?: Crew | null } | undefined)?.crew;
@@ -70,28 +69,20 @@ export async function action({ request, params, context }: Route.ActionArgs) {
     params.crewId,
     INTENTS,
     async ({ identity, crewId, intent, fields, key }) => {
-      const path = `crews/${crewId}`;
       if (intent === "leave") {
-        await crews.writeCrew(
-          identity,
-          "DELETE",
-          `${path}/members/me`,
-          undefined,
-          key(""),
-        );
+        await crews.leaveCrew(identity, crewId, key(""));
         throw redirect("/crews");
       }
       if (intent === "promote" || intent === "demote") {
         const username = fields["username"] ?? "";
-        const changed = (await crews.writeCrew(
+        const changed = await crews.changeCrewMember(
           identity,
-          "PATCH",
-          `${path}/members/${encodeURIComponent(username)}`,
-          { role: intent === "promote" ? "admin" : "member" },
+          crewId,
+          username,
+          intent === "promote" ? "admin" : "member",
           key(username),
-        )) as { display_name?: unknown };
-        const who =
-          typeof changed.display_name === "string" ? changed.display_name : username;
+        );
+        const who = changed.displayName;
         return {
           notice:
             intent === "promote"
@@ -101,16 +92,10 @@ export async function action({ request, params, context }: Route.ActionArgs) {
       }
       if (intent === "remove") {
         const tag = normalizePlayerTag(fields["tag"] ?? "") ?? "";
-        const removed = (await crews.writeCrew(
-          identity,
-          "DELETE",
-          `${path}/players/${encodeURIComponent(tag)}`,
-          undefined,
-          key(tag),
-        )) as { left_crew?: unknown };
+        const removed = await crews.removeCrewPlayer(identity, crewId, tag, key(tag));
         const own = fields["own"] === "1";
         // Your last account out takes you out of the crew.
-        if (own && removed.left_crew === true) throw redirect("/crews");
+        if (own && removed.leftCrew === true) throw redirect("/crews");
         return { notice: own ? `Removed ${tag}.` : `Kicked ${tag}.` };
       }
       const tags = pickedTags(fields);
@@ -119,7 +104,7 @@ export async function action({ request, params, context }: Route.ActionArgs) {
         context?.get(clientAddressContext),
         key(tags.join(",")),
         tags.length,
-        (next) => crews.writeCrew(identity, "POST", `${path}/players`, { tags }, next),
+        (next) => crews.addCrewPlayers(identity, crewId, tags, next),
       );
       if (!added.ok) throw added.cause;
       return {

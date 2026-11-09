@@ -1,3 +1,4 @@
+import { StandingsCells } from "../components/StandingsCells";
 import { useEffect, useRef } from "react";
 import {
   data,
@@ -10,37 +11,37 @@ import {
   useNavigation,
   type LoaderFunctionArgs,
 } from "react-router";
+import { searchLeaderboard } from "../services/leaderboard-search.server";
+import { getTrackedLeaderboard } from "../services/leaderboard.server";
+import { getPublicUser } from "../services/public-user.server";
 
 import { moveFocusWithArrows } from "../components/ArrowKeys";
 import { useBackState } from "../components/BackLink";
 import { DashboardIcon } from "../components/DashboardIcon";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { RANKINGS_PAGE_SIZE } from "../components/LeaderboardShared";
 import { SearchIcon } from "../components/PlayerSearch";
-import { useSeasonReread } from "../components/SeasonReread";
-import { RANKINGS_PAGE_SIZE, TrophyMark } from "../components/LeaderboardShared";
 import {
-  comparesWithReset,
-  hasRecentDays,
-  hasToday,
-  RankMove,
-  RecentDays,
-  RecentDaysHead,
-  shortAge,
-  TodayChange,
-} from "../components/ResetChange";
-import {
-  formatAge,
   formatTimestamp,
   LocalTimestamp,
   OLD_UPDATE_SECONDS,
   useCurrentTime,
 } from "../components/Provenance";
+import { formatAge } from "../lib/age-format";
+import {
+  comparesWithReset,
+  hasRecentDays,
+  hasToday,
+  RecentDaysHead,
+} from "../components/ResetChange";
+import { shortAge } from "../lib/age-format";
+import { useSeasonReread } from "../components/SeasonReread";
+import "../leaderboard-search.css";
 import { publicPageMeta } from "../lib/blog";
+import type { SnapshotSelector, WebsiteErrorResponse } from "../lib/contracts";
 import { canonicalPlayerPath, noMatchHint, normalizePlayerTag } from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
-import type { SnapshotSelector, WebsiteErrorResponse } from "../lib/contracts";
 import type { Route } from "./+types/tracked-leaderboard";
-import "../leaderboard-search.css";
 
 const PAGE_SIZE = RANKINGS_PAGE_SIZE;
 // A saved Daily board is incomplete when none of its players was saved in the
@@ -112,7 +113,7 @@ async function myPlace(request: Request): Promise<{ tag: string; rank: number } 
     const { createPythonClient } = await import("../services/python.server");
     const client = createPythonClient(identity);
     const { username } = await client.getAccount();
-    const players = (await client.getPublicUser(username)).verifiedPlayers;
+    const players = (await getPublicUser(username)).verifiedPlayers;
     const lead = players.find((player) => player.state === "tracking") ?? players[0];
     return lead?.rank ? { tag: lead.tag, rank: lead.rank } : null;
   } catch {
@@ -174,11 +175,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
     throw new Response(null, { status: 422 });
   const me = viewValue === "live" ? myPlace(request) : Promise.resolve(null);
   try {
-    const { createPythonClient } = await import("../services/python.server");
-    const client = createPythonClient();
     // The board and the search start together. An exact tag still redirects
     // first, leaving the board unread, and a failed search is still the error.
-    const boardRead = client.getTrackedLeaderboard(
+    const boardRead = getTrackedLeaderboard(
       PAGE_SIZE,
       viewValue,
       (page - 1) * PAGE_SIZE,
@@ -186,7 +185,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       focusTag ?? undefined,
     );
     boardRead.catch(() => undefined);
-    const search = query ? await client.searchLeaderboard(query) : null;
+    const search = query ? await searchLeaderboard(query) : null;
     if (search?.exactTag)
       throw redirect(playerRankUrl(search.exactTag, search.results[0].rank));
     const leaderboard = await boardRead;
@@ -208,9 +207,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
       me: await me,
     } as const;
   } catch (cause) {
-    const { PythonApiError } = await import("../services/python.server");
+    const { PythonApiError } = await import("../services/python-response.server");
     if (focusTag && cause instanceof PythonApiError && cause.status === 404) {
-      const { createPythonClient } = await import("../services/python.server");
       const missing: WebsiteErrorResponse = {
         error: {
           code: "missing",
@@ -219,7 +217,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         },
       };
       return {
-        leaderboard: await createPythonClient().getTrackedLeaderboard(PAGE_SIZE, "live"),
+        leaderboard: await getTrackedLeaderboard(PAGE_SIZE, "live"),
         error: missing,
         pageUnavailableUrl: null,
         latestDailyUrl: null,
@@ -378,9 +376,6 @@ export default function TrackedLeaderboardRoute() {
     !!newestObservedAt &&
     (Date.parse(newestObservedAt) - Date.parse(observedAt)) / 1000 > OLD_UPDATE_SECONDS;
   const oldNote = <span className="sr-only"> · Older than the rest of the board</span>;
-  // The website reads a profile without a clan as "Unknown"; it shows as no clan.
-  const clanName = (clan: string) =>
-    clan === "Unknown" ? <span className="no-clan">No clan</span> : <bdi>{clan}</bdi>;
   const secondsBeforeReset = (observedAt: string) =>
     daily ? Math.max(0, (Date.parse(daily.resetAt) - Date.parse(observedAt)) / 1000) : 0;
   const newestInput = daily ? leaderboard?.provenance.observedAt : null;
@@ -768,39 +763,15 @@ export default function TrackedLeaderboardRoute() {
                         data-podium-rank={entry.rank <= 3 ? entry.rank : undefined}
                         key={entry.tag}
                       >
-                        <td className="rank-cell" data-label="Rank">
-                          <span className="rank-mark">{entry.rank.toLocaleString()}</span>
-                        </td>
-                        {compared ? (
-                          <td className="move-cell">
-                            <RankMove entry={entry} />
-                          </td>
-                        ) : null}
-                        <th scope="row" className="player-cell" data-label="Player">
-                          <span className="player-id">
-                            <Link
-                              className="player-name"
-                              to={canonicalPlayerPath(entry.tag)}
-                              state={backState}
-                            >
-                              <bdi>{entry.name}</bdi>
-                            </Link>
-                            {entry.tag === me?.tag ? (
-                              <span className="you-badge">You</span>
-                            ) : null}
-                            <span className="player-tag">{entry.tag}</span>
-                          </span>
-                          {/* A phone puts the clan on a smaller line under the
-                              name; wider screens give it the Clan column. */}
-                          <span className="player-sub">
-                            <span className="player-clan" data-label="Clan">
-                              {clanName(entry.clan)}
-                            </span>
-                            {/* As on wide screens, a phone shows a row's update
-                                only when it fell behind the board: an old Live
-                                row's age, or an At Reset row saved long before an
-                                incomplete Reset. Each opens its exact time; screen
-                                readers hear every row's. */}
+                        <StandingsCells
+                          entry={entry}
+                          compared={compared}
+                          showsDays={showsDays}
+                          showsToday={showsToday}
+                          backState={backState}
+                          rankings
+                          you={entry.tag === me?.tag}
+                          mobileUpdate={
                             <details
                               className="player-update-mobile"
                               data-old={isOld(entry.freshness.observedAt) || undefined}
@@ -827,39 +798,20 @@ export default function TrackedLeaderboardRoute() {
                               </summary>
                               <LocalTimestamp value={entry.freshness.observedAt} />
                             </details>
-                          </span>
-                        </th>
-                        {/* Wide screens add the tag on hover. */}
-                        <td className="clan-cell">
-                          {clanName(entry.clan)}
-                          <span className="clan-tag" aria-hidden="true">
-                            {entry.tag}
-                          </span>
-                        </td>
-                        {showsDays ? (
-                          <td className="recent-cell">
-                            <RecentDays entry={entry} />
-                          </td>
-                        ) : null}
-                        {showsToday ? (
-                          <td className="today-cell">
-                            <TodayChange entry={entry} />
-                          </td>
-                        ) : null}
-                        <td className="tie-slot">
-                          {entry.tied ? (
-                            <span
-                              className="tie-pill"
-                              title="Same trophies as another player"
-                            >
-                              Tie
-                            </span>
-                          ) : null}
-                        </td>
-                        <td className="trophy-cell" data-label="Trophies">
-                          <TrophyMark />
-                          <strong>{entry.trophies.toLocaleString()}</strong>
-                        </td>
+                          }
+                          beforeTrophies={
+                            <td className="tie-slot">
+                              {entry.tied ? (
+                                <span
+                                  className="tie-pill"
+                                  title="Same trophies as another player"
+                                >
+                                  Tie
+                                </span>
+                              ) : null}
+                            </td>
+                          }
+                        />
                         <td className="update-cell" data-label="Last updated">
                           {/* Live reads each row's age out, and shows only a dot on
                               a row behind the rest, its exact time in the tooltip. */}

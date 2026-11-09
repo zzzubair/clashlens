@@ -25,7 +25,6 @@ test("Settings saves the name and default player, and unlinks a player after a c
   await ensureAccount(page, "lensscout", "Lens Scout");
   for (const tag of [KEPT, UNLINKED]) await link(page, tag);
 
-  // The profile's small Edit button opens Settings.
   await page.getByRole("link", { name: "Edit your profile in Settings" }).click();
   await expect(page).toHaveURL(/\/account\/settings$/);
   await expectNoSeriousAccessibilityViolations(page);
@@ -41,7 +40,6 @@ test("Settings saves the name and default player, and unlinks a player after a c
   await expect(page.getByRole("status")).toHaveText("Default player saved.");
   await expect(row(UNLINKED).locator(".linked-player-default")).toBeVisible();
 
-  // Unlinking asks first, says what changes and what stays, and Cancel keeps it.
   await row(UNLINKED).getByRole("link", { name: "Unlink" }).click();
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(/^Unlink /);
   await expect(page.getByText(/\/stats uses .+ instead\./)).toBeVisible();
@@ -58,7 +56,6 @@ test("Settings saves the name and default player, and unlinks a player after a c
   await expect(row(UNLINKED)).toHaveCount(0);
   await expect(row(KEPT)).toBeVisible();
 
-  // Gone from the profile too, while the player's own page stays.
   await page.goto("/account");
   const players = page.getByRole("region", { name: "Clash players" });
   await expect(players.getByText(KEPT, { exact: true })).toBeVisible();

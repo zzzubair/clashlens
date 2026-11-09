@@ -1,3 +1,5 @@
+import { legendDayDate, rankMoves } from "../lib/legend-log-data";
+import { formatCount, formatSigned, valueTone } from "../lib/number-format";
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router";
 
@@ -11,45 +13,6 @@ import { DayMark, DayStatusNote } from "./DayStatus";
 import { FoldedBattles } from "./FoldedBattles";
 import { ShieldIcon, Stars, SwordIcon } from "./GameIcons";
 import { linkedBattleId } from "./LinkedBattle";
-
-const dateFormatter = new Intl.DateTimeFormat("en-GB", {
-  day: "numeric",
-  month: "short",
-  year: "numeric",
-  timeZone: "UTC",
-});
-
-export function validDay(day: string | null): string | null {
-  return day && /^\d{4}-\d{2}-\d{2}$/.test(day) && !Number.isNaN(Date.parse(day))
-    ? day
-    : null;
-}
-
-/** A Legend day's date, such as "26 Oct 2026", from its period or its key. */
-export function legendDayDate(period: string): string {
-  const date = new Date(period.split(" – ")[0]);
-  return Number.isNaN(date.getTime())
-    ? "Date unavailable"
-    : dateFormatter.format(date).replace("Sept", "Sep");
-}
-
-export function formatCount(value: number | null): string {
-  return value === null ? "Unknown" : (value || 0).toLocaleString("en-GB");
-}
-
-export function formatSigned(value: number | null): string {
-  if (value === null) return "Unknown";
-  return value > 0
-    ? `+${formatCount(value)}`
-    : value < 0
-      ? `−${formatCount(-value)}`
-      : formatCount(value);
-}
-
-export function valueTone(value: number | null): string {
-  if (value === null || value === 0) return "score-neutral";
-  return value > 0 ? "score-positive" : "score-negative";
-}
 
 /** The change a day's bar shows: its saved change, or today's battles so far. */
 function barChange(day: RankedDaySummary, isCurrentDay: boolean): number | null {
@@ -124,20 +87,6 @@ export function LogDate({ period }: { period: string }) {
       <span className="sr-only">{label.slice(year)}</span>
     </strong>
   );
-}
-
-/** Places a day's Reset rank climbed since the day before's (a fall is negative). */
-export function rankMoves(
-  days: Array<{ dayNumber: number | null; resetRank?: number | null }>,
-): Map<number, number> {
-  const ranks = new Map(days.map((day) => [day.dayNumber, day.resetRank ?? null]));
-  const moves = new Map<number, number>();
-  for (const { dayNumber, resetRank } of days) {
-    const before = dayNumber === null ? null : ranks.get(dayNumber - 1);
-    if (dayNumber !== null && before != null && resetRank != null)
-      moves.set(dayNumber, before - resetRank);
-  }
-  return moves;
 }
 
 /** A day's Reset rank on a rank plate, gold to bronze in the top 3, over its move. */
@@ -262,7 +211,6 @@ export function LegendLog({
   );
   const current = history.filter(({ day }) => legendDayKey(day.period) === todayKey);
   const ended = history.filter(({ day }) => legendDayKey(day.period) !== todayKey);
-  // Newest first, as the days are.
   const rows = [
     ...ended.map((entry) => ({
       start: Date.parse(entry.day.period.split(" – ")[0]),

@@ -1,3 +1,17 @@
+vi.mock("../../app/services/python-transport.server", () => ({
+  requestJson: mocks.requestJson,
+}));
+vi.mock("../../app/services/players.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/players.server")>();
+  return {
+    ...actual,
+    getPlayer: async (...args: Parameters<typeof actual.getPlayer>) =>
+      mocks.createPythonClient().getPlayer(...args),
+    getPlayerSeasons: async (...args: Parameters<typeof actual.getPlayerSeasons>) =>
+      mocks.createPythonClient().getPlayerSeasons(...args),
+  };
+});
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
@@ -26,7 +40,6 @@ vi.mock("../../app/server/config.server", () => ({
 }));
 vi.mock("../../app/services/python.server", async () => ({
   createPythonClient: mocks.createPythonClient,
-  requestJson: mocks.requestJson,
   PythonApiError: (await import("../../app/services/python-response.server"))
     .PythonApiError,
 }));
@@ -61,7 +74,12 @@ const NOVA = {
 };
 
 function group(groupId: string, name: string, tags: string[]) {
-  return { groupId, name, tags, players: tags.map((tag) => ({ ...NOVA, tag })) };
+  return {
+    groupId,
+    name,
+    tags,
+    players: tags.map((tag) => ({ ...NOVA, tag })),
+  };
 }
 const twentyTags = Array.from(
   { length: 20 },
@@ -128,10 +146,10 @@ it("asks a Clasher with no watchlists to name one, then puts the player straight
     createIdempotencyKey: CREATE_KEY,
   });
   expect(mocks.createGroup).toHaveBeenCalledWith({ name: "Friends" }, CREATE_KEY);
-  expect(mocks.requestJson.mock.calls[0]?.slice(0, 2)).toEqual([
-    `/v1/account/groups/${FRIENDS}/players`,
-    "POST",
-  ]);
+  expect([
+    mocks.requestJson.mock.calls[0]?.[0],
+    mocks.requestJson.mock.calls[0]?.[1].method,
+  ]).toEqual([`/v1/account/groups/${FRIENDS}/players`, "POST"]);
   expect(result.data.notice).toBe("Added Nova (#2PP) to Friends.");
   expect(result.data.addedTo).toBe(FRIENDS);
 });

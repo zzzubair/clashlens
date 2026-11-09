@@ -1,3 +1,21 @@
+vi.mock("../../app/services/leaderboard-search.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/leaderboard-search.server")>();
+  return {
+    ...actual,
+    searchLeaderboard: async (...args: Parameters<typeof actual.searchLeaderboard>) =>
+      (() => mocks)().searchLeaderboard(...args),
+  };
+});
+vi.mock("../../app/services/players.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/players.server")>();
+  return {
+    ...actual,
+    getPlayer: async (...args: Parameters<typeof actual.getPlayer>) =>
+      (() => mocks)().getPlayer(...args),
+  };
+});
 import { beforeEach, expect, it, vi } from "vitest";
 
 import type {
@@ -6,6 +24,8 @@ import type {
   RankedDaySummary,
 } from "../../app/lib/contracts";
 import type { OverlayPlayer } from "../../app/lib/obs-overlay";
+import { loader } from "../../app/routes/obs-overlay.player";
+import { PythonApiError } from "../../app/services/python-response.server";
 
 const mocks = vi.hoisted(() => ({
   getPlayer: vi.fn(),
@@ -16,8 +36,6 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
     await importOriginal<typeof import("../../app/services/python.server")>();
   return { ...actual, createPythonClient: () => mocks };
 });
-import { loader } from "../../app/routes/obs-overlay.player";
-import { PythonApiError } from "../../app/services/python.server";
 
 const event = (id: string, trophyChange: number): RankedBattleEvent => ({
   battleId: id,

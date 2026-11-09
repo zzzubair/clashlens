@@ -27,7 +27,7 @@ import {
 } from "../lib/dashboard";
 import type { CardDataMap, CardReads } from "../lib/dashboard-cards";
 import { canonicalPlayerPath } from "../lib/player-tag";
-import type { DashboardActionData, DashboardLoaderData } from "../routes/dashboard";
+import type { DashboardActionData, DashboardLoaderData } from "../lib/dashboard-data";
 import {
   ClockCard,
   CutoffsCard,
@@ -46,7 +46,8 @@ import {
   outdatedCards,
   type DashboardEditEvent,
 } from "./DashboardState";
-import { CardHead, CardNote, cardIcon, updatedAgo } from "./DashboardParts";
+import { CardHead, CardNote } from "./DashboardParts";
+import { updatedAgo } from "../lib/age-format";
 import { LegendDayCard, dayReadAt } from "./LegendDayCard";
 import { OpponentsCard, useBasesDay, type BasesDay } from "./OpponentsCard";
 import {
@@ -57,7 +58,6 @@ import {
 } from "./SeasonCards";
 
 interface ViewContext {
-  /** The player the cards follow. */
   tag: string;
   /** The tag the owner views the dashboard as, read only; null otherwise. */
   viewAs: string | null;
@@ -71,7 +71,6 @@ interface ViewContext {
   pickGroup: (groupId: string) => void;
 }
 
-/** How each built card draws its data. A card added later adds its view here. */
 const CARD_VIEWS: {
   [Card in keyof CardDataMap]: (
     data: CardDataMap[Card],
@@ -159,10 +158,11 @@ function cardBody(
   context: ViewContext,
 ): ReactNode {
   const title = CARDS[card].title;
-  if (context.dayOver || !hasView(card)) return <CardHead title={title} />;
+  if (context.dayOver || !hasView(card))
+    return <CardHead icon={CARDS[card].icon} title={title} />;
   const note = (text: string) => (
     <>
-      <CardHead title={title} />
+      <CardHead icon={CARDS[card].icon} title={title} />
       <CardNote>{text}</CardNote>
     </>
   );
@@ -316,7 +316,7 @@ function DashboardTools({
   );
 }
 
-/** The cards a save makes out of date: their numbers follow the changed settings. */
+/** Device-zone discovery may fail; UTC keeps the clock usable. */
 function deviceTimeZone(): string {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -333,7 +333,6 @@ function moved(cards: CardId[], index: number, step: -1 | 1): CardId[] {
   return next;
 }
 
-/** One setting with a few choices, such as Last 7 days or Whole Season. */
 function Choice<Value extends string>({
   legend,
   options,
@@ -366,7 +365,6 @@ function Choice<Value extends string>({
   );
 }
 
-/** Card settings, opened from "⚙ Settings" while customising. */
 function SettingsDialog({
   card,
   settings,
@@ -535,7 +533,6 @@ function SettingsDialog({
   );
 }
 
-/** "+ Add a card": every built card not on the dashboard, with its size and one line. */
 function AddSheet({
   cards,
   saving,
@@ -600,7 +597,6 @@ function AddSheet({
   );
 }
 
-/** The first-visit pop-up: our layout or an empty one. */
 function FirstVisit({
   saving,
   onPick,
@@ -861,7 +857,6 @@ export function Dashboard({
             <DashboardIcon name="plus" /> Add
             <span className="dash-editbar-long"> a card</span>
           </button>
-          {/* Greyed out while the layout is already the default. */}
           <button
             type="button"
             className="button button-secondary"
@@ -931,11 +926,8 @@ export function Dashboard({
                 >
                   ⠿
                 </button>
-                {/* The card's own title and mark, as outside Customise. */}
                 <span className="dash-edit-name">
-                  {cardIcon(CARDS[card].title) ? (
-                    <DashboardIcon name={cardIcon(CARDS[card].title)!} />
-                  ) : null}
+                  <DashboardIcon name={CARDS[card].icon} />
                   {CARDS[card].title}
                 </span>
                 {CARDS[card].settings ? (

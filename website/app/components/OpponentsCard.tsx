@@ -1,3 +1,4 @@
+import { CARDS } from "../lib/dashboard";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 
@@ -12,7 +13,8 @@ import { addToGroupPath, canonicalPlayerPath } from "../lib/player-tag";
 import { CardHead, CardNote, InfoTip } from "./DashboardParts";
 import { DashboardIcon } from "./DashboardIcon";
 import { ShieldIcon, Star, Stars, TrophyIcon } from "./GameIcons";
-import { signed, timeFormatter } from "./LegendClock";
+import { signedNumber as signed } from "../lib/number-format";
+import { timeFormatter } from "../lib/clock-format";
 
 /**
  * One earlier Legend day on Bases you attacked:
@@ -316,6 +318,7 @@ export function OpponentsCard({
   const shown = !loading && rows !== null && rows.length > 0;
   const head = (
     <CardHead
+      icon={CARDS["bases"].icon}
       title={
         <>
           {"Bases you attacked "}

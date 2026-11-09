@@ -1,3 +1,6 @@
+vi.mock("../../app/server/public-origin.server", () => ({
+  getPublicOrigin: () => new URL("https://clashlens.example"),
+}));
 import {
   mkdir,
   mkdtemp,
@@ -42,19 +45,19 @@ vi.mock("../../app/server/config.server", () => ({
 }));
 
 import { absoluteBlogUrl, blogMeta } from "../../app/lib/blog";
+import BlogIndex, { loader as indexLoader } from "../../app/routes/blog";
 import BlogPostRoute, {
   loader as postLoader,
   meta as postMeta,
 } from "../../app/routes/blog.$slug";
-import BlogIndex, { loader as indexLoader } from "../../app/routes/blog";
 import { loader as mediaLoader } from "../../app/routes/blog.media";
 import { loader as feedLoader } from "../../app/routes/blog.rss";
 import { loader as sitemapLoader } from "../../app/routes/sitemap";
 import {
   BLOG_CACHE_MS,
-  BlogPostError,
   blogFeed,
   blogFolder,
+  BlogPostError,
   loadBlogPosts,
   parseBlogPost,
   readBlogFolder,

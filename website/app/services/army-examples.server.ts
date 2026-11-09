@@ -1,7 +1,7 @@
 import type { ArmyVariantExamples } from "../lib/contracts";
 import { mapArmyUnits } from "./player-response.server";
-import { requestJson } from "./python.server";
 import { isInteger, isRecord, isString, PythonApiError } from "./python-response.server";
+import { requestJson } from "./python-transport.server";
 
 /** A variant's most-used armies for the Armies page's current-Season players,
  * over exactly the Legend days the page showed, or an error once those days
@@ -23,9 +23,7 @@ export async function getArmyVariantExamples(
   });
   const payload = await requestJson<Record<string, unknown>>(
     `/v1/analytics/armies?${query}`,
-    "GET",
-    undefined,
-    "army-variant-examples",
+    { method: "GET", expectedKind: "army-variant-examples" },
   );
   const { groups, selection, covered_days: covered } = payload;
   if (

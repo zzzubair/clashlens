@@ -1,5 +1,6 @@
+import { signedNumber } from "../lib/number-format";
 import type { DayResult } from "../lib/group-comparison";
-import { dayLabel, dayRange } from "./DayScale";
+import { utcDate, dayRange } from "../lib/date-format";
 
 /** One player's line: who, and the days the table's gain counts. */
 export interface GainLine {
@@ -84,11 +85,6 @@ function tickStep(height: number): number {
   const rough = height / 4;
   const size = 10 ** Math.floor(Math.log10(rough));
   return ([1, 2, 5, 10].find((step) => step * size >= rough) ?? 10) * size;
-}
-
-function signed(value: number): string {
-  const text = Math.abs(value).toLocaleString("en");
-  return value > 0 ? `+${text}` : value < 0 ? `−${text}` : text;
 }
 
 /**
@@ -185,7 +181,9 @@ export function GainLines({
         </span>
       </figcaption>
       <p className="sr-only">
-        {series.map((line) => `${line.name} ${signed(line.points.at(-1)!)}`).join(", ")}
+        {series
+          .map((line) => `${line.name} ${signedNumber(line.points.at(-1)!)}`)
+          .join(", ")}
       </p>
       <div className="gain-lines-plot" aria-hidden="true">
         <svg viewBox="0 0 100 100" preserveAspectRatio="none">
@@ -224,7 +222,7 @@ export function GainLines({
         </svg>
         {[0, ...ticks].map((tick) => (
           <span key={tick} className="gain-lines-tick" style={{ top: `${y(tick)}%` }}>
-            {signed(tick)}
+            {signedNumber(tick, { locale: "en" })}
           </span>
         ))}
         {dayStarts.map((start, index) => (
@@ -234,7 +232,7 @@ export function GainLines({
             data-key={keyDays.has(index) || undefined}
             style={{ left: `${((index + 0.5) / dayStarts.length) * 100}%` }}
           >
-            {dayLabel(start)}
+            {utcDate(start)}
           </span>
         ))}
         <svg
@@ -259,7 +257,7 @@ export function GainLines({
             {...lighting(line.tag)}
           >
             <span className="gain-lines-name">{line.name}</span>{" "}
-            {signed(line.points.at(-1)!)}
+            {signedNumber(line.points.at(-1)!)}
           </span>
         ))}
       </div>
@@ -277,7 +275,7 @@ export function GainLines({
               {...lighting(line.tag)}
             >
               <span className="gain-lines-name">{line.name}</span>{" "}
-              {signed(line.points.at(-1)!)}
+              {signedNumber(line.points.at(-1)!)}
             </li>
           ))}
       </ul>

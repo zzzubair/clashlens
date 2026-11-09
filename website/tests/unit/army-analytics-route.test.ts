@@ -1,3 +1,17 @@
+vi.mock("../../app/services/army-analytics.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/army-analytics.server")>();
+  return {
+    ...actual,
+    getArmyAnalytics: async (...args: Parameters<typeof actual.getArmyAnalytics>) =>
+      mocks.createPythonClient().getArmyAnalytics(...args),
+    getArmySeasonSummary: async (
+      ...args: Parameters<typeof actual.getArmySeasonSummary>
+    ) => mocks.createPythonClient().getArmySeasonSummary(...args),
+    getArmySeasons: async (...args: Parameters<typeof actual.getArmySeasons>) =>
+      mocks.createPythonClient().getArmySeasons(...args),
+  };
+});
 import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createElement } from "react";
@@ -46,7 +60,7 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
 });
 
 import ArmyRoute, { loader as armyLoader } from "../../app/routes/army-analytics";
-import { PythonApiError } from "../../app/services/python.server";
+import { PythonApiError } from "../../app/services/python-response.server";
 
 const SEASON = "1785714000";
 const SEASON_END = (Number(SEASON) + 28 * 86400) * 1000;
@@ -238,7 +252,6 @@ describe("army analytics route historical reads", () => {
     });
     const html = await renderArmyRoute(`season=${SEASON}&category=troops`);
     const text = renderedText(html);
-    // The view picker stays on a past Season.
     expect(html).toMatch(/aria-current="page"[^>]*>Unit usage</);
     expect(html).toContain(
       `href="/analytics/armies?season=${SEASON}&amp;category=army-types"`,
@@ -416,7 +429,6 @@ describe("army analytics route historical reads", () => {
     expect(query.get("category")).toBe("army-types");
     expect(query.has("lens")).toBe(false);
     const text = renderedText(html);
-    // Attacks only: the Armies view offers no Attacks/Defenses choice.
     expect(html).not.toContain('name="lens"');
     expect(text).toContain("Analytics Armies Unit usage");
     expect(html).toMatch(/aria-current="page"[^>]*>Armies</);
@@ -617,7 +629,6 @@ describe("army analytics route historical reads", () => {
       "100.0% ±0.0 pts points against the average 4 battles 40.0 ±0.0 against the average all 3 stars",
     );
 
-    // Unit usage has no trophies column.
     getArmyAnalytics.mockResolvedValue(view("troops", "usage-rate"));
     const units = await renderArmyRoute("season=current&category=troops");
     expect(units).not.toContain("average-trophies");
@@ -748,7 +759,6 @@ describe("army analytics route historical reads", () => {
     const html = await renderArmyRoute("season=current");
     expect(renderedText(html)).toContain("Days 23, 25–26 of 28");
     expect(renderedText(html)).toContain("Days not tracked: 1–22, 24.");
-    // There are no day fields to change; the page always reads the Season.
     expect(html).not.toContain('name="start_day"');
     expect(html).not.toContain('name="end_day"');
     const complete = await renderArmyRoute("season=current");
@@ -767,7 +777,6 @@ describe("army analytics route historical reads", () => {
     expect(text).not.toContain("These numbers cover");
     expect(text).not.toContain("Star rates show");
     expect(text).not.toContain("Full star breakdown");
-    // Only the record counts sit behind "How these are counted".
     expect(html.match(/<details.*?<\/details>/s)?.[0]).not.toContain("<p>");
   });
 
@@ -985,8 +994,8 @@ describe("army analytics player groups", () => {
 
   it("keeps the picker and explains a request that hits the 5-second limit", async () => {
     const actual = await vi.importActual<
-      typeof import("../../app/services/python.server")
-    >("../../app/services/python.server");
+      typeof import("../../app/services/army-analytics.server")
+    >("../../app/services/army-analytics.server");
     let reply: (response: ServerResponse) => void = () => {};
     const server = createServer((_request, response) => reply(response));
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -997,7 +1006,7 @@ describe("army analytics player groups", () => {
     process.env.CLASHLENS_PYTHON_API_URL = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 =
       "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
-    mocks.createPythonClient.mockImplementation(actual.createPythonClient);
+    mocks.createPythonClient.mockReturnValue(actual);
     const timeout = AbortSignal.timeout.bind(AbortSignal);
     const limit = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => timeout(100));
     const tooLong =
@@ -1103,11 +1112,9 @@ describe("army analytics attacks and season picker", () => {
     expect(first.match(/<option/g)).toHaveLength(1);
     expect(first).toContain(">This Season</option>");
 
-    // A later season lists each finished season the API reports.
     getArmySeasons.mockResolvedValue([SEASON]);
     const later = picker(await renderArmyRoute("season=current"));
     expect(later.match(/<option/g)).toHaveLength(2);
-    // Named by its first and last Legend days.
     expect(later).toContain(`value="${SEASON}">2 Aug – 29 Aug 2026</option>`);
 
     // A failed list still leaves the current season to pick.
@@ -1222,7 +1229,10 @@ describe("army analytics variant rows", () => {
             ...row("army-type:3", "Thrower", 8),
             typeId: 3,
             variants: [
-              { ...row("army-variant:3:3", "Revenge Thrower", 6), variantId: 3 },
+              {
+                ...row("army-variant:3:3", "Revenge Thrower", 6),
+                variantId: 3,
+              },
               { ...row("army-variant:3:0", "Other Thrower", 2), variantId: 0 },
             ],
           },

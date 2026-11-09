@@ -1,14 +1,48 @@
 import { createElement } from "react";
 import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import {
+  StaticRouterProvider,
   createMemoryRouter,
   createStaticHandler,
   createStaticRouter,
   data as dataWithStatus,
-  StaticRouterProvider,
 } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
+import { readAt } from "../../app/components/DashboardGrid";
+import { emptyDay, fight, linked } from "../fixtures/dashboard-data";
+vi.mock("../../app/services/python-transport.server", () => ({
+  requestJson: mocks.requestJson,
+}));
+vi.mock("../../app/services/leaderboard.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/leaderboard.server")>();
+  return {
+    ...actual,
+    getTrackedLeaderboard: async (
+      ...args: Parameters<typeof actual.getTrackedLeaderboard>
+    ) => mocks.createPythonClient().getTrackedLeaderboard(...args),
+  };
+});
+vi.mock("../../app/services/players.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/players.server")>();
+  return {
+    ...actual,
+    getPlayer: async (...args: Parameters<typeof actual.getPlayer>) =>
+      mocks.createPythonClient().getPlayer(...args),
+    getPlayerSeasons: async (...args: Parameters<typeof actual.getPlayerSeasons>) =>
+      mocks.createPythonClient().getPlayerSeasons(...args),
+  };
+});
+vi.mock("../../app/services/public-user.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/public-user.server")>();
+  return {
+    ...actual,
+    getPublicUser: async (...args: Parameters<typeof actual.getPublicUser>) =>
+      mocks.createPythonClient().getPublicUser(...args),
+  };
+});
 const mocks = vi.hoisted(() => ({
   getWebsiteConfig: vi.fn(),
   requireLogin: vi.fn(),
@@ -37,20 +71,15 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
   return {
     ...actual,
     createPythonClient: mocks.createPythonClient,
-    requestJson: mocks.requestJson,
   };
 });
 
-import { updatedAgo } from "../../app/components/DashboardParts";
-import { readAt } from "../../app/components/DashboardGrid";
+import { updatedAgo } from "../../app/lib/age-format";
 import { LegendClock, clockMarks } from "../../app/components/LegendClock";
 import { LegendDayCard } from "../../app/components/LegendDayCard";
 import { OpponentsCard } from "../../app/components/OpponentsCard";
-import App, { loader as rootLoader } from "../../app/root";
-import type { LinkedPlayerCard } from "../../app/lib/account-contracts";
 import type {
   CardId,
-  ClockBattle,
   DashboardSettings,
   OpponentRow,
   PlayerDay,
@@ -59,8 +88,8 @@ import {
   BASE_TROPHY_BAND,
   DEFAULT_LAYOUT,
   addableCards,
-  cardPlaces,
   baseStrength,
+  cardPlaces,
   defaultSettings,
   nextResetMs,
   parsePostedSettings,
@@ -69,41 +98,25 @@ import {
   shownCards,
 } from "../../app/lib/dashboard";
 import type { CardDataSet, CardReads } from "../../app/lib/dashboard-cards";
+import App, { loader as rootLoader } from "../../app/root";
+import type {
+  DashboardLoaderData,
+  DashboardActionData,
+} from "../../app/lib/dashboard-data";
 import DashboardRoute, {
   action,
   loader,
   shouldRevalidate,
-  type DashboardActionData,
-  type DashboardLoaderData,
 } from "../../app/routes/dashboard";
 import { loadWebsiteConfig } from "../../app/server/config.server";
 import { getPlayerToday } from "../../app/services/dashboard.server";
-import { PythonApiError } from "../../app/services/python.server";
+import { PythonApiError } from "../../app/services/python-response.server";
 
 const ORIGIN = "https://clashlens.example";
 const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" } as const;
 const IDEMPOTENCY_KEY = "3be934b5-68fa-4741-8c7b-e03592e4ad70";
 const MAIN = "#LQ2V8PJ0";
 const ALT = "#2PP8QLY0";
-
-function linked(
-  tag: string,
-  overrides: Partial<LinkedPlayerCard> = {},
-): LinkedPlayerCard {
-  return {
-    tag,
-    name: "Lens Main",
-    clan: null,
-    state: "tracking",
-    reason: null,
-    trophies: 5696,
-    seasonResetPending: false,
-    rank: 318,
-    league: null,
-    today: { net: 46, attacks: 5, defenses: 6 },
-    ...overrides,
-  };
-}
 
 /** Each card's data once its read finishes: the page answers before its cards. */
 async function settled(reads: CardReads): Promise<CardDataSet> {
@@ -146,42 +159,6 @@ const saveRequest = (settings: string, origin = ORIGIN) =>
   postRequest({ settings }, origin);
 const GROUP = "0f6c1d8e-7b2a-4c3d-9e5f-1a2b3c4d5e6f";
 const DEFAULT_SAVE = JSON.stringify({ v: 3, layout: "default" });
-
-function emptyDay(overrides: Partial<PlayerDay> = {}): PlayerDay {
-  return {
-    dayNumber: 16,
-    dayCount: 28,
-    battles: [],
-    complete: false,
-    net: null,
-    attacks: null,
-    defenses: null,
-    lastResetRank: null,
-    trophies: 5696,
-    observedAtMs: null,
-    battlesObservedAtMs: null,
-    openDefenses: null,
-    autoDefenseEach: null,
-    ...overrides,
-  };
-}
-
-function fight(
-  kind: ClockBattle["kind"],
-  hour: number,
-  minute: number,
-  stars: number,
-  trophyChange: number,
-): ClockBattle {
-  return {
-    at: Date.UTC(2026, 9, 7, hour, minute),
-    kind,
-    stars,
-    destruction: stars === 3 ? 100 : 80,
-    trophyChange,
-    opponent: "Opponent",
-  };
-}
 
 /** Render inside a data router, as the page does, for links and saves. */
 async function renderInRouter(element: ReturnType<typeof createElement>) {
@@ -482,7 +459,13 @@ describe("Legend day card", () => {
     const at = (minutes: number) => Date.UTC(2026, 9, 7, 9, 0) - minutes * 60_000;
     const range = { best: 95, worst: 760 };
     const data = (day: PlayerDay | null) =>
-      ({ player: linked(MAIN), day, range, rangeAtMs: at(9), nowMs: at(0) }) as const;
+      ({
+        player: linked(MAIN),
+        day,
+        range,
+        rangeAtMs: at(9),
+        nowMs: at(0),
+      }) as const;
     const updated = (day: PlayerDay | null) =>
       updatedAgo(readAt("legend-day", { ...data(day), projected: null }), at(0));
     expect(updated(null)).toBe("updated 9 min ago");
@@ -505,7 +488,12 @@ describe("Legend day card", () => {
   ) =>
     text(
       renderToStaticMarkup(
-        createElement(LegendDayCard, { player: linked(MAIN), day, range, projected }),
+        createElement(LegendDayCard, {
+          player: linked(MAIN),
+          day,
+          range,
+          projected,
+        }),
       ),
     );
 
@@ -795,9 +783,7 @@ describe("today read for the Legend day and Bases cards", () => {
     });
     expect(mocks.requestJson).toHaveBeenCalledWith(
       `/v1/players/${encodeURIComponent(MAIN)}/today`,
-      "GET",
-      undefined,
-      undefined,
+      { method: "GET" },
     );
   });
 
@@ -901,7 +887,11 @@ describe("dashboard route", () => {
     );
     mocks.requireLogin.mockResolvedValue(IDENTITY);
     mocks.readLoginIdentity.mockResolvedValue(IDENTITY);
-    account = { username: "nova88", displayName: "Nova", preferences: { other: 1 } };
+    account = {
+      username: "nova88",
+      displayName: "Nova",
+      preferences: { other: 1 },
+    };
     const unavailable = async () => {
       throw new PythonApiError(503, { error: "unavailable" });
     };
@@ -1060,7 +1050,11 @@ describe("dashboard route", () => {
     vi.useFakeTimers({ toFake: ["Date"], now: Date.UTC(2026, 9, 7, 4, 59, 59) });
     client.getPublicUser.mockImplementation(async () => {
       vi.setSystemTime(Date.UTC(2026, 9, 7, 5, 0, 1));
-      return { username: "nova88", displayName: "Nova", verifiedPlayers: [linked(MAIN)] };
+      return {
+        username: "nova88",
+        displayName: "Nova",
+        verifiedPlayers: [linked(MAIN)],
+      };
     });
     expect((await load()).dayEndsMs).toBe(Date.UTC(2026, 9, 7, 5));
   });
@@ -1352,7 +1346,6 @@ describe("dashboard page", () => {
       `aria-current="page" href="/?player=${encodeURIComponent(MAIN)}"`,
     );
     expect(html).toContain('href="/account/verify-player"');
-    // The player's name shows once, in its tab, cut with "…" and in full on hover.
     expect(html.match(/title="Lens Main"/g)).toHaveLength(1);
   });
 
@@ -1493,7 +1486,6 @@ describe("dashboard page", () => {
       plain.indexOf("Your Legend day, live"),
     );
     expect(plain).toContain("Your Legend day, live");
-    // One way in; Sign in stays in the header.
     expect(plain).toContain("Your Legend day, live Create account");
   });
 });

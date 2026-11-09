@@ -3,7 +3,7 @@ import { useRouteLoaderData } from "react-router";
 import { AnalyticsChoicesButton, useAnalyticsChoice } from "../components/Analytics";
 import { publicPageMeta } from "../lib/blog";
 import { DISCORD_INVITE_URL } from "../lib/discord";
-import type { RootLoaderData } from "../root";
+import type { RootLoaderData } from "../lib/root-data";
 import type { Route } from "./+types/privacy";
 
 export function meta({ matches }: Route.MetaArgs) {
