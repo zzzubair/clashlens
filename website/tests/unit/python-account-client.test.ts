@@ -441,6 +441,7 @@ describe("server-only Python account client", () => {
         username: "nova88",
         display_name: "Nova",
         verified_players: [],
+        calendar: CALENDAR,
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -451,6 +452,7 @@ describe("server-only Python account client", () => {
       username: "nova88",
       displayName: "Nova",
       verifiedPlayers: [],
+      calendar: CALENDAR,
     });
     const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
     expect(url).toEqual(new URL("/v1/users/nova88", "http://python-fixture.test/"));

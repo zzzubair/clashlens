@@ -724,6 +724,7 @@ describe("dashboard route", () => {
           linked(ALT, { name: "Lens Alt", state: "not_in_legend", trophies: null }),
           linked(MAIN),
         ],
+        calendar: CALENDAR,
       })),
       getPlayer: vi.fn(unavailable),
       getPlayerSeasons: vi.fn(unavailable),
@@ -872,19 +873,14 @@ describe("dashboard route", () => {
     expect(client.listGroups).not.toHaveBeenCalled();
   });
 
-  it("expires player tabs at the supplied Reset when no cards are requested", async () => {
-    mocks.requestJson.mockResolvedValue({
-      calendar: CALENDAR,
-      tag: MAIN,
-      rank_range: null,
-      open_defenses: null,
-      automatic_defense_each: null,
-      opponents: null,
-      board_computed_at: null,
-    });
+  it("expires player tabs at the players read's Reset, with no other read, when no cards are requested", async () => {
     const data = await load(`${ORIGIN}/?cards=`);
     expect(data.cards).toEqual({});
     expect(data.dayEndsMs).toBe(Date.parse(CALENDAR.day_end));
+    // Only the View as check every signed-in load makes; no Today read.
+    expect(mocks.requestJson.mock.calls.map(([path]) => path)).toEqual([
+      "/v1/account/view-as",
+    ]);
   });
 
   it("expires the day at Python's supplied Reset even when its reply arrives after", async () => {
@@ -910,6 +906,7 @@ describe("dashboard route", () => {
         username: "nova88",
         displayName: "Nova",
         verifiedPlayers: [linked(MAIN)],
+        calendar: CALENDAR,
       };
     });
     expect((await load()).dayEndsMs).toBe(Date.UTC(2026, 9, 7, 5));

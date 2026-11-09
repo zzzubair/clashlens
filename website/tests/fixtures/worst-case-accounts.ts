@@ -213,6 +213,7 @@ export function worstPublicUser(): PublicUser {
   return {
     username: WORST_USERNAME,
     displayName: WORST_DISPLAY_NAME,
+    calendar: CALENDAR,
     verifiedPlayers: [
       card(0, {}),
       card(1, {

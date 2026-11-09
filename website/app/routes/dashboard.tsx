@@ -23,7 +23,7 @@ import { SeasonStory } from "../components/SeasonStory";
 import { ViewAsBar, ViewAsForm } from "../components/ViewAs";
 import type { LinkedPlayerCard } from "../lib/account-contracts";
 import { publicPageMeta } from "../lib/blog";
-import type { PlayerPage, WebsiteErrorResponse } from "../lib/contracts";
+import type { Calendar, PlayerPage, WebsiteErrorResponse } from "../lib/contracts";
 import type { DashboardSettings } from "../lib/dashboard";
 import {
   ACCOUNT_CARDS,
@@ -121,8 +121,11 @@ export async function loader({ request }: Route.LoaderArgs) {
   const access = readViewAs(identity, query.get(VIEW_AS_PARAM));
   let players: LinkedPlayerCard[] = [];
   let playersUnavailable = false;
+  let playersCalendar: Calendar | null = null;
   try {
-    players = (await getPublicUser(account.username)).verifiedPlayers;
+    const publicUser = await getPublicUser(account.username);
+    players = publicUser.verifiedPlayers;
+    playersCalendar = publicUser.calendar;
   } catch {
     playersUnavailable = true;
   }
@@ -182,14 +185,6 @@ export async function loader({ request }: Route.LoaderArgs) {
     selected?.state === "not_in_legend" && selected.leftLegendI
       ? await getPlayer(selected.tag).catch(() => null)
       : null;
-  const emptyCalendar =
-    selected && Object.keys(cards).length === 0 && !leftPlayer
-      ? await import("../services/dashboard.server").then(({ getPlayerToday }) =>
-          getPlayerToday(selected.tag)
-            .then((read) => read.calendar)
-            .catch(() => null),
-        )
-      : null;
 
   const saved = query.get("saved");
   const idempotencyKey = freshIdempotencyKey();
@@ -223,8 +218,8 @@ export async function loader({ request }: Route.LoaderArgs) {
         }
         return leftPlayer
           ? Date.parse(leftPlayer.calendar.day_end)
-          : emptyCalendar
-            ? Date.parse(emptyCalendar.day_end)
+          : playersCalendar
+            ? Date.parse(playersCalendar.day_end)
             : Number.POSITIVE_INFINITY;
       })(),
       leftPlayer,

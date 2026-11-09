@@ -124,12 +124,13 @@ describe("Python account response mappers", () => {
         trophies: 4684,
       },
     };
-    const user = { username: "nova", display_name: "Nova" };
+    const user = { username: "nova", display_name: "Nova", calendar: CALENDAR };
     expect(
       mapPublicUser({ ...user, verified_players: [card, season0, notInLegend] }),
     ).toEqual({
       username: "nova",
       displayName: "Nova",
+      calendar: CALENDAR,
       verifiedPlayers: [
         {
           tag: "#2PP",
@@ -187,6 +188,10 @@ describe("Python account response mappers", () => {
     ]) {
       expect(mapPublicUser({ ...user, verified_players: [broken] })).toBeNull();
     }
+    // The cards' today numbers need the day they were read in.
+    expect(
+      mapPublicUser({ ...user, calendar: undefined, verified_players: [] }),
+    ).toBeNull();
   });
 
   it("rejects malformed summary and public user payloads", () => {

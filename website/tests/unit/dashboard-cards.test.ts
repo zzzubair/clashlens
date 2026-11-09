@@ -471,6 +471,7 @@ function answer(url: URL): [status: number, body: unknown] {
       {
         username: "nova88",
         display_name: "Nova",
+        calendar: CALENDAR,
         // The linked list holds an older reading than the player page's 5,370.
         verified_players: [
           linked(MAIN, { trophies: 5360 }),
