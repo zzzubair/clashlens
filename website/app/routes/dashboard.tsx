@@ -197,31 +197,21 @@ export async function loader({ request }: Route.LoaderArgs) {
       selectedTag: selected?.tag ?? null,
       settings,
       cards,
+      // The earliest Reset among the reads shown: each was read for its own
+      // Legend day, and the page must not show any of them past theirs.
       dayEndsMs: (() => {
-        const reads = Object.values(cards);
-        for (const value of reads) {
-          if (
-            value &&
-            !(value instanceof Promise) &&
-            "calendar" in value &&
-            value.calendar
-          )
-            return Date.parse(value.calendar.day_end);
-          if (
-            value &&
-            !(value instanceof Promise) &&
-            "dayEndMs" in value &&
-            typeof value.dayEndMs === "number"
-          )
-            return value.dayEndMs;
-          if (value && !(value instanceof Promise) && "day" in value && value.day)
-            return value.day.dayEndMs;
+        const ends: number[] = [];
+        for (const value of Object.values(cards)) {
+          if (!value || value instanceof Promise) continue;
+          if ("calendar" in value && value.calendar)
+            ends.push(Date.parse(value.calendar.day_end));
+          else if ("dayEndMs" in value && typeof value.dayEndMs === "number")
+            ends.push(value.dayEndMs);
+          else if ("day" in value && value.day) ends.push(value.day.dayEndMs);
         }
-        return leftPlayer
-          ? Date.parse(leftPlayer.calendar.day_end)
-          : playersCalendar
-            ? Date.parse(playersCalendar.day_end)
-            : Number.POSITIVE_INFINITY;
+        if (leftPlayer) ends.push(Date.parse(leftPlayer.calendar.day_end));
+        if (playersCalendar) ends.push(Date.parse(playersCalendar.day_end));
+        return Math.min(Number.POSITIVE_INFINITY, ...ends);
       })(),
       leftPlayer,
       idempotencyKey,

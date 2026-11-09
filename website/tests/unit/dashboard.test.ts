@@ -912,6 +912,38 @@ describe("dashboard route", () => {
     expect((await load()).dayEndsMs).toBe(Date.UTC(2026, 9, 7, 5));
   });
 
+  it("expires at the players read's Reset when a card was read after it", async () => {
+    // The tabs were read at 04:59:59; Today answered at 05:00:01, for the new day.
+    mocks.requestJson.mockResolvedValue({
+      calendar: {
+        ...CALENDAR,
+        as_of: "2026-10-07T05:00:01Z",
+        day_start: "2026-10-07T05:00:00Z",
+        day_end: "2026-10-08T05:00:00Z",
+        day_number: 3,
+      },
+      tag: MAIN,
+      rank_range: null,
+      open_defenses: null,
+      automatic_defense_each: null,
+      opponents: null,
+      board_computed_at: null,
+    });
+    client.getPublicUser.mockResolvedValue({
+      username: "nova88",
+      displayName: "Nova",
+      verifiedPlayers: [linked(MAIN)],
+      calendar: {
+        ...CALENDAR,
+        as_of: "2026-10-07T04:59:59Z",
+        day_start: "2026-10-06T05:00:00Z",
+        day_end: "2026-10-07T05:00:00Z",
+        day_number: 2,
+      },
+    });
+    expect((await load()).dayEndsMs).toBe(Date.UTC(2026, 9, 7, 5));
+  });
+
   it("shows the front page to a sign-in with no account yet", async () => {
     client.getAccount.mockRejectedValue(
       new PythonApiError(404, { error: "account_not_found" }),
