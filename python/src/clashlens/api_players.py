@@ -774,7 +774,7 @@ def list_player_seasons(
                 "source": "tracked_summary",
                 "official_history": None,
                 "_sort_start": row[7],
-                **summary_bounds_payload(row[7], row[9]),
+                **summary_bounds_payload(text_value(row[0]), row[7], row[9]),
             }
             for row in rows
         }
@@ -796,7 +796,9 @@ def list_player_seasons(
                 "source": "official_league_history",
                 "official_history": _official_history_payload(history),
                 "_sort_start": history["season_start"],
-                **summary_bounds_payload(history["season_start"], history["season_end"]),
+                **summary_bounds_payload(
+                    season_id, history["season_start"], history["season_end"]
+                ),
             }
         ordered = sorted(
             seasons.values(),
@@ -913,7 +915,9 @@ def get_player_season_summary(
             "kind": "player-season-summary",
             "tag": normalized_tag,
             "official_season_id": official_season_id,
-            **summary_bounds_payload(history["season_start"], history["season_end"]),
+            **summary_bounds_payload(
+                official_season_id, history["season_start"], history["season_end"]
+            ),
             "start_trophies": None,
             "end_trophies": history["eod_trophies"],
             "final_rank": final_rank,

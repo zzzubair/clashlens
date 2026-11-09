@@ -17,6 +17,7 @@ from domain_test_support import domain_database, store_observation
 
 from clashlens import api_players, reconciliation_db
 from clashlens.api_db import ApiDatabase
+from clashlens.api_player_presentation import summary_bounds_payload
 from clashlens.db import Database
 from clashlens.domain import SEASON_ANCHOR_RULE_VERSION
 from clashlens.reconciliation import ReconciliationResult
@@ -458,6 +459,8 @@ def test_partial_season_marks_missing_and_null_boundaries(database_url: str) -> 
             # Day 1 evidence is absent, so no season start boundary.
             assert summary["start_trophies"] is None
             assert summary["season_start"] is None
+            # This test Season's id is not a Monday 05:00 Reset, so only the
+            # missing saved dates are left to show.
             for public in (api_players.get_player_season_summary(database, "#2PP", SEASON),
                            api_players.list_player_seasons(database, "#2PP")[0]):
                 assert public["season_start"] is None
@@ -469,6 +472,17 @@ def test_partial_season_marks_missing_and_null_boundaries(database_url: str) -> 
         finally:
             database.close()
 
+
+
+def test_a_summary_without_saved_dates_is_dated_from_its_season_id() -> None:
+    # Two thirds of production summaries have no saved start or end; the
+    # website dated them from the id, the Season's first Reset.
+    assert summary_bounds_payload("1791176400", None, None) == {
+        "season_start": "2026-10-05T05:00:00+00:00",
+        "season_end": "2026-11-02T05:00:00+00:00",
+        "last_day_start": "2026-11-01T05:00:00+00:00",
+        "day_count": 28,
+    }
 
 def test_complete_requires_clean_days_flags_and_boundaries(database_url: str) -> None:
     cases = [
