@@ -96,6 +96,13 @@ def test_goal_and_windows_from_fourteen_real_worker_boards(database_url, archive
         assert len(season_days(page)) == 15
         no_goal = served_player(story, you, day(15) + timedelta(hours=2))
         assert "dashboard_goal" not in no_goal["screen_ready"]
+        # The player page asks for none of the Dashboard's facts and gets
+        # the same day, Season and battle facts without them.
+        plain = served_player(story, you, day(15) + timedelta(hours=2), dashboard=False)["screen_ready"]
+        assert not {"rival_season", "dashboard_season", "dashboard_windows", "dashboard_goal"} & set(plain)
+        for key in ("battle_statistics", "season_shape", "trophy_trends", "history_day_starts"):
+            assert plain[key] == ready[key]
+        assert [saved["presentation"] for saved in plain["days"]] == [saved["presentation"] for saved in ready["days"]]
         assert [story.saved_day(you, day(number)) for number in range(1, 15)] == before
 
 
