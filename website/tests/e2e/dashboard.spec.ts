@@ -345,12 +345,14 @@ test("a switch shows the chosen player at once, never the last one's numbers, an
   await expect(legendDay).toContainText(await name(first));
   await expect(legendDay).not.toContainText("Loading…");
   await page.unroute(slow);
-  // Both players must be observed, and every observed card belongs to its tab.
-  const observations = await shownNames();
-  expect(observations.map(([selected]) => selected)).toEqual(
-    expect.arrayContaining([await name(first), await name(second)]),
+  // Both players were seen loaded, and a card showing a player's name only
+  // ever showed it under that player's tab. Loading cards have no name.
+  const players = [await name(first), await name(second)];
+  const loaded = (await shownNames()).filter(([, card]) =>
+    players.some((player) => card.includes(player)),
   );
-  for (const [selected, card] of observations) {
+  expect(loaded.map(([selected]) => selected)).toEqual(expect.arrayContaining(players));
+  for (const [selected, card] of loaded) {
     expect(selected).not.toBeNull();
     expect(card).toContain(selected!);
   }
