@@ -102,7 +102,6 @@ def load_candidates(
 def add_command(
     subparsers: Any, database_argument: Callable[[argparse.ArgumentParser], None]
 ) -> None:
-    """Add the ``load-promotion-candidates`` command to the CLI."""
     command = subparsers.add_parser(
         "load-promotion-candidates",
         help="add Legend II and III players from a CSV on standard input to the Monday promotion list (collector database role)",

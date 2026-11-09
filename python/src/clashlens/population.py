@@ -48,7 +48,6 @@ from .domain import ranked_day_for
 def add_command(
     subparsers: Any, database_argument: Callable[[argparse.ArgumentParser], None]
 ) -> None:
-    """Add the ``population-status`` command to the CLI."""
     command = subparsers.add_parser(
         "population-status",
         help="count tracked, waiting and unavailable players and pending eligibility checks (collector database role)",

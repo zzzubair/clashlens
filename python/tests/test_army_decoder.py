@@ -17,14 +17,12 @@ def test_fixture_decodes_exactly() -> None:
     assert ("troop:58", 2) in home
     assert ("troop:97", 1) in home
     assert len(home) == 2
-    # no cc troops, no siege
     assert len(result.cc_troops) == 0
     assert len(result.siege) == 0
     # spells: pooled s and d, but raw origin preserved
     pooled = {(f.typed_id, f.quantity, f.origin) for f in result.spells}
     # should have Rage 2 home, Recall 1 cc
     assert ("spell:2", 2, "home") in pooled
-    # check via raw
     assert any(
         f.typed_id == "spell:2" and f.quantity == 2 and f.origin == "home"
         for f in result.home_spells_raw
@@ -33,18 +31,14 @@ def test_fixture_decodes_exactly() -> None:
         f.typed_id == "spell:53" and f.quantity == 1 and f.origin == "clan_castle"
         for f in result.cc_spells_raw
     )
-    # pooled includes both
     assert len(result.spells) == 2
-    # hero
     assert len(result.heroes) == 1
     h = result.heroes[0]
     assert h.hero_typed_id == "hero:0"
     assert h.pet_typed_id == "pet:9"
     assert set(h.equipment_typed_ids) == {"equipment:14", "equipment:32"}
-    # absent items not inferred
     assert all(f.typed_id != "troop:0" for f in result.home_troops)
     assert result.decoder_version == DECODER_VERSION
-    # identity excludes cc troops/siege
     assert result.identity_hash is not None
 
 
@@ -54,7 +48,6 @@ def test_missing_and_empty_code_remain_canonical_but_fail_decode() -> None:
         assert result.category == cat
         assert result.decoder_version == DECODER_VERSION
 
-    # parser keeps battle valid
     for payload_code in [None, ""]:
         body = json.dumps(
             {
@@ -177,7 +170,6 @@ def test_changing_only_siege_or_cc_troops_does_not_change_identity() -> None:
     )  # adds CC troop Barbarian
     assert base.identity_hash == with_siege.identity_hash
     assert base.identity_hash == with_cc.identity_hash
-    # but siege fact preserved
     assert len(with_siege.siege) == 1
     assert with_siege.siege[0].typed_id == "troop:51"
     assert len(with_cc.cc_troops) == 1
@@ -188,7 +180,6 @@ def test_home_and_cc_spells_pool_while_origin_recoverable() -> None:
     assert len(r.spells) == 2
     assert any(f.origin == "home" for f in r.spells)
     assert any(f.origin == "clan_castle" for f in r.spells)
-    # pooled for identity
     assert len(r.home_spells_raw) == 1
     assert len(r.cc_spells_raw) == 1
 
@@ -215,7 +206,6 @@ def test_siege_extraction_preserves_origin_combined() -> None:
     cc_siege = decode_army_share_code("i1x51")
     assert home_siege.siege[0].origin == "home"
     assert cc_siege.siege[0].origin == "clan_castle"
-    # both have same typed_id but origin different
 
 
 def test_unnamed_ids_are_saved_in_every_section() -> None:
@@ -245,7 +235,6 @@ def test_malformed_and_partial_invalidate() -> None:
     for code in ["u1x", "u1x58-", "h0p9e14_32z", "u1x58-2x", "h0p9e", "u", "h"]:
         r = decode_army_share_code(code)
         assert hasattr(r, "category")
-    # empty code already tested elsewhere
     assert decode_army_share_code("").category == "empty_army_share_code"
 
 

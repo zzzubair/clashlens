@@ -637,7 +637,6 @@ class Database:
 
             rows = [] if job_ids is None else claim(limit, job_ids=job_ids, planned=planned)
             if job_ids is None or (not rows and planned):
-                # Backfill fills only what live work leaves, as its mode allows.
                 rows = background_pacing.claim_background(
                     connection, "python_processing_jobs_worker", claim(limit, planned=planned, backfill=()), limit, claim,
                     held=hold, planned=planned, work_types=work_types, reset_first=reset_first)

@@ -59,7 +59,6 @@ log = logging.getLogger("clashlens.bot.alerts")
 # Battles saved, or confirmations asked for, longer ago than this are never
 # sent, nor tried again.
 WINDOW = timedelta(minutes=15)
-# How often the loop looks for new battles.
 INTERVAL_SECONDS = 10.0
 # The wait before trying again a DM Discord could not take, doubling with
 # each try up to the longest.
@@ -242,7 +241,6 @@ class Delivery:
     # When its `WINDOW` started: the battle saved, or the confirmation asked for.
     since: datetime
     reply: Reply
-    # The attack, for an attack alert, whose picture is added once delivered.
     alert: dict[str, Any] | None = None
     # Its delivery log id once claimed (logged SENDING), also the nonce of
     # every try, and the loop's clock time then, just before its first try.

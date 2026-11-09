@@ -70,7 +70,6 @@ class MemberStatus(StrEnum):
     MALFORMED = "malformed"
 
 
-# Every member status, as an SQL list.
 MEMBER_STATUSES_SQL = ",".join(f"'{status}'" for status in MemberStatus)
 
 
@@ -99,7 +98,6 @@ class CorrectionState(StrEnum):
     TERMINAL = "terminal"
 
 
-# A day result a correction may carry into a board.
 SETTLED_DAY_STATES = frozenset({
     "Complete", "Partial", "Failed", "Missing", "Unavailable", "Inconsistent", "Malformed",
 })

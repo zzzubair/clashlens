@@ -149,7 +149,6 @@ def test_the_day_before_loss_settles_through_the_next_days_start() -> None:
 
 
 def test_calculating_a_day_again_from_the_same_evidence_gives_the_same_result() -> None:
-    # A retried or restarted calculation saves the same version.
     data = _input(next_start_trophies=6010, end_baseline_evidence=RESET_AT,
                   readings=(Reading(DAY.end + timedelta(minutes=20), 5940),))
     assert reconcile_ranked_day(data) == reconcile_ranked_day(data)

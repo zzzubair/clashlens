@@ -338,7 +338,7 @@ def get_public_user(
         ).fetchone()
         if account is None:
             return None
-        # One read gives every linked player's card, never one per player.
+        # Initial profile and day reads are batched; lookup evidence is read per player.
         cards = api_players.player_cards(
             connection,
             api_players.linked_players(connection, int(account[0])),

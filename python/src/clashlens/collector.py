@@ -102,7 +102,6 @@ class Collector:
         # it running. None runs none, as in tests.
         self.uploads = uploads
         self.battle_logs = BattleLogSchedule()
-        # Players an open OBS overlay shows, read again every few seconds.
         self.overlay_players = partial(collector_overlays.players_in_use, database)
         self._overlays: list[tuple[int, str]] = []
         self._overlays_after = 0.0

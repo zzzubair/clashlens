@@ -70,9 +70,7 @@ from .store import Store, link_colours
 
 log = logging.getLogger("clashlens.bot.summaries")
 
-# Accounts read in one round.
 BATCH = 10
-# How often the loop looks for summaries due.
 SUMMARY_SECONDS = 60.0
 
 # Where an account's summary, or one of its DMs, is still due: before the
@@ -137,7 +135,6 @@ class Summary:
     discord_user_id: str
     reset: datetime
     parts: list[tuple[Reply, tuple[str, ...]]]
-    # Its delivery log id once claimed.
     id: int = 0
 
     @property
@@ -193,7 +190,6 @@ class Summaries:
             board = _board(connection, reset)
             if board is None:
                 return []
-            # The Daily board of the Reset before, for each place moved.
             previous = _board(connection, reset - timedelta(days=1))
             accounts = connection.execute(
                 """

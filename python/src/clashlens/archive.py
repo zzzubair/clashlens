@@ -21,7 +21,6 @@ from .spool import Spool, SpoolError
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _GENERATION_RE = re.compile(r"^[0-9a-f]{32}$")
 _S3_CODE_RE = re.compile(r"^[A-Za-z0-9.]{1,64}$")
-# A marker check's result is reused this long.
 MARKER_CHECK_SECONDS = 300.0
 # A marker check that failed for a reason that may pass is tried again this
 # soon: one caller asks the archive while the others wait for its answer.
@@ -108,7 +107,6 @@ class ArchiveReadError(RuntimeError):
         super().__init__(f"{category}: {message}")
         self.category = category
         self.retryable = retryable
-        # The step that was running, when the caller knows it.
         self.stage: str | None = None
 
 
@@ -599,7 +597,6 @@ class SpoolFirstReader:
             free_inode_floor=free_inode_floor,
         )
         self.stage_metrics = stage_metrics
-        # Measured evidence counters for bounded capacity measurements.
         self._counters = {
             "local_hits": 0, "local_misses": 0, "repairs": 0, "provider_errors": 0,
         }

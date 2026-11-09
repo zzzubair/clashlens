@@ -641,7 +641,6 @@ def get_army_analytics(
                         if population.startswith("top-")
                         else map(int, population.removeprefix("band-").split("-"))
                     )
-                    # Players in the range on any selected day's board.
                     cohort_players, stale_or_uncertain_members = connection.execute(
                         """
                         SELECT count(DISTINCT player_id),

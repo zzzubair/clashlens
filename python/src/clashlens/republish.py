@@ -34,7 +34,6 @@ def add_republish_command(
     database_argument: Callable[[argparse.ArgumentParser], None],
     bounded_int: Callable[[str, int, int], Callable[[str], int]],
 ) -> None:
-    """Add the ``republish-current-season`` command to the CLI."""
     republish_current_season = subparsers.add_parser(
         "republish-current-season",
         help="queue a bounded batch of current-season ranked-day republications",

@@ -49,7 +49,6 @@ KEEP_PULLS = timedelta(days=28)
 SWITCHED_SHARE = 0.25
 REQUEST_SECONDS = 0.5
 TICK_SECONDS = 15.0
-# How often published boards are checked for a new version to score.
 SCORE_SECONDS = 600.0
 _DAY = timedelta(days=1)
 
@@ -652,7 +651,6 @@ async def run(collector: Collector, stop_requested: asyncio.Event) -> None:
 def add_command(
     subparsers: Any, database_argument: Callable[[argparse.ArgumentParser], None]
 ) -> None:
-    """Add the ``game-ranking-score`` command to the CLI."""
     command = subparsers.add_parser(
         "game-ranking-score",
         help="print the Daily board's score against the game's ranking lists (collector database role)",

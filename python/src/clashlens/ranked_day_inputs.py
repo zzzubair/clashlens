@@ -554,7 +554,6 @@ def load_unreadable_report_times(
     return times
 
 
-# Each response's latest processing outcome, and the profile it produced.
 _OUTCOME = """
     LEFT JOIN LATERAL (
         SELECT outcome, parser_version FROM observation_processing_outcomes

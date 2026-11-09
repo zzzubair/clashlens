@@ -232,15 +232,12 @@ class FakeInteraction:
             {
                 "private": bool(message.get("ephemeral")),
                 "edited": edited,
-                # Every line the message shows, in order.
                 "text": "\n\n".join(
                     item.content for item in items if isinstance(item, discord.ui.TextDisplay)
                 ),
-                # Each card's coloured edge.
                 "colours": [
                     item.accent_colour for item in items if isinstance(item, discord.ui.Container)
                 ],
-                # Each text, picture and line in the cards, in order.
                 "shown": [
                     "picture" if isinstance(item, discord.ui.MediaGallery)
                     else "line" if isinstance(item, discord.ui.Separator)
@@ -613,7 +610,6 @@ def test_autocomplete_that_ran_out_of_time_waiting_never_reads(store, monkeypatc
 
     async def go() -> None:
         app = DiscordApp(Commands(store, SITE, now=lambda: NOW))
-        # Every read place busy with other work.
         for _ in range(discord_app.READ_SLOTS):
             await app._slots.acquire()
         assert await app.any_player_choices(FakeInteraction(), "") == []

@@ -4,8 +4,8 @@ A player first tracked after a Reset has no reading from it. Their first
 battle log still holds every battle back to its oldest row, each with its own
 time, so it can stand in for the missing Reset battle log, and the battles it
 holds from earlier days of the Season give those days a result too. Days
-built this way keep every usual day rule; a start from the Season rule stays
-"inferred", never "exact".
+built this way keep every usual day rule; a start from the Season rule is
+known exactly, while the other evidence still decides the day's confidence.
 """
 
 from __future__ import annotations
