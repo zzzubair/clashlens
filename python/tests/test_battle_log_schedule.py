@@ -613,11 +613,25 @@ def test_corrected_older_row_still_marks_the_opponent(age: timedelta) -> None:
     assert state.due(OPPONENT, now + timedelta(seconds=92))
 
 
-def test_row_with_an_unusable_date_is_skipped_without_raising() -> None:
+@pytest.mark.parametrize(
+    "unusable",
+    [
+        {"battleTimestamp": "00010101T000000.000Z"},
+        # Before year 1 once moved to UTC.
+        {"battleTimestamp": "0001-01-01T00:00:00+01:00"},
+        # Past Python's integer digit limit.
+        {"battleTimestamp": None, "battleTime": "9" * 4301},
+    ],
+)
+def test_row_with_an_unusable_date_is_skipped_without_raising(unusable: dict) -> None:
     state = _Schedule()
     now = state.settle(TAG)
     state.settle(OPPONENT)
-    ancient = _battle(OPPONENT, now) | {"battleTimestamp": "00010101T000000.000Z"}
+    ancient = {
+        key: value
+        for key, value in (_battle(OPPONENT, now) | unusable).items()
+        if value is not None
+    }
     valid = _battle(OPPONENT, now - timedelta(seconds=20))
 
     assert not state.log(TAG, now, ancient, valid)

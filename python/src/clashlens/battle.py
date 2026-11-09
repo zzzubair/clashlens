@@ -348,11 +348,18 @@ def _battle_timestamp_value(source: dict[str, Any], parser_version: str) -> Any:
             # fought in 1970. Only an archived date still stands in, as text
             # or as a plausible number of seconds since 1970, in digits or not.
             fallback = source.get("battleTime")
-            number = (
-                int(fallback)
-                if isinstance(fallback, str) and fallback.isascii() and fallback.isdigit()
-                else fallback
-            )
+            try:
+                number = (
+                    int(fallback)
+                    if isinstance(fallback, str)
+                    and fallback.isascii()
+                    and fallback.isdigit()
+                    else fallback
+                )
+            except ValueError as error:  # past Python's integer digit limit
+                raise BattleLogParseError(
+                    "invalid_battle_timestamp", "battleTime is not a usable number"
+                ) from error
             value = (
                 fallback
                 if isinstance(number, str)
@@ -430,7 +437,12 @@ def _parse_battle_timestamp(value: Any, parser_version: str) -> datetime:
         raise BattleLogParseError(
             "invalid_battle_timestamp", "battleTime must include a UTC offset"
         )
-    return parsed.astimezone(UTC)
+    try:
+        return parsed.astimezone(UTC)
+    except OverflowError as error:  # e.g. 0001-01-01 with a positive offset
+        raise BattleLogParseError(
+            "invalid_battle_timestamp", "battle date is outside the calendar"
+        ) from error
 
 
 def _required_int(source: dict[str, Any], key: str) -> int:
