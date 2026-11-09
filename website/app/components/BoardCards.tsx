@@ -89,7 +89,8 @@ export function GoalCard({ data }: { data: GoalData }) {
   }
   const days = `${data.window} day${data.window === 1 ? "" : "s"}`;
   // Days off picked (none at first) set the trophies a day needed and the verdict.
-  const picked = plan.shields.find((item) => item.days === shield);
+  const picked =
+    shield === 0 ? undefined : plan.shields.find((item) => item.days === shield);
   const need = picked?.need ?? plan.need;
   const status = !picked
     ? plan.status
@@ -103,7 +104,7 @@ export function GoalCard({ data }: { data: GoalData }) {
   return (
     <>
       {head(
-        plan.shields.length > 0 ? (
+        plan.shields.some((item) => item.days > 0) ? (
           <SkipPlan
             days={skip}
             options={plan.shields.map((item) => item.days)}

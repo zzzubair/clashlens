@@ -1,14 +1,5 @@
-import DOMAIN from "../../../testdata/w6-domain-contract.json";
 vi.mock("../../app/services/python-transport.server", () => ({
-  requestJson: (...args: unknown[]) =>
-    args[0] === "/v1/account/crews" && (args[1] as { method?: string })?.method === "GET"
-      ? Promise.resolve({
-          kind: "crew-list",
-          crews: [],
-          max_crews: 5,
-          limits: DOMAIN.crews,
-        })
-      : mocks.requestJson(...args),
+  requestJson: mocks.requestJson,
 }));
 vi.mock("../../app/services/public-user.server", async (importOriginal) => {
   const actual =
@@ -303,9 +294,7 @@ describe("refusal messages", () => {
     ["invite_not_found", {}, "That link is already off or expired."],
     ["invite_invalid", {}, "This invite link has expired or was turned off."],
   ])("%s with %o reads %j", (code, details, message) => {
-    expect(crewRefusal(code, details, { maxCrews: 5, limits: DOMAIN.crews })).toBe(
-      message,
-    );
+    expect(crewRefusal(code, details)).toBe(message);
   });
 
   it("names no account when the refusal doesn't say which, and has no message for other codes", () => {
@@ -607,6 +596,35 @@ describe("edit crew", () => {
       post(`/crews/${CREW_ID}/settings`, fields, { crewId: CREW_ID }) as never,
     );
 
+  it("loads settings when the single Crew read succeeds and the Crew list fails", async () => {
+    mocks.requestJson.mockImplementation(async (path: string) => {
+      if (path === `/v1/account/crews/${CREW_ID}`) return crewPayload();
+      throw new PythonApiError(503, { error: "unavailable" });
+    });
+    const result = unwrap<{ crew: unknown; error: unknown }>(
+      await settingsLoader(
+        get(`/crews/${CREW_ID}/settings`, { crewId: CREW_ID }) as never,
+      ),
+    );
+    expect(result.data.error).toBeNull();
+    expect(result.data.crew).not.toBeNull();
+    expect(mocks.requestJson).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["crew_limit_reached", "invalid_crew_size"])(
+    "keeps the %s refusal when the Crew list is down",
+    async (code) => {
+      mocks.requestJson.mockRejectedValue(new PythonApiError(422, { error: code }));
+      const result = unwrap<Answer>(await settings({ intent: "resize", size: "12" }));
+      expect(result.data.error).toBe(
+        code === "crew_limit_reached"
+          ? "You're already in 5 crews, the most you can be in."
+          : "Places must be from 2 to 100.",
+      );
+      expect(mocks.requestJson).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("won't make the crew smaller than the places in use", async () => {
     mocks.requestJson.mockRejectedValue(
       new PythonApiError(422, { error: "crew_size_below_used", used: 4 }),
@@ -796,7 +814,27 @@ describe("join by invite", () => {
   ])("shows %o as %j", async (overrides, text) => {
     mocks.requestJson.mockResolvedValue(invitePayload(overrides));
     expect(await render(`/crews/join/${CODE}`, joinRoute)).toContain(text);
+    if ("state" in overrides && overrides.state === "limit")
+      expect(mocks.requestJson).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["crew_limit_reached", "invalid_crew_size"])(
+    "keeps a refused Join's %s message without reading the Crew list",
+    async (code) => {
+      mocks.requestJson.mockRejectedValue(new PythonApiError(422, { error: code }));
+      const result = unwrap<{ error: unknown }>(
+        await joinAction(
+          post(`/crews/join/${CODE}`, { "join:#2PP": "on" }, { code: CODE }) as never,
+        ),
+      );
+      expect(result.data.error).toBe(
+        code === "crew_limit_reached"
+          ? "You're already in 5 crews, the most you can be in."
+          : "Places must be from 2 to 100.",
+      );
+      expect(mocks.requestJson).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("says a link that doesn't work doesn't work, and an ended one has ended", async () => {
     mocks.requestJson.mockResolvedValueOnce({

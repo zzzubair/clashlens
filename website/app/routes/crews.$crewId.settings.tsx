@@ -7,7 +7,7 @@ import { ErrorNotice } from "../components/ErrorNotice";
 import { LocalTimestamp } from "../components/Provenance";
 import "../crews.css";
 import { isInappropriateName, normalizeGroupName } from "../lib/account-validation";
-import { type Crew } from "../lib/crew-contracts";
+import { MAX_CREW_SIZE, MIN_CREW_SIZE, type Crew } from "../lib/crew-contracts";
 import { isCanonicalUuid } from "../lib/validation";
 import type { Route } from "./+types/crews.$crewId.settings";
 
@@ -24,15 +24,10 @@ export const handle: BackHandle = {
 /** GET /crews/:crewId/settings — Edit crew: name, places, links, owner. */
 export async function loader({ request, params }: Route.LoaderArgs) {
   const { loadCrew } = await import("../services/crews.server");
-  const loaded = await loadCrew(request, params.crewId, false, true);
+  const loaded = await loadCrew(request, params.crewId, false);
   const { freshIdempotencyKey } = await import("../server/actions.server");
   return data(
-    {
-      capacity: loaded.capacity,
-      crew: loaded.crew,
-      error: loaded.error,
-      idempotencyKey: freshIdempotencyKey(),
-    },
+    { crew: loaded.crew, error: loaded.error, idempotencyKey: freshIdempotencyKey() },
     { status: loaded.error ? 503 : 200, headers: NO_STORE },
   );
 }
@@ -70,16 +65,10 @@ export async function action({ request, params }: Route.ActionArgs) {
         return { notice: "Name saved." };
       }
       if (intent === "resize") {
-        const { listCrews } = await import("../services/crews.server");
-        const capacity = await listCrews(identity);
         const size = Number(fields["size"]);
-        if (
-          !Number.isInteger(size) ||
-          size < capacity.limits.min_size ||
-          size > capacity.limits.max_size
-        ) {
+        if (!Number.isInteger(size) || size < MIN_CREW_SIZE || size > MAX_CREW_SIZE) {
           return {
-            error: `Places must be a whole number from ${capacity.limits.min_size} to ${capacity.limits.max_size}.`,
+            error: `Places must be a whole number from ${MIN_CREW_SIZE} to ${MAX_CREW_SIZE}.`,
           };
         }
         await updateCrew(identity, crewId, { size }, key(String(size)));
@@ -109,15 +98,10 @@ export async function action({ request, params }: Route.ActionArgs) {
 }
 
 export default function CrewSettingsRoute() {
-  const {
-    crew,
-    capacity,
-    error,
-    idempotencyKey: loadedKey,
-  } = useLoaderData<typeof loader>();
+  const { crew, error, idempotencyKey: loadedKey } = useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
   const sizeInput = useRef<HTMLInputElement>(null);
-  if (crew === null || capacity === null) {
+  if (crew === null) {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell narrow-shell crew-page">
         <h1>Crew unavailable</h1>
@@ -134,14 +118,12 @@ export default function CrewSettingsRoute() {
     );
   }
   const key = result?.idempotencyKey ?? loadedKey;
-  const smallest = Math.max(capacity.limits.min_size, crew.used);
+  const smallest = Math.max(MIN_CREW_SIZE, crew.used);
   const step = (by: number) => {
     const input = sizeInput.current;
     if (input === null) return;
     const current = Number(input.value) || crew.size;
-    input.value = String(
-      Math.min(capacity.limits.max_size, Math.max(smallest, current + by)),
-    );
+    input.value = String(Math.min(MAX_CREW_SIZE, Math.max(smallest, current + by)));
   };
   const others = crew.members.filter((member) => !member.you);
   const hidden = (intent: string) => (
@@ -195,7 +177,7 @@ export default function CrewSettingsRoute() {
               type="number"
               inputMode="numeric"
               min={smallest}
-              max={capacity.limits.max_size}
+              max={MAX_CREW_SIZE}
               required
               defaultValue={crew.size}
               key={crew.size}
@@ -211,7 +193,7 @@ export default function CrewSettingsRoute() {
             </button>
           </div>
           <p id="crew-size-help" className="form-help">
-            {crew.used} in use, so {smallest} to {capacity.limits.max_size}
+            {crew.used} in use, so {smallest} to {MAX_CREW_SIZE}
           </p>
         </div>
         <button type="submit" className="button secondary">

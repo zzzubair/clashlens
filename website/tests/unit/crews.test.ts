@@ -1,14 +1,5 @@
-import DOMAIN from "../../../testdata/w6-domain-contract.json";
 vi.mock("../../app/services/python-transport.server", () => ({
-  requestJson: (...args: unknown[]) =>
-    args[0] === "/v1/account/crews" && (args[1] as { method?: string })?.method === "GET"
-      ? Promise.resolve({
-          kind: "crew-list",
-          crews: [],
-          max_crews: 5,
-          limits: DOMAIN.crews,
-        })
-      : mocks.requestJson(...args),
+  requestJson: mocks.requestJson,
 }));
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
@@ -588,6 +579,7 @@ describe("create a crew", () => {
       size: 20,
       tags: [TAGS[0]],
     });
+    expect(mocks.requestJson).toHaveBeenCalledTimes(1);
   });
 
   it("asks for an account before sending anything", async () => {

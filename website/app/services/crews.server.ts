@@ -15,6 +15,7 @@ import {
   mapInvitePreview,
   mapMadeInvite,
   mapPlayerCrews,
+  MAX_CREW_SIZE,
   type Crew,
   type CrewBoards,
   type CrewList,
@@ -438,8 +439,8 @@ export async function loadCrewPage(
 }
 
 export type LoadedCrew =
-  | { crew: Crew; accounts: LinkedAccount[]; capacity: CrewList | null; error: null }
-  | { crew: null; accounts: []; capacity: null; error: WebsiteErrorResponse };
+  | { crew: Crew; accounts: LinkedAccount[]; error: null }
+  | { crew: null; accounts: []; error: WebsiteErrorResponse };
 
 /**
  * A crew for Members and Edit crew, with the signed-in account's linked
@@ -449,23 +450,16 @@ export async function loadCrew(
   request: Request,
   crewId: string | undefined,
   withAccounts: boolean,
-  withCapacity = false,
 ): Promise<LoadedCrew> {
   const identity = await crewGuard(request, crewId);
   try {
-    const [crew, accounts, capacity] = await Promise.all([
+    const [crew, accounts] = await Promise.all([
       getCrew(identity, crewId as string),
       withAccounts ? linkedAccounts(identity) : [],
-      withCapacity ? listCrews(identity) : null,
     ]);
-    return { crew, accounts, capacity, error: null };
+    return { crew, accounts, error: null };
   } catch (cause) {
-    return {
-      crew: null,
-      accounts: [],
-      capacity: null,
-      error: loadFailure(request, cause),
-    };
+    return { crew: null, accounts: [], error: loadFailure(request, cause) };
   }
 }
 
@@ -570,7 +564,7 @@ export async function crewFormAction(
   }
   const fields = await parseBoundedFormData(request, {
     ...DEFAULT_FORM_LIMITS,
-    maxFields: DEFAULT_FORM_LIMITS.maxTotalBytes,
+    maxFields: 4 + MAX_CREW_SIZE,
   });
   const idempotencyKey = fields?.["idempotencyKey"] ?? "";
   const intent = fields?.["intent"] ?? "";
@@ -604,14 +598,7 @@ export async function crewFormAction(
     const next = status >= 500 ? idempotencyKey : freshIdempotencyKey();
     const payload = (cause as { payload?: object }).payload;
     return reply(status, intent, next, {
-      error:
-        crewRefusal(
-          code,
-          payload,
-          code === "crew_limit_reached" || code === "invalid_crew_size"
-            ? await listCrews(identity)
-            : undefined,
-        ) ?? safeWebsiteError(cause),
+      error: crewRefusal(code, payload) ?? safeWebsiteError(cause),
     });
   }
 }

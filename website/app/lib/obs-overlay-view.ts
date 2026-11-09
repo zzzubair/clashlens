@@ -697,6 +697,7 @@ export function mountOverlay(
   function apply(next: string, first: boolean) {
     if (!contract) return;
     const initial = cfg === undefined;
+    first = first || initial;
     const nextConfig = readConfig(next, contract);
     const prev = cfg ?? nextConfig;
     cfg = nextConfig;
@@ -764,7 +765,7 @@ export function mountOverlay(
           // A replaced link shows nothing, and checks rarely.
           cancel(pollTimer);
           stopDemo();
-          if (cfg) cfg = { ...cfg, w: 0, h: 0 };
+          if (cfg) cfg = { ...cfg, tag: "", demo: false, w: 0, h: 0 };
           data = null;
           stage.innerHTML = "";
           followed = { kind: "retired" };

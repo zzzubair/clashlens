@@ -142,6 +142,7 @@ describe("group comparison", () => {
       `/v1/account/groups/${GROUP_ID}/comparison?days=3`,
       { method: "GET", identity: IDENTITY },
     );
+    mocks.requestJson.mockClear();
     mocks.requestJson.mockImplementation(async (path: string) => {
       if (path.endsWith("days=999"))
         throw new PythonApiError(422, { error: "invalid_days" });
@@ -152,6 +153,7 @@ describe("group comparison", () => {
     );
     // With no usable sort it opens on the days compared, best gain first.
     expect(fallback.data.sort).toBe("net");
+    expect(mocks.requestJson).toHaveBeenCalledTimes(1);
     expect(mocks.requestJson).toHaveBeenLastCalledWith(
       `/v1/account/groups/${GROUP_ID}/comparison?days=7`,
       { method: "GET", identity: IDENTITY },

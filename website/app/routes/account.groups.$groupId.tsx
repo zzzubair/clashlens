@@ -68,7 +68,8 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   const identity = await requireLogin(request);
   const url = new URL(request.url);
   const requestedDays = Number(url.searchParams.get("days") ?? "7");
-  let days = Number.isSafeInteger(requestedDays) && requestedDays > 0 ? requestedDays : 7;
+  // Unsupported address values keep the old default without a rejected Python read.
+  const days = [3, 7, 14].find((value) => value === requestedDays) ?? 7;
   // The days compared are what the page is for, so it opens best gain first;
   // the Trophies heading still sorts by trophies now.
   const requestedSort = url.searchParams.get("sort") ?? "net";
@@ -92,20 +93,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   }
   try {
     const { getGroupComparison } = await import("../services/group-comparison.server");
-    const comparison = await getGroupComparison(identity, groupId, days).catch(
-      (cause) => {
-        if (
-          days !== 7 &&
-          cause instanceof Error &&
-          "status" in cause &&
-          cause.status === 422
-        ) {
-          days = 7;
-          return getGroupComparison(identity, groupId, days);
-        }
-        throw cause;
-      },
-    );
+    const comparison = await getGroupComparison(identity, groupId, days);
     return data<GroupCompareLoaderData>(
       { ...empty, comparison, days },
       { headers: NO_STORE },

@@ -14,7 +14,14 @@ import { TrophyIcon } from "../components/GameIcons";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { isInappropriateName, normalizeGroupName } from "../lib/account-validation";
 import type { WebsiteErrorResponse } from "../lib/contracts";
-import { canJoin, crewRefusal, type LinkedAccount } from "../lib/crew-contracts";
+import {
+  canJoin,
+  crewRefusal,
+  DEFAULT_CREW_SIZE,
+  MIN_CREW_SIZE,
+  MAX_CREW_SIZE,
+  type LinkedAccount,
+} from "../lib/crew-contracts";
 import { normalizePlayerTag } from "../lib/player-tag";
 import type { Route } from "./+types/crews.new";
 import "../crews.css";
@@ -129,23 +136,15 @@ export async function action({ request, context }: Route.ActionArgs) {
       },
       { status, headers: NO_STORE },
     );
-  const empty = { name: "", size: "", tags: [] };
+  const empty = { name: "", size: String(DEFAULT_CREW_SIZE), tags: [] };
   if (!actions.isSameOrigin(request, getWebsiteConfig().publicOrigin)) {
     return reply(403, empty, {
       generalError: "This page is out of date. Reload and try again.",
     });
   }
-  const { listCrews } = await import("../services/crews.server");
-  let capacity;
-  try {
-    capacity = await listCrews(identity);
-  } catch (cause) {
-    const { safeWebsiteError } = await import("../server/errors.server");
-    return reply(503, empty, { generalError: safeWebsiteError(cause) });
-  }
   const form = await actions.parseBoundedFormData(request, {
     ...actions.DEFAULT_FORM_LIMITS,
-    maxFields: actions.DEFAULT_FORM_LIMITS.maxTotalBytes,
+    maxFields: 3 + MAX_CREW_SIZE,
   });
   const idempotencyKey = form?.["idempotencyKey"] ?? "";
   if (form === null || !actions.isIdempotencyKey(idempotencyKey)) {
@@ -162,12 +161,8 @@ export async function action({ request, context }: Route.ActionArgs) {
   if (name === null) fieldErrors.name = "Crew name must be 1–80 characters.";
   else if (isInappropriateName(values.name))
     fieldErrors.name = "Choose a different crew name.";
-  if (
-    !Number.isInteger(size) ||
-    size < capacity.limits.min_size ||
-    size > capacity.limits.max_size
-  ) {
-    fieldErrors.size = `Places must be a whole number from ${capacity.limits.min_size} to ${capacity.limits.max_size}.`;
+  if (!Number.isInteger(size) || size < MIN_CREW_SIZE || size > MAX_CREW_SIZE) {
+    fieldErrors.size = `Places must be a whole number from ${MIN_CREW_SIZE} to ${MAX_CREW_SIZE}.`;
   }
   if (tags.length === 0) fieldErrors.accounts = "Pick at least one account.";
   else if (Number.isInteger(size) && tags.length > size) {
@@ -193,7 +188,7 @@ export async function action({ request, context }: Route.ActionArgs) {
   const status = (cause as { status?: number }).status ?? 503;
   const formKey = unfinished ? idempotencyKey : undefined;
   const code = crewErrorCode(cause);
-  const message = crewRefusal(code, (cause as { payload?: object }).payload, capacity);
+  const message = crewRefusal(code, (cause as { payload?: object }).payload);
   if (message === null) {
     const { safeWebsiteError } = await import("../server/errors.server");
     return reply(status, values, { generalError: safeWebsiteError(cause) }, formKey);

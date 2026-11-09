@@ -18,6 +18,8 @@ import {
   crewRefusal,
   INVITE_CODE,
   joiningCount,
+  MAX_CREW_SIZE,
+  MAX_CREWS,
   type InviteAccount,
   type InvitePreview,
 } from "../lib/crew-contracts";
@@ -37,7 +39,6 @@ export function meta() {
 }
 
 export interface JoinLoaderData {
-  maxCrews: number | null;
   code: string;
   /** Null for a link that can't be an invite at all. */
   invite: InvitePreview | null;
@@ -85,16 +86,8 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
   const code = await guard(params.code);
   const actions = await import("../server/actions.server");
   const idempotencyKey = actions.freshIdempotencyKey();
-  const reply = (
-    status: number,
-    value: Omit<JoinLoaderData, "idempotencyKey" | "maxCrews"> & {
-      maxCrews?: number | null;
-    },
-  ) =>
-    data<JoinLoaderData>(
-      { maxCrews: null, ...value, idempotencyKey },
-      { status, headers: NO_STORE },
-    );
+  const reply = (status: number, value: Omit<JoinLoaderData, "idempotencyKey">) =>
+    data<JoinLoaderData>({ ...value, idempotencyKey }, { status, headers: NO_STORE });
   if (code === null) {
     return reply(404, { code: "", invite: null, signedIn: false, error: null });
   }
@@ -120,12 +113,7 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
       }
       invite = await getInvite(identity, code);
     }
-    const maxCrews =
-      identity && invite.state === "limit"
-        ? (await (await import("../services/crews.server")).listCrews(identity)).maxCrews
-        : null;
     return reply(invite.state === "invalid" ? 404 : 200, {
-      maxCrews,
       code,
       invite,
       signedIn: identity !== null,
@@ -172,7 +160,7 @@ export async function action({ request, params, context }: Route.ActionArgs) {
   }
   const form = await actions.parseBoundedFormData(request, {
     ...actions.DEFAULT_FORM_LIMITS,
-    maxFields: actions.DEFAULT_FORM_LIMITS.maxTotalBytes,
+    maxFields: 1 + MAX_CREW_SIZE,
   });
   const idempotencyKey = form?.["idempotencyKey"] ?? "";
   if (form === null || !actions.isIdempotencyKey(idempotencyKey)) {
@@ -199,19 +187,9 @@ export async function action({ request, params, context }: Route.ActionArgs) {
   await setupRedirect(request, cause);
   const status = (cause as { status?: number }).status ?? 503;
   const formKey = unfinished ? idempotencyKey : undefined;
-  const codeOfFailure = crewErrorCode(cause);
-  const capacity =
-    codeOfFailure === "crew_limit_reached" || codeOfFailure === "invalid_crew_size"
-      ? await (
-          await import("../services/crews.server")
-        )
-          .listCrews(identity)
-          .catch(() => undefined)
-      : undefined;
   const message = crewRefusal(
-    codeOfFailure,
+    crewErrorCode(cause),
     (cause as { payload?: object }).payload,
-    capacity,
   );
   if (message !== null) return reply(status, tags, message, formKey);
   const { safeWebsiteError } = await import("../server/errors.server");
@@ -219,7 +197,7 @@ export async function action({ request, params, context }: Route.ActionArgs) {
 }
 
 export default function JoinCrewRoute() {
-  const { code, invite, signedIn, maxCrews, idempotencyKey, error } =
+  const { code, invite, signedIn, idempotencyKey, error } =
     useLoaderData<typeof loader>();
   const answer = useActionData<typeof action>();
   if (error) {
@@ -292,7 +270,7 @@ export default function JoinCrewRoute() {
         </section>
       ) : invite.state === "limit" ? (
         <p className="notice crew-notice-action">
-          <span>You&apos;re already in {maxCrews} crews, the most you can be in.</span>
+          <span>You&apos;re already in {MAX_CREWS} crews, the most you can be in.</span>
           <Link className="button secondary" to="/crews">
             See my crews
           </Link>
