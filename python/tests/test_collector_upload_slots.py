@@ -112,7 +112,7 @@ def test_saves_a_held_lock_blocks_land_later_in_order_without_holding_checks() -
         assert len(saved) == 2
         assert store.handoffs == []
         held.clear()
-        await asyncio.wait_for(_committed(spool), 5)
+        await asyncio.wait_for(asyncio.gather(*collector.commits._later), 5)
         assert [handoff.occurrence_key for handoff in store.handoffs] == saved
 
     asyncio.run(scenario())
@@ -232,7 +232,7 @@ def test_restart_recovery_leaves_held_saves_to_commit_later_and_holds_their_work
             assert store.handoffs == []
             assert client.fetch_count == 0
             held.clear()
-            await asyncio.wait_for(_committed(spool), 5)
+            await asyncio.wait_for(asyncio.gather(*collector.commits._later), 5)
             while not store.completed:
                 await asyncio.sleep(0.01)
         finally:
@@ -403,6 +403,13 @@ def test_a_held_player_never_delays_another_players_reset_or_regular_checks(
     store = ResetStore(spool)
     client = Client(spool)
     collector = _collector(spool, store, client)
+    now = datetime.now(UTC)
+    # Both players share one disk-write lock, so the first one's held save
+    # is what the second one must not wait behind.
+    assert collector.commits._handoff_lock(
+        _handoff_for(collector, "#2P0P", now)
+    ) is collector.commits._handoff_lock(_handoff_for(collector, "#2P2G", now))
+
     async def scenario() -> None:
         stop = asyncio.Event()
         loops = [
@@ -467,10 +474,6 @@ def test_a_save_left_at_stop_keeps_later_saves_from_committing_first() -> None:
     assert store.handoffs == []
     assert len(spool.handoffs) == 1
 
-
-async def _committed(spool) -> None:
-    while spool.handoffs:
-        await asyncio.sleep(0.01)
 
 
 def test_collector_run_stops_with_a_response_waiting_for_a_database_lock() -> None:
