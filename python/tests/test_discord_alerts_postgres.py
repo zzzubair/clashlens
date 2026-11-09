@@ -44,7 +44,8 @@ from bot.discord_app import DiscordMessenger
 from bot.replies import PLAYER_COLOURS, Reply, Site
 from bot.store import Store
 from clashlens import api_discord_alerts, provider_membership
-from clashlens.api_db import ApiDatabase, RequestBinding
+from clashlens.api_db import ApiDatabase
+from clashlens.api_requests import RequestBinding
 
 SITE = Site("https://clashlens.test")
 DEFENDER = "#2PP"

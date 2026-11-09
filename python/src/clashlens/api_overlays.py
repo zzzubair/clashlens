@@ -24,10 +24,11 @@ from fastapi.responses import JSONResponse
 from psycopg.types.json import Jsonb
 from pydantic import Field
 
-from .api_accounts import _linked_players
-from .api_db import ApiDatabase, _text
+from .api_db import ApiDatabase
 from .api_http import ApiError, StrictBody, authorize, safe_tag
+from .api_players import linked_players
 from .collector_overlays import PRESENCE_SQL, ViewerPresence
+from .db_rows import text_value
 
 _LINK = re.compile(r"[A-Za-z0-9_-]{22}")
 # Each setting and the values it may take; numbers are stream pixels.
@@ -76,7 +77,7 @@ def link_state(row: Any, link_id: str) -> LinkState:
     RETIRED one: nothing."""
     if row is None:
         return LinkState.ABSENT
-    return LinkState.CURRENT if _text(row[0]) == link_id else LinkState.RETIRED
+    return LinkState.CURRENT if text_value(row[0]) == link_id else LinkState.RETIRED
 
 
 class OverlayBody(StrictBody):
@@ -116,7 +117,7 @@ def get_overlay(database: ApiDatabase, account_id: int) -> dict[str, Any]:
         )
         row = connection.execute(_OVERLAY_SQL + " WHERE overlay.account_id = %s",
                                  (account_id,)).fetchone()
-        players = _linked_players(connection, account_id, None)
+        players = linked_players(connection, account_id, None)
     return {
         "kind": "obs-overlay",
         **_overlay(row),
@@ -219,10 +220,10 @@ _OVERLAY_SQL = """
 
 def _overlay(row: Any) -> dict[str, Any]:
     return {
-        "link": _text(row[0]),
+        "link": text_value(row[0]),
         "settings": dict(row[1]),
         "version": int(row[2]),
-        "tag": None if row[3] is None else _text(row[3]),
+        "tag": None if row[3] is None else text_value(row[3]),
     }
 
 

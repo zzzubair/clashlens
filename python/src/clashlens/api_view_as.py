@@ -26,10 +26,12 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import Field
 
-from . import api_db, api_discord_alerts, api_players
-from .api_db import ApiDatabase, OperationResult, RequestBinding, _text
+from . import api_discord_alerts, api_players, api_requests
+from .api_db import ApiDatabase
 from .api_discord_alerts import Switch, SwitchState
 from .api_http import StrictBody, authorize, operation_response, request_binding
+from .api_requests import OperationResult, RequestBinding
+from .db_rows import text_value
 from .profile import normalize_player_tag
 
 # What any account but the owner gets from a pin or follow, whatever it sent.
@@ -113,7 +115,7 @@ def view_as(
         "kind": "view-as",
         "owner": True,
         "player": cards[0] if cards else None,
-        "pinned": None if pinned is None else _text(pinned[0]),
+        "pinned": None if pinned is None else text_value(pinned[0]),
         "follow": follow,
     }
 
@@ -123,7 +125,7 @@ def set_pin(database: ApiDatabase, binding: RequestBinding, *, tag: str | None) 
     None. Anyone but the owner gets NOT_OWNER whatever the tag."""
     with database.pool.connection() as connection:
         with connection.transaction():
-            existing = api_db._reserve_request(connection, binding)
+            existing = api_requests.reserve_request(connection, binding)
             if existing is not None:
                 return existing
             if not _is_owner(connection, binding.account_id):
@@ -145,7 +147,7 @@ def set_pin(database: ApiDatabase, binding: RequestBinding, *, tag: str | None) 
                     (binding.account_id, player[0]),
                 )
                 result = OperationResult(200, {"pinned": player[1]})
-            api_db._complete_request(connection, binding.request_id, result)
+            api_requests.complete_request(connection, binding.request_id, result)
             return result
 
 
@@ -162,7 +164,7 @@ def set_follow(
     account's. Anyone but the owner gets NOT_OWNER whatever the tag."""
     with database.pool.connection() as connection:
         with connection.transaction():
-            existing = api_db._reserve_request(connection, binding)
+            existing = api_requests.reserve_request(connection, binding)
             if existing is not None:
                 return existing
             if not _is_owner(connection, binding.account_id):
@@ -176,7 +178,7 @@ def set_follow(
                     SwitchState.of(on),
                 )
                 result = OperationResult(200, {"tag": player[1], "alert": alert, "on": on})
-            api_db._complete_request(connection, binding.request_id, result)
+            api_requests.complete_request(connection, binding.request_id, result)
             return result
 
 

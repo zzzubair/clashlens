@@ -460,9 +460,10 @@ def test_public_profile_uses_latest_occurrence_metadata_and_freshness(
         try:
             assert processor.process_job(first_job, owner="dedup-api-v2") is not None
             assert processor.process_job(second_job, owner="dedup-api-v1") is not None
-            page = api_players.get_player_page(api,
-                "#2PP", now=second_at + timedelta(minutes=1), freshness_seconds=900
-            )
+            with api.pool.connection() as page_connection:
+                page = api_players.read_player_page(page_connection,
+                    "#2PP", now=second_at + timedelta(minutes=1), freshness_seconds=900
+                )
             assert page is not None
             assert page["source_http_status"] == 201
             assert page["endpoint_version"] == "profile-v1"
@@ -590,9 +591,10 @@ def test_profile_confirmation_backfill_preserves_proven_checks(
             for tag, expected in (
                 ("#2PP", confirmed_at), ("#8PY", accepted_at), ("#9PY", accepted_at)
             ):
-                page = api_players.get_player_page(
-                    api, tag, now=confirmed_at + timedelta(minutes=6), freshness_seconds=900
-                )
+                with api.pool.connection() as page_connection:
+                    page = api_players.read_player_page(
+                        page_connection, tag, now=confirmed_at + timedelta(minutes=6), freshness_seconds=900
+                    )
                 assert page["observed_at"] == expected.isoformat()
         finally:
             api.close()
@@ -661,7 +663,8 @@ def test_backfilled_profile_identifier_confirms_checks_after_repair(
             ))
 
         def assert_time(at: datetime, expected: datetime) -> None:
-            page = api_players.get_player_page(api, "#2PP", now=at, freshness_seconds=900)
+            with api.pool.connection() as page_connection:
+                page = api_players.read_player_page(page_connection, "#2PP", now=at, freshness_seconds=900)
             board = api_leaderboard.get_live_leaderboard(api, limit=1, now=at)
             assert page["observed_at"] == board["entries"][0]["observed_at"] == expected.isoformat()
             assert page["trophies"] == board["entries"][0]["trophies"] == json.loads(body)["trophies"]
@@ -810,9 +813,10 @@ def test_rank_only_profile_check_confirms_without_saving_or_processing(
             result = check(ranked(790, trophies), checked_at, "rank-only")
             assert result.changed is False and result.processing_job_id is None
             assert counts() == before
-            page = api_players.get_player_page(
-                api, "#2PP", now=checked_at + timedelta(minutes=1), freshness_seconds=900
-            )
+            with api.pool.connection() as page_connection:
+                page = api_players.read_player_page(
+                    page_connection, "#2PP", now=checked_at + timedelta(minutes=1), freshness_seconds=900
+                )
             board = api_leaderboard.get_live_leaderboard(
                 api, limit=1, now=checked_at + timedelta(minutes=1)
             )
@@ -883,9 +887,10 @@ def test_player_page_and_leaderboard_freshness_follow_the_last_successful_check(
                 )
 
         def page(now: datetime) -> tuple[str, str, list[str]]:
-            result = api_players.get_player_page(
-                api, "#2PP", now=now, freshness_seconds=900
-            )
+            with api.pool.connection() as page_connection:
+                result = api_players.read_player_page(
+                    page_connection, "#2PP", now=now, freshness_seconds=900
+                )
             assert result is not None
             # The Live Leaderboard's Last updated follows the same rule.
             board = api_leaderboard.get_live_leaderboard(

@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from threading import Event, Lock
+from threading import Event
 from time import monotonic
 from unittest.mock import Mock
 
@@ -20,12 +19,12 @@ from domain_test_support import (
 from psycopg_pool import PoolTimeout
 
 from clashlens import api_analytics, army_rank_bands, boundary_publication
-from clashlens.api_db import (
+from clashlens.api_analytics import (
     ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS,
     ARMY_ANALYTICS_PARALLEL_POOL_TIMEOUT_SECONDS,
     ARMY_ANALYTICS_QUERY_WORK_MEM,
-    ApiDatabase,
 )
+from clashlens.api_db import ApiDatabase
 from clashlens.archive import S3ArchiveReader
 from clashlens.army_analytics import (
     ArmyAnalyticsSelection,
@@ -216,21 +215,18 @@ def _selection(**changes) -> ArmyAnalyticsSelection:
 
 
 def test_army_cache_is_bounded_thread_safe_and_returns_copies() -> None:
-    api = ApiDatabase.__new__(ApiDatabase)
-    api._army_cache_capacity = 2
-    api._army_cache = OrderedDict()
-    api._army_cache_lock = Lock()
+    api = api_analytics.ArmyAnalyticsReader(Mock(timeout=5, max_size=8), cache_capacity=2)
     first = {"publication_identity": "one", "rows": [{"key": "troop:1"}]}
-    api._army_cache_put(("selection-one",), first)
-    hit = api._army_cache_get(("selection-one",))
+    api.cache_put(("selection-one",), first)
+    hit = api.cache_get(("selection-one",))
     assert hit == first
     assert hit is not first
     hit["rows"].clear()
-    assert api._army_cache_get(("selection-one",))["rows"]
-    assert api._army_cache_get(("selection-two",)) is None
-    api._army_cache_put(("selection-two",), {"publication_identity": "two"})
-    api._army_cache_put(("selection-three",), {"publication_identity": "three"})
-    assert api._army_cache_get(("selection-one",)) is None
+    assert api.cache_get(("selection-one",))["rows"]
+    assert api.cache_get(("selection-two",)) is None
+    api.cache_put(("selection-two",), {"publication_identity": "two"})
+    api.cache_put(("selection-three",), {"publication_identity": "three"})
+    assert api.cache_get(("selection-one",)) is None
 
 
 def test_troop_source_hash_pool_timeout_fails_before_expensive_queries(
@@ -381,7 +377,8 @@ def test_publication_writer_serves_reproducible_perspective_results(
             assert facts[(attacker_vs_defender, "offense")][3] == 6000
             assert facts[(attacker_vs_other, "offense")][3] == 6035
 
-            api = ApiDatabase(ci, army_cache_capacity=0)
+            api = ApiDatabase(ci)
+            api_reader = api_analytics.ArmyAnalyticsReader(api.pool, cache_capacity=0)
             fact_queries: list[str] = []
             original_connection = api.pool.connection
 
@@ -404,7 +401,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
             try:
                 # Offense lens: the unnamed troop 9999 counts like any other.
                 selection = _selection()
-                first = api_analytics.get_army_analytics(api, selection)
+                first = api_analytics.get_army_analytics(api_reader, selection)
                 assert first is not None
                 missing_trophy_queries = [
                     query
@@ -538,7 +535,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 }
                 for category, component_column in category_columns.items():
                     fact_queries.clear()
-                    category_result = api_analytics.get_army_analytics(api,
+                    category_result = api_analytics.get_army_analytics(api_reader,
                         _selection(category=category)
                     )
                     assert category_result is not None
@@ -603,7 +600,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
                             attacker_vs_defender,
                         ),
                     )
-                malformed = api_analytics.get_army_analytics(api, selection)
+                malformed = api_analytics.get_army_analytics(api_reader, selection)
                 assert malformed is not None
                 malformed_row = next(
                     row for row in malformed["rows"] if row["key"] == "badtyped"
@@ -623,11 +620,11 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 # Reads calculate from retained facts without persistent
                 # per-selection storage. Identical inputs keep one identity;
                 # arbitrary URL-backed trophy ranges get distinct identities.
-                second = api_analytics.get_army_analytics(api, selection)
+                second = api_analytics.get_army_analytics(api_reader, selection)
                 assert second is not None
                 assert second["publication_identity"] == identity
                 other_ranges = [
-                    api_analytics.get_army_analytics(api,
+                    api_analytics.get_army_analytics(api_reader,
                         _selection(population=f"trophies-5000-{maximum}")
                     )
                     for maximum in (8998, 8999)
@@ -646,7 +643,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
 
                 # Defense lens uses the defender's own accepted report.
                 fact_queries.clear()
-                defense = api_analytics.get_army_analytics(api,
+                defense = api_analytics.get_army_analytics(api_reader,
                     _selection(lens="defense", category="siege")
                 )
                 assert defense is not None
@@ -678,14 +675,14 @@ def test_publication_writer_serves_reproducible_perspective_results(
                     database, [(defender_id,), (attacker_id,)]
                 )
                 army_rank_bands.refresh_rank_band_totals(database)
-                top5 = api_analytics.get_army_analytics(api, _selection(lens="defense", population="top-5"))
+                top5 = api_analytics.get_army_analytics(api_reader, _selection(lens="defense", population="top-5"))
                 assert top5 is not None
                 assert top5["total_attacks"] == 1
                 assert top5["reproducibility"]["snapshot_versions"] == [1]
                 # The attacker sits at position 6 of the frozen snapshot, so a
                 # Top-5 offense cohort excludes both of their attacks.
                 fact_queries.clear()
-                top5_offense = api_analytics.get_army_analytics(api,
+                top5_offense = api_analytics.get_army_analytics(api_reader,
                     _selection(population="top-5")
                 )
                 assert top5_offense is not None
@@ -712,7 +709,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
 
                 # A withheld day inside the range names the affected day.
                 with pytest.raises(ArmyAnalyticsUnavailable) as unavailable:
-                    api_analytics.get_army_analytics(api, _selection(start_day=22))
+                    api_analytics.get_army_analytics(api_reader, _selection(start_day=22))
                 assert unavailable.value.affected_days == [22]
 
                 # Corrected evidence changes the deterministic identity.
@@ -724,7 +721,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 correction_job = _army_job(database)
                 correction = processor.process_job(correction_job, owner="correction")
                 assert correction is not None and correction.outcome == "processed"
-                third = api_analytics.get_army_analytics(api, selection)
+                third = api_analytics.get_army_analytics(api_reader, selection)
                 assert third is not None
                 assert third["publication_identity"] != identity
                 two_star_row = next(
@@ -764,6 +761,7 @@ def test_unselected_fact_correction_does_not_change_selected_result(
             )
         database, processor = _processor(ci, archive_server, monkeypatch)
         api = ApiDatabase(ci)
+        api_reader = api_analytics.ArmyAnalyticsReader(api.pool)
         try:
             for index, job in enumerate(observations):
                 assert processor.process_job(job, owner=f"ingest-{index}").outcome == "processed"
@@ -801,7 +799,7 @@ def test_unselected_fact_correction_does_not_change_selected_result(
             )
             selection = _selection(population="top-5")
             army_rank_bands.refresh_rank_band_totals(database)
-            before = api_analytics.get_army_analytics(api, selection)
+            before = api_analytics.get_army_analytics(api_reader, selection)
             assert before is not None and before["total_attacks"] == 1
             with database.pool.connection() as connection:
                 before_unselected_hash = connection.execute(
@@ -823,7 +821,7 @@ def test_unselected_fact_correction_does_not_change_selected_result(
             )
             assert correction is not None and correction.outcome == "processed"
             army_rank_bands.refresh_rank_band_totals(database)
-            after = api_analytics.get_army_analytics(api, selection)
+            after = api_analytics.get_army_analytics(api_reader, selection)
             assert after is not None
             assert after["rows"] == before["rows"]
             assert after["reproducibility"]["source_evidence_hash"] == before[
@@ -1015,6 +1013,7 @@ def test_completed_day_without_army_job_is_unavailable_not_false_empty(
         )
         database, processor = _processor(ci, archive_server, monkeypatch)
         api = ApiDatabase(ci)
+        api_reader = api_analytics.ArmyAnalyticsReader(api.pool)
         try:
             assert processor.process_job(job, owner="ingest").outcome == "processed"
             with database.pool.connection() as connection:
@@ -1023,7 +1022,7 @@ def test_completed_day_without_army_job_is_unavailable_not_false_empty(
             # The ranked-day publication is complete but build_army_analytics has
             # not run: the selection must be unavailable, never a false empty.
             with pytest.raises(ArmyAnalyticsUnavailable) as unavailable:
-                api_analytics.get_army_analytics(api, _selection())
+                api_analytics.get_army_analytics(api_reader, _selection())
             assert unavailable.value.affected_days == [DAY_NUMBER]
         finally:
             api.close()
@@ -1046,7 +1045,8 @@ def test_missing_start_trophies_keep_facts_and_report_missing_evidence(
             observed_at=ts2 + timedelta(minutes=1), normalized_tag="#2PP",
         )
         database, processor = _processor(ci, archive_server, monkeypatch)
-        api = ApiDatabase(ci, army_cache_capacity=2)
+        api = ApiDatabase(ci)
+        api_reader = api_analytics.ArmyAnalyticsReader(api.pool, cache_capacity=2)
         try:
             for index, job in enumerate((j1, j2)):
                 processor.process_job(job, owner=f"ingest-{index}")
@@ -1094,7 +1094,7 @@ def test_missing_start_trophies_keep_facts_and_report_missing_evidence(
             assert trophies == [None, None]
 
             # Trophy-range filter excludes them and reports missing evidence.
-            trophy_filtered = api_analytics.get_army_analytics(api,
+            trophy_filtered = api_analytics.get_army_analytics(api_reader,
                 _selection(population="trophies-5000-9000")
             )
             assert trophy_filtered is not None
@@ -1104,11 +1104,11 @@ def test_missing_start_trophies_keep_facts_and_report_missing_evidence(
             # Frozen cohort filters still include the attacks.
             _seed_frozen_snapshot(database, [(attacker_id,), (defender_id,)])
             army_rank_bands.refresh_rank_band_totals(database)
-            top5 = api_analytics.get_army_analytics(api, _selection(population="top-5"))
+            top5 = api_analytics.get_army_analytics(api_reader, _selection(population="top-5"))
             assert top5 is not None
             assert top5["total_attacks"] == 2
             assert top5["missing_trophy_membership_evidence"] == 0
-            cached_top5 = api_analytics.get_army_analytics(api, _selection(population="top-5"))
+            cached_top5 = api_analytics.get_army_analytics(api_reader, _selection(population="top-5"))
             assert cached_top5 == top5
         finally:
             api.close()
@@ -1126,6 +1126,7 @@ def test_stale_snapshot_membership_is_reported_as_cohort_evidence(
         )
         database, processor = _processor(ci, archive_server, monkeypatch)
         api = ApiDatabase(ci)
+        api_reader = api_analytics.ArmyAnalyticsReader(api.pool)
         try:
             processor.process_job(job, owner="ingest")
             with database.pool.connection() as connection:
@@ -1142,7 +1143,7 @@ def test_stale_snapshot_membership_is_reported_as_cohort_evidence(
                 database, [(attacker_id,), (defender_id,)], stale_first=True
             )
             army_rank_bands.refresh_rank_band_totals(database)
-            top2 = api_analytics.get_army_analytics(api, _selection(population="top-5"))
+            top2 = api_analytics.get_army_analytics(api_reader, _selection(population="top-5"))
             assert top2 is not None
             # Position membership still includes the stale entry; the weakness
             # stays visible instead of silently shrinking the cohort.
@@ -1166,6 +1167,7 @@ def test_correction_with_unchanged_aggregates_changes_deterministic_identity(
         )
         database, processor = _processor(ci, archive_server, monkeypatch)
         api = ApiDatabase(ci)
+        api_reader = api_analytics.ArmyAnalyticsReader(api.pool)
         try:
             processor.process_job(job, owner="ingest")
             with database.pool.connection() as connection:
@@ -1174,16 +1176,17 @@ def test_correction_with_unchanged_aggregates_changes_deterministic_identity(
             _publish_day(database, "#2PP", events)
             processor.process_job(_army_job(database), owner="analytics")
             selection = _selection()
-            first = api_analytics.get_army_analytics(api, selection)
+            first = api_analytics.get_army_analytics(api_reader, selection)
             assert first is not None
-            cached = api_analytics.get_army_analytics(api, selection)
+            cached = api_analytics.get_army_analytics(api_reader, selection)
             assert cached == first
             cold_api = ApiDatabase(ci, max_size=2)
+            cold_api_reader = api_analytics.ArmyAnalyticsReader(cold_api.pool)
             try:
                 with ThreadPoolExecutor(max_workers=2) as executor:
                     concurrent_results = list(
                         executor.map(
-                            lambda item: api_analytics.get_army_analytics(cold_api, item),
+                            lambda item: api_analytics.get_army_analytics(cold_api_reader, item),
                             [selection] * 2,
                         )
                     )
@@ -1191,20 +1194,22 @@ def test_correction_with_unchanged_aggregates_changes_deterministic_identity(
             finally:
                 cold_api.close()
 
-            busy_api = ApiDatabase(ci, max_size=2, army_cache_capacity=0)
-            assert busy_api._army_troop_slots.acquire(blocking=False)
+            busy_api = ApiDatabase(ci, max_size=2)
+            busy_api_reader = api_analytics.ArmyAnalyticsReader(busy_api.pool, cache_capacity=0)
+            assert busy_api_reader.troop_slots.acquire(blocking=False)
             try:
                 busy_started = monotonic()
                 with pytest.raises(PoolTimeout, match="troop analytics"):
-                    api_analytics.get_army_analytics(busy_api, selection)
+                    api_analytics.get_army_analytics(busy_api_reader, selection)
                 assert monotonic() - busy_started < (
                     ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS + 0.5
                 )
             finally:
-                busy_api._army_troop_slots.release()
+                busy_api_reader.troop_slots.release()
                 busy_api.close()
 
-            pool_busy_api = ApiDatabase(ci, max_size=2, army_cache_capacity=0)
+            pool_busy_api = ApiDatabase(ci, max_size=2)
+            pool_busy_api_reader = api_analytics.ArmyAnalyticsReader(pool_busy_api.pool, cache_capacity=0)
             try:
                 # Materialize both pool connections so this measures paired
                 # checkout contention, not connection creation.
@@ -1214,13 +1219,13 @@ def test_correction_with_unchanged_aggregates_changes_deterministic_identity(
                 with pool_busy_api.pool.connection():
                     pair_started = monotonic()
                     with pytest.raises(PoolTimeout):
-                        api_analytics.get_army_analytics(pool_busy_api, selection)
+                        api_analytics.get_army_analytics(pool_busy_api_reader, selection)
                     pair_elapsed = monotonic() - pair_started
                     assert pair_elapsed >= (
                         ARMY_ANALYTICS_PARALLEL_POOL_TIMEOUT_SECONDS * 0.5
                     )
                     assert pair_elapsed < 1
-                assert api_analytics.get_army_analytics(pool_busy_api, selection) == first
+                assert api_analytics.get_army_analytics(pool_busy_api_reader, selection) == first
             finally:
                 pool_busy_api.close()
 
@@ -1229,7 +1234,7 @@ def test_correction_with_unchanged_aggregates_changes_deterministic_identity(
             _publish_day_correction(database, "#2PP", events)
             correction = processor.process_job(_army_job(database), owner="correction")
             assert correction is not None and correction.outcome == "processed"
-            second = api_analytics.get_army_analytics(api, selection)
+            second = api_analytics.get_army_analytics(api_reader, selection)
             assert second is not None
             assert second["publication_identity"] != first["publication_identity"]
             assert second["rows"] == first["rows"]
@@ -1262,8 +1267,10 @@ def test_concurrent_correction_never_mixes_army_publication_revisions(
             normalized_tag="#2PP",
         )
         database, processor = _processor(ci, archive_server, monkeypatch)
-        stable_api = ApiDatabase(ci, army_cache_capacity=0)
-        racing_api = ApiDatabase(ci, max_size=2, army_cache_capacity=0)
+        stable_api = ApiDatabase(ci)
+        stable_api_reader = api_analytics.ArmyAnalyticsReader(stable_api.pool, cache_capacity=0)
+        racing_api = ApiDatabase(ci, max_size=2)
+        racing_api_reader = api_analytics.ArmyAnalyticsReader(racing_api.pool, cache_capacity=0)
         try:
             processor.process_job(job, owner="ingest")
             with database.pool.connection() as connection:
@@ -1277,7 +1284,7 @@ def test_concurrent_correction_never_mixes_army_publication_revisions(
             _publish_day(database, "#2PP", initial_events)
             processor.process_job(_army_job(database), owner="analytics")
             selection = _selection()
-            before = api_analytics.get_army_analytics(stable_api, selection)
+            before = api_analytics.get_army_analytics(stable_api_reader, selection)
             assert before is not None
 
             source_waiting = Event()
@@ -1340,11 +1347,11 @@ def test_concurrent_correction_never_mixes_army_publication_revisions(
 
             with ThreadPoolExecutor(max_workers=1) as executor:
                 correction_future = executor.submit(correct_facts)
-                concurrent = api_analytics.get_army_analytics(racing_api, selection)
+                concurrent = api_analytics.get_army_analytics(racing_api_reader, selection)
                 correction_future.result()
             assert concurrent is not None
 
-            after = api_analytics.get_army_analytics(stable_api, selection)
+            after = api_analytics.get_army_analytics(stable_api_reader, selection)
             assert after is not None
             assert after["rows"] != before["rows"]
             assert (

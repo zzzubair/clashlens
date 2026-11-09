@@ -8,7 +8,9 @@ import pytest
 from test_api_migration import migrated_production_database
 
 from clashlens import api_accounts, api_verification, cli
-from clashlens.api_db import ApiDatabase, PermitResult, RequestBinding
+from clashlens.api_db import ApiDatabase
+from clashlens.api_requests import RequestBinding
+from clashlens.api_verification import PermitResult
 from clashlens.verification import OfficialVerificationResponse
 
 

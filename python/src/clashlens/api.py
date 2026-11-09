@@ -33,13 +33,12 @@ from . import (
     provider_membership,
 )
 from .accounts import normalize_display_name, normalize_group_name, normalize_username
-from .api_db import (
-    ApiDatabase,
-)
+from .api_db import ApiDatabase
 from .api_http import (
     ALLOWED_PROVIDERS,
     ApiError,
     StrictBody,
+    api_error_response,
     authorize,
     json_safe,
     operation_response,
@@ -176,6 +175,7 @@ def create_app(
             raise ValueError("a caller may have only current and previous HMAC keys")
 
     production_database = database
+    army_reader = api_analytics.ArmyAnalyticsReader(database.pool)
     current_time = now or (lambda: datetime.fromtimestamp(int(clock()), tz=UTC))
     operating_metrics = api_metrics or ApiMetrics()
     clashking = clashking_client or ClashKingClient()
@@ -202,12 +202,7 @@ def create_app(
 
     @app.exception_handler(ApiError)
     async def api_error_handler(_request: Request, error: ApiError) -> JSONResponse:
-        content: dict[str, Any] = {"error": error.code}
-        if error.detail:
-            content["detail"] = error.detail
-        if error.affected_days is not None:
-            content["affected_days"] = error.affected_days
-        return JSONResponse(status_code=error.status_code, content=content)
+        return api_error_response(error)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(
@@ -218,12 +213,7 @@ def create_app(
     @app.exception_handler(Exception)
     async def safe_error_handler(_request: Request, error: Exception) -> JSONResponse:
         if isinstance(error, ApiError):
-            content: dict[str, Any] = {"error": error.code}
-            if error.detail:
-                content["detail"] = error.detail
-            if error.affected_days is not None:
-                content["affected_days"] = error.affected_days
-            return JSONResponse(status_code=error.status_code, content=content)
+            return api_error_response(error)
         return JSONResponse(status_code=503, content={"error": "service_unavailable"})
 
     @app.middleware("http")
@@ -385,12 +375,14 @@ def create_app(
     ) -> JSONResponse:
         authorize(request, "player.read", production_database)
         normalized_tag = safe_tag(tag)
-        result = api_players.get_player_page(production_database,
-            normalized_tag,
-            now=current_time(),
-            freshness_seconds=_DEFAULT_FRESHNESS_SECONDS,
-            battles=battles,
-        )
+        with production_database.pool.connection() as connection:
+            result = api_players.read_player_page(
+                connection,
+                normalized_tag,
+                now=current_time(),
+                freshness_seconds=_DEFAULT_FRESHNESS_SECONDS,
+                battles=battles,
+            )
         if result is None:
             raise ApiError(404, "player_not_found")
         return JSONResponse(status_code=200, content=json_safe(result))
@@ -652,7 +644,7 @@ def create_app(
             examples = (type_id, variant_id)
         try:
             result = api_analytics.get_army_analytics(
-                production_database, selection, now=current_time(), examples=examples
+                army_reader, selection, now=current_time(), examples=examples
             )
         except CurrentSeasonEmpty as empty:
             content: dict[str, Any] = {"error": "no_completed_legend_days"}
@@ -852,7 +844,7 @@ def create_app(
         return JSONResponse(
             status_code=200,
             content={
-                "groups": api_accounts.list_groups(
+                "groups": api_groups.list_groups(
                     production_database, context.account.internal_id, now=now
                 ),
                 "season": ranked_day_for(now).official_season_id,
@@ -865,7 +857,7 @@ def create_app(
         assert production_database is not None
         name, normalized_name, tags = _group_values(body)
         tags = tags or []
-        result = api_accounts.create_group(production_database,
+        result = api_groups.create_group(production_database,
             request_binding(
                 request,
                 context,
@@ -884,7 +876,7 @@ def create_app(
         assert production_database is not None
         safe_uuid(group_id)
         name, normalized_name, tags = _group_values(body)
-        result = api_accounts.update_group(production_database,
+        result = api_groups.update_group(production_database,
             request_binding(
                 request,
                 context,
@@ -903,7 +895,7 @@ def create_app(
         context = authorize(request, "groups.write", production_database)
         assert production_database is not None
         safe_uuid(group_id)
-        result = api_accounts.delete_group(production_database,
+        result = api_groups.delete_group(production_database,
             request_binding(request, context, "groups.delete", {"group_id": group_id}),
             group_id=group_id,
         )
@@ -917,7 +909,7 @@ def create_app(
         assert production_database is not None
         safe_uuid(group_id)
         tag = safe_tag(body.tag)
-        result = api_accounts.add_group_player(production_database,
+        result = api_groups.add_group_player(production_database,
             request_binding(
                 request, context, "groups.add_player", {"group_id": group_id, "tag": tag}
             ),
@@ -933,7 +925,7 @@ def create_app(
         assert production_database is not None
         safe_uuid(group_id)
         normalized_tag = safe_tag(tag)
-        result = api_accounts.remove_group_player(production_database,
+        result = api_groups.remove_group_player(production_database,
             request_binding(
                 request,
                 context,

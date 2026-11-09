@@ -12,7 +12,7 @@ from test_private_api import NOW_SECONDS, TS_CURRENT, signed_headers
 
 from clashlens import api_player_lookup
 from clashlens.api import create_app
-from clashlens.api_db import OperationResult
+from clashlens.api_requests import OperationResult
 from clashlens.collector_db import CollectorIntent
 
 

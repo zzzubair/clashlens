@@ -44,7 +44,7 @@ from clashlens import (
 )
 from clashlens.api_db import ApiDatabase
 from clashlens.api_leaderboard import _read_live_board
-from clashlens.api_players import get_player_page
+from clashlens.api_players import read_player_page
 from clashlens.db import Database
 from clashlens.domain import ranked_day_for
 
@@ -241,12 +241,13 @@ def test_unplayed_players_rank_at_5000_until_their_first_battle(
             live = _live(connection, DAY_4 + timedelta(hours=1))
         api = ApiDatabase(connection_info)
         try:
-            pages = {
-                tag: get_player_page(
-                    api, tag, now=DAY_4 + timedelta(hours=1), freshness_seconds=900
-                )
-                for tag in (UNPLAYED, STARTER)
-            }
+            with api.pool.connection() as page_connection:
+                pages = {
+                    tag: read_player_page(
+                        page_connection, tag, now=DAY_4 + timedelta(hours=1), freshness_seconds=900
+                    )
+                    for tag in (UNPLAYED, STARTER)
+                }
         finally:
             api.close()
 
@@ -376,7 +377,7 @@ def test_a_newer_season_zero_profile_replaces_an_accepted_one_at_5000(
             ))
         now = DAY_3 + timedelta(hours=1)
         with psycopg.connect(connection_info) as connection:
-            lookup = api_player_lookup._lookup(connection, UNPLAYED, now)
+            lookup = api_player_lookup.read_lookup(connection, UNPLAYED, now)
             live = _live(connection, now)
             board = connection.execute(
                 """
@@ -391,7 +392,8 @@ def test_a_newer_season_zero_profile_replaces_an_accepted_one_at_5000(
             ).fetchone()
         api = ApiDatabase(connection_info)
         try:
-            page = get_player_page(api, UNPLAYED, now=now, freshness_seconds=900)
+            with api.pool.connection() as page_connection:
+                page = read_player_page(page_connection, UNPLAYED, now=now, freshness_seconds=900)
         finally:
             api.close()
 
@@ -473,7 +475,8 @@ def test_a_malformed_season_at_5000_stays_rejected(
             boards = _boards(connection)
         api = ApiDatabase(connection_info)
         try:
-            page = get_player_page(api, UNPLAYED, now=now, freshness_seconds=900)
+            with api.pool.connection() as page_connection:
+                page = read_player_page(page_connection, UNPLAYED, now=now, freshness_seconds=900)
         finally:
             api.close()
 

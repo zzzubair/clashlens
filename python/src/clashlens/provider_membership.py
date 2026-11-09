@@ -17,8 +17,10 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
-from . import api_db, api_discord_alerts
-from .api_db import ApiDatabase, OperationResult, RequestBinding, _text
+from . import api_discord_alerts, api_requests
+from .api_db import ApiDatabase
+from .api_requests import OperationResult, RequestBinding
+from .db_rows import text_value
 from .login_sessions import record_identity_removal, record_logout
 
 
@@ -92,7 +94,7 @@ def read_membership(
     ).fetchone()
     if current is None:
         return ProviderMembership.FREE
-    if _text(current[0]) != provider_subject:
+    if text_value(current[0]) != provider_subject:
         return ProviderMembership.PROVIDER_TAKEN
     return ProviderMembership.ATTACHED
 
@@ -112,9 +114,9 @@ def link_provider(
         with connection.transaction():
             if not _lock_account(connection, account_id):
                 result = OperationResult(404, {"error": "account_not_found"})
-                api_db._complete_request(connection, binding.request_id, result)
+                api_requests.complete_request(connection, binding.request_id, result)
                 return result
-            existing = api_db._reserve_request(connection, binding)
+            existing = api_requests.reserve_request(connection, binding)
             if existing is not None:
                 return existing
             membership = read_membership(connection, account_id, provider, provider_subject)
@@ -123,7 +125,7 @@ def link_provider(
                 ProviderMembership.PROVIDER_TAKEN,
             ):
                 result = OperationResult(409, {"error": "provider_identity_conflict"})
-                api_db._complete_request(connection, binding.request_id, result)
+                api_requests.complete_request(connection, binding.request_id, result)
                 return result
             if membership is ProviderMembership.FREE:
                 inserted = connection.execute(
@@ -138,7 +140,7 @@ def link_provider(
                 if inserted.rowcount != 1:
                     # The unique constraints arbitrate absent-key races.
                     result = OperationResult(409, {"error": "provider_identity_conflict"})
-                    api_db._complete_request(connection, binding.request_id, result)
+                    api_requests.complete_request(connection, binding.request_id, result)
                     return result
                 _audit_provider_event(
                     connection,
@@ -154,7 +156,7 @@ def link_provider(
                 # each attack alert switch again.
                 api_discord_alerts.ask_to_confirm_again(connection, account_id)
             result = OperationResult(200, {"providers": _account_providers(connection, account_id)})
-            api_db._complete_request(connection, binding.request_id, result)
+            api_requests.complete_request(connection, binding.request_id, result)
             return result
 
 
@@ -179,9 +181,9 @@ def unlink_provider(
         with connection.transaction():
             if not _lock_account(connection, account_id):
                 result = OperationResult(404, {"error": "account_not_found"})
-                api_db._complete_request(connection, binding.request_id, result)
+                api_requests.complete_request(connection, binding.request_id, result)
                 return result
-            existing = api_db._reserve_request(connection, binding)
+            existing = api_requests.reserve_request(connection, binding)
             if existing is not None:
                 return existing
             membership = read_membership(
@@ -215,7 +217,7 @@ def unlink_provider(
                 result = OperationResult(
                     200, {"providers": _account_providers(connection, account_id)}
                 )
-            api_db._complete_request(connection, binding.request_id, result)
+            api_requests.complete_request(connection, binding.request_id, result)
             return result
 
 
@@ -230,7 +232,7 @@ def _lock_account(connection: Any, account_id: int) -> bool:
 
 def _account_providers(connection: Any, account_id: int) -> list[str]:
     return [
-        _text(row[0])
+        text_value(row[0])
         for row in connection.execute(
             """
             SELECT provider FROM account_provider_identities

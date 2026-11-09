@@ -357,7 +357,6 @@ def test_retry_keeps_original_incident_even_if_it_recovers(runtime, status, caps
     assert "delivery failed" in err
     assert FAKE_WEBHOOK not in err
 
-
 def test_failed_recovery_retries_without_resending_alert(runtime):
     rt = runtime
     trigger(rt, "reads")
@@ -399,7 +398,6 @@ def test_missing_or_public_webhook_fails_loudly(runtime, monkeypatch, capsys, mo
     assert "Webhook file" in capsys.readouterr().err
     assert not rt.attempts
 
-
 def test_thresholds_are_strict_and_restarts_are_per_service(runtime):
     rt = runtime
     rt.disk_used = 80
@@ -413,7 +411,6 @@ def test_thresholds_are_strict_and_restarts_are_per_service(runtime):
     rt.metrics["clashlens_collector_last_success_age_seconds"] = 600
     assert rt.run() == 0
     assert len(rt.posts) == 1
-
 
 def test_reset_pause_is_excluded_but_stuck_reset_work_still_alerts(runtime):
     rt = runtime
@@ -936,7 +933,8 @@ def test_failed_or_pending_checks_keep_the_confirmed_profile_time(
             ))
 
         def assert_time(now, expected, trophies):
-            page = api_players.get_player_page(api, "#2PP", now=now, freshness_seconds=900)
+            with api.pool.connection() as page_connection:
+                page = api_players.read_player_page(page_connection, "#2PP", now=now, freshness_seconds=900)
             board = api_leaderboard.get_live_leaderboard(api, limit=1, now=now)
             [entry] = board["entries"]
             assert page["observed_at"] == entry["observed_at"] == expected.isoformat()
@@ -1289,6 +1287,8 @@ def test_private_probe_detects_real_api_route_database_failure(runtime, monkeypa
 
     class Pool:
         failed = False
+        timeout = 5.0
+        max_size = 8
 
         @contextmanager
         def connection(self):

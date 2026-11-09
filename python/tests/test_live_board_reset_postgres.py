@@ -68,11 +68,12 @@ def _live(story: Story, now, focus_tag: str | None = None) -> dict[str, tuple]:
     try:
         board = api_leaderboard.get_live_leaderboard(
             api, limit=100, now=now, focus_tag=focus_tag)
-        pages = {
-            entry["tag"]: api_players.get_player_page(
-                api, entry["tag"], now=now, freshness_seconds=600)
-            for entry in board["entries"]
-        } if board is not None else {}
+        with api.pool.connection() as page_connection:
+            pages = {
+                entry["tag"]: api_players.read_player_page(
+                    page_connection, entry["tag"], now=now, freshness_seconds=600)
+                for entry in board["entries"]
+            } if board is not None else {}
     finally:
         api.close()
     assert board is not None

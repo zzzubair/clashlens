@@ -41,7 +41,8 @@ from bot.store import Store
 from bot.summaries import Summaries, Summary, SummaryLoop
 from clashlens import api_view_as
 from clashlens.api import create_app
-from clashlens.api_db import ApiDatabase, RequestBinding
+from clashlens.api_db import ApiDatabase
+from clashlens.api_requests import RequestBinding
 
 OWNER_DISCORD = "100000000000000007"
 OTHER_DISCORD = "100000000000000008"

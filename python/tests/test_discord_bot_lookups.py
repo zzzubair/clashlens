@@ -25,7 +25,7 @@ from test_discord_bot import (
 
 from bot.commands import Commands
 from bot.discord_app import DiscordApp
-from clashlens.api_db import _screen_daily_log_with_events
+from clashlens.api_player_presentation import screen_daily_log_with_events
 
 
 class LookupStore(FakeStore):
@@ -140,7 +140,7 @@ def season_page() -> dict[str, Any]:
         moment = start + timedelta(days=number - 1)
         attacks = [item for item in battles if item["lens"] == "offense"]
         defenses = [item for item in battles if item["lens"] == "defense"]
-        day = _screen_daily_log_with_events(
+        day = screen_daily_log_with_events(
             {
                 "ranked_day_start": moment.isoformat(),
                 "ranked_day_end": (moment + timedelta(days=1)).isoformat(),

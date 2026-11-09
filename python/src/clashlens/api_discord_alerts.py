@@ -16,8 +16,10 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any
 
-from . import api_accounts, api_db
-from .api_db import ApiDatabase, OperationResult, RequestBinding, _text
+from . import api_players, api_requests
+from .api_db import ApiDatabase
+from .api_requests import OperationResult, RequestBinding
+from .db_rows import text_value
 
 # Whether the account `alert` names may get the DMs of the player it names:
 # the player is linked to it, or it is a site owner (migrations 0138, 0139),
@@ -40,9 +42,9 @@ def get_attack_alerts(database: ApiDatabase, account_id: int) -> dict[str, Any]:
     be delivered when nothing has been delivered since and no confirmation
     has been asked for since: a switch going on or Discord connected again."""
     with database.pool.connection() as connection:
-        players = api_accounts._verified_players(connection, account_id, limit=None)
+        players = api_players.verified_players(connection, account_id, limit=None)
         summary_on = {
-            _text(row[0])
+            text_value(row[0])
             for row in connection.execute(
                 """
                 SELECT player.normalized_tag
@@ -54,7 +56,7 @@ def get_attack_alerts(database: ApiDatabase, account_id: int) -> dict[str, Any]:
             ).fetchall()
         }
         on = {
-            _text(row[0])
+            text_value(row[0])
             for row in connection.execute(
                 """
                 SELECT player.normalized_tag
@@ -90,8 +92,8 @@ def get_attack_alerts(database: ApiDatabase, account_id: int) -> dict[str, Any]:
     undelivered = None
     if newest is not None and newest[0] in ("refused", "failed"):
         undelivered = {
-            "tag": _text(newest[3]),
-            "reason": "unreachable" if newest[0] == "failed" else _text(newest[1]),
+            "tag": text_value(newest[3]),
+            "reason": "unreachable" if newest[0] == "failed" else text_value(newest[1]),
             "at": newest[2].isoformat(),
         }
     return {
@@ -207,27 +209,18 @@ def _set_own_switch(
 ) -> OperationResult:
     with database.pool.connection() as connection:
         with connection.transaction():
-            existing = api_db._reserve_request(connection, binding)
+            existing = api_requests.reserve_request(connection, binding)
             if existing is not None:
                 return existing
             # Locking the ownership row holds off a transfer until this commits,
             # so the migration 0108 or 0112 trigger then forgets the switch.
-            link = connection.execute(
-                """
-                SELECT link.player_id, link.account_id
-                FROM verified_player_links AS link
-                JOIN players AS player ON player.id = link.player_id
-                WHERE player.normalized_tag = %s
-                FOR SHARE OF link
-                """,
-                (normalized_tag,),
-            ).fetchone()
+            link = api_players.verified_player_owner(connection, normalized_tag)
             if link is None or int(link[1]) != binding.account_id:
                 result = OperationResult(404, {"error": "player_not_verified"})
             else:
                 flip(connection, switch, int(link[1]), int(link[0]), SwitchState.of(on))
                 result = OperationResult(200, {"tag": normalized_tag, answer: on})
-            api_db._complete_request(connection, binding.request_id, result)
+            api_requests.complete_request(connection, binding.request_id, result)
             return result
 
 
@@ -235,7 +228,7 @@ def set_dark_picture(database: ApiDatabase, binding: RequestBinding, *, on: bool
     """Turn the account's dark attack alert picture on or off."""
     with database.pool.connection() as connection:
         with connection.transaction():
-            existing = api_db._reserve_request(connection, binding)
+            existing = api_requests.reserve_request(connection, binding)
             if existing is not None:
                 return existing
             if on:
@@ -250,5 +243,5 @@ def set_dark_picture(database: ApiDatabase, binding: RequestBinding, *, on: bool
                     (binding.account_id,),
                 )
             result = OperationResult(200, {"dark_picture": on})
-            api_db._complete_request(connection, binding.request_id, result)
+            api_requests.complete_request(connection, binding.request_id, result)
             return result

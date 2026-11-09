@@ -12,7 +12,7 @@ from domain_test_support import domain_database
 from test_crews_postgres import Site, _while_held
 
 from clashlens import api_accounts, api_crews, api_discord_alerts, api_overlays
-from clashlens.api_db import RequestBinding
+from clashlens.api_requests import RequestBinding
 
 
 @pytest.fixture

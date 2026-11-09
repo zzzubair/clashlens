@@ -1,18 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
-from . import api_db
-from .api_db import (
-    ApiDatabase,
-    OperationResult,
-    PermitResult,
-    RequestBinding,
-    VerificationReservation,
-    _text,
-)
+from . import api_db, api_player_lookup, api_requests
+from .api_db import ApiDatabase
+from .api_requests import OperationResult, RequestBinding
+from .db_rows import text_value
 from .verification import KeyAction, VerificationOutcome
 
 # New verification attempts one account may start in any minute.
@@ -20,6 +17,16 @@ VERIFICATION_ATTEMPTS_PER_MINUTE = 6
 # How long a support transfer candidate can be used after its verification.
 TRANSFER_CANDIDATE_MINUTES = 15
 
+
+@dataclass(frozen=True, slots=True)
+class PermitResult:
+    granted: bool
+    reason: str
+
+@dataclass(frozen=True, slots=True)
+class VerificationReservation:
+    fresh: bool
+    result: OperationResult | None
 
 class CredentialState(StrEnum):
     """Health of one shared official API key (``shared_api_credentials.state``).
@@ -89,7 +96,7 @@ class VerificationAnswer(StrEnum):
     ``player_link_verification_audits.outcome`` records it.
 
     ``reserve_verification`` saves it ``PENDING`` with the request's
-    ``private_api_requests`` row (``api_db.RequestPhase``). Exactly one final
+    ``private_api_requests`` row (``api_requests.RequestPhase``). Exactly one final
     answer then replaces ``PENDING``, in the transaction that saves the
     request's response: ``complete_verification`` (``verification_answer``
     picks it), ``complete_invalid_verification_request``, or, once the
@@ -234,7 +241,7 @@ def acquire_official_permit(
                 assert counts is not None and budgets is not None
                 return int(counts[0]), int(counts[1]), int(budgets[0]), int(budgets[1])
 
-            answer = permit_answer(bool(decision[0]), _text(decision[1]), budget)
+            answer = permit_answer(bool(decision[0]), text_value(decision[1]), budget)
             return PermitResult(answer is PermitAnswer.GRANTED, answer)
 
 
@@ -325,13 +332,13 @@ def reserve_verification(
                             },
                         ),
                     )
-            existing = api_db._reserve_request(connection,
+            existing = api_requests.reserve_request(connection,
                 binding,
-                recover_expired_verification=True,
+                recover_expired=recover_expired_verification,
             )
             if existing is not None:
                 return VerificationReservation(False, existing)
-            player_id = api_db._ensure_player(connection, normalized_tag)
+            player_id = api_player_lookup.ensure_player(connection, normalized_tag)
             connection.execute(
                 """
                 INSERT INTO player_link_verification_audits (
@@ -354,8 +361,8 @@ def complete_verification(
 ) -> OperationResult:
     with database.pool.connection() as connection:
         with connection.transaction():
-            api_db._assert_request_binding(connection, binding)
-            api_db._lock_api_player(connection, normalized_tag)
+            api_requests.assert_request_binding(connection, binding)
+            api_db.lock_api_player(connection, normalized_tag)
             player = connection.execute(
                 """
                 SELECT id FROM players WHERE normalized_tag = %s
@@ -440,7 +447,7 @@ def complete_verification(
             )
             if updated.rowcount != 1:
                 raise RuntimeError("verification audit reservation was lost")
-            api_db._complete_request(connection, binding.request_id, result)
+            api_requests.complete_request(connection, binding.request_id, result)
             return result
 
 
@@ -453,7 +460,7 @@ def complete_invalid_verification_request(
     """Close a reserved request after safe body validation fails."""
     with database.pool.connection() as connection:
         with connection.transaction():
-            api_db._assert_request_binding(connection, binding)
+            api_requests.assert_request_binding(connection, binding)
             result = OperationResult(422, {"error": "invalid_request"})
             updated = connection.execute(
                 """
@@ -470,7 +477,38 @@ def complete_invalid_verification_request(
             )
             if updated.rowcount != 1:
                 raise RuntimeError("verification audit reservation was lost")
-            api_db._complete_request(connection, binding.request_id, result)
+            api_requests.complete_request(connection, binding.request_id, result)
             return result
 
 
+def recover_expired_verification(
+    connection: Any, binding: RequestBinding
+) -> OperationResult | None:
+    tag_row = connection.execute(
+        """
+        SELECT player.normalized_tag
+        FROM player_link_verification_audits AS audit
+        JOIN players AS player ON player.id = audit.player_id
+        WHERE audit.request_id = %s AND audit.outcome = 'pending'
+        FOR UPDATE OF audit
+        """,
+        (binding.request_id,),
+    ).fetchone()
+    if tag_row is not None:
+        result = OperationResult(
+            503,
+            {"status": "verification_unavailable", "tag": text_value(tag_row[0])},
+        )
+        updated = connection.execute(
+            """
+            UPDATE player_link_verification_audits
+            SET outcome = 'verification_unavailable',
+                completed_at = clock_timestamp()
+            WHERE request_id = %s AND outcome = 'pending'
+            """,
+            (binding.request_id,),
+        )
+        if updated.rowcount == 1:
+            api_requests.complete_request(connection, binding.request_id, result)
+            return result
+    return None

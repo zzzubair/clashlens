@@ -21,7 +21,8 @@ from bot.__main__ import ConfigError, main, read_token
 from bot.commands import Commands
 from bot.discord_app import DiscordApp, MenuState, build_client
 from bot.replies import GOLD, PLAYER_COLOURS, Site
-from clashlens.api_db import AccountContext, _screen_daily_log_with_events
+from clashlens.api_player_presentation import screen_daily_log_with_events
+from clashlens.api_requests import AccountContext
 from clashlens.domain import ranked_day_for
 
 NOW = datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
@@ -63,7 +64,7 @@ def battle(lens: str, minute: int, stars: int, trophies: int, name: str) -> dict
 def page(tag: str, name: str, battles: list[dict[str, Any]], reasons=()) -> dict[str, Any]:
     attacks = [item for item in battles if item["lens"] == "offense"]
     defenses = [item for item in battles if item["lens"] == "defense"]
-    day = _screen_daily_log_with_events(
+    day = screen_daily_log_with_events(
         {
             "ranked_day_start": TODAY.start.isoformat(),
             "ranked_day_end": TODAY.end.isoformat(),

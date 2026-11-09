@@ -18,13 +18,13 @@ from clashlens import (
     api_leaderboard,
     api_players,
 )
-from clashlens.api_db import (
-    ApiDatabase,
-    RequestBinding,
-    _public_army,
-    _screen_daily_log_with_events,
-    _screen_events,
+from clashlens.api_db import ApiDatabase
+from clashlens.api_player_presentation import (
+    public_army,
+    screen_daily_log_with_events,
+    screen_events,
 )
+from clashlens.api_requests import RequestBinding
 from clashlens.army_decoder import DECODER_VERSION
 from clashlens.catalog import CATALOG_VERSION
 from clashlens.domain import ranked_day_for
@@ -236,9 +236,10 @@ def test_public_saved_operations_are_bounded_and_screen_ready(
             seed_profile(database, "#2PP", 6000)
             seed_profile(database, "#8PY", 6100)
 
-            player = api_players.get_player_page(
-                database, "#2PP", now=NOW, freshness_seconds=900
-            )
+            with database.pool.connection() as page_connection:
+                player = api_players.read_player_page(
+                    page_connection, "#2PP", now=NOW, freshness_seconds=900
+                )
             live = api_leaderboard.get_live_leaderboard(
                 database, limit=100, now=NOW
             )
@@ -290,9 +291,10 @@ def test_player_page_reports_a_player_the_game_no_longer_finds(
             missing_at = NOW + timedelta(minutes=5)
             with database.pool.connection() as connection:
                 seed_check(connection, "#2VUQ8JLC2", "profile", NOW, not_found=missing_at)
-            missing = api_players.get_player_page(
-                database, "#2VUQ8JLC2", now=NOW, freshness_seconds=900
-            )
+            with database.pool.connection() as page_connection:
+                missing = api_players.read_player_page(
+                    page_connection, "#2VUQ8JLC2", now=NOW, freshness_seconds=900
+                )
             live = api_leaderboard.get_live_leaderboard(database, limit=100, now=NOW)
             # A later successful check makes the profile current again.
             with database.pool.connection() as connection:
@@ -300,9 +302,10 @@ def test_player_page_reports_a_player_the_game_no_longer_finds(
                     "UPDATE collector_response_state SET last_success_at = %s",
                     (missing_at + timedelta(minutes=5),),
                 )
-            found = api_players.get_player_page(
-                database, "#2VUQ8JLC2", now=NOW, freshness_seconds=900
-            )
+            with database.pool.connection() as page_connection:
+                found = api_players.read_player_page(
+                    page_connection, "#2VUQ8JLC2", now=NOW, freshness_seconds=900
+                )
         finally:
             database.close()
 
@@ -429,9 +432,10 @@ def test_player_screen_ready_current_day_preserves_partial_inferred_evidence(
                 connection.commit()
             seed_league_history(database, "#2PP", "1781499600")
 
-            player = api_players.get_player_page(
-                database, "#2PP", now=NOW, freshness_seconds=900
-            )
+            with database.pool.connection() as page_connection:
+                player = api_players.read_player_page(
+                    page_connection, "#2PP", now=NOW, freshness_seconds=900
+                )
 
             assert player is not None
             [current_day] = player["screen_ready"]["days"]
@@ -509,9 +513,10 @@ def test_player_page_sends_partial_coverage_for_an_uncertain_current_day(
                 connection.commit()
             seed_league_history(database, "#2UU", "1781499600")
 
-            player = api_players.get_player_page(
-                database, "#2UU", now=NOW, freshness_seconds=900
-            )
+            with database.pool.connection() as page_connection:
+                player = api_players.read_player_page(
+                    page_connection, "#2UU", now=NOW, freshness_seconds=900
+                )
 
             assert player is not None
             [current_day] = player["screen_ready"]["days"]
@@ -550,9 +555,10 @@ def test_player_page_withholds_season_days_when_official_history_disagrees(
                 )
                 connection.commit()
 
-            player = api_players.get_player_page(
-                database, "#2PP", now=NOW, freshness_seconds=900
-            )
+            with database.pool.connection() as page_connection:
+                player = api_players.read_player_page(
+                    page_connection, "#2PP", now=NOW, freshness_seconds=900
+                )
         finally:
             database.close()
 
@@ -569,7 +575,7 @@ def test_player_page_withholds_season_days_when_official_history_disagrees(
 
 
 def test_public_army_shows_an_unknown_hero_once_as_unknown() -> None:
-    army = _public_army(
+    army = public_army(
         (
             1,
             "attacker",
@@ -593,7 +599,7 @@ def test_public_army_shows_an_unknown_hero_once_as_unknown() -> None:
 
 
 def test_screen_events_are_ordered_signed_normalized_and_malformed_safe() -> None:
-    offense, defense = _screen_events(
+    offense, defense = screen_events(
         [
             {
                 "lens": "offense",
@@ -671,7 +677,7 @@ def test_screen_events_are_ordered_signed_normalized_and_malformed_safe() -> Non
     assert [event["battle_id"] for event in defense] == ["200"]
     assert defense[0]["trophy_change"] == -30
     assert defense[0]["perspective_disagreement"] is False
-    assert _screen_events(None) == ([], [])
+    assert screen_events(None) == ([], [])
 
 
 def _stored_day(
@@ -720,7 +726,7 @@ def test_recorded_battles_give_the_day_in_progress_a_net_so_far() -> None:
             "player_not_eligible",
         ],
     )
-    screen = _screen_daily_log_with_events(day_27, "high", now)
+    screen = screen_daily_log_with_events(day_27, "high", now)
     assert screen["battles_complete"] is True
     assert screen["attack_gain"] - screen["defense_loss"] == 295 - 139 == 156
     assert screen["net_trophy_change"] is None
@@ -735,7 +741,7 @@ def test_recorded_battles_give_the_day_in_progress_a_net_so_far() -> None:
         # A finished day without all 8 defenses may have lost later battles.
         {**day_27, "ranked_day_end": "2026-10-03T06:00:00+00:00"},
     ]
-    screens = [_screen_daily_log_with_events(day, "high", now) for day in unknown]
+    screens = [screen_daily_log_with_events(day, "high", now) for day in unknown]
     assert [screen["battles_complete"] for screen in screens] == [False] * 4
 
     # Prodigi's Day 24, finished: all 8 of each, so nothing is missing. Its
@@ -746,12 +752,12 @@ def test_recorded_battles_give_the_day_in_progress_a_net_so_far() -> None:
         [-40] * 7 + [-31],
         ["missing_start_battle_log_baseline", "missing_start_baseline"],
     )
-    screen = _screen_daily_log_with_events(day_24, "high", now)
+    screen = screen_daily_log_with_events(day_24, "high", now)
     assert screen["battles_complete"] is True
     assert screen["attack_gain"] - screen["defense_loss"] == 300 - 311 == -11
     assert screen["net_trophy_change"] is None
     mismatch = {**day_24, "partial_reasons": ["trophy_equation_mismatch"]}
-    assert not _screen_daily_log_with_events(mismatch, "high", now)["battles_complete"]
+    assert not screen_daily_log_with_events(mismatch, "high", now)["battles_complete"]
 
     # All 8 attacks and 8 defenses today: none can be missing, whatever
     # checks were missed, unless a battle is disputed.
@@ -761,7 +767,7 @@ def test_recorded_battles_give_the_day_in_progress_a_net_so_far() -> None:
         [-40] * 7 + [-31],
         ["missing_start_battle_log_baseline", "missing_start_baseline"],
     )
-    screen = _screen_daily_log_with_events(all_today, "high", now)
+    screen = screen_daily_log_with_events(all_today, "high", now)
     assert screen["battles_complete"] is True
     assert screen["attack_gain"] - screen["defense_loss"] == -11
     disputed = {
@@ -771,7 +777,7 @@ def test_recorded_battles_give_the_day_in_progress_a_net_so_far() -> None:
             "duplicate_contribution_disagreement",
         ],
     }
-    assert not _screen_daily_log_with_events(disputed, "high", now)["battles_complete"]
+    assert not screen_daily_log_with_events(disputed, "high", now)["battles_complete"]
 
 
 def test_player_screen_ready_limits_season_days_to_current_official_season(
@@ -854,9 +860,10 @@ def test_player_screen_ready_limits_season_days_to_current_official_season(
                 )
                 connection.commit()
 
-            player = api_players.get_player_page(
-                database, "#2PP", now=NOW, freshness_seconds=900
-            )
+            with database.pool.connection() as page_connection:
+                player = api_players.read_player_page(
+                    page_connection, "#2PP", now=NOW, freshness_seconds=900
+                )
 
             assert player is not None
             screen = player["screen_ready"]
@@ -976,9 +983,10 @@ def test_player_page_shows_each_day_rank_on_its_reset_board(
                 board(6, {other: 1, player: 5}, version=2)
                 connection.commit()
 
-            page = api_players.get_player_page(
-                database, "#2PP", now=NOW, freshness_seconds=900
-            )
+            with database.pool.connection() as page_connection:
+                page = api_players.read_player_page(
+                    page_connection, "#2PP", now=NOW, freshness_seconds=900
+                )
 
             assert page is not None
             assert {
@@ -1042,9 +1050,10 @@ def test_player_page_hides_saved_net_for_days_missing_battles(
                 )
                 connection.commit()
 
-            player = api_players.get_player_page(
-                database, "#2PP", now=NOW, freshness_seconds=900
-            )
+            with database.pool.connection() as page_connection:
+                player = api_players.read_player_page(
+                    page_connection, "#2PP", now=NOW, freshness_seconds=900
+                )
 
             assert player is not None
             screen = player["screen_ready"]
@@ -1311,9 +1320,10 @@ def test_busiest_player_page_stays_well_under_the_response_limit(
                         )
                 connection.commit()
 
-            player = api_players.get_player_page(
-                database, "#2PP", now=NOW, freshness_seconds=900
-            )
+            with database.pool.connection() as page_connection:
+                player = api_players.read_player_page(
+                    page_connection, "#2PP", now=NOW, freshness_seconds=900
+                )
 
             assert player is not None
             screen = player["screen_ready"]
@@ -1395,9 +1405,10 @@ def test_player_page_shows_the_newest_copy_of_each_of_the_latest_28_days(
                         )
                 connection.commit()
 
-            player = api_players.get_player_page(
-                database, "#2PP", now=NOW, freshness_seconds=900
-            )
+            with database.pool.connection() as page_connection:
+                player = api_players.read_player_page(
+                    page_connection, "#2PP", now=NOW, freshness_seconds=900
+                )
 
             assert player is not None
             days = {

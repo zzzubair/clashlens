@@ -28,7 +28,7 @@ from domain_test_support import (
 from psycopg.conninfo import make_conninfo
 
 from clashlens import battle_ingestion, season_anchors
-from clashlens.api_db import _screen_events
+from clashlens.api_player_presentation import screen_events
 from clashlens.domain import ranked_day_for
 from clashlens.profile import PROFILE_PARSER_VERSION
 
@@ -587,7 +587,7 @@ def test_battle_logs_enqueue_live_reconciliation_when_projection_changes(
                 assert version_count == versions
                 assert len(latest_battles) == 1
                 assert latest_battles[0]["disagreement"] is True
-                offense, defense = _screen_events(latest_battles)
+                offense, defense = screen_events(latest_battles)
                 assert len(offense + defense) == 1
                 assert (offense + defense)[0]["perspective_disagreement"] is True
         finally:

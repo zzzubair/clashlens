@@ -10,7 +10,8 @@ from test_api_db_public_ops import NOW, seed_profile
 from test_api_migration import migrated_production_database
 
 from clashlens import api_accounts, api_groups, api_players
-from clashlens.api_db import ApiDatabase, _screen_daily_log_with_events
+from clashlens.api_db import ApiDatabase
+from clashlens.api_player_presentation import screen_daily_log_with_events
 from clashlens.domain import ranked_day_for
 
 TODAY = datetime.fromisoformat("2026-08-06T05:00:00+00:00")
@@ -87,7 +88,7 @@ def test_today_withholds_unproven_net_but_keeps_recorded_evidence(
         "attacks": day["attack_count"],
         "defenses": day["defense_count"],
     }
-    player = _screen_daily_log_with_events(day, "high", NOW)
+    player = screen_daily_log_with_events(day, "high", NOW)
     assert player["battles_complete"] is (expected is not None)
 
 
@@ -118,7 +119,7 @@ def test_member_list_and_add_wait_for_current_season(
                 ]
             ):
                 now = at
-                members = api_accounts.list_groups(database, owner, now=now)
+                members = api_groups.list_groups(database, owner, now=now)
                 member = next(
                     g for g in members if g["group_id"] == original.payload["group_id"]
                 )["players"][0]
@@ -135,7 +136,7 @@ def test_member_list_and_add_wait_for_current_season(
                     f"/v1/account/groups/{group_id}/players",
                     {"group_id": group_id, "tag": "#2PP"},
                 )
-                added = api_accounts.add_group_player(
+                added = api_groups.add_group_player(
                     database,
                     binding,
                     group_id=group_id,
@@ -154,7 +155,7 @@ def test_member_list_and_add_wait_for_current_season(
                         added,
                     )
                 elif index == 1:
-                    replay = api_accounts.add_group_player(
+                    replay = api_groups.add_group_player(
                         database,
                         first_binding,
                         group_id=first_group_id,
@@ -175,9 +176,10 @@ def test_member_list_and_add_wait_for_current_season(
                     comparison["players"][0]["trophies"],
                     comparison["players"][0]["season_reset_pending"],
                 ) == (trophies, pending)
-                page = api_players.get_player_page(
-                    database, "#2PP", now=now, freshness_seconds=900
-                )
+                with database.pool.connection() as page_connection:
+                    page = api_players.read_player_page(
+                        page_connection, "#2PP", now=now, freshness_seconds=900
+                    )
                 assert page["season_reset_pending"] is pending
             now = datetime(2026, 10, 5, 5, 2, tzinfo=UTC)
             with database.pool.connection() as connection:
@@ -185,7 +187,7 @@ def test_member_list_and_add_wait_for_current_season(
                     "UPDATE player_profile_versions SET current_league_season_id = %s, trophies = 5000 WHERE normalized_tag = '#2PP'",
                     (ranked_day_for(now).official_season_id,),
                 )
-            member = api_accounts.list_groups(database, owner, now=now)[0]["players"][0]
+            member = api_groups.list_groups(database, owner, now=now)[0]["players"][0]
             assert (member["trophies"], member["season_reset_pending"]) == (5000, False)
         finally:
             database.close()
@@ -282,7 +284,7 @@ def link_player(database: ApiDatabase, account_id: int, tag: str) -> None:
 def create_group(
     database: ApiDatabase, account_id: int, tags: list[str], *, name: str = "Rivals"
 ):
-    return api_accounts.create_group(
+    return api_groups.create_group(
         database,
         account_binding(
             account_id,
@@ -570,12 +572,13 @@ def test_a_totals_only_player_read_keeps_every_number_and_lists_no_battles(
                 ],
             )
             seed_day(database, "#2PP", 2, net=10, state="Partial")
-            full, totals = (
-                api_players.get_player_page(
-                    database, "#2PP", now=NOW, freshness_seconds=900, **extra
+            with database.pool.connection() as page_connection:
+                full, totals = (
+                    api_players.read_player_page(
+                        page_connection, "#2PP", now=NOW, freshness_seconds=900, **extra
+                    )
+                    for extra in ({}, {"battles": False})
                 )
-                for extra in ({}, {"battles": False})
-            )
         finally:
             database.close()
 

@@ -8,19 +8,19 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from . import api_leaderboard, api_player_lookup, live_board
-from .api_db import (
+from .api_db import ApiDatabase
+from .api_player_presentation import (
     PLAYER_SCREEN_READY_VERSION,
-    ApiDatabase,
-    _daily_log,
-    _historical_season_summary,
-    _json_array,
-    _public_confidence,
-    _screen_daily_log_with_events,
-    _text,
-    _withhold_unsupported_entries,
+    daily_log,
+    historical_season_summary,
+    json_array,
+    player_confidence,
+    screen_daily_log_with_events,
+    withhold_unsupported_entries,
 )
 from .army_decoder import SIEGE_TROOP_IDS, DecodedArmy, decode_army_share_code
 from .catalog import unit_label
+from .db_rows import text_value
 from .domain import (
     SEASON_DURATION,
     awaits_season_reset,
@@ -77,8 +77,8 @@ def _season_weeks(
     return [
         {
             "week_start": week_start.astimezone(UTC),
-            "league": _text(league),
-            "entry": None if entry is None else _text(entry),
+            "league": text_value(league),
+            "entry": None if entry is None else text_value(entry),
             "decided_at": decided_at.astimezone(UTC),
         }
         for week_start, league, entry, decided_at in connection.execute(
@@ -92,8 +92,8 @@ def _season_weeks(
     ]
 
 
-def get_player_page(
-    database: ApiDatabase,
+def read_player_page(
+    connection: Any,
     normalized_tag: str,
     *,
     now: datetime,
@@ -102,401 +102,400 @@ def get_player_page(
 ) -> dict[str, Any] | None:
     """A player's page. Without ``battles``, each day keeps its totals but
     lists none of its battles, and no army is named."""
-    with database.pool.connection() as connection:
-        metadata_join, metadata_columns = database._current_profile_metadata()
-        # A player who has not played yet this Season shows the newest
-        # profile that ranks them at 5,000, as the Live Leaderboard does.
-        unplayed = connection.execute(
-            api_leaderboard.UNPLAYED_PROFILE_SQL,
-            {**live_board.season_params(now), "tag": normalized_tag},
-        ).fetchone()
-        unplayed_id = None if unplayed is None else int(unplayed[0])
-        row = connection.execute(
-            f"""
-            SELECT player.normalized_tag, player.active, player.eligibility_state,
-                   profile.name, profile.trophies,
-                   player.current_observed_at,
-                   {metadata_columns},
-                   profile.profile_json -> 'clan' ->> 'name',
-                   player.current_profile_confirmed_at,
-                   profile.current_league_season_id,
-                   {frozen_trophies_sql("player.id", "%s")},
-                   {opening_day_battles_sql("player.id", "%s")},
-                   player.id,
-                   -- The Live Leaderboard's rule: a profile check newer than
-                   -- the last good one said the game has no such player.
-                   (SELECT checked.last_not_found_at
-                    FROM collector_response_state AS checked
-                    WHERE checked.scope = 'player'
-                      AND checked.identity_key = player.normalized_tag
-                      AND checked.endpoint = 'profile'
-                      AND (checked.last_success_at IS NULL
-                           OR checked.last_not_found_at > checked.last_success_at)),
-                   profile.profile_json -> 'clan' ->> 'tag'
-            FROM players AS player
-            JOIN player_profile_versions AS profile
-                ON profile.id = COALESCE(%s::bigint, player.current_profile_version_id)
-            {metadata_join}
-            WHERE player.normalized_tag = %s
-              AND (profile.source_contract_state = 'accepted'
-                   OR profile.id = %s::bigint)
-            """,
-            (season_opening_reset(now), season_opening_reset(now), unplayed_id,
-             normalized_tag, unplayed_id),
-        ).fetchone()
-        if row is None:
-            return None
-        observed_at = (
-            max(row[5], row[11] or row[5]) if unplayed is None else unplayed[1]
-        ).astimezone(UTC)
-        not_found_at = None if row[16] is None else row[16].astimezone(UTC)
-        # A profile naming an earlier Season, or still showing the frozen
-        # pre-Reset trophies on a Season's first day, shows trophies from
-        # before this player's Season reset, not their current Season total.
-        season_reset_pending = unplayed_id is None and awaits_season_reset(
-            _text(row[12]), int(row[4]), row[13], row[14], now
+    metadata_join, metadata_columns = _current_profile_metadata()
+    # A player who has not played yet this Season shows the newest
+    # profile that ranks them at 5,000, as the Live Leaderboard does.
+    unplayed = connection.execute(
+        api_leaderboard.UNPLAYED_PROFILE_SQL,
+        {**live_board.season_params(now), "tag": normalized_tag},
+    ).fetchone()
+    unplayed_id = None if unplayed is None else int(unplayed[0])
+    row = connection.execute(
+        f"""
+        SELECT player.normalized_tag, player.active, player.eligibility_state,
+               profile.name, profile.trophies,
+               player.current_observed_at,
+               {metadata_columns},
+               profile.profile_json -> 'clan' ->> 'name',
+               player.current_profile_confirmed_at,
+               profile.current_league_season_id,
+               {frozen_trophies_sql("player.id", "%s")},
+               {opening_day_battles_sql("player.id", "%s")},
+               player.id,
+               -- The Live Leaderboard's rule: a profile check newer than
+               -- the last good one said the game has no such player.
+               (SELECT checked.last_not_found_at
+                FROM collector_response_state AS checked
+                WHERE checked.scope = 'player'
+                  AND checked.identity_key = player.normalized_tag
+                  AND checked.endpoint = 'profile'
+                  AND (checked.last_success_at IS NULL
+                       OR checked.last_not_found_at > checked.last_success_at)),
+               profile.profile_json -> 'clan' ->> 'tag'
+        FROM players AS player
+        JOIN player_profile_versions AS profile
+            ON profile.id = COALESCE(%s::bigint, player.current_profile_version_id)
+        {metadata_join}
+        WHERE player.normalized_tag = %s
+          AND (profile.source_contract_state = 'accepted'
+               OR profile.id = %s::bigint)
+        """,
+        (season_opening_reset(now), season_opening_reset(now), unplayed_id,
+         normalized_tag, unplayed_id),
+    ).fetchone()
+    if row is None:
+        return None
+    observed_at = (
+        max(row[5], row[11] or row[5]) if unplayed is None else unplayed[1]
+    ).astimezone(UTC)
+    not_found_at = None if row[16] is None else row[16].astimezone(UTC)
+    # A profile naming an earlier Season, or still showing the frozen
+    # pre-Reset trophies on a Season's first day, shows trophies from
+    # before this player's Season reset, not their current Season total.
+    season_reset_pending = unplayed_id is None and awaits_season_reset(
+        text_value(row[12]), int(row[4]), row[13], row[14], now
+    )
+    age_seconds = max(0, int((now.astimezone(UTC) - observed_at).total_seconds()))
+    # The newest copy of each of the 28 latest days. The days come from the
+    # index alone, so older copies and their battles are never read.
+    daily_rows = connection.execute(
+        """
+        SELECT daily.ranked_day_start, daily.ranked_day_end,
+               daily.official_season_id, daily.season_day_number,
+               daily.version, daily.state, daily.coverage, daily.confidence,
+               daily.attack_count, daily.attack_three_star_count,
+               daily.attack_gain, daily.defense_count,
+               daily.defense_three_star_count, daily.defense_loss,
+               daily.net_trophy_change, daily.adjustments, daily.battles,
+               daily.partial_reasons, ranked_day.start_trophies,
+               ranked_day.input_evidence
+                   #>> '{start_baseline_evidence,start_trophies_source}'
+                   AS start_trophies_source,
+               daily.published_at
+        FROM players AS player
+        CROSS JOIN LATERAL (
+            SELECT DISTINCT saved.ranked_day_start
+            FROM api_player_daily_logs AS saved
+            WHERE saved.player_id = player.id
+            ORDER BY saved.ranked_day_start DESC
+            LIMIT 28
+        ) AS day
+        CROSS JOIN LATERAL (
+            SELECT ranked_day_start, ranked_day_end, official_season_id,
+                   season_day_number, version, state, coverage, confidence,
+                   attack_count, attack_three_star_count, attack_gain,
+                   defense_count, defense_three_star_count, defense_loss,
+                   net_trophy_change, adjustments, battles, partial_reasons,
+                   ranked_day_version_id, published_at
+            FROM api_player_daily_logs AS saved
+            WHERE saved.player_id = player.id
+              AND saved.ranked_day_start = day.ranked_day_start
+            ORDER BY saved.version DESC
+            LIMIT 1
+        ) AS daily
+        LEFT JOIN ranked_day_versions AS ranked_day
+            ON ranked_day.id = daily.ranked_day_version_id
+        WHERE player.normalized_tag = %s
+        ORDER BY daily.ranked_day_start DESC
+        """,
+        (normalized_tag,),
+    ).fetchall()
+    history_updated_at = max(
+        (day[20].astimezone(UTC) for day in daily_rows), default=None
+    )
+    public_confidence = player_confidence(bool(row[1]), text_value(row[2]))
+    # Events keep only the army_share_code: the page draws each army
+    # from it, with army_units naming every unit once per page.
+    screen_days = [
+        screen_daily_log_with_events(day, public_confidence, now)
+        for day in map(daily_log, daily_rows)
+    ]
+    now_utc = now.astimezone(UTC)
+    current_day_pair = next(
+        (
+            (raw_day, screen_day)
+            for raw_day, screen_day in zip(daily_rows, screen_days, strict=True)
+            if raw_day[1] is not None
+            and raw_day[0].astimezone(UTC) <= now_utc < raw_day[1].astimezone(UTC)
+        ),
+        None,
+    )
+    current_day_raw = None if current_day_pair is None else current_day_pair[0]
+    current_day = None if current_day_pair is None else current_day_pair[1]
+    season_context = _current_history_season(connection, normalized_tag, now_utc)
+    season_anchor_conflict = False
+    if season_context is not None and current_day_raw is not None:
+        season_anchor_conflict = (
+            current_day_raw[2] is None
+            or current_day_raw[3] is None
+            or text_value(current_day_raw[2]) != season_context["id"]
+            or int(current_day_raw[3]) != season_context["current_day_number"]
         )
-        age_seconds = max(0, int((now.astimezone(UTC) - observed_at).total_seconds()))
-        # The newest copy of each of the 28 latest days. The days come from the
-        # index alone, so older copies and their battles are never read.
-        daily_rows = connection.execute(
-            """
-            SELECT daily.ranked_day_start, daily.ranked_day_end,
-                   daily.official_season_id, daily.season_day_number,
-                   daily.version, daily.state, daily.coverage, daily.confidence,
-                   daily.attack_count, daily.attack_three_star_count,
-                   daily.attack_gain, daily.defense_count,
-                   daily.defense_three_star_count, daily.defense_loss,
-                   daily.net_trophy_change, daily.adjustments, daily.battles,
-                   daily.partial_reasons, ranked_day.start_trophies,
-                   ranked_day.input_evidence
-                       #>> '{start_baseline_evidence,start_trophies_source}'
-                       AS start_trophies_source,
-                   daily.published_at
-            FROM players AS player
-            CROSS JOIN LATERAL (
-                SELECT DISTINCT saved.ranked_day_start
-                FROM api_player_daily_logs AS saved
-                WHERE saved.player_id = player.id
-                ORDER BY saved.ranked_day_start DESC
-                LIMIT 28
-            ) AS day
-            CROSS JOIN LATERAL (
-                SELECT ranked_day_start, ranked_day_end, official_season_id,
-                       season_day_number, version, state, coverage, confidence,
-                       attack_count, attack_three_star_count, attack_gain,
-                       defense_count, defense_three_star_count, defense_loss,
-                       net_trophy_change, adjustments, battles, partial_reasons,
-                       ranked_day_version_id, published_at
-                FROM api_player_daily_logs AS saved
-                WHERE saved.player_id = player.id
-                  AND saved.ranked_day_start = day.ranked_day_start
-                ORDER BY saved.version DESC
-                LIMIT 1
-            ) AS daily
-            LEFT JOIN ranked_day_versions AS ranked_day
-                ON ranked_day.id = daily.ranked_day_version_id
-            WHERE player.normalized_tag = %s
-            ORDER BY daily.ranked_day_start DESC
-            """,
-            (normalized_tag,),
-        ).fetchall()
-        history_updated_at = max(
-            (day[20].astimezone(UTC) for day in daily_rows), default=None
-        )
-        public_confidence = _public_confidence(bool(row[1]), _text(row[2]))
-        # Events keep only the army_share_code: the page draws each army
-        # from it, with army_units naming every unit once per page.
-        screen_days = [
-            _screen_daily_log_with_events(day, public_confidence, now)
-            for day in map(_daily_log, daily_rows)
-        ]
-        now_utc = now.astimezone(UTC)
-        current_day_pair = next(
-            (
-                (raw_day, screen_day)
-                for raw_day, screen_day in zip(daily_rows, screen_days, strict=True)
-                if raw_day[1] is not None
-                and raw_day[0].astimezone(UTC) <= now_utc < raw_day[1].astimezone(UTC)
-            ),
-            None,
-        )
-        current_day_raw = None if current_day_pair is None else current_day_pair[0]
-        current_day = None if current_day_pair is None else current_day_pair[1]
-        season_context = _current_history_season(connection, normalized_tag, now_utc)
-        season_anchor_conflict = False
-        if season_context is not None and current_day_raw is not None:
-            season_anchor_conflict = (
-                current_day_raw[2] is None
-                or current_day_raw[3] is None
-                or _text(current_day_raw[2]) != season_context["id"]
-                or int(current_day_raw[3]) != season_context["current_day_number"]
-            )
-        calendar = ranked_day_for(now_utc)
-        season_weeks = _season_weeks(connection, int(row[15]), calendar.season_start)
-        newest_legend_week = max(
-            (week for week in season_weeks if week["league"] == "legend_i"),
-            key=lambda week: week["week_start"],
-            default=None,
-        )
-        if season_context is None and current_day_raw is None and newest_legend_week:
-            # A player who left Legend I before finishing any Season there has
-            # no league history row and no Legend day now. The weekly league
-            # record still says this Season held their Legend I days.
-            season_context = {
-                "id": calendar.official_season_id,
-                "current_day_number": calendar.day_number,
-                "start": calendar.season_start,
-                "end": calendar.season_end,
-                "anchor_source": "weekly_league_record",
-                "anchor_observed_at": newest_legend_week["decided_at"],
-            }
-        if season_context is None and (
-            current_day_raw is not None
-            and current_day_raw[2] is not None
-            and current_day_raw[3] is not None
-        ):
-            season_start = current_day_raw[0].astimezone(UTC) - timedelta(
-                days=int(current_day_raw[3]) - 1
-            )
-            season_context = {
-                "id": _text(current_day_raw[2]),
-                "current_day_number": int(current_day_raw[3]),
-                "start": season_start,
-                "end": season_start + SEASON_DURATION,
-                "anchor_source": "daily_publication",
-                "anchor_observed_at": current_day_raw[20].astimezone(UTC),
-            }
-        season_rows = []
-        if (
-            season_context is not None
-            and not season_anchor_conflict
-            and (len(daily_rows) < 28 or daily_rows[-1][0] <= season_context["start"])
-        ):
-            # The 28 latest days hold every day from the oldest of them on,
-            # so here they hold all of the Season's: its days are these rows,
-            # each already the newest copy, without reading them again.
-            season_rows = sorted(
-                (
-                    day
-                    for day in daily_rows
-                    if season_context["start"] <= day[0] < season_context["end"]
-                    and _text(day[2]) == season_context["id"]
-                ),
-                key=lambda day: (day[3] is not None, day[3] or 0, day[0]),
-                reverse=True,
-            )
-        elif season_context is not None and not season_anchor_conflict:
-            # A season is exactly 28 ranked days. Bound this read to the
-            # confirmed season while retaining the latest frozen
-            # publication for each ranked-day start. Filtering before the
-            # bound prevents previous-season rows from filling the result.
-            season_rows = connection.execute(
-                """
-                SELECT ranked_day_start, ranked_day_end, official_season_id,
-                       season_day_number, version, state, coverage, confidence,
-                       attack_count, attack_three_star_count, attack_gain,
-                       defense_count, defense_three_star_count, defense_loss,
-                       net_trophy_change, adjustments, battles, partial_reasons,
-                       start_trophies, start_trophies_source
-                FROM (
-                    SELECT DISTINCT ON (daily.ranked_day_start)
-                           daily.ranked_day_start, daily.ranked_day_end,
-                           daily.official_season_id, daily.season_day_number,
-                           daily.version, daily.state, daily.coverage,
-                           daily.confidence, daily.attack_count,
-                           daily.attack_three_star_count, daily.attack_gain,
-                           daily.defense_count, daily.defense_three_star_count,
-                           daily.defense_loss, daily.net_trophy_change,
-                           daily.adjustments, daily.battles, daily.partial_reasons,
-                           ranked_day.start_trophies,
-                           ranked_day.input_evidence
-                           #>> '{start_baseline_evidence,start_trophies_source}'
-                               AS start_trophies_source
-                    FROM api_player_daily_logs AS daily
-                    LEFT JOIN ranked_day_versions AS ranked_day
-                        ON ranked_day.id = daily.ranked_day_version_id
-                    WHERE daily.player_id = (
-                        SELECT id FROM players WHERE normalized_tag = %s
-                    )
-                      AND daily.ranked_day_start >= %s
-                      AND daily.ranked_day_start < %s
-                    ORDER BY daily.ranked_day_start DESC, daily.version DESC
-                ) AS latest_days
-                WHERE official_season_id = %s
-                ORDER BY season_day_number DESC NULLS LAST,
-                         ranked_day_start DESC
-                LIMIT 28
-                """,
-                (
-                    normalized_tag,
-                    season_context["start"],
-                    season_context["end"],
-                    season_context["id"],
-                ),
-            ).fetchall()
-        # Send each day once: the Season's days are almost always among the
-        # recent ones, so the response lists their starts instead.
-        days = {day["ranked_day_start"]: day for day in screen_days}
-        season_day_starts = []
-        for season_row in season_rows:
-            start = season_row[0].astimezone(UTC).isoformat()
-            if start not in days:
-                days[start] = _screen_daily_log_with_events(
-                    _daily_log(season_row), public_confidence, now
-                )
-            season_day_starts.append(start)
-        # Each day's Clash Lens rank on the frozen board saved at its closing
-        # Reset; unknown until that board exists or when it omits the player.
-        ranks = reset_board_ranks(
-            connection,
-            int(row[15]),
-            [day["ranked_day_end"] for day in days.values() if day["ranked_day_end"]],
-        )
-        for day in days.values():
-            end = day["ranked_day_end"]
-            day["reset_rank"] = None if end is None else ranks.get(datetime.fromisoformat(end))
-            if not battles:
-                # Its totals and battles_complete were worked out from them.
-                day["offense_events"], day["defense_events"] = [], []
-        data_quality = []
-        if age_seconds > freshness_seconds:
-            data_quality.append(
-                {
-                    "code": "stale",
-                    "label": "Stale saved profile",
-                    "detail": "The collector has not confirmed this player profile within the current freshness limit.",
-                }
-            )
-        if current_day is None:
-            data_quality.append(
-                {
-                    "code": "unavailable",
-                    "label": "Missing current ranked-day data",
-                    "detail": "No ranked-day publication covers the current UTC time.",
-                }
-            )
-        elif current_day["completeness"]["state"] != "complete":
-            data_quality.append(
-                {
-                    "code": current_day["completeness"]["state"],
-                    "label": "Incomplete ranked-day data",
-                    "detail": current_day["completeness"]["reason"],
-                }
-            )
-        if not_found_at is not None:
-            data_quality.append(
-                {
-                    "code": "unavailable",
-                    "label": "Player not found",
-                    "detail": "Clash of Clans did not find this player at its latest check, so they are left off the Live Leaderboard. The trophies shown are from the last check that found them, and saved Legend days stay as recorded.",
-                }
-            )
-        if season_reset_pending:
-            data_quality.append(
-                {
-                    "code": "uncertain",
-                    "label": "Waiting for this player's Season reset",
-                    "detail": "The latest profile still shows trophies from the previous Season. The new total appears once the game reports this player's Season reset.",
-                }
-            )
-        if season_anchor_conflict:
-            data_quality.append(
-                {
-                    "code": "uncertain",
-                    "label": "Season boundary conflict",
-                    "detail": "The official league history and ranked-day publication disagree, so season days are withheld.",
-                }
-            )
-        return {
-            "tag": _text(row[0]),
-            "name": _text(row[3]),
-            "trophies": int(row[4]),
-            "season_reset_pending": season_reset_pending,
-            "current_league_season_id": _text(row[12]),
-            "eligibility": _text(row[2]),
-            "active": bool(row[1]),
-            "freshness": "fresh" if age_seconds <= freshness_seconds else "stale",
-            "age_seconds": age_seconds,
-            "coverage": "ranked_days" if daily_rows else "profile_only",
-            "observed_at": observed_at.isoformat(),
-            "battle_history_updated_at": (
-                None if history_updated_at is None else history_updated_at.isoformat()
-            ),
-            "source_http_status": int(row[6]),
-            "endpoint_version": _text(row[7]),
-            "schema_version": _text(row[8]),
-            "parser_version": _text(row[9]),
-            "clan": None if row[10] is None else _text(row[10]),
-            "clan_tag": None if row[17] is None else _text(row[17]),
-            # A missing player's saved profile is not current; saved days
-            # keep their own confidence.
-            "public_confidence": "uncertain" if not_found_at else public_confidence,
-            "profile_not_found_at": (
-                None if not_found_at is None else not_found_at.isoformat()
-            ),
-            "screen_ready": {
-                "days": sorted(
-                    days.values(), key=lambda day: day["ranked_day_start"], reverse=True
-                ),
-                "current_day_start": None
-                if current_day is None
-                else current_day["ranked_day_start"],
-                "current_day_published_at": None
-                if current_day_raw is None
-                else current_day_raw[20].astimezone(UTC).isoformat(),
-                "recent_day_starts": [day["ranked_day_start"] for day in screen_days],
-                "season_day_starts": season_day_starts,
-                # The calendar Season's weeks the weekly league record has
-                # decided: a partial Season reads its Legend I weeks here.
-                "season_weeks": [
-                    {
-                        "week_start": week["week_start"].isoformat(),
-                        "league": week["league"],
-                        "entry": week["entry"],
-                    }
-                    for week in season_weeks
-                ],
-                "season": None
-                if season_context is None or season_anchor_conflict
-                else {
-                    "id": season_context["id"],
-                    "current_day_number": season_context["current_day_number"],
-                    "start": season_context["start"].isoformat(),
-                    "end": season_context["end"].isoformat(),
-                    "anchor_source": season_context["anchor_source"],
-                    "anchor_observed_at": season_context[
-                        "anchor_observed_at"
-                    ].isoformat(),
-                },
-                "data_quality": data_quality,
-                "army_units": army_units(
-                    event.get("army_share_code")
-                    for day in days.values()
-                    for event in (*day["offense_events"], *day["defense_events"])
-                ),
-                "provenance": {
-                    "source": "api_player_daily_logs",
-                    "observed_at": observed_at.isoformat(),
-                    "freshness": "fresh"
-                    if age_seconds <= freshness_seconds
-                    else "stale",
-                    "confidence": (
-                        "uncertain" if not_found_at else public_confidence
-                    ),
-                    # Coverage is complete, partial, missing or unknown; an
-                    # uncertain day is not complete, and says why itself.
-                    "coverage": (
-                        "missing"
-                        if current_day is None
-                        else "partial"
-                        if current_day["completeness"]["state"] == "uncertain"
-                        else current_day["completeness"]["state"]
-                    ),
-                    "version": PLAYER_SCREEN_READY_VERSION,
-                },
-            },
+    calendar = ranked_day_for(now_utc)
+    season_weeks = _season_weeks(connection, int(row[15]), calendar.season_start)
+    newest_legend_week = max(
+        (week for week in season_weeks if week["league"] == "legend_i"),
+        key=lambda week: week["week_start"],
+        default=None,
+    )
+    if season_context is None and current_day_raw is None and newest_legend_week:
+        # A player who left Legend I before finishing any Season there has
+        # no league history row and no Legend day now. The weekly league
+        # record still says this Season held their Legend I days.
+        season_context = {
+            "id": calendar.official_season_id,
+            "current_day_number": calendar.day_number,
+            "start": calendar.season_start,
+            "end": calendar.season_end,
+            "anchor_source": "weekly_league_record",
+            "anchor_observed_at": newest_legend_week["decided_at"],
         }
+    if season_context is None and (
+        current_day_raw is not None
+        and current_day_raw[2] is not None
+        and current_day_raw[3] is not None
+    ):
+        season_start = current_day_raw[0].astimezone(UTC) - timedelta(
+            days=int(current_day_raw[3]) - 1
+        )
+        season_context = {
+            "id": text_value(current_day_raw[2]),
+            "current_day_number": int(current_day_raw[3]),
+            "start": season_start,
+            "end": season_start + SEASON_DURATION,
+            "anchor_source": "daily_publication",
+            "anchor_observed_at": current_day_raw[20].astimezone(UTC),
+        }
+    season_rows = []
+    if (
+        season_context is not None
+        and not season_anchor_conflict
+        and (len(daily_rows) < 28 or daily_rows[-1][0] <= season_context["start"])
+    ):
+        # The 28 latest days hold every day from the oldest of them on,
+        # so here they hold all of the Season's: its days are these rows,
+        # each already the newest copy, without reading them again.
+        season_rows = sorted(
+            (
+                day
+                for day in daily_rows
+                if season_context["start"] <= day[0] < season_context["end"]
+                and text_value(day[2]) == season_context["id"]
+            ),
+            key=lambda day: (day[3] is not None, day[3] or 0, day[0]),
+            reverse=True,
+        )
+    elif season_context is not None and not season_anchor_conflict:
+        # A season is exactly 28 ranked days. Bound this read to the
+        # confirmed season while retaining the latest frozen
+        # publication for each ranked-day start. Filtering before the
+        # bound prevents previous-season rows from filling the result.
+        season_rows = connection.execute(
+            """
+            SELECT ranked_day_start, ranked_day_end, official_season_id,
+                   season_day_number, version, state, coverage, confidence,
+                   attack_count, attack_three_star_count, attack_gain,
+                   defense_count, defense_three_star_count, defense_loss,
+                   net_trophy_change, adjustments, battles, partial_reasons,
+                   start_trophies, start_trophies_source
+            FROM (
+                SELECT DISTINCT ON (daily.ranked_day_start)
+                       daily.ranked_day_start, daily.ranked_day_end,
+                       daily.official_season_id, daily.season_day_number,
+                       daily.version, daily.state, daily.coverage,
+                       daily.confidence, daily.attack_count,
+                       daily.attack_three_star_count, daily.attack_gain,
+                       daily.defense_count, daily.defense_three_star_count,
+                       daily.defense_loss, daily.net_trophy_change,
+                       daily.adjustments, daily.battles, daily.partial_reasons,
+                       ranked_day.start_trophies,
+                       ranked_day.input_evidence
+                       #>> '{start_baseline_evidence,start_trophies_source}'
+                           AS start_trophies_source
+                FROM api_player_daily_logs AS daily
+                LEFT JOIN ranked_day_versions AS ranked_day
+                    ON ranked_day.id = daily.ranked_day_version_id
+                WHERE daily.player_id = (
+                    SELECT id FROM players WHERE normalized_tag = %s
+                )
+                  AND daily.ranked_day_start >= %s
+                  AND daily.ranked_day_start < %s
+                ORDER BY daily.ranked_day_start DESC, daily.version DESC
+            ) AS latest_days
+            WHERE official_season_id = %s
+            ORDER BY season_day_number DESC NULLS LAST,
+                     ranked_day_start DESC
+            LIMIT 28
+            """,
+            (
+                normalized_tag,
+                season_context["start"],
+                season_context["end"],
+                season_context["id"],
+            ),
+        ).fetchall()
+    # Send each day once: the Season's days are almost always among the
+    # recent ones, so the response lists their starts instead.
+    days = {day["ranked_day_start"]: day for day in screen_days}
+    season_day_starts = []
+    for season_row in season_rows:
+        start = season_row[0].astimezone(UTC).isoformat()
+        if start not in days:
+            days[start] = screen_daily_log_with_events(
+                daily_log(season_row), public_confidence, now
+            )
+        season_day_starts.append(start)
+    # Each day's Clash Lens rank on the frozen board saved at its closing
+    # Reset; unknown until that board exists or when it omits the player.
+    ranks = reset_board_ranks(
+        connection,
+        int(row[15]),
+        [day["ranked_day_end"] for day in days.values() if day["ranked_day_end"]],
+    )
+    for day in days.values():
+        end = day["ranked_day_end"]
+        day["reset_rank"] = None if end is None else ranks.get(datetime.fromisoformat(end))
+        if not battles:
+            # Its totals and battles_complete were worked out from them.
+            day["offense_events"], day["defense_events"] = [], []
+    data_quality = []
+    if age_seconds > freshness_seconds:
+        data_quality.append(
+            {
+                "code": "stale",
+                "label": "Stale saved profile",
+                "detail": "The collector has not confirmed this player profile within the current freshness limit.",
+            }
+        )
+    if current_day is None:
+        data_quality.append(
+            {
+                "code": "unavailable",
+                "label": "Missing current ranked-day data",
+                "detail": "No ranked-day publication covers the current UTC time.",
+            }
+        )
+    elif current_day["completeness"]["state"] != "complete":
+        data_quality.append(
+            {
+                "code": current_day["completeness"]["state"],
+                "label": "Incomplete ranked-day data",
+                "detail": current_day["completeness"]["reason"],
+            }
+        )
+    if not_found_at is not None:
+        data_quality.append(
+            {
+                "code": "unavailable",
+                "label": "Player not found",
+                "detail": "Clash of Clans did not find this player at its latest check, so they are left off the Live Leaderboard. The trophies shown are from the last check that found them, and saved Legend days stay as recorded.",
+            }
+        )
+    if season_reset_pending:
+        data_quality.append(
+            {
+                "code": "uncertain",
+                "label": "Waiting for this player's Season reset",
+                "detail": "The latest profile still shows trophies from the previous Season. The new total appears once the game reports this player's Season reset.",
+            }
+        )
+    if season_anchor_conflict:
+        data_quality.append(
+            {
+                "code": "uncertain",
+                "label": "Season boundary conflict",
+                "detail": "The official league history and ranked-day publication disagree, so season days are withheld.",
+            }
+        )
+    return {
+        "tag": text_value(row[0]),
+        "name": text_value(row[3]),
+        "trophies": int(row[4]),
+        "season_reset_pending": season_reset_pending,
+        "current_league_season_id": text_value(row[12]),
+        "eligibility": text_value(row[2]),
+        "active": bool(row[1]),
+        "freshness": "fresh" if age_seconds <= freshness_seconds else "stale",
+        "age_seconds": age_seconds,
+        "coverage": "ranked_days" if daily_rows else "profile_only",
+        "observed_at": observed_at.isoformat(),
+        "battle_history_updated_at": (
+            None if history_updated_at is None else history_updated_at.isoformat()
+        ),
+        "source_http_status": int(row[6]),
+        "endpoint_version": text_value(row[7]),
+        "schema_version": text_value(row[8]),
+        "parser_version": text_value(row[9]),
+        "clan": None if row[10] is None else text_value(row[10]),
+        "clan_tag": None if row[17] is None else text_value(row[17]),
+        # A missing player's saved profile is not current; saved days
+        # keep their own confidence.
+        "public_confidence": "uncertain" if not_found_at else public_confidence,
+        "profile_not_found_at": (
+            None if not_found_at is None else not_found_at.isoformat()
+        ),
+        "screen_ready": {
+            "days": sorted(
+                days.values(), key=lambda day: day["ranked_day_start"], reverse=True
+            ),
+            "current_day_start": None
+            if current_day is None
+            else current_day["ranked_day_start"],
+            "current_day_published_at": None
+            if current_day_raw is None
+            else current_day_raw[20].astimezone(UTC).isoformat(),
+            "recent_day_starts": [day["ranked_day_start"] for day in screen_days],
+            "season_day_starts": season_day_starts,
+            # The calendar Season's weeks the weekly league record has
+            # decided: a partial Season reads its Legend I weeks here.
+            "season_weeks": [
+                {
+                    "week_start": week["week_start"].isoformat(),
+                    "league": week["league"],
+                    "entry": week["entry"],
+                }
+                for week in season_weeks
+            ],
+            "season": None
+            if season_context is None or season_anchor_conflict
+            else {
+                "id": season_context["id"],
+                "current_day_number": season_context["current_day_number"],
+                "start": season_context["start"].isoformat(),
+                "end": season_context["end"].isoformat(),
+                "anchor_source": season_context["anchor_source"],
+                "anchor_observed_at": season_context[
+                    "anchor_observed_at"
+                ].isoformat(),
+            },
+            "data_quality": data_quality,
+            "army_units": army_units(
+                event.get("army_share_code")
+                for day in days.values()
+                for event in (*day["offense_events"], *day["defense_events"])
+            ),
+            "provenance": {
+                "source": "api_player_daily_logs",
+                "observed_at": observed_at.isoformat(),
+                "freshness": "fresh"
+                if age_seconds <= freshness_seconds
+                else "stale",
+                "confidence": (
+                    "uncertain" if not_found_at else public_confidence
+                ),
+                # Coverage is complete, partial, missing or unknown; an
+                # uncertain day is not complete, and says why itself.
+                "coverage": (
+                    "missing"
+                    if current_day is None
+                    else "partial"
+                    if current_day["completeness"]["state"] == "uncertain"
+                    else current_day["completeness"]["state"]
+                ),
+                "version": PLAYER_SCREEN_READY_VERSION,
+            },
+        },
+    }
 
 
 def army_units(codes: Iterable[str | None]) -> dict[str, dict[str, Any]]:
@@ -586,8 +585,8 @@ NEWEST_PROFILE_JOIN = """
 
 def player_row(row: Any) -> tuple[int, str, str | None, str | None, str | None]:
     """One PLAYER_ROW_COLUMNS row as ``player_cards`` takes it."""
-    return (int(row[0]), _text(row[1]), *(
-        None if value is None else _text(value) for value in row[2:5]
+    return (int(row[0]), text_value(row[1]), *(
+        None if value is None else text_value(value) for value in row[2:5]
     ))
 
 
@@ -627,7 +626,7 @@ def player_cards(
         ).fetchall()
     }
     today = {
-        int(row[0]): _screen_daily_log_with_events(_daily_log(row[1:]), "high", now)
+        int(row[0]): screen_daily_log_with_events(daily_log(row[1:]), "high", now)
         for row in connection.execute(
             """
             SELECT DISTINCT ON (player_id)
@@ -646,7 +645,7 @@ def player_cards(
     left = left_legend_i(connection, ids, now)
     cards = []
     for player_id, tag, name, clan, league in players:
-        lookup = api_player_lookup._lookup(connection, tag, now)
+        lookup = api_player_lookup.read_lookup(connection, tag, now)
         profile = profiles.get(player_id)
         reason = lookup.get("reason")
         if lookup["state"] == "tracking" and reason is None and profile is None:
@@ -671,7 +670,7 @@ def player_cards(
         elif reason is None and profile is not None:
             # As on the player page: an earlier Season's trophies are no total.
             pending = awaits_season_reset(
-                _text(profile[1]), int(profile[0]), profile[2], profile[3], now
+                text_value(profile[1]), int(profile[0]), profile[2], profile[3], now
             )
             card["trophies"] = None if pending else int(profile[0])
             card["season_reset_pending"] = pending
@@ -726,15 +725,15 @@ def list_player_seasons(
             (normalized_tag,),
         ).fetchall()
         seasons = {
-            _text(row[0]): {
-                "official_season_id": _text(row[0]),
-                "coverage_state": _text(row[1]),
+            text_value(row[0]): {
+                "official_season_id": text_value(row[0]),
+                "coverage_state": text_value(row[1]),
                 "days_observed": int(row[2]),
                 "days_missing": int(row[3]),
                 "start_trophies": None if row[4] is None else int(row[4]),
                 "end_trophies": None
                 if row[5] is None
-                or 28 in _withhold_unsupported_entries(_json_array(row[8]))
+                or 28 in withhold_unsupported_entries(json_array(row[8]))
                 else int(row[5]),
                 "published_at": row[6].astimezone(UTC).isoformat(),
                 "source": "tracked_summary",
@@ -814,7 +813,7 @@ def get_player_season_summary(
         if row is not None:
             columns = [d.name for d in cursor.description]
             record = dict(zip(columns, row))
-            result = _historical_season_summary(record)
+            result = historical_season_summary(record)
             ranks = reset_board_ranks(
                 connection,
                 int(record["player_id"]),
@@ -979,7 +978,7 @@ def _read_known_players(
             {"opening_reset": opening_reset},
         ).fetchall()
     season_id = ranked_day_for(now).official_season_id
-    return season_id, [(*row, _lower(_text(row[1]))) for row in rows]
+    return season_id, [(*row, _lower(text_value(row[1]))) for row in rows]
 
 
 class KnownPlayerNames(SharedCopy[tuple[str, list[tuple[Any, ...]]]]):
@@ -1015,7 +1014,7 @@ def _waits(row: tuple[Any, ...], now: datetime, earlier_season: bool) -> bool:
     one held from a copy read before this Season's opening Reset does: that
     copy cannot show whose Season reset has come."""
     return earlier_season or awaits_season_reset(
-        _text(row[6]), int(row[2]), row[7], row[8], now
+        text_value(row[6]), int(row[2]), row[7], row[8], now
     )
 
 
@@ -1075,15 +1074,122 @@ def search_known_players(
         pending = _waits(row, now, earlier_season)
         results.append(
             {
-                "tag": _text(row[0]),
-                "name": _text(row[1]),
-                "clan": None if row[5] is None else _text(row[5]),
+                "tag": text_value(row[0]),
+                "name": text_value(row[1]),
+                "clan": None if row[5] is None else text_value(row[5]),
                 "trophies": None if pending else int(row[2]),
                 "season_reset_pending": pending,
                 "freshness": "fresh" if age_seconds <= freshness_seconds else "stale",
                 "age_seconds": age_seconds,
                 "observed_at": observed_at.isoformat(),
-                "public_confidence": _public_confidence(True, _text(row[4])),
+                "public_confidence": player_confidence(True, text_value(row[4])),
             }
         )
     return results
+
+
+def _current_profile_metadata() -> tuple[str, str]:
+    return (
+        """
+            LEFT JOIN LATERAL (
+                SELECT effect.source_http_status, effect.endpoint_version,
+                       effect.schema_version, effect.parser_version
+                FROM player_profile_effects AS effect
+                WHERE effect.profile_version_id = profile.id
+                  AND effect.effect_kind = 'current_profile'
+                ORDER BY effect.observed_at DESC, effect.id DESC
+                LIMIT 1
+            ) AS current_effect ON true
+        """,
+        (
+            "COALESCE(current_effect.source_http_status, profile.source_http_status), "
+            "COALESCE(current_effect.endpoint_version, profile.endpoint_version), "
+            "COALESCE(current_effect.schema_version, profile.schema_version), "
+            "COALESCE(current_effect.parser_version, profile.parser_version)"
+        ),
+    )
+
+
+# A public profile shows at most this many verified players.
+PUBLIC_PLAYER_LIMIT = 500
+
+# Trophies come only from accepted Legend statistics. The name comes from the
+# accepted current profile, or else from the newest saved profile, whose name
+# is validated separately from Legend season/tier evidence.
+MEMBER_JOINS = """
+    LEFT JOIN players AS player ON player.id = member.player_id
+    LEFT JOIN player_profile_versions AS accepted
+        ON accepted.id = player.current_profile_version_id
+       AND accepted.source_contract_state = 'accepted'
+    LEFT JOIN LATERAL (
+        SELECT name, player_id FROM player_profile_versions
+        WHERE accepted.id IS NULL AND normalized_tag = player.normalized_tag
+        ORDER BY observed_at DESC, id DESC LIMIT 1
+    ) AS latest ON latest.player_id = player.id
+"""
+
+
+
+
+def group_player(connection: Any, row: Any, now: datetime) -> dict[str, Any]:
+    tag, active, name, trophies, season_id, frozen_trophies, day_battles = row
+    pending = trophies is not None and awaits_season_reset(
+        None if season_id is None else text_value(season_id),
+        int(trophies),
+        frozen_trophies,
+        day_battles,
+        now,
+    )
+    return {
+        "tag": text_value(tag),
+        "name": None if name is None else text_value(name),
+        "trophies": None if trophies is None or pending else int(trophies),
+        "season_reset_pending": pending,
+        "state": "tracking"
+        if active
+        else api_player_lookup.read_lookup(connection, text_value(tag))["state"],
+    }
+
+
+def linked_players(
+    connection: Any, account_id: int, limit: int | None = PUBLIC_PLAYER_LIMIT
+) -> list[tuple[int, str, str | None, str | None, str | None]]:
+    """Each verified player's id, tag, and newest saved name, clan and league,
+    the first `limit` by tag, or all of them when it is None."""
+    rows = connection.execute(
+        f"""
+        SELECT {PLAYER_ROW_COLUMNS}
+        FROM verified_player_links AS link
+        JOIN players AS player ON player.id = link.player_id
+        {NEWEST_PROFILE_JOIN}
+        WHERE link.account_id = %s
+        ORDER BY player.normalized_tag
+        LIMIT %s
+        """,
+        (account_id, limit),
+    ).fetchall()
+    return [player_row(row) for row in rows]
+
+
+def verified_players(
+    connection: Any, account_id: int, limit: int | None = 500
+) -> list[dict[str, Any]]:
+    return [
+        {"tag": tag, "name": name}
+        for _id, tag, name, _clan, _league in linked_players(connection, account_id, limit)
+    ]
+
+
+
+def verified_player_owner(connection: Any, normalized_tag: str) -> Any:
+    """Lock the verified link against transfer until the caller commits."""
+    return connection.execute(
+        """
+        SELECT link.player_id, link.account_id
+        FROM verified_player_links AS link
+        JOIN players AS player ON player.id = link.player_id
+        WHERE player.normalized_tag = %s
+        FOR SHARE OF link
+        """,
+        (normalized_tag,),
+    ).fetchone()

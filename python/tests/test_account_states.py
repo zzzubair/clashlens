@@ -10,8 +10,8 @@ import psycopg
 import pytest
 from domain_test_support import domain_database
 
-from clashlens.api_db import RequestBinding, RequestPhase, _request_phase
 from clashlens.api_player_lookup import RECHECKABLE, LookupState, _check_progress
+from clashlens.api_requests import RequestBinding, RequestPhase, request_phase
 from clashlens.api_verification import (
     CredentialState,
     PermitAnswer,
@@ -63,7 +63,7 @@ def test_each_named_state_list_matches_the_database(
 
 def test_a_saved_request_id_conflicts_waits_replays_or_recovers() -> None:
     def phase(saved=SAVED, state="in_progress", until=None, clock=None):
-        return _request_phase((*saved, state, until), BINDING, clock)
+        return request_phase((*saved, state, until), BINDING, clock)
 
     assert phase(state="complete") is RequestPhase.COMPLETE
     assert phase() is RequestPhase.IN_PROGRESS

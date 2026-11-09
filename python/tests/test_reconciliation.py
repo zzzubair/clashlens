@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
-from clashlens.api_db import _screen_events
+from clashlens.api_player_presentation import screen_events
 from clashlens.domain import ranked_day_for
 from clashlens.reconciliation import (
     BATTLE_EVENT_SERIALIZATION_VERSION,
@@ -1064,7 +1064,7 @@ def test_ranked_day_battle_events_exclude_invalid_and_unselected_rows() -> None:
     ]
     # Publication rows carry each contribution's lens beside its event.
     lenses = {"accepted": "offense", "disagreement": "defense"}
-    offense, defense = _screen_events(
+    offense, defense = screen_events(
         [{"lens": lenses[event["battle_id"]], **event} for event in events]
     )
     assert [event["perspective_disagreement"] for event in offense + defense] == [

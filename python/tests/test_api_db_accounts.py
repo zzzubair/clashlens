@@ -7,8 +7,9 @@ from test_api_db_public_ops import NOW, seed_profile
 from test_api_db_verification import verification_binding
 from test_api_migration import migrated_production_database
 
-from clashlens import api_accounts, api_verification
-from clashlens.api_db import ApiDatabase, RequestBinding
+from clashlens import api_accounts, api_groups, api_verification
+from clashlens.api_db import ApiDatabase
+from clashlens.api_requests import RequestBinding
 from clashlens.verification import VerificationOutcome
 
 
@@ -191,7 +192,7 @@ def test_public_search_finds_linked_players_without_exposing_private_lists(datab
                     outcome=VerificationOutcome.VERIFIED,
                     account_id=owner_id, completed_at=NOW,
                 )
-            api_accounts.create_group(
+            api_groups.create_group(
                 database,
                 account_binding(owner_id, "groups.create", "/v1/account/groups", {"tag": "#P0LQ"}),
                 name="Watch", normalized_name="Watch", normalized_tags=["#P0LQ"],

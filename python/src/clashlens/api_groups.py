@@ -11,17 +11,21 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import uuid4
 
-from . import api_player_lookup
-from .api_db import (
-    ApiDatabase,
-    _battles_so_far_complete,
-    _screen_daily_log,
-    _screen_events,
-    _shown_total,
-    _text,
+import psycopg
+
+from . import api_player_lookup, api_requests
+from .api_db import ApiDatabase
+from .api_player_presentation import (
+    battles_so_far_complete,
+    screen_daily_log,
+    screen_events,
+    shown_total,
 )
-from .api_players import left_legend_i
+from .api_players import MEMBER_JOINS, group_player, left_legend_i
+from .api_requests import OperationResult, RequestBinding
+from .db_rows import text_value
 from .domain import awaits_season_reset, ranked_day_for, season_opening_reset
 from .season_lifecycle import retired_day_ranges
 from .season_reset_sql import frozen_trophies_sql, opening_day_battles_sql
@@ -71,8 +75,8 @@ def get_group_comparison(
         ).fetchall()
         if not rows:
             return None
-        group_name = _text(rows[0][0])
-        members = [(int(row[1]), _text(row[2])) for row in rows if row[1] is not None]
+        group_name = text_value(rows[0][0])
+        members = [(int(row[1]), text_value(row[2])) for row in rows if row[1] is not None]
         if len(members) > MAX_COMPARED_MEMBERS:
             raise GroupTooLarge(len(members))
         own = connection.execute(
@@ -87,7 +91,7 @@ def get_group_comparison(
         ).fetchall()
         own_ids = {int(row[0]) for row in own}
         players: dict[int, dict[str, Any]] = {}
-        for player_id, tag in [*members, *((int(r[0]), _text(r[1])) for r in own)]:
+        for player_id, tag in [*members, *((int(r[0]), text_value(r[1])) for r in own)]:
             players.setdefault(player_id, {"tag": tag, "in_group": False})
         for player_id, _tag in members:
             players[player_id]["in_group"] = True
@@ -142,7 +146,7 @@ def get_group_comparison(
             status = (
                 "tracking"
                 if active
-                else api_player_lookup._lookup(connection, player["tag"])["state"]
+                else api_player_lookup.read_lookup(connection, player["tag"])["state"]
             )
             results.append(
                 {
@@ -175,7 +179,7 @@ def _current(profile: Any, now: datetime, freshness_seconds: int) -> dict[str, A
         return {
             "name": None
             if profile is None or profile[2] is None
-            else _text(profile[2]),
+            else text_value(profile[2]),
             "trophies": None,
             "season_reset_pending": False,
             "observed_at": None,
@@ -185,10 +189,10 @@ def _current(profile: Any, now: datetime, freshness_seconds: int) -> dict[str, A
     observed_at = max(profile[4], profile[5] or profile[4]).astimezone(UTC)
     age_seconds = max(0, int((now - observed_at).total_seconds()))
     pending = awaits_season_reset(
-        _text(profile[6]), int(profile[3]), profile[7], profile[8], now
+        text_value(profile[6]), int(profile[3]), profile[7], profile[8], now
     )
     return {
-        "name": _text(profile[2]),
+        "name": text_value(profile[2]),
         "trophies": None if pending else int(profile[3]),
         "season_reset_pending": pending,
         "observed_at": observed_at.isoformat(),
@@ -233,11 +237,11 @@ def _window(
             state = "retired" if start in retired else "missing"
             days.append({"start": start.isoformat(), "state": state, "net": None})
             continue
-        state = _screen_daily_log(
+        state = screen_daily_log(
             {
-                "state": _text(row[2]),
-                "coverage": _text(row[3]),
-                "confidence": None if row[4] is None else _text(row[4]),
+                "state": text_value(row[2]),
+                "coverage": text_value(row[3]),
+                "confidence": None if row[4] is None else text_value(row[4]),
                 "partial_reasons": list(row[5]) if isinstance(row[5], list) else [],
             },
             "high",
@@ -246,16 +250,16 @@ def _window(
         # late, so it is counted but marked as able to change.
         if state == "complete" and start == day_starts[-1]:
             state = "correcting"
-        day_net = _shown_total(
+        day_net = shown_total(
             row[6],
-            _text(row[3]),
+            text_value(row[3]),
             row[7],
             row[8],
             list(row[5]) if isinstance(row[5], list) else [],
         )
         days.append({"start": start.isoformat(), "state": state, "net": day_net})
         offense_events, defense_events = (
-            _unseen(events, seen) for events in _screen_events(row[9])
+            _unseen(events, seen) for events in screen_events(row[9])
         )
         if state in {"complete", "correcting"} and day_net is not None:
             net += day_net
@@ -309,8 +313,8 @@ def _today(row: Any) -> dict[str, Any]:
     lost = None if row[11] is None else int(row[11])
     attacks = None if row[7] is None else int(row[7])
     defenses = None if row[8] is None else int(row[8])
-    offense, defense = _screen_events(row[9])
-    complete = _battles_so_far_complete(
+    offense, defense = screen_events(row[9])
+    complete = battles_so_far_complete(
         {
             "uncertainty_reasons": list(row[5]) if isinstance(row[5], list) else [],
             "attack_count": attacks,
@@ -352,3 +356,348 @@ def _add_group_difference(players: list[dict[str, Any]]) -> None:
             if other is not player and other["in_group"] and mine.keys() & theirs.keys()
         ]
         player["vs_group"] = round(sum(gaps) / len(gaps), 1) if gaps else None
+
+
+# Saving starts at most the comparison limit of new player checks.
+GROUP_LOOKUP_LIMIT = 20
+
+def create_group(
+    database: ApiDatabase,
+    binding: RequestBinding,
+    *,
+    name: str,
+    normalized_name: str,
+    normalized_tags: list[str],
+) -> OperationResult:
+    with database.pool.connection() as connection:
+        with connection.transaction():
+            existing = api_requests.reserve_request(connection, binding)
+            if existing is not None:
+                return existing
+            public_id = uuid4()
+            try:
+                with connection.transaction():
+                    group = connection.execute(
+                        """
+                        INSERT INTO account_groups (
+                            public_id, account_id, name, normalized_name
+                        ) VALUES (%s, %s, %s, %s)
+                        RETURNING id
+                        """,
+                        (public_id, binding.account_id, name, normalized_name),
+                    ).fetchone()
+                    assert group is not None
+                    _replace_group_players(connection, int(group[0]), normalized_tags)
+            except psycopg.errors.UniqueViolation:
+                result = OperationResult(409, {"error": "group_name_conflict"})
+                api_requests.complete_request(connection, binding.request_id, result)
+                return result
+            except psycopg.errors.CheckViolation as error:
+                if error.diag.constraint_name != "account_groups_limit":
+                    raise
+                result = OperationResult(422, {"error": "group_limit_reached"})
+                api_requests.complete_request(connection, binding.request_id, result)
+                return result
+            result = OperationResult(
+                201,
+                {
+                    "group_id": str(public_id),
+                    "name": name,
+                    "tags": sorted(set(normalized_tags)),
+                },
+            )
+            api_requests.complete_request(connection, binding.request_id, result)
+            return result
+
+
+def update_group(
+    database: ApiDatabase,
+    binding: RequestBinding,
+    *,
+    group_id: str,
+    name: str,
+    normalized_name: str,
+    normalized_tags: list[str] | None,
+) -> OperationResult:
+    with database.pool.connection() as connection:
+        with connection.transaction():
+            existing = api_requests.reserve_request(connection, binding)
+            if existing is not None:
+                return existing
+            try:
+                with connection.transaction():
+                    group = connection.execute(
+                        """
+                        UPDATE account_groups
+                        SET name = %s, normalized_name = %s,
+                            updated_at = clock_timestamp()
+                        WHERE public_id = %s AND account_id = %s
+                        RETURNING id
+                        """,
+                        (name, normalized_name, group_id, binding.account_id),
+                    ).fetchone()
+                    if group is not None and normalized_tags is not None:
+                        _replace_group_players(connection, int(group[0]), normalized_tags)
+            except psycopg.errors.UniqueViolation:
+                result = OperationResult(409, {"error": "group_name_conflict"})
+                api_requests.complete_request(connection, binding.request_id, result)
+                return result
+            if group is None:
+                result = OperationResult(404, {"error": "group_not_found"})
+            else:
+                result = OperationResult(
+                    200,
+                    {
+                        "group_id": group_id,
+                        "name": name,
+                        "tags": sorted(set(normalized_tags))
+                        if normalized_tags is not None
+                        else [player["tag"] for player in _group_players(
+                            connection, int(group[0])
+                        )],
+                    },
+                )
+            api_requests.complete_request(connection, binding.request_id, result)
+            return result
+
+
+def delete_group(
+    database: ApiDatabase,
+    binding: RequestBinding,
+    *,
+    group_id: str,
+) -> OperationResult:
+    with database.pool.connection() as connection:
+        with connection.transaction():
+            existing = api_requests.reserve_request(connection, binding)
+            if existing is not None:
+                return existing
+            deleted = connection.execute(
+                """
+                DELETE FROM account_groups
+                WHERE public_id = %s AND account_id = %s
+                """,
+                (group_id, binding.account_id),
+            )
+            if deleted.rowcount == 1:
+                result = OperationResult(
+                    200, {"deleted": True, "group_id": group_id}
+                )
+            else:
+                result = OperationResult(404, {"error": "group_not_found"})
+            api_requests.complete_request(connection, binding.request_id, result)
+            return result
+
+
+def add_group_player(
+    database: ApiDatabase,
+    binding: RequestBinding,
+    *,
+    group_id: str,
+    normalized_tag: str,
+    now: datetime | None = None,
+) -> OperationResult:
+    """Add one player the game has already confirmed exists."""
+    now = now or datetime.now(UTC)
+    with database.pool.connection() as connection:
+        with connection.transaction():
+            existing = api_requests.reserve_request(connection, binding)
+            if existing is not None:
+                return existing
+            group = _lock_group(connection, binding, group_id)
+            if group is None:
+                result = OperationResult(404, {"error": "group_not_found"})
+            else:
+                # Same order as saving a whole group: the group row, then the tag.
+                api_player_lookup.lock_tag(connection, normalized_tag)
+                members = [
+                    player["tag"]
+                    for player in _group_players(connection, group, now=now)
+                ]
+                state = api_player_lookup.read_lookup(connection, normalized_tag)["state"]
+                if normalized_tag in members:
+                    result = OperationResult(409, {"error": "group_player_exists"})
+                elif len(members) >= MAX_COMPARED_MEMBERS:
+                    result = OperationResult(422, {"error": "group_full"})
+                elif state == api_player_lookup.LookupState.NOT_FOUND:
+                    result = OperationResult(422, {"error": "player_not_found"})
+                elif state not in api_player_lookup.CONFIRMED:
+                    # Unchecked, still checking or a failed check: the caller
+                    # starts or waits for the player lookup and tries again.
+                    result = OperationResult(
+                        409, {"error": "player_not_checked", "state": state}
+                    )
+                else:
+                    connection.execute(
+                        """
+                        INSERT INTO account_group_players (group_id, player_id)
+                        SELECT %s, id FROM players WHERE normalized_tag = %s
+                        """,
+                        (group, normalized_tag),
+                    )
+                    [player] = [
+                        player
+                        for player in _group_players(connection, group, now=now)
+                        if player["tag"] == normalized_tag
+                    ]
+                    result = OperationResult(200, {"group_id": group_id, **player})
+            api_requests.complete_request(connection, binding.request_id, result)
+            return result
+
+
+def remove_group_player(
+    database: ApiDatabase,
+    binding: RequestBinding,
+    *,
+    group_id: str,
+    normalized_tag: str,
+) -> OperationResult:
+    with database.pool.connection() as connection:
+        with connection.transaction():
+            existing = api_requests.reserve_request(connection, binding)
+            if existing is not None:
+                return existing
+            group = _lock_group(connection, binding, group_id)
+            if group is None:
+                result = OperationResult(404, {"error": "group_not_found"})
+            else:
+                removed = connection.execute(
+                    """
+                    DELETE FROM account_group_players AS member
+                    USING players AS player
+                    WHERE member.group_id = %s
+                      AND member.player_id = player.id
+                      AND player.normalized_tag = %s
+                    """,
+                    (group, normalized_tag),
+                )
+                result = OperationResult(
+                    200,
+                    {
+                        "group_id": group_id,
+                        "tag": normalized_tag,
+                        "removed": removed.rowcount == 1,
+                    },
+                )
+            api_requests.complete_request(connection, binding.request_id, result)
+            return result
+
+
+def list_groups(
+    database: ApiDatabase, account_id: int, *, now: datetime | None = None
+) -> list[dict[str, Any]]:
+    now = now or datetime.now(UTC)
+    with database.pool.connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT group_row.public_id, group_row.name, player.normalized_tag,
+                   player.active, COALESCE(accepted.name, latest.name),
+                   accepted.trophies, accepted.current_league_season_id,
+                   {frozen_trophies_sql("player.id", "%s")},
+                   {opening_day_battles_sql("player.id", "%s")},
+                   group_row.created_at
+            FROM account_groups AS group_row
+            LEFT JOIN account_group_players AS member ON member.group_id = group_row.id
+            {MEMBER_JOINS}
+            WHERE group_row.account_id = %s
+            ORDER BY group_row.normalized_name, group_row.public_id, player.normalized_tag
+            LIMIT 10000
+            """,
+            (season_opening_reset(now), season_opening_reset(now), account_id),
+        ).fetchall()
+        groups: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            public_id = str(row[0])
+            # The dashboard shows the first group made, so each says when.
+            group = groups.setdefault(
+                public_id,
+                {
+                    "group_id": public_id,
+                    "name": text_value(row[1]),
+                    "created_at": row[-1].astimezone(UTC).isoformat(),
+                    "tags": [],
+                    "players": [],
+                },
+            )
+            if row[2] is not None:
+                player = group_player(connection, row[2:-1], now)
+                group["tags"].append(player["tag"])
+                group["players"].append(player)
+        return list(groups.values())
+
+
+def _replace_group_players(
+    connection: Any,
+    group_id: int,
+    normalized_tags: list[str],
+) -> None:
+    tags = sorted(set(normalized_tags))
+    # A player lookup takes the tag lock before touching the player row, so
+    # take every tag lock first, in one order, before inserting players.
+    for normalized_tag in tags:
+        api_player_lookup.lock_tag(connection, normalized_tag)
+    connection.execute(
+        "DELETE FROM account_group_players WHERE group_id = %s",
+        (group_id,),
+    )
+    for normalized_tag in tags:
+        player_id = api_player_lookup.ensure_player(connection, normalized_tag)
+        connection.execute(
+            """
+            INSERT INTO account_group_players (group_id, player_id)
+            VALUES (%s, %s)
+            """,
+            (group_id, player_id),
+        )
+    # A tag Clash Lens has no profile for starts the same check a player page
+    # visit starts, so the group shows it as being checked, not inactive.
+    unchecked = connection.execute(
+        """
+        SELECT player.normalized_tag
+        FROM account_group_players AS member
+        JOIN players AS player ON player.id = member.player_id
+        WHERE member.group_id = %s AND NOT player.active
+          AND player.current_profile_version_id IS NULL
+        ORDER BY player.normalized_tag
+        LIMIT %s
+        """,
+        (group_id, GROUP_LOOKUP_LIMIT),
+    ).fetchall()
+    for (normalized_tag,) in unchecked:
+        api_player_lookup.admit(connection, text_value(normalized_tag))
+
+
+def _lock_group(connection: Any, binding: RequestBinding, group_id: str) -> int | None:
+    # Filtering by the account means another account's group reads as missing.
+    row = connection.execute(
+        """
+        SELECT id FROM account_groups
+        WHERE public_id = %s AND account_id = %s
+        FOR UPDATE
+        """,
+        (group_id, binding.account_id),
+    ).fetchone()
+    return None if row is None else int(row[0])
+
+
+def _group_players(
+    connection: Any, group_id: int, *, now: datetime | None = None
+) -> list[dict[str, Any]]:
+    """Each member's tag with the stored in-game name and trophies, when known."""
+    now = now or datetime.now(UTC)
+    rows = connection.execute(
+        f"""
+        SELECT player.normalized_tag, player.active,
+               COALESCE(accepted.name, latest.name), accepted.trophies,
+               accepted.current_league_season_id,
+               {frozen_trophies_sql("player.id", "%s")},
+               {opening_day_battles_sql("player.id", "%s")}
+        FROM account_group_players AS member
+        {MEMBER_JOINS}
+        WHERE member.group_id = %s
+        ORDER BY player.normalized_tag
+        LIMIT 101
+        """,
+        (season_opening_reset(now), season_opening_reset(now), group_id),
+    ).fetchall()
+    return [group_player(connection, row, now) for row in rows]

@@ -11,7 +11,8 @@ from psycopg.conninfo import make_conninfo
 from test_api_migration import migrated_production_database
 
 from clashlens import api_accounts, api_verification
-from clashlens.api_db import ApiDatabase, RequestBinding
+from clashlens.api_db import ApiDatabase
+from clashlens.api_requests import RequestBinding
 from clashlens.collector_db import CollectorDatabase
 from clashlens.verification import KeyAction, VerificationOutcome
 
