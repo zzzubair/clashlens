@@ -111,9 +111,12 @@ def read_player_page(
     freshness_seconds: int,
     battles: bool = True,
     goal_rank: int | None = None,
+    dashboard: bool = False,
 ) -> dict[str, Any] | None:
     """A player's page. Without ``battles``, each day keeps its totals but
-    lists none of its battles, and no army is named."""
+    lists none of its battles, and no army is named. Only ``dashboard``,
+    or a ``goal_rank``, adds the Dashboard's Season, window and rival facts."""
+    dashboard = dashboard or goal_rank is not None
     metadata_join, metadata_columns = _current_profile_metadata()
     # A player who has not played yet this Season shows the newest
     # profile that ranks them at 5,000, as the Live Leaderboard does.
@@ -514,8 +517,9 @@ def read_player_page(
 
     recent, season, current = player_facts(result, now, battles=battles)
     ready = result["screen_ready"]
-    ready["rival_season"] = rival_season(ready["season"], recent, season, current)
-    if battles:
+    if dashboard:
+        ready["rival_season"] = rival_season(ready["season"], recent, season, current)
+    if battles and dashboard:
         ready["dashboard_season"] = dashboard_season(ready["season"], recent, season, current)
         if ready["dashboard_season"] is not None:
             dashboard_ends = {day["start"]: day["end_trophies"] for day in ready["dashboard_season"]["days"]}
@@ -523,9 +527,9 @@ def read_player_page(
                 if day["ranked_day_start"] in dashboard_ends:
                     day["display_end"]["dashboard"] = dashboard_ends[day["ranked_day_start"]]
         ready["dashboard_windows"] = dashboard_windows(ready["dashboard_season"])
-        if goal_rank is not None:
-            ready["dashboard_goal"] = dashboard_goal(connection, result, goal_rank)
-    else:
+    if battles and goal_rank is not None:
+        ready["dashboard_goal"] = dashboard_goal(connection, result, goal_rank)
+    if not battles:
         for day in ready["days"]:
             day["offense_events"], day["defense_events"] = [], []
             for key in ("display_start", "display_start_by_reference", "display_end", "presentation"):

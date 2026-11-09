@@ -1,15 +1,28 @@
+// One formatter per option set: building an Intl formatter costs far more
+// than formatting with one, and pages format dozens of dates.
+const dateFormats = new Map<string, Intl.DateTimeFormat>();
+
+function dateFormat(options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const key = JSON.stringify(options);
+  let format = dateFormats.get(key);
+  if (!format) {
+    format = new Intl.DateTimeFormat("en-GB", { ...options, timeZone: "UTC" });
+    dateFormats.set(key, format);
+  }
+  return format;
+}
+
 export function utcDate(
   value: string | number | Date,
   { weekday = false, year = false }: { weekday?: boolean; year?: boolean } = {},
 ): string {
-  return new Date(value)
-    .toLocaleDateString("en-GB", {
-      ...(weekday ? { weekday: "short" } : {}),
-      day: "numeric",
-      month: "short",
-      ...(year ? { year: "numeric" } : {}),
-      timeZone: "UTC",
-    })
+  return dateFormat({
+    ...(weekday ? { weekday: "short" } : {}),
+    day: "numeric",
+    month: "short",
+    ...(year ? { year: "numeric" } : {}),
+  })
+    .format(new Date(value))
     .replace("Sept", "Sep");
 }
 
@@ -21,9 +34,7 @@ export function dayRange(starts: string[]): string | null {
   if (first === undefined || last === undefined) return null;
   const day = (start: string) => new Date(start).getUTCDate();
   const month = (start: string) =>
-    new Date(start)
-      .toLocaleDateString("en-GB", { month: "short", timeZone: "UTC" })
-      .replace("Sept", "Sep");
+    dateFormat({ month: "short" }).format(new Date(start)).replace("Sept", "Sep");
   return month(first) === month(last)
     ? `${day(first)}–${day(last)} ${month(last)}`
     : `${day(first)} ${month(first)} – ${day(last)} ${month(last)}`;
