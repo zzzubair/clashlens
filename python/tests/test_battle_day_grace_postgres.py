@@ -22,13 +22,13 @@ from domain_test_support import (
 from psycopg.types.json import Jsonb
 
 from clashlens import battle, battle_day_repair, domain, reconciliation_db, republish
-from clashlens.db import (
+from clashlens.db import DEFAULT_PARSER_VERSION
+from clashlens.domain import RANKED_DAY_DURATION, ranked_day_for
+from clashlens.job_contracts import (
     ANALYTICS_RULE_VERSION,
-    DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
 )
-from clashlens.domain import RANKED_DAY_DURATION, ranked_day_for
 
 MIGRATION = (
     Path(__file__).parents[2] / "deploy/migrations/0057_battle_day_grace.sql"

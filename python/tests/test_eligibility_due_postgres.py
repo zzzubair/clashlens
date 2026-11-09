@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import psycopg
 import pytest
+from collector_db_postgres_support import _handoff, _hash
 from domain_test_support import (
     _processor,
     domain_database,
@@ -17,7 +18,6 @@ from domain_test_support import (
     store_observation,
 )
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
-from test_collector_db_postgres import _handoff, _hash
 
 from clashlens import league_decider, league_week, population, promotion_candidates
 from clashlens.collector_db import CollectorDatabase

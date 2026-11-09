@@ -15,7 +15,7 @@ from threading import Event
 import psycopg
 import pytest
 from domain_test_support import _processor, domain_database, text
-from test_worker_reserved_capacity_postgres import (
+from worker_reserved_capacity_postgres_support import (
     _queue_builds,
     _queue_profiles,
     _wait_for_statuses,

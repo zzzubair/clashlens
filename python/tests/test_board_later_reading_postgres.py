@@ -13,9 +13,18 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-import psycopg
+from board_later_reading_postgres_support import (
+    _hold,
+)
 from domain_test_support import domain_database
-from test_reset_scenarios_postgres import SEASON, Battle, _ranked, _story, day, defenses
+from reset_scenarios_postgres_support import (
+    SEASON,
+    Battle,
+    _ranked,
+    _story,
+    day,
+    defenses,
+)
 
 from clashlens import queue_refresh
 
@@ -31,22 +40,6 @@ LATE = (PROVEN, EARLY, NEW_DAY)
 
 def _at(hour: int, minute: int, second: int) -> datetime:
     return datetime(2026, 10, 7, hour, minute, second, tzinfo=UTC)
-
-
-def _hold(connection_info: str, tags: tuple[str, ...], since: datetime) -> None:
-    """Leave the players' responses from ``since`` for the worker's next
-    round: it saves the others first."""
-    with psycopg.connect(connection_info) as connection:
-        connection.execute(
-            """
-            UPDATE python_processing_jobs AS job SET due_at = now() + interval '1 day'
-            FROM collector_observations AS observation
-            WHERE observation.id = job.observation_id
-              AND observation.normalized_tag = ANY(%s)
-              AND observation.response_completed_at >= %s
-            """,
-            (list(tags), since),
-        )
 
 
 def test_a_later_reading_proves_the_battles_after_an_older_one(

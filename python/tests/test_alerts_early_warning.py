@@ -5,11 +5,8 @@ times and the worker 4 times with no warning at all."""
 from datetime import UTC, datetime
 
 import pytest
-import test_alerts
 
 from clashlens import alerts
-
-runtime = test_alerts.runtime
 
 PREFIX = "clashlens_collector_"
 OVERDUE = f"{PREFIX}oldest_pending_processing_age_seconds"

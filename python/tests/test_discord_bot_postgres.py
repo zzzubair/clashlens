@@ -7,8 +7,13 @@ from datetime import timedelta
 from uuid import uuid4
 
 import pytest
+from api_db_public_ops_support import NOW, seed_profile
+from discord_bot_postgres_support import (
+    DISCORD_ID,
+    _account,
+    _verify,
+)
 from domain_test_support import as_api_role, domain_database
-from test_api_db_public_ops import NOW, seed_profile
 
 from bot.commands import Commands
 from bot.replies import Site
@@ -16,62 +21,6 @@ from bot.store import Store
 from clashlens import api_accounts, live_board
 from clashlens.api_db import ApiDatabase
 from clashlens.api_requests import RequestBinding
-
-DISCORD_ID = "100000000000000001"
-
-
-def _account(database: ApiDatabase, provider: str, subject: str, username: str) -> int:
-    created = api_accounts.create_account(
-        database,
-        RequestBinding(
-            request_id=str(uuid4()),
-            caller="typescript-website",
-            provider=provider,
-            provider_subject=subject,
-            account_id=None,
-            operation="account.create",
-            method="POST",
-            request_target="/v1/account",
-            identity={"username": username},
-        ),
-        username=username,
-        normalized_username=username,
-        display_name=username.title(),
-    )
-    assert created.status_code == 201
-    account = api_accounts.resolve_account(database, provider, subject)
-    assert account is not None
-    return account.internal_id
-
-
-def _verify(database: ApiDatabase, account_id: int, tag: str) -> None:
-    """Verify `tag` to the account, moving it there as a transfer does."""
-    request_id = str(uuid4())
-    with database.pool.connection() as connection:
-        connection.execute(
-            """
-            INSERT INTO private_api_requests (
-                request_id, caller, provider, provider_subject, account_id,
-                operation, method, request_target, identity_json, state,
-                response_status, response_json, completed_at
-            ) VALUES (
-                %s, 'typescript-website', 'discord', 'fixture', %s,
-                'player_links.verify', 'POST', '/v1/players/verifytoken',
-                '{}'::jsonb, 'complete', 200, '{}'::jsonb, clock_timestamp()
-            )
-            """,
-            (request_id, account_id),
-        )
-        connection.execute(
-            """
-            INSERT INTO verified_player_links (player_id, account_id, verification_request_id)
-            SELECT id, %s, %s FROM players WHERE normalized_tag = %s
-            ON CONFLICT (player_id) DO UPDATE
-                SET account_id = EXCLUDED.account_id,
-                    verification_request_id = EXCLUDED.verification_request_id
-            """,
-            (account_id, request_id, tag),
-        )
 
 
 def _set_default(database: ApiDatabase, account, tag: str) -> bool:

@@ -16,14 +16,18 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 import psycopg
+from collector_db_postgres_support import _handoff
 from domain_test_support import domain_database, store_observation, text
-from test_collector_db_postgres import _handoff
-from test_reconcile_pass_postgres import _open, _queued, _run_pass
-from test_reset_scenarios_postgres import (
+from league_week_days_postgres_support import (
+    Climber,
+    _public_days,
+)
+from reconcile_pass_postgres_support import _open, _queued, _run_pass
+from reset_scenarios_postgres_support import (
     SEASON,
     Player,
     Story,
@@ -50,44 +54,6 @@ from clashlens.db import Database
 from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
 from clashlens.league_week import Below, Claim, League, ProofKind
 from clashlens.season_summaries import materialize_player_season
-
-
-@dataclass
-class Climber(Player):
-    """A player whose profile can show Legend II while naming the Season:
-    the game's accepted answer for a Legend II player. ``dropped`` still
-    shows Legend II naming Season 0."""
-
-    legend_ii: bool = False
-
-    def profile(self, trophies: int, season: datetime | None) -> bytes:
-        payload = json.loads(super().profile(trophies, season))
-        if self.legend_ii:
-            payload["leagueTier"] = {"id": 105000035, "name": "Legend II"}
-        return json.dumps(payload).encode()
-
-
-def _public_days(connection_info: str, tag: str) -> dict[datetime, dict[str, object]]:
-    """Each Legend day the player's page shows: the newest public row of
-    each day, its state, unfinished reasons, attacks and defenses."""
-    with psycopg.connect(connection_info) as connection:
-        return {
-            start: {"state": text(state), "reasons": list(reasons),
-                    "attacks": attack_count, "defenses": defense_count}
-            for start, state, reasons, attack_count, defense_count in connection.execute(
-                """
-                SELECT DISTINCT ON (daily.ranked_day_start)
-                       daily.ranked_day_start, daily.state, daily.partial_reasons,
-                       daily.attack_count, daily.defense_count
-                FROM api_player_daily_logs AS daily
-                JOIN players AS player ON player.id = daily.player_id
-                WHERE player.normalized_tag = %s
-                ORDER BY daily.ranked_day_start, daily.version DESC
-                """,
-                (tag,),
-            ).fetchall()
-        }
-
 
 (DROPPED, STALE, STALE_LATE, PROMOTED, IDLE_PROMOTED, IDLE_BELOW, FAILED, FAILED_TWICE,
  FIRST_SEEN, STEADY_1, STEADY_2, STEADY_3) = (

@@ -11,8 +11,7 @@ before the Reset finishes after it. Busy mornings took the read 9 to 12
 seconds, so it runs under a 30 second limit, and the connection it used goes
 back to page requests with their 10 seconds. See docs/testing.md.
 
-The worker saves a day's live numbers only while the database's clock is in
-that day, so the story is today's Legend day, whatever the date.
+The worker and database share the story's controlled clock.
 """
 
 from __future__ import annotations
@@ -24,9 +23,8 @@ from threading import Event
 from typing import Any
 
 import psycopg
-import pytest
 from domain_test_support import as_api_role, domain_database
-from test_reset_scenarios_postgres import _story, attacks, defenses
+from reset_scenarios_postgres_support import _story, attacks, defenses
 
 from clashlens import api_dashboard, api_leaderboard
 from clashlens.api_db import ApiDatabase
@@ -37,18 +35,14 @@ CLIMBER, DONE, RESTING, NEWCOMER = "#2PP", "#8PP", "#9PP", "#PPP"
 
 
 def test_rank_range_fills_in_from_a_slow_background_read_and_never_crosses_a_reset(
-    database_url: str, archive_server, monkeypatch
+    database_url: str, archive_server, monkeypatch, fixed_clock
 ) -> None:
-    with domain_database(database_url) as connection_info:
+    with domain_database(database_url, clock=fixed_clock) as connection_info:
         with psycopg.connect(connection_info) as connection:
             today = ranked_day_for(connection.execute("SELECT clock_timestamp()").fetchone()[0])
-        if today.day_number in (1, 28):
-            # Day 1 starts everyone at 5,000, and Day 28's Reset starts a new
-            # Season: neither has the story's two days in one Season.
-            pytest.skip(f"Season Day {today.day_number}")
         day_start, season, reset = today.start, today.season_start, today.end
         story = _story(connection_info, archive_server, monkeypatch,
-                       CLIMBER, DONE, RESTING, NEWCOMER)
+                       CLIMBER, DONE, RESTING, NEWCOMER, wall_clock=fixed_clock)
         # Two +40 attacks so far: 5,380, with 6 attacks and 8 defenses open.
         story.players[CLIMBER].battles = attacks(day_start, 40, 40)
         # Every battle used: 8 attacks of 40 and 8 defenses of 30 end on 5,280.

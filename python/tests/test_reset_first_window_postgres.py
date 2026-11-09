@@ -15,8 +15,15 @@ from datetime import datetime, timedelta
 
 import psycopg
 from domain_test_support import domain_database
-from test_reconciliation_postgres import _processor
-from test_reset_scenarios_postgres import SEASON, Story, _story, attacks, day, defenses
+from reconciliation_postgres_support import _processor
+from reset_scenarios_postgres_support import (
+    SEASON,
+    Story,
+    _story,
+    attacks,
+    day,
+    defenses,
+)
 
 from clashlens import (
     background_pacing,

@@ -11,8 +11,7 @@ import psycopg
 import pytest
 from domain_test_support import domain_database, legend_i_week, store_observation, text
 from psycopg.types.json import Jsonb
-from test_reconciliation import _input
-from test_reconciliation_postgres import (
+from reconciliation_postgres_support import (
     DAY_END,
     DAY_START,
     _battle_log,
@@ -21,7 +20,8 @@ from test_reconciliation_postgres import (
     _seed_reset_collection_identity,
     _store_baseline_pair,
 )
-from test_snapshot_publication_postgres import _process_snapshot_and_analytics
+from reconciliation_support import _input
+from snapshot_publication_postgres_support import _process_snapshot_and_analytics
 
 from clashlens import (
     boundary_publication,
@@ -31,13 +31,13 @@ from clashlens import (
     reset_baselines,
 )
 from clashlens.collector_db import CollectorDatabase
-from clashlens.db import (
+from clashlens.db import DEFAULT_PARSER_VERSION
+from clashlens.domain import ranked_day_for
+from clashlens.job_contracts import (
     ANALYTICS_RULE_VERSION,
-    DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
 )
-from clashlens.domain import ranked_day_for
 from clashlens.league_week import week_start
 from clashlens.profile import PROFILE_PARSER_VERSION
 from clashlens.reconciliation import (

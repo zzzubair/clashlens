@@ -28,10 +28,10 @@ from typing import Any
 
 from .boundary_manifest import retry_wait
 from .boundary_members import take_saved_days
-from .db import (
+from .db import DEFAULT_PARSER_VERSION
+from .job_contracts import (
     ANALYTICS_RULE_VERSION,
     ARMY_ANALYTICS_RULE_VERSION,
-    DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
 )

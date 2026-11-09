@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 import psycopg
 from domain_test_support import domain_database, text
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
-from test_reset_scenarios_postgres import SEASON, _story, attacks, day, defenses
+from reset_scenarios_postgres_support import SEASON, _story, attacks, day, defenses
 
 from clashlens import league_decider, league_week, queue_refresh, worker
 from clashlens.collector_db import CollectorDatabase

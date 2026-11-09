@@ -266,7 +266,7 @@ def test_retirement_fences_replay_and_keeps_active_work(
     from time import monotonic, sleep
 
     from domain_test_support import _processor, domain_database, store_observation
-    from test_parsed_content_dedup_postgres import _replay_job
+    from parsed_content_dedup_postgres_support import _replay_job
 
     with domain_database(database_url) as dsn:
         database, processor = _processor(dsn, archive_server)

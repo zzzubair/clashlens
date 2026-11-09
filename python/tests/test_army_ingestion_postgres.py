@@ -8,8 +8,9 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation, text
-from test_boundary_publication_postgres import _sweep_with_members
+from army_ingestion_postgres_support import _live_row, _unswept_battles
+from boundary_publication_postgres_support import _sweep_with_members
+from domain_test_support import _processor, domain_database, store_observation, text
 
 from clashlens import (
     army_ingestion,
@@ -20,41 +21,9 @@ from clashlens import (
     ingestion,
     reset_baselines,
 )
-from clashlens.archive import ArchiveReadError, S3ArchiveReader
+from clashlens.archive import ArchiveReadError
 from clashlens.db import Database
 from clashlens.worker import ObservationProcessor, ProcessResult, process_concurrently
-
-
-def _processor(connection_info: str, archive_server):
-    database = Database(connection_info)
-    processor = ObservationProcessor(
-        database,
-        S3ArchiveReader(
-            endpoint=archive_server[0],
-            bucket="evidence",
-            access_key="test",
-            secret_key="test",
-            secure=False,
-            allow_insecure_test_origin=True,
-        ),
-    )
-    return database, processor
-
-
-def _live_row(attack: bool, tag: str, code: str | None, ts: datetime):
-    row = {
-        "battleType": "legend",
-        "attack": attack,
-        "battleTime": ts.strftime("%Y%m%dT%H%M%S.000Z"),
-        "stars": 3,
-        "destructionPercentage": 100,
-        "opponentPlayerTag": tag,
-        "opponentName": "Opp",
-        "opponentTownHallLevel": 17,
-    }
-    if code is not None:
-        row["armyShareCode"] = code
-    return row
 
 
 def test_ranked_day_enqueue_lookup_uses_day_index(
@@ -702,38 +671,6 @@ def test_battle_log_with_saved_decodes_does_not_wait_for_reset_lock(
                         army_ingestion._upsert_army_decodes(db, connection, battle_ids)
         finally:
             db.close()
-
-
-def _unswept_battles(ci: str, archive_server, players: dict[str, str]):
-    """Save one Aug 4 battle per player whose decodes still need saving."""
-    ts = datetime(2026, 8, 4, 12, tzinfo=UTC)
-    db, proc = _processor(ci, archive_server)
-    try:
-        for player, code in players.items():
-            _, job_id = store_observation(
-                ci,
-                archive_server,
-                occurrence_key=f"unswept-{player}",
-                endpoint="battle_log",
-                body=json.dumps({"items": [_live_row(True, "#8PP", code, ts)]}).encode(),
-                observed_at=ts + timedelta(minutes=1),
-                normalized_tag=player,
-            )
-            assert proc.process_job(job_id, owner="seed").outcome == "processed"
-    finally:
-        db.close()
-    with psycopg.connect(ci) as connection:
-        # As if each battle were new, so the next save writes decodes again.
-        connection.execute("UPDATE battle_army_decodes SET is_active = false")
-        return {
-            text(tag): [int(battle_id)]
-            for tag, battle_id in connection.execute(
-                """
-                SELECT player.normalized_tag, battle.id FROM legend_battles AS battle
-                JOIN players AS player ON player.id = battle.attacker_player_id
-                """
-            ).fetchall()
-        }
 
 
 def test_battle_logs_before_a_reset_do_not_wait_on_each_other(

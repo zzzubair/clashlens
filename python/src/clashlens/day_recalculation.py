@@ -8,12 +8,11 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from . import domain
-from .db import (
+from .db import DEFAULT_PARSER_VERSION, ended_day_priority
+from .job_contracts import (
     ANALYTICS_RULE_VERSION,
-    DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
-    ended_day_priority,
 )
 
 

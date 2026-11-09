@@ -143,14 +143,13 @@ def test_each_players_place_is_the_middle_of_their_imagined_places() -> None:
     open_defenses = [1, 1, 1, 0, 1] * 6
     places = _places(trophies, open_attacks, open_defenses, [day], seed=7)
     count = len(trophies)
-    middles = []
-    for player in range(count):
-        own = sorted(
-            _place(keys, keys[places.position[player]]) for keys in places.keys
-        )
-        middles.append((own[99] + own[100] + 1) // 2)
+    # Recorded once for these 30 tags and seed 7 at ca7fba08, using
+    # the ranks of its 200 imagined finishes. Keep the full
+    # vector so changed sampling and median rounding both break this case.
+    middles = [18, 12, 5, 11, 25, 20, 12, 6, 11, 25,
+               19, 12, 6, 12, 24, 20, 11, 8, 11, 24,
+               18, 12, 6, 10, 25, 19, 11, 6, 10, 24]
     assert places.middles() == middles
-    assert len(set(middles)) > 1
     inputs = (
         trophies, open_attacks, open_defenses, [3] * count, [None] * count,
         [f"#PP{TAG[index // len(TAG)]}{TAG[index % len(TAG)]}" for index in range(count)],

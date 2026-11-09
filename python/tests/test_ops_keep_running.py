@@ -6,54 +6,17 @@ import sys
 from pathlib import Path
 
 import pytest
+from ops_keep_running_support import (
+    NEW_COLLECTOR,
+    OLD_COLLECTOR,
+    OPS,
+    POSTGRES,
+    SAME_CONTENTS,
+    deploy,
+)
 
-OPS = Path(__file__).resolve().parents[2] / "ops"
-OLD_COLLECTOR = "sha256:" + "1" * 64
-NEW_COLLECTOR = "sha256:" + "2" * 64
-POSTGRES = "sha256:" + "3" * 64
-SAME_CONTENTS = '["sha256:aa"] ["python"] null ["PATH=/opt/venv/bin"] "10001:10001"'
 DATABASE = {"clashlens-postgres", "clashlens-pod", "clashlens-network"}
 KEPT = DATABASE | {"clashlens-collector"}
-FAKE_MANAGER = f"""#!{sys.executable}
-import json, os, sys
-from pathlib import Path
-args = sys.argv[1:]
-with open(os.environ["CALLS"], "a") as calls:
-    calls.write(" ".join(args) + "\\n")
-fmt = args[args.index("--format") + 1] if "--format" in args else ""
-if args[:2] == ["image", "inspect"] and os.environ.get("INTERRUPT"):
-    os.kill(int(os.environ["MAIN_PID"]), 15)
-if args[:2] == ["image", "inspect"]:
-    images = json.loads(os.environ["IMAGES"])
-    if args[-1] not in images:
-        sys.exit(125)
-    print(images[args[-1]])
-elif args[:2] == ["secret", "inspect"]:
-    print((Path(os.environ["SECRET_STORE"]) / args[-1]).read_text())
-elif args[:1] == ["inspect"] and fmt == "{{{{.Image}}}}":
-    print(json.loads(os.environ["RUNNING"])[args[-1]].removeprefix("sha256:"))
-elif args[:1] == ["inspect"]:
-    print("healthy")
-elif args[:2] == ["--user", "is-active"]:
-    stopped = "--user stop " + args[2] + "\\n" in Path(os.environ["CALLS"]).read_text()
-    print("inactive" if stopped or args[2] in os.environ.get("INACTIVE", "") else "active")
-elif args[:2] == ["--user", "is-enabled"]:
-    print("disabled")
-"""
-DEPLOY = r"""
-source "$1" help >/dev/null
-MODE=production PREFIX=clashlens
-RELEASE=([COLLECTOR_IMAGE]=$NEW_COLLECTOR [POSTGRES_IMAGE]=$POSTGRES)
-RESTART_COLLECTOR=$RESTART KEEP_COLLECTOR=$KEEP
-[[ "$FAILS" != true ]] || UP_PHASE=changing
-render_units() { printf 'rendered collector=%s\n' "${RELEASE[COLLECTOR_IMAGE]}"; }
-keep_running_plan
-stop_units
-keep_running_check
-[[ "$FAILS" != true ]] || die "the stack did not become healthy; run ./ops logs"
-keep_running_record
-printf 'keep=%s collector=%s\n' "$(collector_kept && echo true || echo false)" "${RELEASE[COLLECTOR_IMAGE]}"
-"""
 
 # The real up, with the host and configuration checks before the keep decision skipped.
 UP = r"""
@@ -86,85 +49,6 @@ printf 'RELEASE_MODE=production\nCOLLECTOR_IMAGE=%s\nPOSTGRES_IMAGE=%s\n' "$NEW_
 RELEASE=([COLLECTOR_IMAGE]=$NEW_COLLECTOR [POSTGRES_IMAGE]=$POSTGRES)
 up_stack
 """
-
-@pytest.fixture
-def stack(tmp_path):
-    units = tmp_path / "config" / "containers" / "systemd"
-    units.mkdir(parents=True)
-    env = tmp_path / "state" / "clashlens" / "env"
-    env.mkdir(parents=True)
-    secrets = tmp_path / "secrets"
-    secrets.mkdir()
-    (units / "clashlens-collector.container").write_text(
-        f"Image={OLD_COLLECTOR}\nMemory=2g\n"
-        "Secret=clashlens-collector-database-url,type=mount,target=/run/secrets/database-url\n"
-        "Secret=clashlens-normal-api-keys,type=env,target=CLASHLENS_NORMAL_API_KEYS\n"
-    )
-    (units / "clashlens-postgres.container").write_text(
-        f"Image={POSTGRES}\nSecret=clashlens-postgres-password,type=mount,target=/run/secrets/p\n"
-    )
-    for name in ("clashlens.pod", "clashlens.network", "clashlens-postgres.volume"):
-        (units / name).write_text(f"# {name}\n")
-    (env / "collector.env").write_text("CLASHLENS_REQUESTS_PER_SECOND_PER_KEY=40\n")
-    (env / "postgres.env").write_text("POSTGRES_DB=clashlens\n")
-    for name, value in (
-        ("clashlens-collector-database-url", "postgresql://collector:old-password@db"),
-        ("clashlens-normal-api-keys", "normal-1=old-key-value"),
-        ("clashlens-postgres-password", "database-password"),
-    ):
-        (secrets / name).write_text(value)
-    manager = tmp_path / "manager"
-    manager.write_text(FAKE_MANAGER)
-    manager.chmod(0o700)
-    stack = {
-        "tmp_path": tmp_path,
-        "env": {
-            "PATH": "/usr/bin:/bin",
-            "PODMAN_BIN": str(manager),
-            "SYSTEMCTL_BIN": str(manager),
-            "XDG_STATE_HOME": str(tmp_path / "state"),
-            "XDG_CONFIG_HOME": str(tmp_path / "config"),
-            "CALLS": str(tmp_path / "calls"),
-            "SECRET_STORE": str(secrets),
-            "NEW_COLLECTOR": NEW_COLLECTOR,
-            "POSTGRES": POSTGRES,
-            "RESTART": "false",
-            "KEEP": "false",
-            "FAILS": "false",
-            "IMAGES": json.dumps(
-                {OLD_COLLECTOR: SAME_CONTENTS, NEW_COLLECTOR: SAME_CONTENTS, POSTGRES: "pg"}
-            ),
-            "RUNNING": json.dumps(
-                {"clashlens-collector": OLD_COLLECTOR, "clashlens-postgres": POSTGRES}
-            ),
-        },
-    }
-    # The first up has no record, so it restarts everything and writes one.
-    first = deploy(stack)
-    assert "Restarting the database, pod, network and collector: no record" in first.stdout
-    assert "keep=false" in first.stdout
-    return stack
-
-
-def deploy(stack, returncode=0, **overrides):
-    calls = Path(stack["env"]["CALLS"])
-    calls.unlink(missing_ok=True)
-    result = subprocess.run(
-        ["bash", "-c", DEPLOY, "keep-running-test", str(OPS)],
-        env=dict(stack["env"], **overrides),
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    assert result.returncode == returncode, result.stderr
-    result.calls = calls
-    result.stopped = {
-        line.split()[2].removesuffix(".service")
-        for line in calls.read_text().splitlines()
-        if line.startswith("--user stop ") and line.endswith(".service")
-    }
-    return result
 
 
 def assert_restarted(result, reason):

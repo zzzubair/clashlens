@@ -32,7 +32,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import db, domain, reconcile_pass
+from . import db, domain, job_contracts, reconcile_pass
 from .background_pacing import (
     DAY_RECHECK_PRIORITY,
     LIVE_LAG_MIN_JOBS,
@@ -49,8 +49,8 @@ RECHECK_SPREAD = timedelta(hours=4)
 RECHECK_ROOM = 5000
 NIGHT_PASS_DUE_BY = timedelta(hours=22)  # 03:00 UTC, counted from the Reset.
 _VERSIONS = {
-    "parser": db.DEFAULT_PARSER_VERSION, "processing": db.PROCESSING_VERSION,
-    "domain": db.DOMAIN_RULE_VERSION, "analytics": db.ANALYTICS_RULE_VERSION,
+    "parser": db.DEFAULT_PARSER_VERSION, "processing": job_contracts.PROCESSING_VERSION,
+    "domain": job_contracts.DOMAIN_RULE_VERSION, "analytics": job_contracts.ANALYTICS_RULE_VERSION,
     "rule": RECONCILIATION_RULE_VERSION,
 }
 

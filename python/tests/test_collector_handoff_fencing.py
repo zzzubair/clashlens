@@ -12,7 +12,7 @@ from typing import Any
 
 import psycopg
 import pytest
-from test_collector import _Client, _collector, _Reservation, _Spool, _Store
+from collector_support import _Client, _collector, _Reservation, _Spool, _Store
 
 from clashlens import collector_commits
 from clashlens.collector import _CLEANUP_BATCH_SIZE, _CLEANUP_LOOKUP_SIZE

@@ -22,8 +22,7 @@ from domain_test_support import (
     seed_battles,
     store_observation,
 )
-from psycopg.conninfo import conninfo_to_dict, make_conninfo
-from test_first_battle_log_postgres import (
+from first_battle_log_postgres_support import (
     DAY_1,
     DAY_2,
     LOSS,
@@ -31,9 +30,10 @@ from test_first_battle_log_postgres import (
     _log,
     _new_season_profile,
 )
-from test_frozen_board_locator_postgres import _rows_read
-from test_reconciliation_postgres import _processor, _profile
-from test_snapshot_publication_postgres import _process_snapshot_and_analytics
+from frozen_board_locator_postgres_support import _rows_read
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from reconciliation_postgres_support import _processor, _profile
+from snapshot_publication_postgres_support import _process_snapshot_and_analytics
 
 from clashlens import (
     api_player_lookup,

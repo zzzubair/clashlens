@@ -4,7 +4,7 @@ import threading
 from uuid import uuid4
 
 import psycopg
-from test_api_migration import migrated_production_database
+from api_migration_support import migrated_production_database
 
 from clashlens import api_accounts, provider_membership
 from clashlens.api_db import ApiDatabase

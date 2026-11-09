@@ -20,8 +20,8 @@ from types import SimpleNamespace
 
 import psycopg
 import pytest
+from collector_support import _Client, _collector, _Spool, _Store
 from conftest import _FixtureS3Handler
-from test_collector import _Client, _collector, _Spool, _Store
 
 import clashlens.uploader as uploader_module
 from clashlens import async_runtime, collector_liveness
@@ -1069,7 +1069,7 @@ def _saved_responses(
     archive served by ``handler`` that holds the archive's marker."""
     import psycopg
     from domain_test_support import domain_database
-    from test_spool_full_recovery_postgres import TAGS, _save
+    from spool_full_recovery_postgres_support import TAGS, _save
 
     from clashlens import cli
     from clashlens.collector_db import CollectorDatabase

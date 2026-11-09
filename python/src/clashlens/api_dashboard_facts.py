@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from .api_leaderboard import _frozen_publications
+from .api_player_presentation import day_net, heatmap_kind
 from .db_rows import text_value
 from .domain import (
     MAX_BATTLE_TROPHIES,
@@ -27,14 +28,6 @@ def _season_days(context: dict, recent: list[dict], season: list[dict], current:
     return saved
 
 
-def _net(day: dict) -> int | None:
-    """The saved net, or with every battle known, gain less loss."""
-    gain, loss = day["attack_gain"], day["defense_loss"]
-    if day["net_trophy_change"] is not None:
-        return day["net_trophy_change"]
-    return gain - loss if day["battles_complete"] and gain is not None and loss is not None else None
-
-
 def dashboard_season(context: dict | None, recent: list[dict], season: list[dict], current: dict | None) -> dict | None:
     if context is None:
         return None
@@ -45,7 +38,7 @@ def dashboard_season(context: dict | None, recent: list[dict], season: list[dict
         if day is None:
             continue
         gain, loss = day["attack_gain"], day["defense_loss"]
-        net = _net(day)
+        net = day_net(day)
         attacks, defenses = day["attack_count"], day["defense_count"]
         tripled = day["defense_three_star_count"]
         events = day["offense_events"]
@@ -71,7 +64,7 @@ def dashboard_season(context: dict | None, recent: list[dict], season: list[dict
                      for event in sorted(events, key=lambda event: datetime.fromisoformat(event["battle_timestamp"]))] if every_attack else None,
             "attack_slots": MAX_DAILY_ATTACKS if every_attack else None,
             "maximum_attack_gain": MAX_DAILY_ATTACKS * MAX_BATTLE_TROPHIES if every_attack else None,
-            "kind": "shield" if attacks == 0 and defenses == 0 and net == 0 else "missing" if net is None else "played",
+            "kind": heatmap_kind(attacks, defenses, net),
         })
     return {
         "today": context["current_day_number"], "start": context["start"], "end": context["end"],
@@ -106,7 +99,7 @@ def rival_season(context: dict | None, recent: list[dict], season: list[dict], c
         "hit_rate": _rate(days, lambda day: day["attack_three_star_count"], lambda day: day["attack_count"]),
         "offense": _rate(days, lambda day: day["attack_gain"] if day["attack_count"] else None),
         "defense": _rate(days, lambda day: -day["defense_loss"] if day["defense_count"] and day["defense_loss"] is not None else None),
-        "net_per_day": _rate(days, lambda day: _net(day) if day["attack_count"] or day["defense_count"] else None),
+        "net_per_day": _rate(days, lambda day: day_net(day) if day["attack_count"] or day["defense_count"] else None),
         "finished_days": None if context is None else context["current_day_number"] - 1,
         "reset_rank": None if context is None else saved.get(context["current_day_number"] - 1, {}).get("reset_rank"),
     }

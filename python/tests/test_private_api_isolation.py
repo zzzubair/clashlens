@@ -4,9 +4,9 @@ from urllib.parse import quote
 from uuid import uuid4
 
 import pytest
+from api_migration_support import migrated_production_database
 from fastapi.testclient import TestClient
-from test_api_migration import migrated_production_database
-from test_private_api import NOW, NOW_SECONDS, TS_CURRENT, json_body, signed_headers
+from private_api_support import NOW, NOW_SECONDS, TS_CURRENT, json_body, signed_headers
 
 from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase

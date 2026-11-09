@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from test_player_presentation_facts import saved_day
+from player_presentation_facts_support import saved_day
 
 from clashlens.api_dashboard_facts import dashboard_season, dashboard_windows, goal_plan
 

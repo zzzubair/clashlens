@@ -7,7 +7,7 @@ import json
 import psycopg
 import pytest
 from domain_test_support import domain_database
-from test_reset_scenarios_postgres import SEASON, _even, _story, day
+from reset_scenarios_postgres_support import SEASON, _even, _story, day
 
 
 @pytest.mark.parametrize(

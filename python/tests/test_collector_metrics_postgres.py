@@ -23,12 +23,12 @@ from clashlens.collector_db import (
 )
 from clashlens.collector_metrics import health_metrics
 from clashlens.collector_uploads import claim_upload, complete_upload, fail_upload
-from clashlens.db import (
+from clashlens.domain import ranked_day_for
+from clashlens.job_contracts import (
     ARMY_ANALYTICS_RULE_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
 )
-from clashlens.domain import ranked_day_for
 from clashlens.operator_recovery import replay_failed_jobs, retry_failed_item
 
 

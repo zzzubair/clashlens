@@ -5,11 +5,11 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from api_security_support import FakeDatabase
+from crews_postgres_support import Site
 from domain_test_support import as_api_role, domain_database
 from fastapi.testclient import TestClient
-from test_api_security import FakeDatabase
-from test_crews_postgres import Site
-from test_private_api import NOW, NOW_SECONDS, TS_CURRENT, json_body, signed_headers
+from private_api_support import NOW, NOW_SECONDS, TS_CURRENT, json_body, signed_headers
 
 from clashlens import api_crews
 from clashlens.api import create_app

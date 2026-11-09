@@ -4,12 +4,12 @@ from weakref import ref
 import pytest
 
 from clashlens import worker
-from clashlens.db import (
+from clashlens.db import LeaseLost
+from clashlens.job_contracts import (
     ANALYTICS_RULE_VERSION,
     ARMY_ANALYTICS_RULE_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
-    LeaseLost,
 )
 
 

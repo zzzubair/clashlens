@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import psycopg
 import pytest
-from test_api_migration import migrated_production_database
+from api_migration_support import migrated_production_database
 
 from clashlens import api_accounts, api_verification, cli
 from clashlens.api_db import ApiDatabase

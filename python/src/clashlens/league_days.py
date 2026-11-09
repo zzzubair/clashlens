@@ -21,8 +21,8 @@ from enum import StrEnum
 from typing import Any
 
 from . import domain, league_week
-from .db import PYTHON_BACKFILL_PRIORITY
 from .domain import RankedDay
+from .job_contracts import PYTHON_BACKFILL_PRIORITY
 from .league_week import (
     WEEK,
     Decision,

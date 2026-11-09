@@ -22,11 +22,7 @@ from .analytics import (
 )
 from .boundary_manifest import reset_trophies
 from .db import (
-    ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
-    DOMAIN_RULE_VERSION,
-    PROCESSING_VERSION,
-    PYTHON_BACKFILL_PRIORITY,
     PYTHON_LIVE_PRIORITY,
     Claim,
     Database,
@@ -34,6 +30,12 @@ from .db import (
 )
 from .db_rows import text_value
 from .domain import RANKED_DAY_DURATION, ranked_day_for
+from .job_contracts import (
+    ANALYTICS_RULE_VERSION,
+    DOMAIN_RULE_VERSION,
+    PROCESSING_VERSION,
+    PYTHON_BACKFILL_PRIORITY,
+)
 from .past_reset_pacing import operator_generation
 from .profile import normalize_player_tag
 

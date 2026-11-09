@@ -9,16 +9,20 @@ from types import SimpleNamespace
 
 import psycopg
 import pytest
-from domain_test_support import PROFILE_FIXTURE, domain_database
-from test_collector import _collector
-from test_collector_uploads_postgres import _archive_instance
-from test_worker_lifecycle import _worker_namespace
+from collector_support import _collector
+from collector_uploads_postgres_support import _archive_instance
+from domain_test_support import domain_database
+from spool_full_recovery_postgres_support import (
+    TAGS,
+    _save,
+)
+from worker_lifecycle_support import _worker_namespace
 
 from clashlens import cli, queue_refresh
 from clashlens import spool as spool_module
 from clashlens.archive import S3ArchiveReader, SpoolFirstReader
 from clashlens.collector import _CLEANUP_LOOKUP_SIZE, Collector
-from clashlens.collector_db import CollectorDatabase, ResponseHandoff
+from clashlens.collector_db import CollectorDatabase
 from clashlens.collector_uploads import (
     UNRESOLVED_WRITE_ATTEMPTS,
     WriteMayLand,
@@ -30,9 +34,6 @@ from clashlens.collector_uploads import (
 )
 from clashlens.spool import Spool, SpoolError
 
-NOW = datetime.now(UTC).replace(microsecond=0)
-TAGS = ("#2PP", "#2PY")
-
 
 @pytest.fixture(autouse=True)
 def _no_daily_recheck(monkeypatch) -> None:
@@ -40,49 +41,6 @@ def _no_daily_recheck(monkeypatch) -> None:
     # it would queue the nightly re-check into these tests' queue
     # (test_reconcile_pass_postgres), so CI would get one result per hour.
     monkeypatch.setattr(queue_refresh, "due_recheck_slot", lambda _connection, _now: None)
-
-
-def _profile(tag: str) -> bytes:
-    payload = json.loads(PROFILE_FIXTURE.read_bytes())
-    payload["tag"] = tag
-    return json.dumps(payload).encode()
-
-
-def _save(
-    connection_info: str, database: CollectorDatabase, spool: Spool, tag: str
-) -> str:
-    """Save one profile the way the collector does: spool file, then database."""
-    with psycopg.connect(connection_info) as connection:
-        player_id = connection.execute(
-            "INSERT INTO players (normalized_tag, active, next_due_at)"
-            " VALUES (%s, true, %s) RETURNING id",
-            (tag, NOW),
-        ).fetchone()[0]
-    body = _profile(tag)
-    digest = hashlib.sha256(body).hexdigest()
-    with spool.reservation() as reservation:
-        reservation.publish(body, digest)
-    database.record_response(
-        ResponseHandoff(
-            occurrence_key=f"full-spool-{tag}",
-            scope="player",
-            identity_key=tag,
-            endpoint="profile",
-            player_id=player_id,
-            normalized_tag=tag,
-            request_started_at=NOW - timedelta(seconds=1),
-            response_completed_at=NOW,
-            http_status=200,
-            response_hash=digest,
-            content_fingerprint=digest,
-            byte_size=len(body),
-            spool_key=f"sha256/{digest[:2]}/{digest}",
-            collector_version="python-collector-test",
-            key_label="regular-a",
-            evidence_headers={"content-type": "application/json"},
-        )
-    )
-    return digest
 
 
 def test_full_spool_drains_once_the_archive_returns(

@@ -7,22 +7,10 @@ from urllib.parse import quote
 from uuid import uuid4
 
 import psycopg
-import pytest
-from domain_test_support import domain_database
-from test_crews_postgres import Site, _while_held
+from crews_postgres_support import Site, _while_held
 
 from clashlens import api_accounts, api_crews, api_discord_alerts, api_overlays
 from clashlens.api_requests import RequestBinding
-
-
-@pytest.fixture
-def site(database_url: str):
-    with domain_database(database_url) as connection_info:
-        built = Site(connection_info)
-        try:
-            yield built
-        finally:
-            built.close()
 
 
 def _account_call(
