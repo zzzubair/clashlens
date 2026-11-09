@@ -1,3 +1,4 @@
+import { CALENDAR } from "../fixtures/player-route-data";
 const reads = vi.hoisted(() => ({
   getPlayer: vi.fn(),
   getTrackedLeaderboard: vi.fn(),
@@ -104,6 +105,7 @@ it("reads other players' pages for Rivals and Watchlist once each, without their
       .mockReset()
       .mockImplementation(async () => board),
     listGroups: vi.fn(async () => ({
+      calendar: CALENDAR,
       groups: [{ groupId: "mates", name: "Mates", tags: ["#P1", "#Q9"], players: [] }],
       season: "1793595600",
     })),
@@ -126,4 +128,16 @@ it("reads other players' pages for Rivals and Watchlist once each, without their
     "#P7 false",
     "#Q9 false",
   ]);
+});
+
+it("keeps the supplied Live calendar on Cutoffs when the player page is missing", async () => {
+  const { client, ctx } = slowPageContext();
+  ctx.settings.cutoffs = [1];
+  client.getPlayer.mockResolvedValue(null as never);
+  client.getTrackedLeaderboard.mockResolvedValue({
+    calendar: CALENDAR,
+    entries: [{ rank: 1, trophies: 5400, freshness: { observedAt: CALENDAR.as_of } }],
+  } as never);
+  const cards = readCards(["cutoffs"], ctx, IDENTITY);
+  expect((await cards.cutoffs)?.calendar).toEqual(CALENDAR);
 });

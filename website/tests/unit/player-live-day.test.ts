@@ -1,4 +1,17 @@
-import { describe, expect, it } from "vitest";
+import cases from "../../../testdata/w6-presentation-parity.json";
+import { mapDisplayEnd } from "../../app/services/player-facts.server";
+const clock = vi.hoisted(() => ({ now: 0 }));
+vi.mock("../../app/components/Provenance", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../app/components/Provenance")>()),
+  useServerTime: () => clock.now,
+}));
+import {
+  CALENDAR,
+  EMPTY_PLAYER_FACTS,
+  UNKNOWN_END,
+  VERIFIED,
+} from "../fixtures/player-route-data";
+import { describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
@@ -18,10 +31,24 @@ const WAITING = [
   "missing_end_baseline",
 ];
 
+const END_CASES = cases.filter((c) => c.rule === "display_end");
+const endFact = (index: number) => mapDisplayEnd(END_CASES[index].expected);
+const LIVE = {
+  ...VERIFIED,
+  status: "in_progress" as const,
+  is_current: true,
+  live_routine: true,
+  battle_net: 0,
+  battle_net_complete: 0,
+};
 const TODAY: RankedDaySummary = {
   dayNumber: 4,
   label: "Ranked day",
-  period: "2026-10-08T05:00:00Z – 2026-10-09T05:00:00Z",
+  start: "2026-10-08T05:00:00Z",
+  end: "2026-10-09T05:00:00Z",
+  seasonId: null,
+  presentation: LIVE,
+  displayEnd: UNKNOWN_END,
   state: "Live",
   startTrophies: 6000,
   offense: { attacks: 0, threeStars: 0, trophyGain: 0 },
@@ -40,14 +67,24 @@ function page(
   now = "2026-10-08T12:00:00Z",
   endedDays: RankedDaySummary[] = [],
   warnings: PlayerPage["dataQuality"] = [],
+  facts: Partial<PlayerPage> = {},
+  cautionCodes: string[] = [],
 ) {
+  clock.now = Date.parse(now);
   const today = {
     ...TODAY,
+    presentation: {
+      ...LIVE,
+      reason_codes: codes,
+      caution_codes: cautionCodes,
+      live_routine: cautionCodes.length === 0,
+    },
     completeness: { state: "partial" as const, reason: codes.join("; ") },
     uncertainty: codes,
   };
   const player = {
     kind: "player-page",
+    ...EMPTY_PLAYER_FACTS,
     tag: TAG,
     trackingState: "tracking",
     profile: {
@@ -64,6 +101,24 @@ function page(
     currentDay: today,
     recentDays: [today, ...endedDays],
     seasonDays: [],
+    historyDays: [
+      today,
+      ...endedDays.filter((day) => day.presentation!.show_in_player_log),
+    ],
+    historyDayNumbers: Object.fromEntries(
+      [today, ...endedDays].map((day) => [day.start, day.dayNumber!]),
+    ),
+    seasonShape: {
+      seasonStart: Date.parse(CALENDAR.season_start),
+      today: 4,
+      kinds: ["legend", "legend", "legend", "legend", ...Array(24).fill("ahead")],
+      runs: [{ first: 1, last: 4, signedUp: 1, promoted: false, dropped: false }],
+      partial: false,
+      outsideNow: false,
+      legendDays: { expected: 3, saved: 0 },
+      lastLegendDay: null,
+    },
+    ...facts,
     dataQuality: [
       { code: "partial", label: "Incomplete ranked-day data", detail: codes.join("; ") },
       ...warnings,
@@ -111,8 +166,12 @@ const todayEntry = (html: string) =>
   html.split('id="legend-day-2026-10-08"')[1].split("</details>")[0];
 const ended = (day: number, extra: Partial<RankedDaySummary>): RankedDaySummary => ({
   ...TODAY,
-  dayNumber: day,
-  period: `2026-10-0${day}T05:00:00Z – 2026-10-0${day + 1}T05:00:00Z`,
+  dayNumber: day - 4,
+  start: `2026-10-0${day}T05:00:00Z`,
+  end: `2026-10-0${day + 1}T05:00:00Z`,
+  seasonId: null,
+  presentation: VERIFIED,
+  displayEnd: { ...UNKNOWN_END, status: "verified" },
   state: "Complete",
   confidence: "exact",
   uncertainty: [],
@@ -129,13 +188,19 @@ describe("today's Legend day wording", () => {
     const previousSeasonDay: RankedDaySummary = {
       ...TODAY,
       dayNumber: 28,
-      period: "2026-10-04T05:00:00Z – 2026-10-05T05:00:00Z",
+      start: "2026-10-04T05:00:00Z",
+      end: "2026-10-05T05:00:00Z",
+      seasonId: null,
+      presentation: VERIFIED,
+      displayEnd: UNKNOWN_END,
       state: "Complete",
       trophyChange: 35,
       completeness: { state: "complete", reason: "Complete evidence." },
       uncertainty: [],
     };
-    const html = await page(WAITING, "2026-10-08T12:00:00Z", [previousSeasonDay]);
+    const html = await page(WAITING, "2026-10-08T12:00:00Z", [previousSeasonDay], [], {
+      historyDays: [TODAY],
+    });
     expect(html).not.toContain("Trophy trend");
     const summary = html.split('id="season-summary-title"')[1].split("</section>")[0];
     expect(summary).toContain("3 days missing");
@@ -167,7 +232,7 @@ describe("today's Legend day wording", () => {
       ["end_baseline_incomplete", "The end-of-day trophy reading is incomplete."],
       ["new_unknown_code", "Some daily evidence is unavailable."],
     ]) {
-      const html = await page([...WAITING, code]);
+      const html = await page([...WAITING, code], undefined, [], [], {}, [code]);
       expect(note(html)).toContain(
         `<strong>Incomplete ranked-day data:</strong> ${text}`,
       );
@@ -211,7 +276,14 @@ describe("today's Legend day wording", () => {
   });
 
   it("keeps a real problem visible and its day open after Reset", async () => {
-    const html = await page([...WAITING, "battle_log_row_gap"], "2026-10-09T05:00:00Z");
+    const html = await page(
+      [...WAITING, "battle_log_row_gap"],
+      "2026-10-09T05:00:00Z",
+      [],
+      [],
+      {},
+      ["battle_log_row_gap"],
+    );
     expect(note(html)).toContain(
       "<strong>Incomplete ranked-day data:</strong> Part of a battle log reply could not be read.",
     );
@@ -226,8 +298,12 @@ describe("today's Legend day wording", () => {
   it("shows each ended day's Reset rank and leaves today's until Reset", async () => {
     const ended = (day: number, resetRank: number | null): RankedDaySummary => ({
       ...TODAY,
-      dayNumber: day,
-      period: `2026-10-0${day}T05:00:00Z – 2026-10-0${day + 1}T05:00:00Z`,
+      dayNumber: day - 4,
+      start: `2026-10-0${day}T05:00:00Z`,
+      end: `2026-10-0${day + 1}T05:00:00Z`,
+      seasonId: null,
+      presentation: VERIFIED,
+      displayEnd: UNKNOWN_END,
       state: "Complete",
       resetRank,
     });
@@ -245,8 +321,12 @@ describe("today's Legend day wording", () => {
   it("shows how far each day's Reset rank moved since the day before", async () => {
     const ended = (day: number, resetRank: number): RankedDaySummary => ({
       ...TODAY,
-      dayNumber: day,
-      period: `2026-10-0${day}T05:00:00Z – 2026-10-0${day + 1}T05:00:00Z`,
+      dayNumber: day - 4,
+      start: `2026-10-0${day}T05:00:00Z`,
+      end: `2026-10-0${day + 1}T05:00:00Z`,
+      seasonId: null,
+      presentation: VERIFIED,
+      displayEnd: UNKNOWN_END,
       state: "Complete",
       resetRank,
     });
@@ -270,15 +350,17 @@ describe("today's Legend day wording", () => {
     const html = await page(WAITING, undefined, [
       // 40 from attacks, 0 on defense, 32 taken at Reset: +8.
       ended(7, {
+        displayEnd: endFact(4),
         startTrophies: 5992,
         offense: { attacks: 1, threeStars: 1, trophyGain: 40 },
         trophyChange: 8,
         automaticDefenseLoss: 32,
       }),
       // Its battles add up to 5,050, but the next day started at 5,992.
-      ended(6, { startTrophies: 5000, trophyChange: 50 }),
+      ended(6, { displayEnd: endFact(1), startTrophies: 5000, trophyChange: 50 }),
       // 4,900 + 20, raised 80 by the weekly reset to the next day's 5,000.
       ended(5, {
+        displayEnd: endFact(8),
         startTrophies: 4900,
         trophyChange: 20,
         resetAdjustment: { kind: "weekly", amount: 80 },
@@ -325,6 +407,7 @@ describe("today's Legend day wording", () => {
       ended(7, { startTrophies: 4968, trophyChange: 0 }),
       // 4,887 + 81, raised 32 by the weekly reset to 5,000.
       ended(6, {
+        displayEnd: endFact(7),
         startTrophies: 4887,
         trophyChange: 81,
         resetAdjustment: { kind: "weekly", amount: 32 },
@@ -337,7 +420,7 @@ describe("today's Legend day wording", () => {
 
   it("leaves an older day's end Unavailable when the next day is missing", async () => {
     const html = await page(WAITING, undefined, [
-      ended(7, { startTrophies: 5992, trophyChange: 8 }),
+      ended(7, { displayEnd: endFact(4), startTrophies: 5992, trophyChange: 8 }),
       ended(5, { startTrophies: 5000, trophyChange: 50 }),
     ]);
     expect(cell(html, "2026-10-05", "End of day")).toMatch(
@@ -352,9 +435,10 @@ describe("today's Legend day wording", () => {
       ended(7, {
         startTrophies: 5200,
         trophyChange: 0,
+        presentation: { ...VERIFIED, show_in_player_log: false },
         uncertainty: ["player_not_eligible"],
       }),
-      ended(6, { startTrophies: 5150, trophyChange: 50 }),
+      ended(6, { displayEnd: endFact(3), startTrophies: 5150, trophyChange: 50 }),
     ]);
     expect(html).not.toContain('id="legend-day-2026-10-07"');
     expect(cell(html, "2026-10-06", "End of day")).toMatch(/^<strong>5,200<\/strong>/);
@@ -424,6 +508,10 @@ describe("today's Legend day wording", () => {
           day: {
             ...TODAY,
             battlesComplete,
+            presentation: {
+              ...TODAY.presentation!,
+              battle_net_complete: battlesComplete ? 156 : null,
+            },
             offense: { attacks: 6, trophyGain: 196 },
             defense: { defenses: 2, trophyLoss: 40 },
           },

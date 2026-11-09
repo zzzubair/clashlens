@@ -1,3 +1,4 @@
+import { CALENDAR } from "../fixtures/player-route-data";
 vi.mock("../../app/services/leaderboard.server", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../app/services/leaderboard.server")>();
@@ -64,6 +65,7 @@ import { worstCasePlayers } from "../fixtures/worst-case-players";
 
 const board: TrackedLeaderboard = {
   kind: "tracked-leaderboard",
+  calendar: CALENDAR,
   view: "live",
   entries: [
     {

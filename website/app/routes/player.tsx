@@ -31,7 +31,7 @@ import { LiveRank, PlayerHeading, type LiveRankRead } from "../components/Player
 import { LocalTimestamp, useCurrentTime, useServerTime } from "../components/Provenance";
 import { RefreshProgress, refreshInProgress } from "../components/RefreshProgress";
 import { SeasonMenu } from "../components/SeasonMenu";
-import { nextSeasonReset, useSeasonReread } from "../components/SeasonReread";
+import { useSeasonReread } from "../components/SeasonReread";
 import { SeasonStory } from "../components/SeasonStory";
 import { SeasonHeatMap, heatDays } from "../components/SeasonSummary";
 import { SelectedSeason } from "../components/SelectedSeason";
@@ -54,11 +54,9 @@ import type {
 import type { PlayerCrew } from "../lib/crew-contracts";
 import {
   dayEnd,
-  dayEvidence,
   dayReasons,
   explainsNoResults,
   legendDayKey,
-  liveDay,
   liveDayNotice,
   lookupExplanation,
   lookupMessage,
@@ -83,13 +81,7 @@ import {
   type LookupWait,
 } from "../lib/player-refresh";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
-import {
-  gapLabel,
-  inGap,
-  logGaps,
-  seasonDayDate,
-  seasonShape,
-} from "../lib/season-shape";
+import { gapLabel, inGap, logGaps, seasonDayDate } from "../lib/season-shape";
 import type { LiveClan } from "../services/live-clan.server";
 import "../player.css";
 import "../player-hero.css";
@@ -389,16 +381,16 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     explainedVisit,
   );
   usePlayerLookupEvent(data.requestedTag, trackedPlayer, lookup);
-  const loadedAt = player ? profileLoadedAt(player.profile) : undefined;
+  const loadedAt = player?.calendar.as_of;
   const now = useServerTime(loadedAt);
   const seasonExpired = useSeasonReread(
     loadedAt,
     minuteChecks || !!trackedPlayer?.profile.seasonResetPending,
     data.selectedSeason === null,
     !!data.lookup && !["checking", "tracking"].includes(data.lookup.state),
+    player?.calendar.season_end,
   );
-  const statisticsTime =
-    seasonExpired && loadedAt ? Math.max(now, nextSeasonReset(loadedAt)) : now;
+  const statisticsTime = now;
   const seasonMenu = (currentAvailable: boolean) =>
     data.requestedTag && (
       <SeasonMenu
@@ -408,10 +400,10 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         currentAvailable={currentAvailable}
       />
     );
-  const allHistory = selectPlayerHistory(player, statisticsTime);
+  const allHistory = seasonExpired ? [] : selectPlayerHistory(player);
   // A partial Season's log: one row for each stretch with no Legend I
   // battles, in place of its days.
-  const shape = player ? seasonShape(player, statisticsTime) : null;
+  const shape = seasonExpired ? null : (player?.seasonShape ?? null);
   const shapeGaps = shape?.partial ? logGaps(shape) : [];
   const history =
     shape && shapeGaps.length > 0
@@ -426,7 +418,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     : [];
   const heatMap = shape ? (
     <SeasonHeatMap
-      days={heatDays(history, shape.seasonStart)}
+      days={heatDays(history)}
       seasonStart={shape.seasonStart}
       today={shape.today}
     />
@@ -434,36 +426,35 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
   // A player now outside Legend I shows the total they left on.
   const leftOn =
     player && shape?.outsideNow && shape.lastLegendDay
-      ? dayEnd(shape.lastLegendDay, player, statisticsTime).trophies
+      ? dayEnd(shape.lastLegendDay).trophies
       : null;
   const droppedRun = shape
     ? [...shape.runs].reverse().find((run) => run.dropped)
     : undefined;
   const todayEnded =
-    player?.currentDay != null &&
-    Date.parse(player.currentDay.period.split(" – ")[1]) <= now;
+    player?.currentDay != null && Date.parse(player.currentDay.end ?? "") <= now;
   const today = todayEnded ? null : (player?.currentDay ?? null);
   // Today's day starts folded; an ended day with a real problem starts open.
   const openDay =
     selectedDay ??
-    (player?.currentDay && todayEnded && !liveDay(dayEvidence(player.currentDay)).routine
-      ? legendDayKey(player.currentDay.period)
+    (player?.currentDay && todayEnded && !player.currentDay.presentation!.live_routine
+      ? legendDayKey(player.currentDay.start)
       : null);
   // A linked day outside the current Season's log, such as an ended Season's,
   // shows its battles from the days the page already has.
   const pastDayKey =
     data.selectedSeason !== null ||
-    !history.some(({ day }) => legendDayKey(day.period) === selectedDay)
+    !history.some(({ day }) => legendDayKey(day.start) === selectedDay)
       ? selectedDay
       : null;
   const pastDay = player
-    ? savedDays(player).find((day) => legendDayKey(day.period) === pastDayKey)
+    ? savedDays(player).find((day) => legendDayKey(day.start) === pastDayKey)
     : undefined;
   const dayBattles =
     pastDayKey &&
     (pastDay ||
       data.historical?.dailyEntries.some(
-        (day) => legendDayKey(day.period) === pastDayKey,
+        (day) => legendDayKey(day.start) === pastDayKey,
       )) ? (
       <DayBattles day={pastDayKey} battles={pastDay} units={player?.armyUnits ?? {}} />
     ) : null;
@@ -668,6 +659,11 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         {data.selectedSeason !== null ? (
           <SelectedSeason
             seasonId={data.selectedSeason}
+            bounds={
+              data.seasons.find((season) => season.seasonId === data.selectedSeason) ??
+              null
+            }
+            listUnavailable={!!data.seasonsError}
             summary={data.historical}
             error={data.historicalError}
             menu={seasonMenu(current !== null)}
@@ -830,10 +826,16 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
       {data.selectedSeason !== null ? (
         <SelectedSeason
           seasonId={data.selectedSeason}
+          bounds={
+            data.seasons.find((season) => season.seasonId === data.selectedSeason) ?? null
+          }
+          listUnavailable={!!data.seasonsError}
           summary={data.historical}
           error={data.historicalError}
           menu={seasonMenu(true)}
         />
+      ) : seasonExpired ? (
+        <p className="section-note">No finished Legend days yet this Season</p>
       ) : (
         <BattleStatistics
           player={trackedPlayer}
@@ -863,7 +865,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           </p>
           {selectedDay &&
           !pastDay &&
-          !history.some(({ day }) => legendDayKey(day.period) === selectedDay) ? (
+          !history.some(({ day }) => legendDayKey(day.start) === selectedDay) ? (
             <p className="section-note" role="status">
               No saved Legend log for {legendDayDate(selectedDay)}.
             </p>
@@ -874,7 +876,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
               day &&
               warning.code === day.completeness.state &&
               warning.detail === day.completeness.reason
-                ? liveDayNotice(dayEvidence(day), todayEnded, warning.label)
+                ? liveDayNotice(day, todayEnded, warning.label)
                 : undefined;
             if (notice === null) return null;
             const plain = notice

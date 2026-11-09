@@ -1,7 +1,7 @@
+import { parseCalendar } from "../lib/calendar";
 import type { LinkedPlayerCard, ListedGroup } from "../lib/account-contracts";
 import type {
   PlayerPage,
-  RankedDaySummary,
   SummarizedSeasonRef,
   TrackedLeaderboard,
   TrackedPlayerEntry,
@@ -14,7 +14,6 @@ import type {
   PlayerDay,
   RankRange,
 } from "../lib/dashboard";
-import { nextResetMs } from "../lib/dashboard";
 import type {
   ArmyDays,
   ArmyHits,
@@ -24,12 +23,8 @@ import type {
 } from "../lib/dashboard-armies";
 import { ARMY_DEFAULT_DAYS, ARMY_MAX_DAYS, isArmyDays } from "../lib/dashboard-armies";
 import {
-  DAILY_BATTLES,
   GOAL_PACE_DAYS,
   SEASON_START_TROPHIES,
-  netPerDay,
-  rate,
-  sideAverages,
   type CardDataMap,
   type CardReads,
   type ClockData,
@@ -60,6 +55,7 @@ import { type PythonClient } from "./python.server";
 
 /** One player's dashboard numbers for today, from GET /v1/players/{tag}/today. */
 export interface PlayerToday {
+  calendar: import("../lib/contracts").Calendar;
   /** Today's Legend day of the Season; null from a data service before it was sent. */
   dayNumber: number | null;
   rankRange: RankRange | null;
@@ -146,7 +142,7 @@ function legendsHeld(value: unknown): LegendsHeld {
 }
 
 function dayNumber(value: unknown): number {
-  const day = count(value, 28);
+  const day = count(value);
   if (day < 1) malformed();
   return day;
 }
@@ -172,6 +168,7 @@ export async function getPlayerToday(
   const pending = payload.projected_rank_pending ?? false;
   if (typeof pending !== "boolean") malformed();
   return {
+    calendar: parseCalendar(payload.calendar) ?? malformed(),
     dayNumber: nullable(payload.season_day_number ?? null, dayNumber),
     rankRange: nullable(range, (item) => {
       if (!isRecord(item)) malformed();
@@ -201,7 +198,7 @@ const BASES_TIMEOUT_MS = 15_000;
 
 /** Day `day` of this Season's bases, from GET /v1/players/{tag}/bases?day=. */
 export async function getPlayerBases(tag: string, day: number): Promise<PastBases> {
-  if (!isCanonicalPlayerTag(tag) || !Number.isInteger(day) || day < 1 || day > 28)
+  if (!isCanonicalPlayerTag(tag) || !Number.isInteger(day) || day < 1)
     throw new PythonApiError(422, { error: "invalid_request" });
   const payload = await requestJson<unknown>(
     `/v1/players/${encodeURIComponent(tag)}/bases?day=${day}`,
@@ -221,8 +218,6 @@ export interface CardContext {
   waitForBoard?: boolean;
 }
 
-const DAY_MS = 86_400_000;
-const SEASON_SECONDS = 28 * 86_400;
 const RIVALS_ABOVE = 3;
 const RIVALS_BELOW = 3;
 const RIVAL_ROWS = RIVALS_ABOVE + RIVALS_BELOW + 1;
@@ -231,72 +226,10 @@ const BOARD_PAGE = 10;
 /** Player pages read once per load, however many cards use them. */
 type PageReader = (tag: string) => Promise<PlayerPage | null>;
 
-function periodStart(day: RankedDaySummary): number {
-  return Date.parse(day.period.split(" – ")[0] ?? "");
-}
-
-/**
- * The Season's finished days for one player. A day's end is the next day's
- * Reset reading when that is saved, otherwise its start plus its change and
- * any weekly or Season reset at its closing Reset. Python leaves a total unknown when battles may be missing, and so does
- * this; the battles' sum stands in only when Python found every battle.
- */
 export function seasonData(page: PlayerPage): SeasonData {
-  const season = page.season;
-  if (season === null) return { today: null, startMs: null, days: [] };
-  const anchor = Date.parse(season.anchor);
-  const saved = new Map<number, RankedDaySummary>();
-  for (const day of [
-    ...page.recentDays,
-    ...page.seasonDays,
-    ...(page.currentDay ? [page.currentDay] : []),
-  ]) {
-    const number = Math.floor((periodStart(day) - anchor) / DAY_MS) + 1;
-    if (number >= 1 && number <= season.currentDayNumber && !saved.has(number))
-      saved.set(number, day);
-  }
-  const days: SeasonDay[] = [];
-  for (let number = 1; number < season.currentDayNumber; number++) {
-    const day = saved.get(number);
-    if (!day) continue;
-    const next = saved.get(number + 1);
-    const gain = day.offense.trophyGain;
-    const loss = day.defense.trophyLoss;
-    const net =
-      day.trophyChange ??
-      (day.battlesComplete && gain !== null && loss !== null ? gain - loss : null);
-    const attacks = day.offense.attacks;
-    const defenses = day.defense.defenses;
-    const tripledOn = day.defense.threeStarsAgainst;
-    const everyAttack =
-      attacks === day.offenseEvents.length &&
-      gain === day.offenseEvents.reduce((sum, event) => sum + event.trophyChange, 0) &&
-      !day.offenseEvents.some((event) => event.perspectiveDisagreement) &&
-      day.offenseEvents.length <= DAILY_BATTLES &&
-      (attacks === DAILY_BATTLES || day.logCoverage === "complete");
-    days.push({
-      day: number,
-      attacks,
-      defenses,
-      offense: gain,
-      defense: loss === null ? null : -loss,
-      net,
-      triples: day.offense.threeStars,
-      held: defenses === null || tripledOn === null ? null : defenses - tripledOn,
-      endTrophies:
-        next?.startTrophies ??
-        (day.startTrophies != null && net !== null
-          ? day.startTrophies + net + (day.resetAdjustment?.amount ?? 0)
-          : null),
-      rank: day.resetRank ?? null,
-      hits: everyAttack
-        ? [...day.offenseEvents]
-            .sort((a, b) => Date.parse(a.battleTimestamp) - Date.parse(b.battleTimestamp))
-            .map((event) => [event.stars, event.trophyChange])
-        : null,
-    });
-  }
-  return { today: season.currentDayNumber, startMs: anchor, days };
+  if (page.dashboardSeason === null)
+    throw new PythonApiError(502, { error: "malformed" });
+  return page.dashboardSeason;
 }
 
 function legendDay(page: PlayerPage, today: PlayerToday | null): PlayerDay {
@@ -305,9 +238,9 @@ function legendDay(page: PlayerPage, today: PlayerToday | null): PlayerDay {
   const gain = day?.offense.trophyGain ?? null;
   const loss = day?.defense.trophyLoss ?? null;
   // The finished day that ended at the Reset that started today.
-  const dayStartMs = nextResetMs(Date.now()) - DAY_MS;
+  const dayStartMs = Date.parse(page.calendar.day_start);
   const previous = [...page.recentDays, ...page.seasonDays].find(
-    (finished) => Date.parse(finished.period.split(" – ")[1] ?? "") === dayStartMs,
+    (finished) => Date.parse(finished.end ?? "") === dayStartMs,
   );
   const [profileAt, battlesAt] = [
     page.profile.freshness.observedAt,
@@ -315,6 +248,8 @@ function legendDay(page: PlayerPage, today: PlayerToday | null): PlayerDay {
   ].map((value) => (value ? Date.parse(value) : Number.NaN));
   const observed = [profileAt, battlesAt].filter(Number.isFinite);
   return {
+    dayStartMs: Date.parse(page.calendar.day_start),
+    dayEndMs: Date.parse(page.calendar.day_end),
     dayNumber: page.season?.currentDayNumber ?? null,
     dayCount: page.season?.dayCount ?? null,
     battles: clockData(page).battles,
@@ -362,6 +297,8 @@ function clockData(page: PlayerPage): ClockData {
     : NaN;
   return {
     battles,
+    dayStartMs: Date.parse(page.calendar.day_start),
+    dayEndMs: Date.parse(page.calendar.day_end),
     observedAtMs: Number.isFinite(published) ? published : null,
   };
 }
@@ -396,7 +333,9 @@ async function trophiesAt(
     getTrackedLeaderboard(1, selector ? "daily" : "live", rank - 1, selector),
   );
   const entry = board?.entries[0];
-  return entry && entry.rank === rank ? entry : null;
+  return entry && entry.rank === rank
+    ? { ...entry, calendar: board?.calendar ?? null }
+    : null;
 }
 
 /**
@@ -547,6 +486,8 @@ async function cutoffsData(
   const profile = reset?.page.profile ?? null;
   const you = profile === null || profile.seasonResetPending ? null : profile.trophies;
   return {
+    calendar:
+      reset?.page.calendar ?? live.find((entry) => entry?.calendar)?.calendar ?? null,
     name: ctx.selected.name ?? ctx.selected.tag,
     live: {
       lines: lines.map((top, index) => ({
@@ -585,14 +526,10 @@ function rivalNumbers(page: PlayerPage | null, mode: "live" | "season") {
       defense: loss === null ? null : -loss,
     };
   }
-  const days = seasonData(page).days;
   return {
-    hitRate: rate(
-      days,
-      (day) => day.triples,
-      (day) => day.attacks,
-    ),
-    ...sideAverages(days),
+    hitRate: page.rivalSeason.hitRate,
+    offense: page.rivalSeason.offense,
+    defense: page.rivalSeason.defense,
   };
 }
 
@@ -604,13 +541,7 @@ async function rivalsData(
   const tag = ctx.selected.tag;
   // Only the Season rows need the last Reset; the live rows start without it.
   const resetRead = lastReset(ctx, pages);
-  const lastRank = (page: PlayerPage | null) => {
-    if (page === null) return null;
-    const season = seasonData(page);
-    return season.today === null
-      ? null
-      : (season.days.find((day) => day.day === season.today! - 1)?.rank ?? null);
-  };
+  const lastRank = (page: PlayerPage | null) => page?.rivalSeason.resetRank ?? null;
   const liveRows = async () => {
     // A read focused on one player holds their page of 7 and 5 places either
     // side, so all 7 rows everywhere but the board's last place. There, a read
@@ -649,7 +580,7 @@ async function rivalsData(
         page?.currentDay ? [page.currentDayPublishedAt] : [],
       ),
     ];
-    return { rows, observedAtMs: observedMs(times) };
+    return { rows, observedAtMs: observedMs(times), calendar: first?.calendar ?? null };
   };
   const seasonRows = async () => {
     const reset = await resetRead;
@@ -677,7 +608,7 @@ async function rivalsData(
     return { rows, days: reset.finished };
   };
   const [live, season] = await Promise.all([liveRows(), seasonRows()]);
-  return { live, season };
+  return { live, season, calendar: live?.calendar ?? null };
 }
 
 function comparedRow(player: ComparedPlayer, name: string | null): GroupRow {
@@ -699,7 +630,7 @@ async function groupWatchData(
   pages: PageReader,
   identity: LoginIdentity,
 ): Promise<GroupWatchData | null> {
-  const { groups } = await ctx.client.listGroups();
+  const { groups, calendar } = await ctx.client.listGroups();
   const made = (item: ListedGroup) =>
     item.createdAt ? Date.parse(item.createdAt) : Number.POSITIVE_INFINITY;
   const ordered = [...groups].sort(
@@ -713,7 +644,8 @@ async function groupWatchData(
     name: item.name,
     members: item.tags.length,
   }));
-  if (group === null) return { groups: listed, groupId: null, window, days: 0, rows: [] };
+  if (group === null)
+    return { calendar, groups: listed, groupId: null, window, days: null, rows: [] };
   const selected = ctx.selected.tag;
   if (window === "7") {
     const comparison = await getGroupComparison(identity, group.groupId, 7);
@@ -728,6 +660,7 @@ async function groupWatchData(
       .map((player) => comparedRow(player, null))
       .map((row) => ({ ...row, you: row.tag === selected }));
     return {
+      calendar: comparison.calendar,
       groups: listed,
       groupId: group.groupId,
       window,
@@ -739,28 +672,33 @@ async function groupWatchData(
   const read = await Promise.all(
     tags.map(async (tag) => [tag, await pages(tag)] as const),
   );
-  let days = 0;
+  let days: number | null = null;
   const rows = read.flatMap(([tag, page]): GroupRow[] => {
     if (page === null || page.trackingState === "not_in_legend") return [];
-    const season = seasonData(page);
-    days = Math.max(days, season.today === null ? 0 : season.today - 1);
+    const season = page.rivalSeason;
+    if (season.finishedDays !== null)
+      days = Math.max(days ?? season.finishedDays, season.finishedDays);
     return [
       {
         tag,
         name: page.profile.name || tag,
         you: tag === selected,
         trophies: page.profile.seasonResetPending ? null : page.profile.trophies,
-        gain: netPerDay(season.days),
-        hitRate: rate(
-          season.days,
-          (day) => day.triples,
-          (day) => day.attacks,
-        ),
-        ...sideAverages(season.days),
+        gain: season.netPerDay,
+        hitRate: season.hitRate,
+        offense: season.offense,
+        defense: season.defense,
       },
     ];
   });
-  return { groups: listed, groupId: group.groupId, window, days, rows: byGain(rows) };
+  return {
+    calendar,
+    groups: listed,
+    groupId: group.groupId,
+    window,
+    days,
+    rows: byGain(rows),
+  };
 }
 
 function byGain(rows: GroupRow[]): GroupRow[] {
@@ -776,10 +714,11 @@ async function lastSeasonFinish(
   seasonsRead: Promise<SummarizedSeasonRef[] | null>,
 ) {
   if (page.season === null) return null;
-  const previous = String(Date.parse(page.season.anchor) / 1000 - SEASON_SECONDS);
   const seasons = await seasonsRead;
   const history = seasons?.find(
-    (season) => season.seasonId === previous,
+    (season) =>
+      season.seasonEnd !== null &&
+      Date.parse(season.seasonEnd) === Date.parse(page.season!.anchor),
   )?.officialHistory;
   return history ? { rank: history.finalPlacement, trophies: history.eodTrophies } : null;
 }
@@ -795,9 +734,17 @@ export function readCards(
   ctx: CardContext,
   identity: LoginIdentity,
 ): CardReads {
+  let calendar: PlayerPage["calendar"] | null = null;
   const read = new Map<string, Promise<PlayerPage | null>>();
   const pages: PageReader = (tag) => {
-    if (!read.has(tag)) read.set(tag, unlessMissing(getPlayer(tag)));
+    if (!read.has(tag))
+      read.set(
+        tag,
+        unlessMissing(getPlayer(tag)).then((page) => {
+          if (tag === ctx.selected.tag && page) calendar = page.calendar;
+          return page;
+        }),
+      );
     return read.get(tag)!;
   };
   // Other players' cards show their days' totals, never their battles.
@@ -816,13 +763,24 @@ export function readCards(
   // worked out, each says so and the page asks again.
   let todayRead: Promise<PlayerToday | null> | undefined;
   const today = () =>
-    (todayRead ??= getPlayerToday(ctx.selected.tag, ctx.waitForBoard).catch(() => null));
+    (todayRead ??= getPlayerToday(ctx.selected.tag, ctx.waitForBoard)
+      .then((read) => {
+        calendar = read.calendar;
+        return read;
+      })
+      .catch(() => null));
   const waiting = (read: PlayerToday | null, projecting = false) =>
     projecting || read?.boardComputedAtMs === null ? { boardPending: true as const } : {};
-  const armies = async (lens: ArmyLens) => ({
-    tag: ctx.selected.tag,
-    armies: await getPlayerArmies(ctx.selected.tag, lens, ARMY_DEFAULT_DAYS),
-  });
+  const armies = async (lens: ArmyLens) => {
+    const [armies, read] = await Promise.all([
+      getPlayerArmies(ctx.selected.tag, lens, ARMY_DEFAULT_DAYS),
+      today(),
+    ]);
+    const suppliedCalendar = read?.calendar ?? calendar;
+    return suppliedCalendar
+      ? { tag: ctx.selected.tag, armies, calendar: suppliedCalendar }
+      : null;
+  };
   const readers: {
     [Card in keyof CardDataMap]: () => Promise<CardDataMap[Card] | null>;
   } = {
@@ -834,6 +792,7 @@ export function readCards(
       ]);
       return {
         player: ctx.selected,
+        calendar: page?.calendar ?? read?.calendar ?? null,
         day: page === null ? null : legendDay(page, read),
         range: read?.rankRange ?? null,
         rangeAtMs: read?.rankRange ? read.boardComputedAtMs : null,
@@ -876,7 +835,19 @@ export function readCards(
   return Object.fromEntries(
     cards
       .filter((card): card is keyof CardDataMap => Object.hasOwn(readers, card))
-      .map((card) => [card, readers[card]().catch(() => null)]),
+      .map((card) => [
+        card,
+        readers[card]()
+          .then((value) =>
+            value === null
+              ? null
+              : {
+                  ...value,
+                  calendar: ("calendar" in value ? value.calendar : null) ?? calendar,
+                },
+          )
+          .catch(() => null),
+      ]),
   ) as CardReads;
 }
 

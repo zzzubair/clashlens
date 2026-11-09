@@ -136,7 +136,7 @@ export default function GroupCompareRoute() {
   const { comparison, days, sort, notFound, tooLarge, error } =
     useLoaderData<typeof loader>();
   const location = useLocation();
-  const seasonEnded = useSeasonEnded(comparison?.season ?? null);
+  const seasonEnded = useSeasonEnded(comparison?.calendar.season_end ?? null);
   const navigate = useNavigate();
   // A phone row shows the measure the list is sorted by, so the order is always
   // the one on screen; sorted by trophies, it keeps the measure last picked.

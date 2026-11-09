@@ -34,7 +34,13 @@ export function ClockCard({
         title="Legend clock"
         meta={<span title="Times on the dial">{zoneName(timeZone)}</span>}
       />
-      <LegendClock battles={data.battles} nowMs={nowMs} timeZone={timeZone} />
+      <LegendClock
+        dayStartMs={data.dayStartMs}
+        dayEndMs={data.dayEndMs}
+        battles={data.battles}
+        nowMs={nowMs}
+        timeZone={timeZone}
+      />
     </>
   );
 }
@@ -690,7 +696,11 @@ export function GroupWatchCard({
     <>
       <CardHead icon={CARDS["group-watch"].icon} title="Watchlist" meta={picker} />
       <p className="dash-muted dash-card-sub">
-        {data.window === "7" ? "Last 7 days" : `Whole Season · ${data.days} days`}
+        {data.window === "7"
+          ? "Last 7 days"
+          : data.days === null
+            ? "Whole Season"
+            : `Whole Season · ${data.days} days`}
       </p>
       {index >= 0 ? (
         <table className="group-table">

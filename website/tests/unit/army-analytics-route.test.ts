@@ -1,3 +1,4 @@
+import { CALENDAR, SEASON_BOUNDS } from "../fixtures/player-route-data";
 vi.mock("../../app/services/army-analytics.server", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../app/services/army-analytics.server")>();
@@ -115,6 +116,8 @@ function currentAnalytics(
 ) {
   return {
     kind: "army-analytics",
+    calendar: CALENDAR,
+    seasonBounds: SEASON_BOUNDS[SEASON],
     selection: {
       lens: "offense",
       season: SEASON,
@@ -199,6 +202,8 @@ describe("army analytics route historical reads", () => {
   it("renders finalized quantity, usage and star counts", async () => {
     const getArmySeasonSummary = vi.fn().mockResolvedValue({
       kind: "army-analytics",
+      calendar: CALENDAR,
+      seasonBounds: SEASON_BOUNDS[SEASON],
       selection: {
         season: SEASON,
         lens: "offense",
@@ -670,7 +675,7 @@ describe("army analytics route historical reads", () => {
       );
     mocks.createPythonClient.mockReturnValue({
       getArmySeasonSummary,
-      getArmySeasons: vi.fn().mockResolvedValue([SEASON]),
+      getArmySeasons: vi.fn().mockResolvedValue([SEASON_BOUNDS[SEASON]]),
     });
     const html = await renderArmyRoute(`season=${SEASON}&category=army-types`);
     expect(getArmySeasonSummary.mock.calls[0][1].get("population")).toBe("top-1000");
@@ -706,7 +711,7 @@ describe("army analytics route historical reads", () => {
     });
     mocks.createPythonClient.mockReturnValue({
       getArmySeasonSummary,
-      getArmySeasons: vi.fn().mockResolvedValue([SEASON]),
+      getArmySeasons: vi.fn().mockResolvedValue([SEASON_BOUNDS[SEASON]]),
     });
     const html = await renderArmyRoute(`season=${SEASON}&population=top-200`);
     const [season, query] = getArmySeasonSummary.mock.calls[0] as [
@@ -931,7 +936,7 @@ describe("army analytics current season end", () => {
     vi.setSystemTime(SEASON_END);
     mocks.createPythonClient.mockReturnValue({
       getArmyAnalytics: vi.fn().mockResolvedValue(currentAnalytics("top-100", [27], 100)),
-      getArmySeasons: vi.fn().mockResolvedValue([SEASON]),
+      getArmySeasons: vi.fn().mockResolvedValue([SEASON_BOUNDS[SEASON]]),
     });
     const html = await renderArmyRoute("season=current");
     expect(html).not.toContain('aria-label="Army statistics"');
@@ -1112,7 +1117,7 @@ describe("army analytics attacks and season picker", () => {
     expect(first.match(/<option/g)).toHaveLength(1);
     expect(first).toContain(">This Season</option>");
 
-    getArmySeasons.mockResolvedValue([SEASON]);
+    getArmySeasons.mockResolvedValue([SEASON_BOUNDS[SEASON]]);
     const later = picker(await renderArmyRoute("season=current"));
     expect(later.match(/<option/g)).toHaveLength(2);
     expect(later).toContain(`value="${SEASON}">2 Aug – 29 Aug 2026</option>`);

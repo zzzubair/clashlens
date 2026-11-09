@@ -8,7 +8,7 @@ export function validDay(day: string | null): string | null {
 
 /** A Legend day's date, such as "26 Oct 2026", from its period or its key. */
 export function legendDayDate(period: string): string {
-  const date = new Date(period.split(" – ")[0]);
+  const date = new Date(period);
   return Number.isNaN(date.getTime())
     ? "Date unavailable"
     : utcDate(date, { year: true });

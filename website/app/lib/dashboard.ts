@@ -353,14 +353,6 @@ export function parsePostedSettings(value: unknown): DashboardSettings | null {
   return readSettings(value);
 }
 
-/** The Reset is 05:00 UTC. Returns the next Reset after `nowMs`, in milliseconds. */
-export function nextResetMs(nowMs: number): number {
-  const reset = new Date(nowMs);
-  reset.setUTCHours(5, 0, 0, 0);
-  if (reset.getTime() <= nowMs) reset.setUTCDate(reset.getUTCDate() + 1);
-  return reset.getTime();
-}
-
 /** One battle of the current Legend day, placed on the Legend clock. */
 export interface ClockBattle {
   /** Unix milliseconds. */
@@ -375,6 +367,8 @@ export interface ClockBattle {
 
 /** The current Legend day of one player, from their player page. */
 export interface PlayerDay {
+  dayStartMs: number;
+  dayEndMs: number;
   dayNumber: number | null;
   dayCount: number | null;
   battles: ClockBattle[];

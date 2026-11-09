@@ -1,5 +1,3 @@
-import { nextResetMs } from "./dashboard";
-
 export function timeFormatter(timeZone: string): Intl.DateTimeFormat {
   return new Intl.DateTimeFormat("en-GB", {
     hour: "2-digit",
@@ -10,8 +8,11 @@ export function timeFormatter(timeZone: string): Intl.DateTimeFormat {
 }
 
 /** Whole minutes left in the Legend day, and the "9h 05m" the clocks show for them. */
-export function resetCountdown(nowMs: number): { left: number; text: string } {
-  const left = Math.ceil((nextResetMs(nowMs) - nowMs) / 60_000);
+export function resetCountdown(
+  nowMs: number,
+  dayEndMs: number,
+): { left: number; text: string } {
+  const left = Math.max(0, Math.ceil((dayEndMs - nowMs) / 60_000));
   return {
     left,
     text: `${Math.floor(left / 60)}h ${String(left % 60).padStart(2, "0")}m`,

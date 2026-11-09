@@ -1,3 +1,4 @@
+import { CALENDAR, SEASON_BOUNDS } from "../fixtures/player-route-data";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 
@@ -26,6 +27,14 @@ describe("army analytics response boundary", () => {
   function armyAnalyticsPayload() {
     return {
       kind: "army-analytics",
+      calendar: CALENDAR,
+      season_bounds: {
+        id: "1791176400",
+        start: "2026-10-05T05:00:00Z",
+        end: "2026-11-02T05:00:00Z",
+        last_day_start: "2026-11-01T05:00:00Z",
+        day_count: 28,
+      },
       total_attacks: 2,
       usable_army_sample: 2,
       army_states: { fully_decoded: 1, partial: 1 },
@@ -87,6 +96,7 @@ describe("army analytics response boundary", () => {
         new Response(
           JSON.stringify({
             error: "no_completed_legend_days",
+            calendar: CALENDAR,
             previous_season_id: "1783916800",
           }),
           { status: 404, headers: { "content-type": "application/json" } },
@@ -131,6 +141,14 @@ describe("army analytics response boundary", () => {
     expect((fetchMock.mock.calls[0][0] as URL).pathname).toBe("/v1/analytics/armies");
     expect(mapped).toMatchObject({
       kind: "army-analytics",
+      calendar: CALENDAR,
+      seasonBounds: {
+        id: "1791176400",
+        start: "2026-10-05T05:00:00Z",
+        end: "2026-11-02T05:00:00Z",
+        last_day_start: "2026-11-01T05:00:00Z",
+        day_count: 28,
+      },
       totalAttacks: 2,
       usableArmySample: 2,
       armyStates: { fully_decoded: 1, partial: 1 },
@@ -314,14 +332,19 @@ describe("army analytics response boundary", () => {
   it("reads the finished seasons that have army data and rejects a malformed list", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(Response.json({ seasons: ["1785714000", "1783296000"] }))
+      .mockResolvedValueOnce(
+        Response.json({
+          seasons: ["1785714000", "1783296000"],
+          season_details: [SEASON_BOUNDS["1785714000"], SEASON_BOUNDS["1783296000"]],
+        }),
+      )
       .mockResolvedValueOnce(Response.json({ seasons: [1785714000] }));
     vi.stubGlobal("fetch", fetchMock);
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
     await expect(
       (await import("../../app/services/army-analytics.server")).getArmySeasons(),
-    ).resolves.toEqual(["1785714000", "1783296000"]);
+    ).resolves.toEqual([SEASON_BOUNDS["1785714000"], SEASON_BOUNDS["1783296000"]]);
     expect((fetchMock.mock.calls[0][0] as URL).pathname).toBe(
       "/v1/analytics/armies/seasons",
     );

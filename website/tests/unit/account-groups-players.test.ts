@@ -1,3 +1,4 @@
+import { CALENDAR } from "../fixtures/player-route-data";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
@@ -88,6 +89,7 @@ async function submit(fields: Record<string, string>): Promise<Outcome> {
 
 function groupWith(tags: string[]) {
   return {
+    calendar: CALENDAR,
     season: "1791176400",
     groups: [
       {
@@ -158,6 +160,7 @@ describe("adding and removing one group player", () => {
       "Added Nova (#P0LQ2Y8). Waiting for this player's Season reset.",
     );
     const listed = mapGroups({
+      calendar: CALENDAR,
       season: "1791176400",
       groups: [
         {
@@ -181,6 +184,7 @@ describe("adding and removing one group player", () => {
         path: "/account/watchlists",
         Component: GroupsRoute,
         loader: () => ({
+          calendar: CALENDAR,
           groups: listed?.groups ?? [],
           previews: {},
           // No Season: this checks the server's waiting flag, not the clock.
@@ -343,7 +347,11 @@ describe("adding and removing one group player", () => {
       attacks: 3,
       defenses: 1,
     };
-    mocks.listGroups.mockResolvedValue({ season: "1791176400", groups });
+    mocks.listGroups.mockResolvedValue({
+      calendar: CALENDAR,
+      season: "1791176400",
+      groups,
+    });
     mocks.getGroupComparison.mockImplementation(async (_, groupId: string) => {
       if (groupId === full!.groupId) return comparison;
       throw new PythonApiError(503, { error: "unavailable" });
@@ -519,6 +527,7 @@ async function renderGroups(
       Component: GroupsRoute,
       action: () => actionData,
       loader: () => ({
+        calendar: CALENDAR,
         groups,
         previews,
         previewDays,

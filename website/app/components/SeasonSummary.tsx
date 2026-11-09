@@ -241,13 +241,12 @@ const DAY = 86_400_000;
 
 /** Each saved day of the Season as the heat map reads it, by its Season day. */
 export function heatDays(
-  history: Array<{ day: RankedDaySummary }>,
-  seasonStart: number,
+  history: Array<{ day: RankedDaySummary; dayNumber?: number }>,
 ): SeasonDay[] {
-  return history.map(({ day }): SeasonDay => {
+  return history.map(({ day, dayNumber }): SeasonDay => {
     const loss = day.defense.trophyLoss;
     return {
-      day: Math.round((Date.parse(day.period.split(" – ")[0]) - seasonStart) / DAY) + 1,
+      day: dayNumber ?? day.dayNumber!,
       attacks: day.offense.attacks,
       defenses: day.defense.defenses,
       offense: day.offense.trophyGain,

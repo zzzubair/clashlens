@@ -1,3 +1,18 @@
+import {
+  HOUR,
+  DAY,
+  ANCHOR,
+  SEASON_ID,
+  NOW,
+  MAIN,
+  TUNDRA,
+  iso,
+  dayStart,
+  mainPage,
+  tundraPage,
+  suppliedSeason,
+} from "../fixtures/dashboard-player";
+import { CALENDAR } from "../fixtures/player-route-data";
 import { createElement } from "react";
 import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import {
@@ -42,15 +57,8 @@ import { loadWebsiteConfig } from "../../app/server/config.server";
 const ORIGIN = "https://clashlens.example";
 const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" } as const;
 const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
-const HOUR = 3_600_000;
-const DAY = 24 * HOUR;
 /** The Season started at this Reset; the page is read on Day 9 at 09:30 UTC. */
-const ANCHOR = Date.UTC(2026, 8, 7, 5);
-const SEASON_ID = String(ANCHOR / 1000);
-const NOW = ANCHOR + 8 * DAY + 4.5 * HOUR;
-const MAIN = "#LQ2V8PJ0";
 const ALT = "#2PP8QLY0";
-const TUNDRA = "#8PYQ2LJ0";
 const AVA = "#9YJ2C0QL";
 const BO = "#YQ2LPJ80";
 const CY = "#QL8YPJ20";
@@ -59,226 +67,9 @@ const ALPHA = "6a7b8c9d-0e1f-4a2b-8c3d-4e5f6a7b8c9d";
 const BOARD_SIZE = 9000;
 
 /** A timestamp as Python writes it. */
-const iso = (ms: number) => new Date(ms).toISOString().replace(".000Z", "+00:00");
-const dayStart = (day: number) => ANCHOR + (day - 1) * DAY;
 /** A valid player tag for a board place nobody else holds. */
 const rankTag = (rank: number) =>
   `#JC${[...String(rank)].map((digit) => "0289PYLQGR"[Number(digit)]).join("")}`;
-
-let battleIds = 0;
-function event(at: number, stars: number, trophyChange: number) {
-  battleIds += 1;
-  return {
-    battle_id: `battle-${battleIds}`,
-    battle_timestamp: iso(at),
-    opponent: { tag: "#2PY", name: "Opponent" },
-    destruction_percentage: stars === 3 ? 100 : 80,
-    stars,
-    trophy_change: trophyChange,
-    perspective_disagreement: false,
-    army_share_code: null,
-  };
-}
-
-interface DayPlan {
-  day: number;
-  /** Attacks tripled (40 each); the rest are 2-star attacks worth 30. */
-  triples: number;
-  /** Defenses held at 2 stars (−24 each); the rest are tripled (−40 each). */
-  held: number;
-  start: number;
-  rank: number | null;
-  attacks?: number;
-  defenses?: number;
-  /** The battle log has a gap, so Python leaves the day's trophy change unknown. */
-  gap?: boolean;
-}
-
-/** One finished Legend day as Python's player page sends it. */
-function savedDay(plan: DayPlan) {
-  const start = dayStart(plan.day);
-  const attacks = plan.attacks ?? 8;
-  const defenses = plan.defenses ?? 8;
-  const hits = Array.from({ length: attacks }, (_, index) =>
-    index < plan.triples ? 40 : 30,
-  );
-  const losses = Array.from({ length: defenses }, (_, index) =>
-    index < plan.held ? 24 : 40,
-  );
-  const gain = hits.reduce((total, value) => total + value, 0);
-  const loss = losses.reduce((total, value) => total + value, 0);
-  return {
-    ranked_day_start: iso(start),
-    ranked_day_end: iso(start + DAY),
-    season_day_number: plan.day,
-    state: plan.gap ? "Partial" : "Complete",
-    confidence: plan.gap ? "partial" : "exact",
-    coverage: plan.gap ? "partial" : "complete",
-    completeness: plan.gap
-      ? { state: "partial", reason: "battle_log_gap" }
-      : { state: "complete", reason: "Complete evidence." },
-    public_confidence: plan.gap ? "partial" : "high",
-    uncertainty_reasons: plan.gap ? ["battle_log_gap"] : [],
-    start_trophies: plan.start,
-    attack_count: attacks,
-    attack_three_star_count: Math.min(plan.triples, attacks),
-    attack_gain: gain,
-    defense_count: defenses,
-    defense_three_star_count: defenses - plan.held,
-    defense_loss: loss,
-    net_trophy_change: plan.gap ? null : gain - loss,
-    reset_rank: plan.rank,
-    battles_complete: !plan.gap && attacks === 8 && defenses === 8,
-    offense_events: hits.map((value, index) =>
-      event(start + (index + 1) * HOUR, value === 40 ? 3 : 2, value),
-    ),
-    defense_events: losses.map((value, index) =>
-      event(start + (index + 1.5) * HOUR, value === 40 ? 3 : 2, -value),
-    ),
-  };
-}
-
-/** Day 9 so far. */
-function today(
-  totals: [
-    attacks: number,
-    triples: number,
-    gain: number,
-    defenses: number,
-    loss: number,
-  ],
-  events: { offense: ReturnType<typeof event>[]; defense: ReturnType<typeof event>[] },
-) {
-  const start = dayStart(9);
-  const [attacks, triples, gain, defenses, loss] = totals;
-  return {
-    ranked_day_start: iso(start),
-    ranked_day_end: iso(start + DAY),
-    season_day_number: 9,
-    state: "Live",
-    confidence: null,
-    coverage: "partial",
-    completeness: { state: "partial", reason: "The day is not over." },
-    public_confidence: "partial",
-    uncertainty_reasons: [],
-    start_trophies: null,
-    attack_count: attacks,
-    attack_three_star_count: triples,
-    attack_gain: gain,
-    defense_count: defenses,
-    defense_three_star_count: 0,
-    defense_loss: loss,
-    net_trophy_change: null,
-    battles_complete: false,
-    offense_events: events.offense,
-    defense_events: events.defense,
-  };
-}
-
-/** GET /v1/players/{tag}, as Python sends it. */
-function playerPage(
-  tag: string,
-  name: string,
-  trophies: number,
-  days: ReturnType<typeof savedDay>[],
-  current: ReturnType<typeof today>,
-  publishedAt = NOW - 5 * 60_000,
-) {
-  const observedAt = iso(NOW - 10 * 60_000);
-  return {
-    tag,
-    name,
-    trophies,
-    active: true,
-    eligibility: "eligible",
-    clan: null,
-    season_reset_pending: false,
-    current_league_season_id: SEASON_ID,
-    freshness: "fresh",
-    observed_at: observedAt,
-    age_seconds: 600,
-    public_confidence: "high",
-    screen_ready: {
-      season: {
-        id: SEASON_ID,
-        start: iso(ANCHOR),
-        end: iso(ANCHOR + 28 * DAY),
-        current_day_number: 9,
-        anchor_source: "official_league_history",
-        anchor_observed_at: iso(ANCHOR),
-      },
-      days: [...days, current],
-      current_day_start: current.ranked_day_start,
-      current_day_published_at: iso(publishedAt),
-      // The last two days also arrive as recent days; each counts once.
-      recent_day_starts: days.slice(-2).map((day) => day.ranked_day_start),
-      season_day_starts: days.map((day) => day.ranked_day_start),
-      data_quality: [],
-      provenance: {
-        source: "api_player_daily_logs",
-        observed_at: observedAt,
-        freshness: "fresh",
-        confidence: "high",
-        coverage: "partial",
-        version: "test-v1",
-      },
-    },
-  };
-}
-
-/**
- * The selected account's Season: Day 3 a shield day, Day 7 never saved.
- * Net by day: +44, +70, 0, +8, +64, +2, (missing), +86.
- */
-function mainDays(day6: Partial<DayPlan> = {}) {
-  return [
-    savedDay({ day: 1, triples: 6, held: 4, start: 5000, rank: 900 }),
-    savedDay({ day: 2, triples: 7, held: 5, start: 5044, rank: 700 }),
-    savedDay({
-      day: 3,
-      triples: 0,
-      held: 0,
-      start: 5114,
-      rank: 760,
-      attacks: 0,
-      defenses: 0,
-    }),
-    savedDay({ day: 4, triples: 4, held: 3, start: 5114, rank: 800 }),
-    savedDay({ day: 5, triples: 8, held: 4, start: 5122, rank: 500 }),
-    savedDay({ day: 6, triples: 5, held: 2, start: 5186, rank: 520, ...day6 }),
-    savedDay({ day: 8, triples: 7, held: 6, start: 5238, rank: 318 }),
-  ];
-}
-
-function mainPage(day6: Partial<DayPlan> = {}) {
-  const start = dayStart(9);
-  return playerPage(
-    MAIN,
-    "Lens Main",
-    5370,
-    mainDays(day6),
-    today([2, 1, 71, 1, 16], {
-      // 07:10 and 07:25 share one mark on the clock.
-      offense: [
-        event(start + 2 * HOUR + 10 * 60_000, 3, 40),
-        event(start + 2 * HOUR + 25 * 60_000, 2, 31),
-      ],
-      defense: [event(start + 4 * HOUR, 1, -16)],
-    }),
-  );
-}
-
-/** A rival 1 place above, who was #310 at the last Reset; today's battles saved 20 min ago. */
-function tundraPage() {
-  return playerPage(
-    TUNDRA,
-    "Tundra",
-    5375,
-    [savedDay({ day: 8, triples: 8, held: 8, start: 5180, rank: 310 })],
-    today([4, 2, 150, 2, 60], { offense: [], defense: [] }),
-    NOW - 20 * 60_000,
-  );
-}
 
 const LIVE_LINES: Record<number, number> = {
   10: 6100,
@@ -366,6 +157,7 @@ function leaderboard(query: URLSearchParams) {
   const pages = Math.ceil(BOARD_SIZE / limit);
   return {
     kind: day === null ? "live" : "frozen",
+    ...(day === null ? { calendar: CALENDAR } : {}),
     generated_at: iso(NOW),
     ...(day === null
       ? {
@@ -462,6 +254,7 @@ function compared(
 function comparison() {
   return {
     kind: "group-comparison",
+    calendar: CALENDAR,
     group_id: CLAN_MATES,
     name: "Clan mates",
     days: 7,
@@ -539,6 +332,15 @@ const hit = (stars: number, destruction: number, trophies: number, minutes: numb
 
 /** What GET /v1/players/{tag}/today returns on Day 9 for today's two attacks. */
 const TODAY = {
+  calendar: {
+    ...CALENDAR,
+    as_of: iso(NOW),
+    day_start: iso(dayStart(9)),
+    day_end: iso(dayStart(10)),
+    season_start: iso(ANCHOR),
+    season_end: iso(ANCHOR + 28 * DAY),
+    day_number: 9,
+  },
   tag: MAIN,
   rank_range: { best: 95, worst: 760 },
   projected_rank: 240,
@@ -675,7 +477,7 @@ function answer(url: URL): [status: number, body: unknown] {
       },
     ];
   if (path === "/v1/account/groups")
-    return [200, { season: SEASON_ID, groups: python.groups }];
+    return [200, { calendar: CALENDAR, season: SEASON_ID, groups: python.groups }];
   if (path === `/v1/account/groups/${CLAN_MATES}/comparison`) return [200, comparison()];
   if (path === `/v1/players/${MAIN}/seasons`)
     return [
@@ -684,6 +486,10 @@ function answer(url: URL): [status: number, body: unknown] {
         seasons: [
           {
             official_season_id: String(ANCHOR / 1000 - 28 * 86_400),
+            season_start: iso(ANCHOR - 28 * DAY),
+            season_end: iso(ANCHOR),
+            last_day_start: iso(ANCHOR - DAY),
+            day_count: 28,
             coverage_state: "partial",
             days_observed: 0,
             days_missing: 28,
@@ -705,7 +511,25 @@ function answer(url: URL): [status: number, body: unknown] {
       armies(url.searchParams.get("lens")!, Number(url.searchParams.get("days"))),
     ];
   const page = python.pages[path.replace("/v1/players/", "")];
-  if (path.startsWith("/v1/players/") && page) return [200, page];
+  if (path.startsWith("/v1/players/") && page) {
+    const result = structuredClone(page) as ReturnType<typeof mainPage>;
+    if (path.endsWith(TUNDRA))
+      result.screen_ready.rival_season = {
+        reset_rank: 310,
+        hit_rate: 1,
+        offense: 320,
+        defense: -192,
+        net_per_day: 128,
+        finished_days: 8,
+      };
+    if (url.searchParams.get("battles") === "false") {
+      for (const day of result.screen_ready.days) {
+        day.offense_events = [];
+        day.defense_events = [];
+      }
+    }
+    return [200, result];
+  }
   if (path === "/v1/leaderboards/live" || path === "/v1/leaderboards/frozen") {
     const board = leaderboard(url.searchParams);
     if (url.searchParams.get("focus_tag") === MAIN && python.liveMoves.length > 1)
@@ -928,6 +752,9 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     // Legend clock: today's battles; the dial draws once the browser knows the time.
     expect(text(cards["legend-clock"]!)).toContain("Legend clock UTC time");
     expect(data.cards["legend-clock"]).toEqual({
+      calendar: expect.objectContaining({ day_end: iso(dayStart(10)) }),
+      dayStartMs: dayStart(9),
+      dayEndMs: dayStart(10),
       battles: [
         expect.objectContaining({ kind: "attack", stars: 3, trophyChange: 40 }),
         expect.objectContaining({ kind: "attack", stars: 2, trophyChange: 31 }),
@@ -1056,7 +883,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
 
   it("leaves a day not available when Python leaves its result unknown", async () => {
     // Day 6: six triples recorded, eight defenses for −320, and a gap in the battle log.
-    python.pages[MAIN] = mainPage({ triples: 6, held: 0, attacks: 6, gap: true });
+    python.pages[MAIN] = mainPage({ triples: 6, held: 0, attacks: 6, gap: true }, 9);
     const data = await load();
     expect(data.cards["heat-map"]?.days.find((day) => day.day === 6)).toMatchObject({
       net: null,
@@ -1078,7 +905,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
 
   it("keeps a day's attacks when only its defenses may be missing", async () => {
     // Day 6: all 8 attacks recorded, 6 defenses, and a gap in the battle log.
-    python.pages[MAIN] = mainPage({ defenses: 6, gap: true });
+    python.pages[MAIN] = mainPage({ defenses: 6, gap: true }, 10);
     const data = await load();
     const day6 = data.cards["heat-map"]?.days.find((day) => day.day === 6);
     expect(day6).toMatchObject({ net: null, triples: 5, offense: 290 });
@@ -1124,6 +951,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
         adjustments: [{ type: "weekly_reset", amount: 80 }],
       },
     );
+    page.screen_ready.dashboard_season = suppliedSeason(5);
     python.pages[MAIN] = page;
     const data = await load();
     // 5,238 at the start, +86 from battles, +80 from the reset.
@@ -1136,7 +964,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
 
   it("leaves a day's attacks unknown when more than 8 are recorded", async () => {
     // Day 6: nine recorded triples in an unbroken battle log.
-    python.pages[MAIN] = mainPage({ attacks: 9, triples: 9 });
+    python.pages[MAIN] = mainPage({ attacks: 9, triples: 9 }, 12);
     const data = await load();
     expect(data.cards["heat-map"]?.days.find((day) => day.day === 6)?.hits).toBeNull();
     const offense = text(cardsIn(await render(data))["offense-consistency"]!);
@@ -1336,6 +1164,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
   it("waits for the first Reset on Day 1", async () => {
     const page = mainPage();
     page.screen_ready.season.current_day_number = 1;
+    page.screen_ready.dashboard_season = { ...suppliedSeason(11), today: 1, days: [] };
     page.screen_ready.season_day_starts = [];
     page.screen_ready.recent_day_starts = [];
     python.pages[MAIN] = page;

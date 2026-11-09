@@ -1,3 +1,4 @@
+import { EMPTY_PLAYER_FACTS } from "../fixtures/player-route-data";
 vi.mock("../../app/services/players.server", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../app/services/players.server")>();
@@ -57,6 +58,7 @@ const URL_FOR_TAG = `${ORIGIN}/players/%232PP`;
 function playerNamed(name: string, tag = TAG): PlayerPage {
   return {
     kind: "player-page",
+    ...EMPTY_PLAYER_FACTS,
     tag,
     trackingState: "tracking",
     profile: { tag, name, clan: "Example", trophies: 6123 },

@@ -1,4 +1,6 @@
-import type { ArmyAnalytics } from "../lib/contracts";
+import { parseCalendar } from "../lib/calendar";
+import { mapSeasonBounds } from "./player-facts.server";
+import type { ArmyAnalytics, SeasonBounds } from "../lib/contracts";
 import {
   PythonApiError,
   isFiniteNumber,
@@ -28,6 +30,10 @@ export async function getArmyAnalytics(query: URLSearchParams): Promise<ArmyAnal
         isString(cause.payload.previous_season_id)
           ? cause.payload.previous_season_id
           : null,
+        parseCalendar(cause.payload.calendar) ??
+          (() => {
+            throw new PythonApiError(502, { error: "malformed" });
+          })(),
       );
     }
     throw cause;
@@ -49,7 +55,7 @@ export async function getArmySeasonSummary(
 }
 
 // Finished seasons with saved attack summaries, newest first.
-export async function getArmySeasons(): Promise<string[]> {
+export async function getArmySeasons(): Promise<SeasonBounds[]> {
   const payload = await requestJson<unknown>("/v1/analytics/armies/seasons", {
     method: "GET",
   });
@@ -60,13 +66,24 @@ export async function getArmySeasons(): Promise<string[]> {
   ) {
     throw new PythonApiError(502, { error: "malformed" });
   }
-  return payload.seasons;
+  if (!Array.isArray(payload.season_details))
+    throw new PythonApiError(502, { error: "malformed" });
+  const details = payload.season_details.map(mapSeasonBounds);
+  if (
+    details.some((detail) => detail === null) ||
+    !payload.seasons.every((id) => details.some((detail) => detail?.id === id))
+  )
+    throw new PythonApiError(502, { error: "malformed" });
+  return details as SeasonBounds[];
 }
 
 export class NoCompletedLegendDaysError extends Error {
   readonly previousSeasonId: string | null;
 
-  constructor(previousSeasonId: string | null) {
+  constructor(
+    previousSeasonId: string | null,
+    readonly calendar: import("../lib/contracts").Calendar,
+  ) {
     super("no completed Legend days this season");
     this.name = "NoCompletedLegendDaysError";
     this.previousSeasonId = previousSeasonId;
@@ -207,6 +224,12 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
         }
       : undefined,
     kind: "army-analytics",
+    calendar:
+      parseCalendar(payload.calendar) ??
+      (() => {
+        throw new PythonApiError(502, { error: "malformed" });
+      })(),
+    seasonBounds: mapSeasonBounds(payload.season_bounds),
     selection: {
       lens: selection.lens,
       season: selection.season,

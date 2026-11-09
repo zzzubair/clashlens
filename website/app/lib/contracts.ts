@@ -83,6 +83,7 @@ export interface LeaderboardSearch {
 }
 
 export interface TrackedLeaderboard {
+  calendar: Calendar | null;
   kind: "tracked-leaderboard";
   view: "live" | "daily";
   entries: TrackedPlayerEntry[];
@@ -179,6 +180,8 @@ export interface UpdateStatus {
 }
 
 export interface ArmyAnalytics {
+  calendar: Calendar | null;
+  seasonBounds: SeasonBounds | null;
   pagination?: { offset: number; totalRows: number; nextOffset: number | null };
   kind: "army-analytics";
   selection: {
@@ -276,7 +279,11 @@ export interface RankedBattleEvent {
 export interface RankedDaySummary {
   dayNumber: number | null;
   label: string;
-  period: string;
+  presentation: DayPresentation | null;
+  displayEnd: DayEnd | null;
+  start: string;
+  end: string | null;
+  seasonId: string | null;
   state: "Live" | "Complete" | "Partial" | "Uncertain";
   // How the saved day was proven: "exact" when its Reset reading matched
   // every part of its calculation, "inferred" when a part is calculated.
@@ -355,6 +362,24 @@ export interface SeasonWeek {
 }
 
 export interface PlayerPage {
+  trophyTrends: Record<
+    "7" | "14",
+    { span: number; counted: number; total: number | null }
+  > | null;
+  dashboardSeason: import("./dashboard-cards").SeasonData | null;
+  rivalSeason: {
+    resetRank: number | null;
+    hitRate: number | null;
+    offense: number | null;
+    defense: number | null;
+    netPerDay: number | null;
+    finishedDays: number | null;
+  };
+  calendar: Calendar;
+  seasonShape: import("./season-shape").SeasonShape | null;
+  historyDays: RankedDaySummary[];
+  historyDayNumbers: Record<string, number>;
+  battleStatistics: Record<"7" | "14" | "season", BattleStatisticsFact> | null;
   kind: "player-page";
   tag: string;
   trackingState: "tracking" | "not_in_legend" | "uncertain";
@@ -362,6 +387,8 @@ export interface PlayerPage {
   season: {
     id: string;
     anchor: string;
+    end: string;
+    initialTrophies: number;
     currentDayNumber: number;
     dayCount: number;
     anchorSource:
@@ -415,8 +442,11 @@ export type RefreshError = WebsiteErrorResponse;
 export type EodProofState = "accepted" | "provisional" | null;
 
 export interface HistoricalSeasonDayEntry {
+  presentation: DayPresentation;
   dayNumber: number | null;
-  period: string;
+  start: string;
+  end: string | null;
+  seasonId: string | null;
   startTrophies: number | null;
   endTrophies: number | null;
   eodState: EodProofState;
@@ -437,6 +467,13 @@ export interface HistoricalSeasonDayEntry {
 }
 
 export interface HistoricalSeasonSummary {
+  summaryStatistics: {
+    attack: { perDay: number | null; perBattle: number | null };
+    defense: { perDay: number | null; perBattle: number | null };
+  };
+  dayCount: number;
+  lastDayStart: string | null;
+  seasonShape: import("./season-shape").SeasonShape<HistoricalSeasonDayEntry> | null;
   kind: "player-season-summary";
   tag: string;
   seasonId: string;
@@ -473,6 +510,10 @@ export interface OfficialSeasonHistory {
 }
 
 export interface SummarizedSeasonRef {
+  seasonStart: string | null;
+  seasonEnd: string | null;
+  lastDayStart: string | null;
+  dayCount: number;
   seasonId: string;
   coverageState: "complete" | "partial";
   daysObserved: number;
@@ -489,4 +530,67 @@ export interface PastSeasonFinish {
   seasonEnd: string | null;
   trophies: number | null;
   globalRank: number | null;
+}
+
+export interface Calendar {
+  as_of: string;
+  day_start: string;
+  day_end: string;
+  season_id: string;
+  season_start: string;
+  season_end: string;
+  day_number: number;
+  day_count: number;
+}
+export interface SeasonBounds {
+  id: string;
+  start: string;
+  end: string;
+  last_day_start: string;
+  day_count: number;
+}
+export type DayStatus =
+  "in_progress" | "verified" | "calculated" | "uncertain" | "not_enrolled";
+export interface DayPresentation {
+  status: DayStatus;
+  battle_net: number | null;
+  battle_net_complete: number | null;
+  is_current: boolean;
+  show_in_player_log: boolean;
+  show_in_day_summary: boolean;
+  live_routine: boolean;
+  reason_codes: string[];
+  caution_codes: string[];
+}
+export interface DayEnd {
+  before_reset: number | null;
+  after_reset: number | null;
+  player_log: number | null;
+  dashboard: number | null;
+  status: DayStatus;
+  conflict: null | {
+    battle_end: number;
+    reset_kind: "weekly" | "season" | null;
+    reset_amount: number;
+    next_start: number;
+  };
+}
+export interface BattleStatisticsFact {
+  start: string;
+  end: string;
+  daysSaved: number;
+  daysExpected: number;
+  incomplete: boolean;
+  resetDayStart: string | null;
+  attack: BattleSide;
+  defense: BattleSide;
+}
+export interface BattleSide {
+  count: number;
+  stars: number[];
+  trophies: number;
+  playedDays: number;
+  perDay: number | null;
+  perBattle: number | null;
+  disputed: boolean;
 }

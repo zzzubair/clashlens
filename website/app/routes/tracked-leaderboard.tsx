@@ -298,6 +298,8 @@ export default function TrackedLeaderboardRoute() {
     savedLeaderboard?.generatedAt,
     !!savedLeaderboard?.seasonResetPending,
     view === "live",
+    false,
+    savedLeaderboard?.calendar?.season_end,
   );
   const leaderboard = seasonExpired ? null : savedLeaderboard;
   const search = seasonExpired ? null : savedSearch;

@@ -2,7 +2,6 @@ import { signedNumber as signed } from "../lib/number-format";
 import { timeFormatter, resetCountdown } from "../lib/clock-format";
 import { useEffect, useRef, useState } from "react";
 
-import { nextResetMs } from "../lib/dashboard";
 import type { ClockBattle } from "../lib/dashboard";
 import { Stars } from "./GameIcons";
 
@@ -269,8 +268,12 @@ export function LegendClock({
   battles,
   nowMs,
   timeZone,
+  dayStartMs,
+  dayEndMs,
 }: {
   battles: ClockBattle[];
+  dayStartMs: number;
+  dayEndMs: number;
   nowMs: number | null;
   timeZone: string;
 }) {
@@ -315,12 +318,12 @@ export function LegendClock({
     };
   }, [open]);
 
-  const resetMs = nowMs === null ? null : nextResetMs(nowMs);
-  const dayStart = resetMs === null ? null : resetMs - DAY_MINUTES * 60_000;
+  const resetMs = nowMs === null ? null : dayEndMs;
+  const dayStart = resetMs === null ? null : dayStartMs;
   const format = timeFormatter(timeZone);
   const elapsed =
     nowMs === null || dayStart === null ? null : (nowMs - dayStart) / 60_000;
-  const countdown = nowMs === null ? "–" : resetCountdown(nowMs).text;
+  const countdown = nowMs === null ? "–" : resetCountdown(nowMs, dayEndMs).text;
   const resetLabel = resetMs === null ? "--:--" : format.format(resetMs);
   const marks = dayStart === null ? [] : clockMarks(battles, dayStart);
   const [arcX, arcY] = point(elapsed ?? 0, RING);

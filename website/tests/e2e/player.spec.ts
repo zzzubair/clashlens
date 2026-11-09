@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-
 import {
   expect,
   test,
@@ -8,7 +7,13 @@ import {
   type Request,
 } from "@playwright/test";
 import { UNSAFE_decodeViaTurboStream } from "react-router";
-
+import {
+  decodePageData,
+  encodePageData,
+  pagePlayer,
+  withServerData,
+  withServerAge,
+} from "./helpers/player-page";
 import type { PlayerPage, RankedBattleEvent } from "../../app/lib/contracts";
 import { ensureAccount, signIn } from "./helpers/account";
 import {
@@ -16,7 +21,6 @@ import {
   WORST_SEASONS,
   worstCasePlayer,
 } from "../fixtures/player-worst-case";
-
 // Sends Refresh submissions with an invalid key, so the server refuses them
 // before they spend either per-visitor allowance.
 async function refuseRefreshes(page: Page, allowNext = () => false) {
@@ -29,7 +33,6 @@ async function refuseRefreshes(page: Page, allowNext = () => false) {
   });
   return submissions;
 }
-
 function refreshSubmitted(page: Page) {
   return page.waitForResponse(
     (response) =>
@@ -37,95 +40,6 @@ function refreshSubmitted(page: Page) {
       response.url().includes("/resources/players/"),
   );
 }
-
-// React Router page data is a flat list of values: objects map "_<key index>"
-// to value indexes, arrays list value indexes, -5 is null and -7 undefined.
-// A streamed value is ["P", its own index], resolved by a later "P<index>:"
-// line; it decodes to undefined, so past Seasons are left out.
-function decodePageData(text: string) {
-  const values: unknown[] = JSON.parse(text.split("\n")[0]);
-  const decode = (index: number): unknown => {
-    if (index < 0) return index === -5 ? null : undefined;
-    const value = values[index];
-    if (Array.isArray(value)) return value[0] === "P" ? undefined : value.map(decode);
-    if (value === null || typeof value !== "object") return value;
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [
-        values[Number(key.slice(1))],
-        decode(item as number),
-      ]),
-    );
-  };
-  return decode(0) as Record<string, { data?: { player?: PlayerPage } }>;
-}
-
-function encodePageData(data: unknown) {
-  const values: unknown[] = [];
-  const encode = (value: unknown): number => {
-    if (value === null) return -5;
-    if (value === undefined) return -7;
-    if (typeof value !== "object") return values.push(value) - 1;
-    const index = values.push(null) - 1;
-    values[index] = Array.isArray(value)
-      ? value.map(encode)
-      : Object.fromEntries(
-          Object.entries(value).map(([key, item]) => [`_${encode(key)}`, encode(item)]),
-        );
-    return index;
-  };
-  encode(data);
-  return `${JSON.stringify(values)}\n`;
-}
-
-function pagePlayer(data: ReturnType<typeof decodePageData>) {
-  const player = Object.values(data).find((route) => route.data?.player)?.data?.player;
-  expect(player?.currentDay, "saved player has a current Legend day").toBeTruthy();
-  return player!;
-}
-
-// Read the complete response before changing its data. Adding a value to only
-// the first chunk shifts the references used by later streamed values.
-async function withServerData(
-  html: string,
-  edit: (saved: { player: PlayerPage; seasons?: unknown }) => void,
-) {
-  const enqueue =
-    /window\.__reactRouterContext\.streamController\.enqueue\(("(?:[^"\\]|\\.)*")\);/g;
-  const stream = [...html.matchAll(enqueue)]
-    .map((match) => JSON.parse(match[1]) as string)
-    .join("");
-  const decoded = await UNSAFE_decodeViaTurboStream(
-    new Response(stream).body!,
-    globalThis,
-  );
-  await decoded.done;
-  const data = decoded.value as {
-    loaderData: Record<string, { player: PlayerPage; pastSeasons: unknown }>;
-  };
-  const saved = data.loaderData["routes/player"];
-  edit(saved);
-  for (const [key, value] of Object.entries(saved))
-    Object.assign(saved, { [key]: await value });
-  const escaped = JSON.stringify(encodePageData(data)).replace(
-    /[&<>\u2028\u2029]/g,
-    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
-  );
-  let first = true;
-  const served = html.replace(enqueue, () => {
-    if (!first) return "";
-    first = false;
-    return `window.__reactRouterContext.streamController.enqueue(${escaped});`;
-  });
-  expect(served).not.toBe(html);
-  return served;
-}
-
-function withServerAge(html: string, ageSeconds: number) {
-  return withServerData(html, (saved) => {
-    saved.player.profile.freshness.ageSeconds = ageSeconds;
-  });
-}
-
 test("saved-page age override preserves streamed history and unrelated counts", async () => {
   const values: unknown[] = JSON.parse(
     encodePageData({
@@ -172,7 +86,6 @@ test("saved-page age override preserves streamed history and unrelated counts", 
   expect(saved.player.attacks).toBe(1);
   expect(await saved.pastSeasons).toEqual([42]);
 });
-
 for (const ageSeconds of [30, 60, 61, 120]) {
   test(`profile visit refreshes once only when the server says its saved check is older than 60 seconds (${ageSeconds}s)`, async ({
     page,
@@ -336,8 +249,13 @@ test("a battle processed shortly after a completed Refresh reaches the open page
     trophyChange: 40,
     perspectiveDisagreement: false,
   };
-  for (const day of [player.currentDay!, ...player.recentDays, ...player.seasonDays]) {
-    if (day.period === player.currentDay!.period) day.offenseEvents.unshift(attack);
+  for (const day of new Set([
+    player.currentDay!,
+    ...player.recentDays,
+    ...player.seasonDays,
+    ...player.historyDays,
+  ])) {
+    if (day.start === player.currentDay!.start) day.offenseEvents.unshift(attack);
   }
   const processedData = encodePageData(processed);
   const attacks = page.locator(".battle-row-attack", { hasText: "Catch-up Clasher" });
@@ -387,7 +305,13 @@ test("a battle processed shortly after a completed Refresh reaches the open page
         progressPercent: 100,
         message: "Complete.",
         publishedAt: observedAt,
-        player: { ...player, currentDay: null, recentDays: [], seasonDays: [] },
+        player: {
+          ...player,
+          currentDay: null,
+          recentDays: [],
+          seasonDays: [],
+          historyDays: [],
+        },
       },
     });
   });
@@ -713,9 +637,14 @@ test("a folded Legend day keeps every battle as the page starts and after a Refr
     const saved = await page.request.get("/players/%232PP.data");
     const later = decodePageData(await saved.text());
     const player = pagePlayer(later);
-    const days = [player.currentDay!, ...player.recentDays, ...player.seasonDays];
+    const days = [
+      player.currentDay!,
+      ...player.recentDays,
+      ...player.seasonDays,
+      ...player.historyDays,
+    ];
     for (const day of new Set(days)) {
-      if (id !== `legend-day-${day.period.slice(0, 10)}`) continue;
+      if (id !== `legend-day-${day.start.slice(0, 10)}`) continue;
       day.offenseEvents.unshift({
         battleId: "after-refresh",
         battleTimestamp: new Date().toISOString(),
@@ -757,7 +686,13 @@ test("a folded Legend day keeps every battle as the page starts and after a Refr
               progressPercent: 100,
               message: "Complete.",
               publishedAt: new Date().toISOString(),
-              player: { ...player, currentDay: null, recentDays: [], seasonDays: [] },
+              player: {
+                ...player,
+                currentDay: null,
+                recentDays: [],
+                seasonDays: [],
+                historyDays: [],
+              },
             },
           }),
     );
@@ -849,6 +784,9 @@ for (const [device, size] of [
             offenseEvents: player.currentDay!.offenseEvents.slice(1),
           },
         };
+        withoutBattle.historyDays = player.historyDays.map((day) =>
+          day.start === withoutBattle.currentDay.start ? withoutBattle.currentDay : day,
+        );
         await openBattleLink(
           page,
           link,

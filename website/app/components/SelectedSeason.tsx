@@ -8,32 +8,36 @@ import type {
   HistoricalSeasonSummary,
   WebsiteErrorResponse,
 } from "../lib/contracts";
-import { legendDayKey, presentDay } from "../lib/player-lookup-text";
-import { seasonDates } from "../lib/season-end";
-import { gapLabel, inGap, logGaps, pastSeasonShape } from "../lib/season-shape";
+import { legendDayKey, dayPresentation } from "../lib/player-lookup-text";
+import { seasonDates, unavailableSeasonDates } from "../lib/season-end";
+import { gapLabel, inGap, logGaps } from "../lib/season-shape";
 import { DayMark, DayStatusNote, provisional } from "./DayStatus";
 import { ErrorNotice } from "./ErrorNotice";
 import { ShieldIcon, SwordIcon } from "./GameIcons";
 import { LogDate, LogHead, LogRank } from "./LegendLog";
 import { SeasonStory } from "./SeasonStory";
-import { SeasonSummary, per, type SummarySide } from "./SeasonSummary";
+import { SeasonSummary, type SummarySide } from "./SeasonSummary";
 
-type PastShape = ReturnType<typeof pastSeasonShape>;
+type PastShape = NonNullable<HistoricalSeasonSummary["seasonShape"]>;
 
 /** A chosen past Season: its finish, then its saved days in the log's short rows. */
 export function SelectedSeason({
   seasonId,
+  bounds,
+  listUnavailable,
   summary,
   error,
   menu,
 }: {
   seasonId: string;
+  bounds: { seasonStart: string | null; seasonEnd: string | null } | null;
+  listUnavailable: boolean;
   summary: HistoricalSeasonSummary | null;
   error: WebsiteErrorResponse | null;
   menu: React.ReactNode;
 }) {
   if (summary !== null) {
-    const shape = summary.source === "tracked_summary" ? pastSeasonShape(summary) : null;
+    const shape = summary.source === "tracked_summary" ? summary.seasonShape : null;
     return (
       <>
         <SeasonFinish summary={summary} shape={shape} menu={menu} />
@@ -42,14 +46,17 @@ export function SelectedSeason({
       </>
     );
   }
+  const unavailableLabel = listUnavailable
+    ? unavailableSeasonDates(seasonId)
+    : seasonDates(bounds);
   return (
     <section className="data-section" aria-labelledby="historical-title">
       <div className="section-heading">
-        <h2 id="historical-title">{seasonDates(seasonId)}</h2>
+        <h2 id="historical-title">{unavailableLabel}</h2>
         {menu}
       </div>
       {error ? <ErrorNotice error={error} /> : null}
-      <p className="section-note">Results for {seasonDates(seasonId)} are unavailable.</p>
+      <p className="section-note">Results for {unavailableLabel} are unavailable.</p>
     </section>
   );
 }
@@ -75,23 +82,18 @@ function SeasonFinish({
     count: number | null,
     stars: Record<string, number | null>,
     unknown: number | null,
-    trophies: number | null,
     played: "attacks" | "defenses",
   ): SummarySide => ({
     count,
     stars: [0, 1, 2, 3].map((star) => stars[star] ?? null),
     unknown,
-    // Days without a battle on this side, such as shielded days, don't count.
-    perDay: per(
-      trophies,
-      summary.daysObserved -
-        summary.dailyEntries.filter((day) => day[played] === 0).length,
-    ),
-    perBattle: per(trophies, count),
+    perDay: summary.summaryStatistics[played === "attacks" ? "attack" : "defense"].perDay,
+    perBattle:
+      summary.summaryStatistics[played === "attacks" ? "attack" : "defense"].perBattle,
   });
   return (
     <SeasonSummary
-      title={seasonDates(summary.seasonId)}
+      title={seasonDates(summary)}
       controls={menu}
       {...(partial
         ? {
@@ -104,9 +106,9 @@ function SeasonFinish({
             // Every day can be saved and the Season still partial, when a day
             // or a total isn't confirmed.
             meta:
-              summary.daysObserved < 28
-                ? `${28 - summary.daysObserved} of 28 days missing`
-                : "All 28 days saved, not all confirmed",
+              summary.daysObserved < summary.dayCount
+                ? `${summary.dayCount - summary.daysObserved} of ${summary.dayCount} days missing`
+                : `All ${summary.dayCount} days saved, not all confirmed`,
           })}
       rank={
         left
@@ -130,14 +132,12 @@ function SeasonFinish({
           summary.attackCount,
           summary.attackStars,
           summary.attackStarsUnknown,
-          summary.attackGain,
           "attacks",
         ),
         defense: side(
           summary.defenseCount,
           summary.defenseStars,
           summary.defenseStarsUnknown,
-          summary.defenseLoss,
           "defenses",
         ),
       })}
@@ -166,7 +166,7 @@ function SeasonDays({
   const rows = [
     ...summary.dailyEntries
       .filter((day) => !inGap(gaps, shape, day))
-      .map((day) => ({ start: Date.parse(day.period.split(" – ")[0]), day })),
+      .map((day) => ({ start: Date.parse(day.start), day })),
     ...gaps.map((gap) => ({ start: gap.lastStart, gap })),
   ].sort((a, b) => a.start - b.start);
   const moves = rankMoves(summary.dailyEntries);
@@ -178,7 +178,7 @@ function SeasonDays({
   return (
     <section className="data-section" aria-label="Daily trophy totals">
       {selectedDay &&
-      !summary.dailyEntries.some((day) => legendDayKey(day.period) === selectedDay) ? (
+      !summary.dailyEntries.some((day) => legendDayKey(day.start) === selectedDay) ? (
         <p className="section-note" role="status">
           No saved Legend log for {legendDayDate(selectedDay)}.
         </p>
@@ -192,9 +192,9 @@ function SeasonDays({
             </p>
           ) : "day" in row && row.day ? (
             <SeasonDay
-              key={`${row.day.period}-${row.day.dayNumber ?? "unknown"}`}
+              key={`${row.day.start}-${row.day.dayNumber ?? "unknown"}`}
               day={row.day}
-              selected={legendDayKey(row.day.period) === selectedDay}
+              selected={legendDayKey(row.day.start) === selectedDay}
               rankMove={
                 row.day.dayNumber === null ? undefined : moves.get(row.day.dayNumber)
               }
@@ -215,33 +215,20 @@ function SeasonDay({
   selected: boolean;
   rankMove?: number;
 }) {
-  const { status, reasons, battleNet } = presentDay(
-    {
-      net: day.netChange,
-      state: day.state,
-      confidence: day.confidence,
-      coverage: day.coverage,
-      codes: day.flags,
-      attackGain: day.attackGain,
-      defenseLoss: day.defenseLoss,
-      attacks: day.attacks,
-      defenses: day.defenses,
-    },
-    false,
-  );
+  const { status, reasons, battleNet } = dayPresentation(day);
   const defense = day.defenseLoss === null ? null : -day.defenseLoss;
   return (
     <details
       className="log-day"
       {...(selected && {
-        id: `legend-day-${legendDayKey(day.period)}`,
+        id: `legend-day-${legendDayKey(day.start)}`,
         "aria-current": "date",
         open: true,
       })}
     >
       <summary className="log-row">
         <span className="log-when">
-          <LogDate period={day.period} />
+          <LogDate period={day.start} />
           <span className="log-day-meta">
             <small>
               {day.dayNumber === null ? "Day unknown" : `Day ${day.dayNumber}`}

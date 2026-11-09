@@ -117,10 +117,10 @@ async function readPlayer(tag: string): Promise<OverlayPlayer> {
     const lost = complete ? day.defense.trophyLoss : null;
     out.day = {
       number: day.dayNumber,
-      of: page.season?.dayCount ?? 28,
+      of: page.calendar.day_count,
       gained,
       lost,
-      net: day.trophyChange ?? (gained !== null && lost !== null ? gained - lost : null),
+      net: day.trophyChange ?? day.presentation!.battle_net_complete,
       battles,
     };
   }

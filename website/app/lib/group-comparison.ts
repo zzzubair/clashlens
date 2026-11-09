@@ -1,3 +1,5 @@
+import { parseCalendar } from "./calendar";
+import type { Calendar } from "./contracts";
 /**
  * Response contract for GET /v1/account/groups/{id}/comparison, produced by
  * python/src/clashlens/api_groups.py. Totals arrive with their sample sizes;
@@ -75,6 +77,7 @@ export interface ComparedPlayer {
 }
 
 export interface GroupComparison {
+  calendar: Calendar;
   groupId: string;
   name: string;
   days: ComparisonDays;
@@ -120,6 +123,8 @@ export function mapGroupComparison(value: unknown): GroupComparison | null {
     !Array.isArray(value.players)
   )
     return null;
+  const calendar = parseCalendar(value.calendar);
+  if (calendar === null) return null;
   const players: ComparedPlayer[] = [];
   for (const item of value.players) {
     const player = mapPlayer(item, value.day_starts.length);
@@ -127,6 +132,7 @@ export function mapGroupComparison(value: unknown): GroupComparison | null {
     players.push(player);
   }
   return {
+    calendar,
     groupId: value.group_id,
     name: value.name,
     days: value.days as ComparisonDays,

@@ -1,15 +1,6 @@
-import { seasonStartAt } from "../components/SeasonReread";
-import type {
-  HistoricalSeasonDayEntry,
-  HistoricalSeasonSummary,
-  PlayerPage,
-  RankedDaySummary,
-  SeasonWeek,
-} from "./contracts";
+import type { RankedDaySummary } from "./contracts";
 
 const DAY_MS = 86_400_000;
-const WEEK_MS = 7 * DAY_MS;
-const SEASON_START_TROPHIES = 5000;
 
 /**
  * What one day of the Season was for this player: a Legend I day, a Legend I
@@ -47,125 +38,6 @@ export interface SeasonShape<Day = RankedDaySummary> {
   legendDays: { expected: number; saved: number };
   /** The newest finished Legend I day, the one a dropped player left on. */
   lastLegendDay: Day | null;
-}
-
-const startOf = (day: RankedDaySummary) => Date.parse(day.period.split(" – ")[0]);
-
-/** A day known to be 5,000 to 5,000 with no battles: not one with unknown numbers. */
-function unplayed(day: RankedDaySummary) {
-  return (
-    day.offenseEvents.length === 0 &&
-    day.defenseEvents.length === 0 &&
-    day.offense.attacks === 0 &&
-    day.defense.defenses === 0 &&
-    day.trophyChange === 0 &&
-    day.startTrophies === SEASON_START_TROPHIES
-  );
-}
-
-/**
- * The current Season as the weekly league record and the saved days tell it.
- * A player can leave Legend I only at a Monday Reset, but can enter it on any
- * day: promotion lands at the Monday Reset and each day until they sign up is
- * saved as 5,000 to 5,000 with no battles.
- */
-export function seasonShape(player: PlayerPage, now: number): SeasonShape {
-  const anchor = player.season ? Date.parse(player.season.anchor) : NaN;
-  const seasonStart =
-    anchor <= now && now < anchor + 28 * DAY_MS ? anchor : seasonStartAt(now);
-  const today = Math.min(28, Math.floor((now - seasonStart) / DAY_MS) + 1);
-  const saved = new Map<number, RankedDaySummary>();
-  for (const day of [
-    ...player.seasonDays,
-    ...(player.currentDay ? [player.currentDay] : []),
-    ...player.recentDays,
-  ]) {
-    const number = Math.floor((startOf(day) - seasonStart) / DAY_MS) + 1;
-    if (number >= 1 && number <= 28 && !saved.has(number)) saved.set(number, day);
-  }
-  return shapeOf(seasonStart, today, player.seasonWeeks ?? [], saved, unplayed);
-}
-
-/**
- * A Season's shape from its weeks and saved days. Days before `today` are
- * finished; an ended Season passes 29, so all 28 are.
- */
-export function shapeOf<Day>(
-  seasonStart: number,
-  today: number,
-  seasonWeeks: SeasonWeek[],
-  saved: Map<number, Day>,
-  unplayed: (day: Day) => boolean,
-): SeasonShape<Day> {
-  const weeks = new Map<number, SeasonWeek>(
-    seasonWeeks.map((week) => [Date.parse(week.start), week]),
-  );
-  const weekOf = (number: number) =>
-    weeks.get(seasonStart + Math.floor((number - 1) / 7) * WEEK_MS);
-  const last = Math.min(today, 28);
-  const kinds: SeasonDayKind[] = [];
-  for (let number = 1; number <= 28; number++) {
-    const league = weekOf(number)?.league;
-    kinds.push(
-      number > today
-        ? "ahead"
-        : league === "below_legend_i"
-          ? "outside"
-          : league === "legend_i" || saved.has(number)
-            ? "legend"
-            : "unrecorded",
-    );
-  }
-  const runs: SeasonRun[] = [];
-  for (let number = 1; number <= last; number++) {
-    if (kinds[number - 1] !== "legend") continue;
-    const first = number;
-    while (number < last && kinds[number] === "legend") number++;
-    // Until the player's first battle, each saved day is 5,000 to 5,000.
-    let signedUp: number | null = null;
-    for (let day = first; day <= number; day++) {
-      const kept = saved.get(day);
-      if (kept && !unplayed(kept)) {
-        signedUp = day;
-        break;
-      }
-      // Today, still being played, can't show the player has not signed up.
-      if (kept && day < today) kinds[day - 1] = "waiting";
-    }
-    const entry = weekOf(first)?.entry;
-    runs.push({
-      first,
-      last: number,
-      signedUp,
-      promoted: entry === "promoted" || entry === "first_seen",
-      dropped: number < 28 && kinds[number] === "outside",
-    });
-  }
-  let expected = 0;
-  let savedCount = 0;
-  let lastLegendDay: Day | null = null;
-  for (let number = 1; number < today && number <= 28; number++) {
-    if (kinds[number - 1] !== "legend") continue;
-    expected++;
-    const kept = saved.get(number);
-    if (kept) {
-      savedCount++;
-      lastLegendDay = kept;
-    }
-  }
-  const lastRun = runs.at(-1);
-  if (lastRun?.dropped && lastRun.signedUp === null)
-    lastLegendDay = saved.get(lastRun.last) ?? lastLegendDay;
-  return {
-    seasonStart,
-    today,
-    kinds,
-    runs,
-    partial: kinds.some((kind) => kind === "outside" || kind === "waiting"),
-    outsideNow: today <= 28 && kinds[today - 1] === "outside",
-    legendDays: { expected, saved: savedCount },
-    lastLegendDay,
-  };
 }
 
 /** A Season day's date, such as "Mon 12 Oct". */
@@ -253,36 +125,10 @@ export function gapLabel(shape: SeasonShape<unknown>, gap: LogGap) {
 export function inGap(
   gaps: LogGap[],
   shape: SeasonShape<unknown>,
-  day: { period: string },
+  day: { start: string },
 ) {
-  const number =
-    Math.floor((Date.parse(day.period.split(" – ")[0]) - shape.seasonStart) / DAY_MS) + 1;
-  return gaps.some((gap) => gap.first <= number && number <= gap.last);
-}
-
-/** Whether the player left Legend I at the Reset ending this day. */
-export function leftAfter(player: PlayerPage, day: RankedDaySummary) {
-  const end = Date.parse(day.period.split(" – ")[1]);
-  return (player.seasonWeeks ?? []).some(
-    (week) => Date.parse(week.start) === end && week.league === "below_legend_i",
-  );
-}
-
-/** An ended Season's shape from its saved summary. */
-export function pastSeasonShape(summary: HistoricalSeasonSummary) {
-  const saved = new Map<number, HistoricalSeasonDayEntry>();
-  for (const entry of summary.dailyEntries)
-    if (entry.dayNumber !== null && !saved.has(entry.dayNumber))
-      saved.set(entry.dayNumber, entry);
-  return shapeOf(
-    Number(summary.seasonId) * 1000,
-    29,
-    summary.seasonWeeks ?? [],
-    saved,
-    (entry) =>
-      entry.attacks === 0 &&
-      entry.defenses === 0 &&
-      entry.netChange === 0 &&
-      entry.startTrophies === SEASON_START_TROPHIES,
+  const at = Date.parse(day.start);
+  return gaps.some(
+    (gap) => shape.seasonStart + (gap.first - 1) * DAY_MS <= at && at <= gap.lastStart,
   );
 }

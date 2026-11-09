@@ -26,7 +26,6 @@ import type { WebsiteErrorResponse } from "../lib/contracts";
 import type { SeasonDay } from "../lib/dashboard-cards";
 import { LOOKUP_MESSAGES, lookupExplanation } from "../lib/player-lookup-text";
 import { canonicalPlayerPath } from "../lib/player-tag";
-import { logGaps, shapeOf } from "../lib/season-shape";
 import type { RootLoaderData } from "../lib/root-data";
 import type { PublicUserDays } from "../services/public-user-days.server";
 import type { Route } from "./+types/users.$username";
@@ -92,7 +91,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
         ? Promise.resolve({})
         : import("../services/public-user-days.server")
             .then((api) => api.getPublicUserDays(username))
-            .then((read) => linkedDays(read, Date.now()))
+            .then((read) => linkedDays(read))
             .catch(() => ({}));
     return data<UserLoaderData>(
       { user, notFound: false, error: null, owner, days },
@@ -114,34 +113,19 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   }
 }
 
-const DAY_MS = 86_400_000;
-
 /**
  * Each linked player's rank at the last Reset and Season heat map, from one
  * read of every linked player's place and saved days this Season. The heat
  * map colours the days the player page's Season summary does: those its log
  * shows, without a partial Season's stretches outside Legend I.
  */
-function linkedDays(read: PublicUserDays, now: number): Record<string, LinkedDay> {
+function linkedDays(read: PublicUserDays): Record<string, LinkedDay> {
   const seasonStart = Date.parse(read.seasonStart);
-  const today = Math.min(28, Math.floor((now - seasonStart) / DAY_MS) + 1);
+  const today = read.calendar.day_number;
   return Object.fromEntries(
     read.players.map((player) => {
-      const saved = new Map(player.days.map((day) => [day.day, day] as const));
-      const shape = shapeOf(
-        seasonStart,
-        today,
-        player.seasonWeeks,
-        saved,
-        (day) => day.unplayed,
-      );
-      const gaps = shape.partial ? logGaps(shape) : [];
-      const days = player.days
-        .filter(
-          (kept) =>
-            kept.listed &&
-            !gaps.some((gap) => gap.first <= kept.day && kept.day <= gap.last),
-        )
+      const days = player.heatmapDayNumbers
+        .map((number) => player.days.find((day) => day.day === number)!)
         .map((kept): SeasonDay => ({
           day: kept.day,
           attacks: kept.attacks,

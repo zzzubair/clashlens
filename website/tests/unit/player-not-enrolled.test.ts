@@ -1,22 +1,11 @@
+import { UNKNOWN_END, VERIFIED } from "../fixtures/player-route-data";
 import { describe, expect, it } from "vitest";
 import type { PlayerPage, RankedDaySummary } from "../../app/lib/contracts";
 import {
-  dayEvidence,
-  presentDay,
+  dayPresentation,
   selectPlayerHistory,
   showsCurrentSeason,
 } from "../../app/lib/player-lookup-text";
-
-const DAY = {
-  net: null,
-  state: "Partial",
-  coverage: "partial",
-  codes: ["missing_start_baseline", "not_enrolled"],
-  attackGain: null,
-  defenseLoss: null,
-  attacks: 0,
-  defenses: 0,
-};
 
 const SEASON_START = Date.parse("2026-09-07T05:00:00Z");
 
@@ -26,7 +15,16 @@ const emptyDay = (number: number, codes: string[]): RankedDaySummary => {
   return {
     dayNumber: number,
     label: "Ranked day",
-    period: `${new Date(start).toISOString()} – ${new Date(start + 86_400_000).toISOString()}`,
+    start: `${new Date(start).toISOString()}`,
+    end: `${new Date(start + 86_400_000).toISOString()}`,
+    seasonId: null,
+    presentation: {
+      ...VERIFIED,
+      status: "not_enrolled",
+      battle_net: null,
+      reason_codes: ["not_enrolled"],
+    },
+    displayEnd: UNKNOWN_END,
     state: "Partial",
     offense: { attacks: 0, threeStars: 0, trophyGain: null },
     defense: { defenses: 0, threeStarsAgainst: 0, trophyLoss: null },
@@ -40,17 +38,25 @@ const emptyDay = (number: number, codes: string[]): RankedDaySummary => {
 
 describe("days before a late joiner signed up", () => {
   it("say the player was not enrolled instead of a missing result", () => {
-    expect(presentDay(DAY, false)).toEqual({
+    expect(dayPresentation(emptyDay(3, []))).toEqual({
       status: "Not enrolled",
       reasons: ["The player had not signed up for this Season yet."],
       battleNet: null,
+      cautions: [],
     });
   });
 
   it("leave other incomplete days unchanged", () => {
-    expect(presentDay({ ...DAY, codes: ["missing_start_baseline"] }, false).status).toBe(
-      "Uncertain",
-    );
+    expect(
+      dayPresentation({
+        ...emptyDay(3, []),
+        presentation: {
+          ...VERIFIED,
+          status: "uncertain",
+          reason_codes: ["missing_start_baseline"],
+        },
+      }).status,
+    ).toBe("Uncertain");
   });
 
   it("stay in the history when the player was also not in Legend I", () => {
@@ -60,6 +66,8 @@ describe("days before a late joiner signed up", () => {
         anchor: "2026-09-07T05:00:00Z",
         currentDayNumber: 10,
         dayCount: 28,
+        end: "2026-11-02T05:00:00Z",
+        initialTrophies: 5000,
         anchorSource: "official_league_history",
         anchorObservedAt: "2026-09-07T05:10:00Z",
       },
@@ -70,9 +78,13 @@ describe("days before a late joiner signed up", () => {
       ],
       seasonDays: [],
     } as unknown as PlayerPage;
-    const history = selectPlayerHistory(player, Date.parse("2026-09-16T06:00:00Z"));
+    const history = selectPlayerHistory({
+      ...player,
+      historyDays: [player.recentDays[0]],
+      historyDayNumbers: { [player.recentDays[0].start]: 3 },
+    });
     expect(history.map(({ seasonDay }) => seasonDay)).toEqual(["Day 3"]);
-    expect(presentDay(dayEvidence(history[0].day), false).status).toBe("Not enrolled");
+    expect(dayPresentation(history[0].day).status).toBe("Not enrolled");
   });
 
   it("give a player outside Legend I no current Season when they never played a Legend day", () => {

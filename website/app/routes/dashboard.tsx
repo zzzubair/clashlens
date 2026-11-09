@@ -30,7 +30,6 @@ import {
   CARD_IDS,
   VIEW_AS_PARAM,
   isDashboardSave,
-  nextResetMs,
   parsePostedSettings,
   readSettings,
   serializeSettings,
@@ -40,7 +39,6 @@ import type { CardReads } from "../lib/dashboard-cards";
 import { leftDate, leftLine, type LeftLegendI } from "../lib/left-legend";
 import { LOOKUP_MESSAGES } from "../lib/player-lookup-text";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
-import { seasonShape } from "../lib/season-shape";
 import type { Route } from "./+types/dashboard";
 import "../dashboard.css";
 import "../dashboard-cards.css";
@@ -117,7 +115,6 @@ export async function loader({ request }: Route.LoaderArgs) {
     );
   }
 
-  const dayEndsMs = nextResetMs(Date.now());
   // Asked on every signed-in load, whatever the address says, alongside the
   // linked players: a non-owner's page is the same with or without view_as.
   const { readViewAs } = await import("../server/view-as.server");
@@ -196,7 +193,30 @@ export async function loader({ request }: Route.LoaderArgs) {
       selectedTag: selected?.tag ?? null,
       settings,
       cards,
-      dayEndsMs,
+      dayEndsMs: (() => {
+        const reads = Object.values(cards);
+        for (const value of reads) {
+          if (
+            value &&
+            !(value instanceof Promise) &&
+            "calendar" in value &&
+            value.calendar
+          )
+            return Date.parse(value.calendar.day_end);
+          if (
+            value &&
+            !(value instanceof Promise) &&
+            "dayEndMs" in value &&
+            typeof value.dayEndMs === "number"
+          )
+            return value.dayEndMs;
+          if (value && !(value instanceof Promise) && "day" in value && value.day)
+            return value.day.dayEndMs;
+        }
+        return leftPlayer
+          ? Date.parse(leftPlayer.calendar.day_end)
+          : Number.POSITIVE_INFINITY;
+      })(),
       leftPlayer,
       idempotencyKey,
       canViewAs: owner.owner,
@@ -457,6 +477,7 @@ export default function DashboardRoute() {
   const loaderData = useLoaderData<typeof loader>();
   const dayOver = useDayOver(
     loaderData.kind === "signed-in" ? loaderData.dayEndsMs : Number.POSITIVE_INFINITY,
+    loaderData.kind === "signed-in" ? loaderData.cards : null,
   );
   if (loaderData.kind === "signed-out") return <FrontPage data={loaderData} />;
   if (loaderData.kind === "error") {
@@ -596,7 +617,7 @@ function LeftLegendPanel({
       </p>
       {player ? (
         <>
-          <SeasonStory shape={seasonShape(player, now)} />
+          {player.seasonShape ? <SeasonStory shape={player.seasonShape} /> : null}
           <BattleStatistics player={player} now={now} />
         </>
       ) : null}
@@ -621,7 +642,22 @@ function NewDayNotice() {
 }
 
 /** Whether the Legend day the page was read for has ended, checked every 30 seconds. */
-function useDayOver(dayEndsMs: number): boolean {
+function useDayOver(dayEndsMs: number, cards: CardReads | null): boolean {
+  const [readEnd, setReadEnd] = useState(dayEndsMs);
+  useEffect(() => {
+    let active = true;
+    for (const value of Object.values(cards ?? {}))
+      void Promise.resolve(value).then(
+        (read) => {
+          if (active && read?.calendar) setReadEnd(Date.parse(read.calendar.day_end));
+        },
+        () => {},
+      );
+    return () => {
+      active = false;
+    };
+  }, [cards]);
+  dayEndsMs = Number.isFinite(dayEndsMs) ? dayEndsMs : readEnd;
   const [, setTick] = useState(0);
   const over = Date.now() >= dayEndsMs;
   useEffect(() => {

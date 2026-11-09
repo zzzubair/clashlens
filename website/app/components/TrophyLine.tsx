@@ -28,7 +28,6 @@ const count = (value: number) => value.toLocaleString("en-GB");
  */
 export function TrophyLine({
   history,
-  player,
   now,
   current,
   until = now,
@@ -44,7 +43,7 @@ export function TrophyLine({
   endLabel?: string;
 }) {
   const [active, setActive] = useState<number | null>(null);
-  const dayStart = (day: RankedDaySummary) => Date.parse(day.period.split(" – ")[0]);
+  const dayStart = (day: RankedDaySummary) => Date.parse(day.start);
   const oldest = history.at(-1)?.day;
   if (!oldest) return null;
   const origin = dayStart(oldest);
@@ -54,7 +53,7 @@ export function TrophyLine({
   for (const { day } of [...history].reverse()) {
     const at = (dayStart(day) - origin) / DAY;
     if (day.startTrophies != null && !resets.has(at)) resets.set(at, day.startTrophies);
-    const end = dayEnd(day, player, now).trophies;
+    const end = dayEnd(day).trophies;
     if (end !== null) resets.set(at + 1, end);
   }
   const marks = [...resets].sort(([a], [b]) => a - b);

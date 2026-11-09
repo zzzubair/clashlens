@@ -1,3 +1,4 @@
+import { UNKNOWN_END, VERIFIED } from "../fixtures/player-route-data";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -12,12 +13,16 @@ const NOW = FIRST + 3 * DAY + 3_600_000;
 
 // Day `index` of the line, starting at `start` trophies; the next saved day's
 // start is this day's EOD.
-function day(index: number, start: number): RankedDaySummary {
+function day(index: number, start: number, end: number | null = null): RankedDaySummary {
   const begins = FIRST + index * DAY;
   return {
     dayNumber: index + 1,
     label: "Legend day",
-    period: `${new Date(begins).toISOString()} – ${new Date(begins + DAY).toISOString()}`,
+    start: `${new Date(begins).toISOString()}`,
+    end: `${new Date(begins + DAY).toISOString()}`,
+    seasonId: null,
+    presentation: VERIFIED,
+    displayEnd: { ...UNKNOWN_END, player_log: end },
     state: begins + DAY > NOW ? "Live" : "Complete",
     startTrophies: start,
     offense: { attacks: 0, threeStars: null, trophyGain: 0 },
@@ -60,16 +65,16 @@ describe("Season trophy line", () => {
   it("keeps a day with no saved EOD in its place, bridged by a dashed line", () => {
     // Day 3 was never saved, so Day 2 has no EOD: Day 1's end, then a dashed
     // stretch across Days 2 and 3 to now, the end of Day 4.
-    const { solid, dashed } = line([day(0, 5_000), day(1, 5_040), day(3, 5_080)]);
+    const { solid, dashed } = line([day(0, 5_000, 5_040), day(1, 5_040), day(3, 5_080)]);
     expect(solid).toMatch(/^M0\.0 [\d.]+ L80\.0 [\d.]+ M240\.0 [\d.]+ L320\.0 [\d.]+$/);
     expect(dashed).toMatch(/^M80\.0 [\d.]+ L240\.0 [\d.]+$/);
   });
 
   it("draws every day solid when each has an EOD", () => {
     const { solid, dashed } = line([
-      day(0, 5_000),
-      day(1, 5_040),
-      day(2, 5_020),
+      day(0, 5_000, 5_040),
+      day(1, 5_040, 5_020),
+      day(2, 5_020, 5_080),
       day(3, 5_080),
     ]);
     expect(solid?.match(/M/g)).toHaveLength(4);
@@ -77,7 +82,12 @@ describe("Season trophy line", () => {
   });
 
   it("labels a round trophy scale down one side and lists each Reset for screen readers", () => {
-    const { html } = line([day(0, 5_000), day(1, 5_040), day(2, 5_020), day(3, 5_080)]);
+    const { html } = line([
+      day(0, 5_000, 5_040),
+      day(1, 5_040),
+      day(2, 5_020, 5_080),
+      day(3, 5_080),
+    ]);
     const axis = html.match(/class="trophy-line-axis"[^>]*>(.*?)<\/div>/)?.[1] ?? "";
     expect([...axis.matchAll(/>([\d,]+)</g)].map(([, tick]) => tick)).toEqual([
       "5,000",

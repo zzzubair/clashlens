@@ -46,7 +46,7 @@ export async function getPlayer(tag: string, battles = true): Promise<PlayerPage
     `/v1/players/${encodeURIComponent(tag)}${battles ? "" : "?battles=false"}`,
     { method: "GET" },
   );
-  return mapPlayerPage(payload);
+  return mapPlayerPage(payload, battles);
 }
 
 export async function getPlayerSeasons(tag: string): Promise<SummarizedSeasonRef[]> {

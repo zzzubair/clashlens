@@ -1,3 +1,4 @@
+import { CALENDAR, RAW_DAY_FACTS, RAW_PLAYER_FACTS } from "../fixtures/player-route-data";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
@@ -5,6 +6,7 @@ const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 function emptyLivePayload() {
   return {
     kind: "live",
+    calendar: CALENDAR,
     generated_at: "2026-08-06T12:00:00Z",
     source_observations: {
       oldest_observed_at: null,
@@ -171,6 +173,7 @@ describe("server-only Python client response boundary", () => {
       ],
     });
     const day = (start: string, change: unknown) => ({
+      ...RAW_DAY_FACTS,
       ranked_day_start: start,
       net_trophy_change: change,
     });
@@ -200,13 +203,13 @@ describe("server-only Python client response boundary", () => {
         },
       ],
     });
-    // A bare number, a fraction, a day with no start or one not at a Reset,
+    // A bare number, a fraction, a day with no start or a malformed timestamp,
     // and more than 7 days.
     for (recent of [
       [40],
       [day("2026-08-04T05:00:00Z", 40.5)],
       [{ net_trophy_change: 40 }],
-      [day("2026-08-04T06:00:00Z", 40)],
+      [day("not-a-timestamp", 40)],
       Array(8).fill(day("2026-08-04T05:00:00Z", 40)),
     ])
       await expect(
@@ -218,9 +221,9 @@ describe("server-only Python client response boundary", () => {
   });
 
   it.each([
-    ["out-of-range Daily selector", { season_day_number: 29 }],
+    ["nonpositive Daily selector", { season_day_number: 0 }],
     ["invalid Daily reset timestamp", { reset_at: "not-a-timestamp" }],
-    ["non-reset-hour Daily timestamp", { reset_at: "2026-08-06T06:00:00Z" }],
+    ["non-UTC Daily timestamp", { reset_at: "2026-08-06T06:00:00+01:00" }],
   ])("rejects an %s", async (_name, invalidField) => {
     const payload = {
       ...emptyLivePayload(),
@@ -446,6 +449,7 @@ describe("server-only Python client response boundary", () => {
         new Response(
           JSON.stringify({
             kind: "live",
+            calendar: CALENDAR,
             ordering_rule_version: "tracked-trophies-md5-v1",
             generated_at: "2026-08-06T12:00:00+00:00",
             source_observations: {
@@ -492,10 +496,12 @@ describe("server-only Python client response boundary", () => {
                 today_change: 61,
                 recent_days: [
                   {
+                    ...RAW_DAY_FACTS,
                     ranked_day_start: "2026-08-04T05:00:00+00:00",
                     net_trophy_change: 130,
                   },
                   {
+                    ...RAW_DAY_FACTS,
                     ranked_day_start: "2026-08-05T05:00:00+00:00",
                     net_trophy_change: null,
                   },
@@ -819,6 +825,7 @@ describe("server-only Python client response boundary", () => {
       },
     ];
     const currentDay = {
+      ...RAW_DAY_FACTS,
       ranked_day_start: "2026-08-06T05:00:00+00:00",
       ranked_day_end: "2026-08-07T05:00:00+00:00",
       official_season_id: "2026-08",
@@ -841,6 +848,7 @@ describe("server-only Python client response boundary", () => {
     };
     const previousDay = {
       ...currentDay,
+      ...RAW_DAY_FACTS,
       ranked_day_start: "2026-08-05T05:00:00+00:00",
       ranked_day_end: "2026-08-06T05:00:00+00:00",
       season_day_number: 2,
@@ -858,6 +866,7 @@ describe("server-only Python client response boundary", () => {
       public_confidence: "high",
       eligibility: "eligible",
       screen_ready: {
+        ...RAW_PLAYER_FACTS,
         days: [currentDay, previousDay],
         current_day_start: currentDay.ranked_day_start,
         current_day_published_at: "2026-08-06T11:30:00+00:00",
@@ -867,6 +876,8 @@ describe("server-only Python client response boundary", () => {
           id: "2026-08",
           start: "2026-08-04T05:00:00+00:00",
           end: "2026-09-01T05:00:00+00:00",
+          day_count: 28,
+          initial_trophies: 5000,
           current_day_number: 3,
           anchor_source: "daily_publication",
           anchor_observed_at: "2026-08-06T11:58:00+00:00",
@@ -887,6 +898,7 @@ describe("server-only Python client response boundary", () => {
       public_confidence: "uncertain",
       profile_not_found_at: "2026-08-06T12:30:00+00:00",
       screen_ready: {
+        ...RAW_PLAYER_FACTS,
         ...full.screen_ready,
         days: [],
         current_day_start: null,
@@ -906,6 +918,7 @@ describe("server-only Python client response boundary", () => {
     const malformedEvents = {
       ...full,
       screen_ready: {
+        ...RAW_PLAYER_FACTS,
         ...full.screen_ready,
         days: [
           {
@@ -919,7 +932,11 @@ describe("server-only Python client response boundary", () => {
     // Every day the lists name must be one of the days sent.
     const unsentDay = {
       ...full,
-      screen_ready: { ...full.screen_ready, days: [currentDay] },
+      screen_ready: {
+        ...RAW_PLAYER_FACTS,
+        ...full.screen_ready,
+        days: [currentDay],
+      },
     };
     // Audit example #J9Y9J80L: the game returned nine real attacks for one day.
     const nineAttacks = {
@@ -933,6 +950,7 @@ describe("server-only Python client response boundary", () => {
     const tooManyEvents = {
       ...full,
       screen_ready: {
+        ...RAW_PLAYER_FACTS,
         ...full.screen_ready,
         days: [nineAttacks, previousDay],
         season_day_starts: [nineAttacks.ranked_day_start],
@@ -941,6 +959,7 @@ describe("server-only Python client response boundary", () => {
     const nullProvenance = {
       ...full,
       screen_ready: {
+        ...RAW_PLAYER_FACTS,
         ...full.screen_ready,
         provenance: { ...full.screen_ready.provenance, observed_at: null },
       },
@@ -966,6 +985,8 @@ describe("server-only Python client response boundary", () => {
     expect(mapped.season).toMatchObject({
       anchor: "2026-08-04T05:00:00+00:00",
       dayCount: 28,
+      end: "2026-09-01T05:00:00+00:00",
+      initialTrophies: 5000,
       anchorSource: "daily_publication",
       anchorObservedAt: "2026-08-06T11:58:00+00:00",
     });
@@ -1042,6 +1063,7 @@ describe("server-only Python client response boundary", () => {
 
   it("keeps a disagreement battle on its player event", async () => {
     const day = {
+      ...RAW_DAY_FACTS,
       ranked_day_start: "2026-08-06T05:00:00+00:00",
       ranked_day_end: null,
       official_season_id: null,
@@ -1091,6 +1113,7 @@ describe("server-only Python client response boundary", () => {
       public_confidence: "high",
       eligibility: "eligible",
       screen_ready: {
+        ...RAW_PLAYER_FACTS,
         days: [day],
         current_day_start: day.ranked_day_start,
         recent_day_starts: [],

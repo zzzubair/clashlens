@@ -1,3 +1,4 @@
+import { parseCalendar } from "../lib/calendar";
 import type { TrackedLeaderboard } from "../lib/contracts";
 import {
   PythonApiError,
@@ -7,7 +8,6 @@ import {
   isNullableString,
   isOneOf,
   isRecord,
-  isResetTimestamp,
   isSnakeProvenance,
   isString,
   isUtcTimestamp,
@@ -169,8 +169,7 @@ function mapLeaderboard(
       !isString(value.official_season_id) ||
       value.official_season_id.length === 0 ||
       !isInteger(value.season_day_number) ||
-      value.season_day_number < 1 ||
-      value.season_day_number > 28
+      value.season_day_number < 1
     )
       throw new PythonApiError(502, { error: "malformed" });
     return {
@@ -182,17 +181,17 @@ function mapLeaderboard(
     payload.kind === "frozen"
       ? {
           ...mapSelector(payload),
-          resetAt: isResetTimestamp(payload.reset_at)
+          resetAt: isUtcTimestamp(payload.reset_at)
             ? payload.reset_at
             : (() => {
                 throw new PythonApiError(502, { error: "malformed" });
               })(),
-          seasonStartAt: isResetTimestamp(payload.season_start_at)
+          seasonStartAt: isUtcTimestamp(payload.season_start_at)
             ? payload.season_start_at
             : (() => {
                 throw new PythonApiError(502, { error: "malformed" });
               })(),
-          seasonEndAt: isResetTimestamp(payload.season_end_at)
+          seasonEndAt: isUtcTimestamp(payload.season_end_at)
             ? payload.season_end_at
             : (() => {
                 throw new PythonApiError(502, { error: "malformed" });
@@ -205,16 +204,15 @@ function mapLeaderboard(
             payload.next_snapshot === null ? null : mapSelector(payload.next_snapshot),
         }
       : null;
-  if (
-    daily &&
-    (Date.parse(daily.seasonEndAt) - Date.parse(daily.seasonStartAt) !==
-      28 * 24 * 60 * 60 * 1000 ||
-      Date.parse(daily.resetAt) - Date.parse(daily.seasonStartAt) !==
-        daily.dayNumber * 24 * 60 * 60 * 1000)
-  )
-    throw new PythonApiError(502, { error: "malformed" });
   return {
     kind: "tracked-leaderboard",
+    calendar:
+      view === "live"
+        ? (parseCalendar(payload.calendar) ??
+          (() => {
+            throw new PythonApiError(502, { error: "malformed" });
+          })())
+        : null,
     view,
     entries: entries as TrackedLeaderboard["entries"],
     totalTracked: payload.tracked_population,

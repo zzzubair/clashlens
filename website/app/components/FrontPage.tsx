@@ -49,6 +49,9 @@ export function FrontPage({ data }: { data: FrontPageData }) {
   const seasonExpired = useSeasonReread(
     data.leaderboard?.generatedAt,
     !!data.leaderboard?.seasonResetPending,
+    true,
+    false,
+    data.leaderboard?.calendar?.season_end,
   );
   const leaderboard = seasonExpired ? null : data.leaderboard;
   return (

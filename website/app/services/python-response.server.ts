@@ -27,15 +27,6 @@ export function isUtcTimestamp(value: unknown): value is string {
   );
 }
 
-export function isResetTimestamp(value: unknown): value is string {
-  if (!isUtcTimestamp(value)) return false;
-  const match = /^(\d{4}-\d{2}-\d{2})T05:00:00(?:Z|\+00:00)$/.exec(value);
-  return (
-    match !== null &&
-    new Date(value).toISOString().slice(0, 19) === `${match[1]}T05:00:00`
-  );
-}
-
 export function isNullableString(value: unknown): value is string | null {
   return value === null || isString(value);
 }
@@ -67,7 +58,7 @@ export function mapRecentDays(value: unknown): RecentDay[] | null {
   for (const day of value) {
     if (
       !isRecord(day) ||
-      !isResetTimestamp(day.ranked_day_start) ||
+      !isUtcTimestamp(day.ranked_day_start) ||
       !(day.net_trophy_change === null || isInteger(day.net_trophy_change))
     )
       return null;

@@ -6,7 +6,7 @@ import { Link, useLocation } from "react-router";
 import type { ArmyUnitNames } from "../lib/army";
 import type { PlayerPage, RankedBattleEvent, RankedDaySummary } from "../lib/contracts";
 import { copyArmyLink } from "../lib/game-links";
-import { dayEnd, dayEvidence, legendDayKey, presentDay } from "../lib/player-lookup-text";
+import { dayEnd, dayPresentation, legendDayKey } from "../lib/player-lookup-text";
 import { canonicalPlayerPath } from "../lib/player-tag";
 import { ArmyPortraits } from "./ArmyPortraits";
 import { DayMark, DayStatusNote } from "./DayStatus";
@@ -17,7 +17,7 @@ import { linkedBattleId } from "./LinkedBattle";
 /** The change a day's bar shows: its saved change, or today's battles so far. */
 function barChange(day: RankedDaySummary, isCurrentDay: boolean): number | null {
   return isCurrentDay && day.trophyChange === null && day.battlesComplete
-    ? presentDay(dayEvidence(day), true).battleNet
+    ? day.presentation!.battle_net_complete
     : day.trophyChange;
 }
 
@@ -177,7 +177,6 @@ const LATEST = 7;
 export function LegendLog({
   history,
   player,
-  now,
   today,
   openDay,
   gaps = [],
@@ -190,30 +189,29 @@ export function LegendLog({
   /** Rows standing for days with no Legend I battles, each placed by its last day. */
   gaps?: Array<{ start: number; label: string; kind: "outside" | "waiting" }>;
 }) {
-  const todayKey = today ? legendDayKey(today.period) : null;
+  const todayKey = today ? legendDayKey(today.start) : null;
   const moves = rankMoves(history.map(({ day }) => day));
   // Every day's bar shares one scale, so the Season's days compare at a glance.
   const scale = barScale(
-    history.map(({ day }) => dayBar(day, legendDayKey(day.period) === todayKey)),
+    history.map(({ day }) => dayBar(day, legendDayKey(day.start) === todayKey)),
   );
   const day = ({ day, seasonDay }: (typeof history)[number]) => (
     <LegendDay
-      key={legendDayKey(day.period)}
+      key={legendDayKey(day.start)}
       day={day}
       player={player}
-      now={now}
       seasonDay={seasonDay}
-      isCurrentDay={legendDayKey(day.period) === todayKey}
+      isCurrentDay={legendDayKey(day.start) === todayKey}
       openDay={openDay}
       rankMove={day.dayNumber === null ? undefined : moves.get(day.dayNumber)}
       scale={scale}
     />
   );
-  const current = history.filter(({ day }) => legendDayKey(day.period) === todayKey);
-  const ended = history.filter(({ day }) => legendDayKey(day.period) !== todayKey);
+  const current = history.filter(({ day }) => legendDayKey(day.start) === todayKey);
+  const ended = history.filter(({ day }) => legendDayKey(day.start) !== todayKey);
   const rows = [
     ...ended.map((entry) => ({
-      start: Date.parse(entry.day.period.split(" – ")[0]),
+      start: Date.parse(entry.day.start),
       entry,
     })),
     ...gaps.map((gap) => ({ start: gap.start, gap })),
@@ -235,7 +233,7 @@ export function LegendLog({
       : -1;
   const older = fold < 0 ? [] : rows.slice(fold);
   const linked = older.some(
-    (r) => "entry" in r && r.entry && legendDayKey(r.entry.day.period) === openDay,
+    (r) => "entry" in r && r.entry && legendDayKey(r.entry.day.start) === openDay,
   );
   return (
     <>
@@ -266,7 +264,6 @@ export function LegendLog({
 function LegendDay({
   day,
   player,
-  now,
   seasonDay,
   isCurrentDay,
   openDay,
@@ -275,17 +272,16 @@ function LegendDay({
 }: {
   day: RankedDaySummary;
   player: PlayerPage;
-  now: number;
   seasonDay: string;
   isCurrentDay: boolean;
   openDay: string | null;
   rankMove?: number;
   scale: BarScale;
 }) {
-  const dayKey = legendDayKey(day.period);
-  const dayLabel = legendDayDate(day.period);
-  const shown = presentDay(dayEvidence(day), isCurrentDay);
-  const end = dayEnd(day, player, now);
+  const dayKey = legendDayKey(day.start);
+  const dayLabel = legendDayDate(day.start);
+  const shown = dayPresentation(day);
+  const end = dayEnd(day);
   const { status, reasons } = isCurrentDay ? shown : end;
   const { battleNet } = shown;
   const defense = day.defense.trophyLoss === null ? null : -day.defense.trophyLoss;
@@ -339,7 +335,7 @@ function LegendDay({
     >
       <summary className="log-row" style={swing(dayBar(day, isCurrentDay), scale)}>
         <span className="log-when">
-          <LogDate period={day.period} />
+          <LogDate period={day.start} />
           <span className="log-day-meta">
             <small>{seasonDay}</small>
             {isCurrentDay ? <LiveBadge /> : <DayMark status={status} />}
@@ -501,6 +497,7 @@ function LegendDay({
 
 /** What today's slots need of a Legend day. */
 export interface TodayBattles {
+  presentation: RankedDaySummary["presentation"];
   dayNumber: number | null;
   battlesComplete?: boolean;
   offense: Pick<RankedDaySummary["offense"], "attacks" | "trophyGain">;
@@ -519,6 +516,7 @@ type TodayBattle = Pick<
  * played, with dashed slots still to play, headed by the Legend day.
  */
 export function TodaySlots({ day }: { day: TodayBattles }) {
+  const net = day.presentation!.battle_net_complete;
   const defense = day.defense.trophyLoss === null ? null : -day.defense.trophyLoss;
   const sides = [
     ["attack", "Attacks", day.offense.attacks, day.offense.trophyGain, day.offenseEvents],
@@ -532,10 +530,8 @@ export function TodaySlots({ day }: { day: TodayBattles }) {
         <span> · today</span>
         {/* The day's net so far, the first thing a Clasher asks of it; a day
             with battles missing has no net to show. */}
-        {day.battlesComplete && day.offense.trophyGain !== null && defense !== null ? (
-          <b className={`today-net ${valueTone(day.offense.trophyGain + defense)}`}>
-            {formatSigned(day.offense.trophyGain + defense)}
-          </b>
+        {net !== null ? (
+          <b className={`today-net ${valueTone(net)}`}>{formatSigned(net)}</b>
         ) : null}
       </p>
       {sides.map(([side, title, saved, total, events]) => {

@@ -1,3 +1,18 @@
+import { parseCalendar } from "../lib/calendar";
+import {
+  mapTrophyTrends,
+  mapDashboardSeason,
+  mapRivalSeason,
+  mapShape,
+  mapPresentation,
+  mapDisplayEnd,
+  mapDisplayStart,
+  mapBattleStatistics,
+  integer,
+  nullableTimestamp,
+  nullableNumber,
+  record,
+} from "./player-facts.server";
 import type { ArmyUnitNames } from "../lib/army";
 import type {
   EodProofState,
@@ -39,19 +54,22 @@ export function mapPlayerSeasons(payload: unknown): SummarizedSeasonRef[] {
     const officialHistory = mapOfficialSeasonHistory(value.official_history);
     if (
       value.days_observed < 0 ||
-      value.days_observed > 28 ||
+      value.days_observed > integer(value.day_count) ||
       value.days_missing < 0 ||
-      value.days_missing > 28 ||
+      value.days_missing > integer(value.day_count) ||
       (value.source === "official_league_history" &&
-        (!isCanonicalLegendSeasonId(value.official_season_id) ||
-          officialHistory === null ||
+        (officialHistory === null ||
           value.coverage_state !== "partial" ||
           value.days_observed !== 0 ||
-          value.days_missing !== 28))
+          value.days_missing !== integer(value.day_count)))
     )
       malformed();
     return {
       seasonId: value.official_season_id,
+      seasonStart: nullableTimestamp(value.season_start),
+      seasonEnd: nullableTimestamp(value.season_end),
+      lastDayStart: nullableTimestamp(value.last_day_start),
+      dayCount: integer(value.day_count),
       coverageState: value.coverage_state,
       daysObserved: value.days_observed,
       daysMissing: value.days_missing,
@@ -95,7 +113,7 @@ export function mapHistoricalSeason(payload: unknown): HistoricalSeasonSummary {
     !(payload.season_end === null || isString(payload.season_end)) ||
     !isOneOf(payload.coverage_state, ["complete", "partial"] as const) ||
     !Array.isArray(payload.daily_entries) ||
-    payload.daily_entries.length > 28 ||
+    payload.daily_entries.length > integer(payload.day_count) ||
     !Array.isArray(payload.unresolved_flags) ||
     !payload.unresolved_flags.every(isString) ||
     !Array.isArray(payload.missing_days) ||
@@ -139,8 +157,8 @@ export function mapHistoricalSeason(payload: unknown): HistoricalSeasonSummary {
     (officialHistory === null ||
       payload.coverage_state !== "partial" ||
       payload.days_observed !== 0 ||
-      payload.days_missing !== 28 ||
-      payload.missing_days.length !== 28 ||
+      payload.days_missing !== integer(payload.day_count) ||
+      payload.missing_days.length !== integer(payload.day_count) ||
       !payload.missing_days.every((day, index) => day === index + 1) ||
       payload.daily_entries.length !== 0 ||
       payload.published_at !== null ||
@@ -148,8 +166,6 @@ export function mapHistoricalSeason(payload: unknown): HistoricalSeasonSummary {
       payload.season_end === null ||
       !isUtcTimestamp(payload.season_start) ||
       !isUtcTimestamp(payload.season_end) ||
-      !isSeasonDuration(payload.season_start, payload.season_end) ||
-      !isCanonicalSeasonId(payload.official_season_id, payload.season_start) ||
       payload.end_trophies !== officialHistory.eodTrophies ||
       payload.attack_stars_unknown !== null ||
       payload.defense_stars_unknown !== null ||
@@ -170,7 +186,7 @@ export function mapHistoricalSeason(payload: unknown): HistoricalSeasonSummary {
     if (
       !isRecord(value) ||
       !(value.season_day_number === null || isInteger(value.season_day_number)) ||
-      !isString(value.ranked_day_start) ||
+      !isUtcTimestamp(value.ranked_day_start) ||
       !(value.ranked_day_end === null || isString(value.ranked_day_end)) ||
       !isString(value.state) ||
       !isString(value.coverage) ||
@@ -197,9 +213,10 @@ export function mapHistoricalSeason(payload: unknown): HistoricalSeasonSummary {
     if ("battle_id" in value || "battles" in value || "opponent" in value) malformed();
     return {
       dayNumber: value.season_day_number as number | null,
-      period: isString(value.ranked_day_end)
-        ? `${value.ranked_day_start} – ${value.ranked_day_end}`
-        : (value.ranked_day_start as string),
+      start: value.ranked_day_start,
+      end: value.ranked_day_end as string | null,
+      seasonId: payload.official_season_id as string,
+      presentation: mapPresentation(value.presentation),
       startTrophies: value.start_trophies as number | null,
       endTrophies: value.end_trophies as number | null,
       eodState: (value.eod_state ?? null) as EodProofState,
@@ -228,6 +245,21 @@ export function mapHistoricalSeason(payload: unknown): HistoricalSeasonSummary {
   });
   return {
     kind: "player-season-summary",
+    summaryStatistics: Object.fromEntries(
+      ["attack", "defense"].map((side) => {
+        const value = record(record(payload.summary_statistics)[side]);
+        return [
+          side,
+          {
+            perDay: nullableNumber(value.per_day),
+            perBattle: nullableNumber(value.per_battle),
+          },
+        ];
+      }),
+    ) as HistoricalSeasonSummary["summaryStatistics"],
+    dayCount: integer(payload.day_count),
+    lastDayStart: nullableTimestamp(payload.last_day_start),
+    seasonShape: mapShape(payload.season_shape, dailyEntries),
     tag: payload.tag,
     seasonId: payload.official_season_id,
     seasonStart: payload.season_start as string | null,
@@ -256,7 +288,7 @@ export function mapHistoricalSeason(payload: unknown): HistoricalSeasonSummary {
   };
 }
 
-export function mapPlayerPage(payload: unknown): PlayerPage {
+export function mapPlayerPage(payload: unknown, battles = true): PlayerPage {
   if (
     !isRecord(payload) ||
     !isCanonicalPlayerTag(payload.tag) ||
@@ -297,10 +329,10 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
       armyShareCode: isString(value.army_share_code) ? value.army_share_code : null,
     };
   };
-  const mapDay = (value: unknown) => {
+  const mapDay = (value: unknown, reference?: "season" | "recent" | "current") => {
     if (
       !isRecord(value) ||
-      !isString(value.ranked_day_start) ||
+      !isUtcTimestamp(value.ranked_day_start) ||
       !isNullableString(value.ranked_day_end) ||
       !isOneOf(value.state, ["Live", "Complete", "Partial"] as const) ||
       !(
@@ -347,24 +379,36 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
       value.net_trophy_change,
     ].every((item) => item === null || isInteger(item));
     if (!valid) malformed();
+    const display = battles
+      ? mapDisplayStart(
+          reference &&
+            isRecord(value.display_start_by_reference) &&
+            value.display_start_by_reference[reference] !== null
+            ? value.display_start_by_reference[reference]
+            : value.display_start,
+        )
+      : null;
+    if (!(value.official_season_id === null || isString(value.official_season_id)))
+      malformed();
     return {
       dayNumber: value.season_day_number as number | null,
+      start: value.ranked_day_start,
+      end: value.ranked_day_end,
+      seasonId: value.official_season_id,
+      presentation: battles ? mapPresentation(value.presentation) : null,
+      displayEnd: battles ? mapDisplayEnd(value.display_end) : null,
       label: "Ranked day",
-      period: isString(value.ranked_day_end)
-        ? `${value.ranked_day_start} – ${value.ranked_day_end}`
-        : value.ranked_day_start,
       state: value.state,
       confidence: (value.confidence as RankedDaySummary["confidence"]) ?? null,
       logCoverage: isOneOf(value.coverage, ["complete", "partial"] as const)
         ? value.coverage
         : undefined,
-      startTrophies: (value.start_trophies as number | null | undefined) ?? null,
-      // The Season rule's 5,000 is the game's rule, not a reading, and the
-      // previous day's calculated end is a calculation.
+      startTrophies: display ? display.trophies : (value.start_trophies as number | null),
+      startTrophiesCalculation: display?.calculation,
       startTrophiesSource:
-        value.start_trophies_source === "season_rule"
+        display?.source === "season_rule"
           ? ("Season rule" as const)
-          : value.start_trophies_source === "previous_day_end"
+          : display?.source === "calculated"
             ? ("Calculated" as const)
             : undefined,
       offense: {
@@ -404,17 +448,61 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
     !Array.isArray(screen.season_day_starts)
   )
     malformed();
-  screen.days.forEach(mapDay);
-  // Each day is sent once; the recent and Season lists name days by start.
   const days = new Map(
-    screen.days.map((day) => [(day as Record<string, unknown>).ranked_day_start, day]),
+    screen.days.map((value) => {
+      if (!isRecord(value) || !isUtcTimestamp(value.ranked_day_start)) malformed();
+      return [value.ranked_day_start, value] as const;
+    }),
   );
-  const dayAt = (start: unknown) => {
+  const primaryDays = new Map([...days].map(([start, value]) => [start, mapDay(value)]));
+  const dayAt = (start: unknown, reference?: "season" | "recent" | "current") => {
     if (!isString(start) || !days.has(start)) malformed();
-    return mapDay(days.get(start));
+    const raw = days.get(start)!;
+    if (reference && isRecord(raw.display_start_by_reference))
+      return mapDay(raw, reference);
+    return primaryDays.get(start)!;
   };
+  const historyStarts = screen.history_day_starts;
+  if (battles && (!Array.isArray(historyStarts) || !historyStarts.every(isUtcTimestamp)))
+    malformed();
+  const seasonDays = screen.season_day_starts.map((start) => dayAt(start, "season"));
+  const recentDays = screen.recent_day_starts.map((start) => dayAt(start, "recent"));
+  const currentDay =
+    screen.current_day_start === null ? null : dayAt(screen.current_day_start, "current");
   const player: PlayerPage = {
     kind: "player-page",
+    trophyTrends: battles ? mapTrophyTrends(screen.trophy_trends) : null,
+    dashboardSeason: battles ? mapDashboardSeason(screen.dashboard_season) : null,
+    rivalSeason: mapRivalSeason(screen.rival_season),
+    calendar:
+      parseCalendar(screen.calendar) ??
+      (() => {
+        throw new PythonApiError(502, { error: "malformed" });
+      })(),
+    seasonShape: battles
+      ? mapShape(screen.season_shape, [
+          ...seasonDays,
+          ...(currentDay ? [currentDay] : []),
+          ...recentDays,
+        ])
+      : null,
+    historyDayNumbers: battles
+      ? Object.fromEntries(
+          (historyStarts as string[]).map((start) => [
+            start,
+            integer(record(screen.history_day_numbers)[start]),
+          ]),
+        )
+      : {},
+    historyDays: battles
+      ? (historyStarts as string[]).map(
+          (start) =>
+            [...seasonDays, ...(currentDay ? [currentDay] : []), ...recentDays].find(
+              (day) => day.start === start,
+            ) ?? dayAt(start),
+        )
+      : [],
+    battleStatistics: battles ? mapBattleStatistics(screen.battle_statistics) : null,
     tag: payload.tag,
     trackingState:
       payload.active === true
@@ -461,20 +549,16 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
     },
     season: mapSeason(screen.season),
     seasonWeeks: mapSeasonWeeks(screen.season_weeks),
-    currentDay:
-      screen.current_day_start === null ? null : dayAt(screen.current_day_start),
+    currentDay,
     currentDayPublishedAt: isUtcTimestamp(screen.current_day_published_at)
       ? screen.current_day_published_at
       : null,
-    recentDays: screen.recent_day_starts.map(dayAt),
-    seasonDays: screen.season_day_starts.map(dayAt),
+    recentDays,
+    seasonDays,
     armyUnits: mapArmyUnits(screen.army_units),
     dataQuality: mapDataQuality(screen.data_quality),
     provenance: mapSnakeProvenanceRequired(screen.provenance),
   };
-  calculateStartingTrophies(player.seasonDays, player.profile);
-  calculateStartingTrophies(player.recentDays, player.profile);
-  if (player.currentDay) calculateStartingTrophies([player.currentDay], player.profile);
   // Most days are in two or three lists. A day that came out the same in each
   // is one object, so the page data carries it once instead of once per list.
   const shared = new Map<string, RankedDaySummary>();
@@ -501,91 +585,6 @@ export function mapArmyUnits(value: unknown): ArmyUnitNames {
   );
 }
 
-// A battle reported in the first 5 minutes after a Reset belongs to the day
-// before it, as BATTLE_DAY_GRACE in python/src/clashlens/domain.py.
-const BATTLE_DAY_GRACE_MS = 5 * 60 * 1000;
-const SEASON_MS = 28 * 24 * 60 * 60 * 1000;
-// Every Legend I player starts a Season at exactly this many trophies, as
-// SEASON_START_TROPHIES in python/src/clashlens/domain.py.
-const SEASON_START_TROPHIES = 5000;
-
-function calculateStartingTrophies(
-  days: RankedDaySummary[],
-  profile: PlayerPage["profile"],
-) {
-  const observedAt = Date.parse(profile.freshness.observedAt);
-  const profileSeasonStart = Number(profile.currentLeagueSeasonId ?? NaN) * 1000;
-  const bounds = (day: RankedDaySummary) => day.period.split(" – ").map(Date.parse);
-  const ordered = [...days].sort((a, b) => bounds(b)[0] - bounds(a)[0]);
-  let nextDay: RankedDaySummary | undefined;
-  for (const day of ordered) {
-    const [start, end] = bounds(day);
-    const next = nextDay;
-    nextDay = day;
-    if (day.dayNumber === 1 && day.startTrophies !== SEASON_START_TROPHIES)
-      day.startTrophies = null;
-    if (day.startTrophies != null || !Number.isFinite(start) || !Number.isFinite(end))
-      continue;
-    const events = [...day.offenseEvents, ...day.defenseEvents];
-    // Only subtract the displayed change when every included battle agrees
-    // with the totals. A profile from another day is never a daily end total.
-    if (
-      day.offense.trophyGain === null ||
-      day.defense.trophyLoss === null ||
-      day.offense.attacks !== day.offenseEvents.length ||
-      day.defense.defenses !== day.defenseEvents.length ||
-      day.offenseEvents.reduce((sum, event) => sum + event.trophyChange, 0) !==
-        day.offense.trophyGain ||
-      -day.defenseEvents.reduce((sum, event) => sum + event.trophyChange, 0) !==
-        day.defense.trophyLoss ||
-      events.some(
-        (event) =>
-          event.perspectiveDisagreement ||
-          Date.parse(event.battleTimestamp) < start + BATTLE_DAY_GRACE_MS ||
-          Date.parse(event.battleTimestamp) >= end + BATTLE_DAY_GRACE_MS,
-      )
-    )
-      continue;
-    const netChange = day.trophyChange ?? day.offense.trophyGain - day.defense.trophyLoss;
-    let trophies: number | undefined;
-    // A profile naming another Season than this day's is not its day total,
-    // nor is one still waiting for its Season reset on the Season's first day.
-    if (
-      !(profile.seasonResetPending && day.dayNumber === 1) &&
-      start >= profileSeasonStart &&
-      start < profileSeasonStart + SEASON_MS &&
-      observedAt >= start &&
-      observedAt < end &&
-      (day.completeness.state === "complete" ||
-        (day.offense.attacks === 8 && day.defense.defenses === 8)) &&
-      events.every((event) => Date.parse(event.battleTimestamp) <= observedAt)
-    ) {
-      trophies = profile.trophies;
-    } else if (
-      next?.startTrophies != null &&
-      bounds(next)[0] === end &&
-      day.dayNumber !== null &&
-      next.dayNumber === day.dayNumber + 1 &&
-      (day.completeness.state === "complete" ||
-        (day.offense.attacks === 8 && day.defense.defenses === 8))
-    ) {
-      // Work backwards only across adjacent days in the same season. Eight
-      // attacks and defenses avoid guessing unobserved reset deductions.
-      trophies = next.startTrophies;
-    }
-    if (
-      trophies === undefined ||
-      !Number.isSafeInteger(trophies - netChange) ||
-      trophies - netChange < 0 ||
-      (day.dayNumber === 1 && trophies - netChange !== SEASON_START_TROPHIES)
-    )
-      continue;
-    day.startTrophies = trophies - netChange;
-    day.startTrophiesCalculation = { trophies, netChange };
-    day.startTrophiesSource = "Calculated";
-  }
-}
-
 function mapSnakeProvenanceRequired(value: unknown) {
   if (!isSnakeProvenance(value)) malformed();
   return {
@@ -605,25 +604,24 @@ function mapSeason(value: unknown): PlayerPage["season"] {
     !isString(value.id) ||
     !isUtcTimestamp(value.start) ||
     !isUtcTimestamp(value.end) ||
-    !isSeasonDuration(value.start, value.end) ||
     !isInteger(value.current_day_number) ||
     value.current_day_number < 1 ||
-    value.current_day_number > 28 ||
+    value.current_day_number > integer(value.day_count) ||
     !isOneOf(value.anchor_source, [
       "official_league_history",
       "daily_publication",
       "weekly_league_record",
     ] as const) ||
-    !isUtcTimestamp(value.anchor_observed_at) ||
-    (value.anchor_source === "official_league_history" &&
-      !isCanonicalSeasonId(value.id, value.start))
+    !isUtcTimestamp(value.anchor_observed_at)
   )
     malformed();
   return {
     id: value.id,
     anchor: value.start,
     currentDayNumber: value.current_day_number,
-    dayCount: 28,
+    dayCount: integer(value.day_count),
+    end: value.end,
+    initialTrophies: integer(value.initial_trophies),
     anchorSource: value.anchor_source,
     anchorObservedAt: value.anchor_observed_at,
   };
@@ -647,30 +645,6 @@ export function mapSeasonWeeks(value: unknown): SeasonWeek[] {
       ] as const))
       ? [{ start: week.week_start, league: week.league, entry: week.entry }]
       : [],
-  );
-}
-
-function isSeasonDuration(start: string, end: string): boolean {
-  return Date.parse(end) - Date.parse(start) === 28 * 24 * 60 * 60 * 1_000;
-}
-
-function isCanonicalSeasonId(seasonId: string, start: string): boolean {
-  return (
-    isCanonicalLegendSeasonId(seasonId) && Number(seasonId) === Date.parse(start) / 1_000
-  );
-}
-
-function isCanonicalLegendSeasonId(seasonId: string): boolean {
-  if (!/^\d+$/.test(seasonId)) return false;
-  const seconds = Number(seasonId);
-  if (!Number.isSafeInteger(seconds)) return false;
-  const start = new Date(seconds * 1_000);
-  return (
-    start.getUTCDay() === 1 &&
-    start.getUTCHours() === 5 &&
-    start.getUTCMinutes() === 0 &&
-    start.getUTCSeconds() === 0 &&
-    (seconds - 1_783_918_800) % (28 * 24 * 60 * 60) === 0
   );
 }
 

@@ -1,3 +1,4 @@
+import { CALENDAR } from "../fixtures/player-route-data";
 vi.mock("../../app/services/players.server", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../app/services/players.server")>();
@@ -338,6 +339,11 @@ it("shows each linked player's Season heat map and their rank's move since the R
   const start = Date.now() - 5 * hour;
   const seasonStart = start - 48 * hour;
   mocks.getPublicUserDays.mockResolvedValue({
+    calendar: {
+      ...CALENDAR,
+      season_start: new Date(seasonStart).toISOString(),
+      day_number: 3,
+    },
     seasonStart: new Date(seasonStart).toISOString(),
     // The read has nothing for the others yet.
     players: [
@@ -345,6 +351,7 @@ it("shows each linked player's Season heat map and their rank's move since the R
         tag: "#2PP",
         resetRank: 1300,
         seasonWeeks: [],
+        heatmapDayNumbers: [1, 2, 3],
         days: [savedDay(1, -20), savedDay(2, 40), savedDay(3, null, 2)],
       },
     ],

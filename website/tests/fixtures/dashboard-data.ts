@@ -22,6 +22,8 @@ export function linked(
 
 export function emptyDay(overrides: Partial<PlayerDay> = {}): PlayerDay {
   return {
+    dayStartMs: Date.UTC(2026, 9, 7, 5),
+    dayEndMs: Date.UTC(2026, 9, 8, 5),
     dayNumber: 16,
     dayCount: 28,
     battles: [],
