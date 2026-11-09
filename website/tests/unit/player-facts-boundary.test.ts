@@ -61,7 +61,8 @@ function reply() {
 
 describe("player facts response boundary", () => {
   it("uses supplied facts independently of the saved evidence", () => {
-    const page = mapPlayerPage(reply());
+    const page = mapPlayerPage({ ...reply(), clan_tag: "#2CLAN" });
+    expect(page.profile.clanTag).toBe("#2CLAN");
     const day = page.historyDays[0];
     expect(day.startTrophies).toBe(1234);
     expect(dayEnd(day).trophies).toBe(4321);
