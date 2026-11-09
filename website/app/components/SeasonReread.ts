@@ -61,13 +61,18 @@ export function seasonCheckReads(check: {
   return check.trust === "slipped" || check.sinceRead >= 60_000;
 }
 
-/** Reread saved data at Season Reset and once a minute while awaiting recovery. */
+/**
+ * Reread saved data at Season Reset (or at `seasonEnd`, the time the data stops
+ * holding) and once a minute while awaiting recovery. Returns whether the
+ * trusted clock has passed `expiresAt`, which defaults to that reread time.
+ */
 export function useSeasonReread(
   loadedAt: string | undefined,
   waiting: boolean,
   enabled = true,
   finalAnswer = false,
   seasonEnd?: string,
+  expiresAt?: string,
 ) {
   const revalidator = useRevalidator();
   const navigation = useNavigation();
@@ -163,5 +168,6 @@ export function useSeasonReread(
     };
   }, [enabled, sourceTime, reset, recoveryWaiting, revalidate]);
 
-  return enabled && !!sourceTime && clock.current.now >= reset;
+  const expiry = expiresAt ? Date.parse(expiresAt) : reset;
+  return enabled && !!sourceTime && clock.current.now >= expiry;
 }
