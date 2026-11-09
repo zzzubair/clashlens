@@ -30,6 +30,7 @@ from . import api_discord_alerts, api_players, api_requests
 from .api_db import ApiDatabase
 from .api_discord_alerts import Switch, SwitchState
 from .api_http import StrictBody, authorize, operation_response, request_binding
+from .api_player_presentation import calendar_payload
 from .api_requests import OperationResult, RequestBinding
 from .db_rows import text_value
 from .profile import normalize_player_tag
@@ -117,6 +118,8 @@ def view_as(
         "player": cards[0] if cards else None,
         "pinned": None if pinned is None else text_value(pinned[0]),
         "follow": follow,
+        # When the viewed card's today numbers stop being today's.
+        "calendar": calendar_payload(now),
     }
 
 
