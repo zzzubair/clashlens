@@ -385,10 +385,10 @@ test("declining in one tab stops counting and deletes the ID in every tab", asyn
   await fakePostHog(first);
   const other = await fakePostHog(second);
   await first.goto(`${analyticsFixtureOrigin}/privacy`);
-  await expect(banner(second)).toHaveCount(0);
   await banner(first).getByRole("button", { name: "Accept" }).click();
   await second.goto(`${analyticsFixtureOrigin}/privacy`);
   await expect.poll(() => other.events.length).toBeGreaterThan(0);
+  await expect(banner(second)).toHaveCount(0);
   const before = other.events.length;
 
   await reopenFromFooter(first);

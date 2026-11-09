@@ -570,17 +570,17 @@ describe("search loading", () => {
 });
 
 it("submitting a normalized exact tag opens its automatic lookup page", async () => {
-  await expect(
-    searchLoader({
-      request: new Request("https://clashlens.example/search?q=%20%23lqqp%20"),
-    } as never),
-  ).rejects.toMatchObject({ status: 302 });
-  try {
-    await searchLoader({
-      request: new Request("https://clashlens.example/search?q=%23lqqp"),
-    } as never);
-  } catch (response) {
-    expect((response as Response).headers.get("Location")).toBe("/players/%23LQQP");
+  for (const query of ["%20%23lqqp%20", "%23lqqp"]) {
+    await expect(
+      searchLoader({
+        request: new Request(`https://clashlens.example/search?q=${query}`),
+      } as never),
+    ).rejects.toSatisfy((response: unknown) => {
+      expect(response).toBeInstanceOf(Response);
+      expect((response as Response).status).toBe(302);
+      expect((response as Response).headers.get("Location")).toBe("/players/%23LQQP");
+      return true;
+    });
   }
 });
 
