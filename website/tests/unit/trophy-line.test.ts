@@ -32,7 +32,6 @@ function day(index: number, start: number, end: number | null = null): RankedDay
     defenseEvents: [],
     completeness: { state: "complete", reason: "" },
     battlesComplete: true,
-    uncertainty: [],
   };
 }
 

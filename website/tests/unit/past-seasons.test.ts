@@ -90,14 +90,6 @@ const PLAYER = {
   recentDays: [],
   seasonDays: [],
   dataQuality: [],
-  provenance: {
-    source: "api_player_daily_logs",
-    observedAt: "2026-10-04T12:00:00Z",
-    freshness: "fresh",
-    confidence: "high",
-    coverage: "complete",
-    version: "v1",
-  },
 } satisfies PlayerPage;
 
 function loadPage() {

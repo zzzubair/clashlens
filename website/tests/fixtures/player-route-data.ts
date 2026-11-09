@@ -244,14 +244,6 @@ export const PLAYER = {
   recentDays: [],
   seasonDays: [],
   dataQuality: [],
-  provenance: {
-    source: "api_player_daily_logs",
-    observedAt: "2026-09-07T12:00:00Z",
-    freshness: "fresh",
-    confidence: "high",
-    coverage: "complete",
-    version: "v1",
-  },
 } satisfies PlayerPage;
 
 export const NEWER_PROFILE = {
@@ -293,7 +285,6 @@ export const SAVED_DAY: RankedDaySummary = {
   ],
   defenseEvents: [],
   completeness: { state: "complete", reason: "Complete" },
-  uncertainty: ["player_not_eligible"],
 };
 
 export const REFRESH_STATUS: RefreshStatus = {

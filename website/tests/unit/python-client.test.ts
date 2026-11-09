@@ -1039,7 +1039,6 @@ describe("server-only Python client response boundary", () => {
       await (await import("../../app/services/players.server")).getPlayer("#2PP")
     ).seasonDays;
     expect(excessDay.offenseEvents).toHaveLength(9);
-    expect(excessDay.uncertainty).toEqual(["attack_count_exceeds_eight"]);
     // Shared/player provenance cannot use the live leaderboard's empty-source exception.
     await expect(
       (await import("../../app/services/players.server")).getPlayer("#2PP"),

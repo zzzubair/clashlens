@@ -10,7 +10,7 @@ import {
 const SEASON_START = Date.parse("2026-09-07T05:00:00Z");
 
 // A day before tracking began: no Reset readings and no battles.
-const emptyDay = (number: number, codes: string[]): RankedDaySummary => {
+const emptyDay = (number: number): RankedDaySummary => {
   const start = SEASON_START + (number - 1) * 86_400_000;
   return {
     dayNumber: number,
@@ -32,13 +32,12 @@ const emptyDay = (number: number, codes: string[]): RankedDaySummary => {
     offenseEvents: [],
     defenseEvents: [],
     completeness: { state: "partial", reason: "Partial" },
-    uncertainty: codes,
   };
 };
 
 describe("days before a late joiner signed up", () => {
   it("say the player was not enrolled instead of a missing result", () => {
-    expect(dayPresentation(emptyDay(3, []))).toEqual({
+    expect(dayPresentation(emptyDay(3))).toEqual({
       status: "Not enrolled",
       reasons: ["The player had not signed up for this Season yet."],
       battleNet: null,
@@ -49,7 +48,7 @@ describe("days before a late joiner signed up", () => {
   it("leave other incomplete days unchanged", () => {
     expect(
       dayPresentation({
-        ...emptyDay(3, []),
+        ...emptyDay(3),
         presentation: {
           ...VERIFIED,
           status: "uncertain",
@@ -72,10 +71,7 @@ describe("days before a late joiner signed up", () => {
         anchorObservedAt: "2026-09-07T05:10:00Z",
       },
       currentDay: null,
-      recentDays: [
-        emptyDay(3, ["missing_start_baseline", "player_not_eligible", "not_enrolled"]),
-        emptyDay(2, ["missing_start_baseline", "player_not_eligible"]),
-      ],
+      recentDays: [emptyDay(3), emptyDay(2)],
       seasonDays: [],
     } as unknown as PlayerPage;
     const history = selectPlayerHistory({
@@ -89,8 +85,8 @@ describe("days before a late joiner signed up", () => {
 
   it("give a player outside Legend I no current Season when they never played a Legend day", () => {
     const lookup = { tag: "#L82PYUC9J", state: "not_in_legend" } as const;
-    const notEnrolled = emptyDay(3, ["missing_start_baseline", "not_enrolled"]);
-    const played = { ...emptyDay(4, []), offenseEvents: [{}] } as RankedDaySummary;
+    const notEnrolled = emptyDay(3);
+    const played = { ...emptyDay(4), offenseEvents: [{}] } as RankedDaySummary;
     expect(showsCurrentSeason(lookup, [{ day: notEnrolled }])).toBe(false);
     expect(showsCurrentSeason(lookup, [{ day: notEnrolled }, { day: played }])).toBe(
       true,

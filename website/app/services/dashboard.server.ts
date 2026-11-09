@@ -230,6 +230,11 @@ export function seasonData(page: PlayerPage): SeasonData {
   return page.dashboardSeason;
 }
 
+function rivalSeason(page: PlayerPage) {
+  if (page.rivalSeason === null) throw new PythonApiError(502, { error: "malformed" });
+  return page.rivalSeason;
+}
+
 function legendDay(page: PlayerPage, today: PlayerToday | null): PlayerDay {
   const day = page.currentDay;
   const complete = day?.battlesComplete === true;
@@ -306,7 +311,7 @@ async function lastReset(ctx: CardContext, pages: PageReader) {
   const page = await pages(ctx.selected.tag);
   if (page === null) return null;
   const season = seasonData(page);
-  const finished = page.rivalSeason.finishedDays;
+  const finished = rivalSeason(page).finishedDays;
   return {
     page,
     season,
@@ -482,11 +487,8 @@ function rivalNumbers(page: PlayerPage | null, mode: "live" | "season") {
       defense: loss === null ? null : -loss,
     };
   }
-  return {
-    hitRate: page.rivalSeason.hitRate,
-    offense: page.rivalSeason.offense,
-    defense: page.rivalSeason.defense,
-  };
+  const { hitRate, offense, defense } = rivalSeason(page);
+  return { hitRate, offense, defense };
 }
 
 async function rivalsData(
@@ -497,7 +499,8 @@ async function rivalsData(
   const tag = ctx.selected.tag;
   // Only the Season rows need the last Reset; the live rows start without it.
   const resetRead = lastReset(ctx, pages);
-  const lastRank = (page: PlayerPage | null) => page?.rivalSeason.resetRank ?? null;
+  const lastRank = (page: PlayerPage | null) =>
+    page === null ? null : rivalSeason(page).resetRank;
   const liveRows = async () => {
     // A read focused on one player holds their page of 7 and 5 places either
     // side, so all 7 rows everywhere but the board's last place. There, a read
@@ -637,7 +640,7 @@ async function groupWatchData(
   let days: number | null = null;
   const rows = read.flatMap(([tag, page]): GroupRow[] => {
     if (page === null || page.trackingState === "not_in_legend") return [];
-    const season = page.rivalSeason;
+    const season = rivalSeason(page);
     if (season.finishedDays !== null)
       days = Math.max(days ?? season.finishedDays, season.finishedDays);
     return [
@@ -704,8 +707,8 @@ export function readCards(
         tag,
         unlessMissing(
           tag === ctx.selected.tag && cards.includes("goal")
-            ? getPlayer(tag, true, ctx.settings.goal)
-            : getPlayer(tag),
+            ? getPlayer(tag, true, true, ctx.settings.goal)
+            : getPlayer(tag, true, true),
         ).then((page) => {
           if (tag === ctx.selected.tag && page) calendar = page.calendar;
           return page;
@@ -717,7 +720,8 @@ export function readCards(
   const totalsRead = new Map<string, Promise<PlayerPage | null>>();
   const totals: PageReader = (tag) => {
     if (tag === ctx.selected.tag) return pages(tag);
-    if (!totalsRead.has(tag)) totalsRead.set(tag, unlessMissing(getPlayer(tag, false)));
+    if (!totalsRead.has(tag))
+      totalsRead.set(tag, unlessMissing(getPlayer(tag, false, true)));
     return totalsRead.get(tag)!;
   };
   const season = async () => {

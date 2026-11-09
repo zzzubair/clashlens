@@ -95,7 +95,6 @@ function day(
     offenseEvents,
     defenseEvents,
     completeness: { state: "complete", reason: "" },
-    uncertainty: [],
     ...overrides,
   };
 }
@@ -114,7 +113,6 @@ export function worstCasePlayer(tag = WORST_TAG, now = Date.now()): PlayerPage {
     },
     trophyChange: null,
     completeness: { state: "partial", reason: LONG_DETAIL },
-    uncertainty: LONG_DETAIL.split("; "),
     startTrophiesCalculation: { trophies: 6512, netChange: 52 },
   });
   const seasonDays = [
@@ -126,7 +124,6 @@ export function worstCasePlayer(tag = WORST_TAG, now = Date.now()): PlayerPage {
       defense: { defenses: null, threeStarsAgainst: null, trophyLoss: null },
       state: "Uncertain",
       completeness: { state: "uncertain", reason: "malformed_evidence" },
-      uncertainty: ["malformed_evidence", "season_anchor_conflict", "truncated_reasons"],
     }),
     day(now, 3, 25, 1, 1, { startTrophies: 4812, trophyChange: -1288 }),
     day(now, 4, null, 12, 8),
@@ -192,14 +189,6 @@ export function worstCasePlayer(tag = WORST_TAG, now = Date.now()): PlayerPage {
         detail: "Clash of Clans has not answered for this player since it was saved.",
       },
     ],
-    provenance: {
-      source: "api_player_daily_logs",
-      observedAt: null,
-      freshness: "stale",
-      confidence: "uncertain",
-      coverage: "partial",
-      version: "v1",
-    },
   };
 }
 
