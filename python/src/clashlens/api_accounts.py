@@ -360,6 +360,8 @@ def get_public_user(
         "username": text_value(account[1]),
         "display_name": text_value(account[2]),
         "verified_players": cards,
+        # When the cards' today numbers stop being today's.
+        "calendar": calendar_payload(now),
     }
 
 
