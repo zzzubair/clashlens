@@ -211,7 +211,6 @@ export function LegendLog({
   );
   const current = history.filter(({ day }) => legendDayKey(day.period) === todayKey);
   const ended = history.filter(({ day }) => legendDayKey(day.period) !== todayKey);
-  // Newest first, as the days are.
   const rows = [
     ...ended.map((entry) => ({
       start: Date.parse(entry.day.period.split(" – ")[0]),

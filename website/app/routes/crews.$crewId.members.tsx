@@ -24,7 +24,6 @@ const INTENTS = ["remove", "add", "promote", "demote", "leave"] as const;
 /** The row's remove button says what it does; its name adds whose account. */
 const REMOVE_ICON = <span aria-hidden="true">Remove</span>;
 
-/** Back leads to the crew. */
 export const handle: BackHandle = {
   back: (match) => {
     const crew = (match.loaderData as { crew?: Crew | null } | undefined)?.crew;

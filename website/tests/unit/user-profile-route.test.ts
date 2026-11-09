@@ -521,7 +521,6 @@ it("gives the owner one small Edit button and their two tools, and no settings",
   expect(tools[1]).not.toContain("Not set up");
   for (const text of ["Make default", "Sign-in", "OBS overlay", "Default"])
     expect(html).not.toContain(text);
-  // The cards are the same ones every visitor sees.
   expect(html.match(/<article class="linked-player-card"/g)).toHaveLength(4);
 });
 

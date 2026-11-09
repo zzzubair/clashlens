@@ -464,7 +464,6 @@ describe("loading PostHog after Accept", () => {
     try {
       const analytics = await import("../../app/lib/analytics");
       expect(analytics.consentStage()).toBe("undecided");
-      // Nothing is kept before Accept.
       analytics.track("$pageview", { signed_in: false });
       saved = "accepted";
       expect(analytics.consentStage()).toBe("accepted");

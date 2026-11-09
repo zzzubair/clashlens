@@ -486,7 +486,6 @@ describe("adding and removing one group player", () => {
     );
     expect(card(renamed)).toContain("A group with this name already exists.");
     expect(card(renamed)).toContain('value="Taken"');
-    // Only that group's card opens.
     expect(renamed.match(/class="group-panel">/g)).toHaveLength(1);
 
     const deleted = card(

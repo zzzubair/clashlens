@@ -1,5 +1,5 @@
 import { isSafeReturnPath, type LoginIdentity } from "./auth.server"; /**
- * Server-only signed browser cookies for Google login sessions and one-time
+ * Server-only signed browser cookies for Google and Discord logins and one-time
  * OAuth transactions.
  *
  * Values are canonical JSON bound by an HMAC-SHA256 signature using the
@@ -12,7 +12,7 @@ import { isSafeReturnPath, type LoginIdentity } from "./auth.server"; /**
  * connection it came through, ends every copy of that login. Cookies from
  * before the 30-day lifetime keep their 24 hours. OAuth transaction cookies
  * carry only the provider they belong to, the state, nonce, PKCE verifier and
- * challenge, and same-origin return path with a ten-minute lifetime. No Google
+ * challenge, and same-origin return path with a ten-minute lifetime. No provider
  * tokens, email, or other personal data ever appears in a cookie value, and
  * every value stays far below the 4 KB cookie limit.
  *
@@ -372,7 +372,6 @@ export function cookieAttributes(secure: boolean): string {
   return `Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`;
 }
 
-/** Build a full Set-Cookie header value for a signed cookie value. */
 export function buildSetCookieHeader(
   name: string,
   value: string,
@@ -382,7 +381,6 @@ export function buildSetCookieHeader(
   return `${name}=${value}; Max-Age=${maxAgeSeconds}; ${cookieAttributes(secure)}`;
 }
 
-/** Build a Set-Cookie header value that clears a login cookie immediately. */
 export function buildClearCookieHeader(name: string, secure: boolean): string {
   return `${name}=; Max-Age=0; ${cookieAttributes(secure)}`;
 }

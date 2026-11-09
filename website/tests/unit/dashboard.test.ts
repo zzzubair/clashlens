@@ -1346,7 +1346,6 @@ describe("dashboard page", () => {
       `aria-current="page" href="/?player=${encodeURIComponent(MAIN)}"`,
     );
     expect(html).toContain('href="/account/verify-player"');
-    // The player's name shows once, in its tab, cut with "…" and in full on hover.
     expect(html.match(/title="Lens Main"/g)).toHaveLength(1);
   });
 
@@ -1487,7 +1486,6 @@ describe("dashboard page", () => {
       plain.indexOf("Your Legend day, live"),
     );
     expect(plain).toContain("Your Legend day, live");
-    // One way in; Sign in stays in the header.
     expect(plain).toContain("Your Legend day, live Create account");
   });
 });

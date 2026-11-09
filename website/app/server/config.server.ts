@@ -19,7 +19,7 @@ import { decodeSecretValue, loadSecretFile } from "./signer.server";
 export const GOOGLE_ISSUER = "https://accounts.google.com";
 export const DISCORD_API_BASE_URL = "https://discord.com";
 export const MAX_GOOGLE_CLIENT_ID_LENGTH = 256;
-/** Discord application (user) IDs are fixed-width numeric snowflakes. */
+/** Discord application IDs accept 17 to 20 decimal digits. */
 export const MAX_DISCORD_CLIENT_ID_LENGTH = 20;
 export const MAX_CLIENT_SECRET_LENGTH = 512;
 

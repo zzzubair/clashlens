@@ -8,7 +8,6 @@ import { type LoginIdentity } from "../server/auth.server";
 import { PythonApiError } from "./python-response.server";
 import { requestJson } from "./python-transport.server";
 
-/** Read one private group's side-by-side comparison for the signed-in account. */
 export async function getGroupComparison(
   identity: LoginIdentity,
   groupId: string,

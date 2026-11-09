@@ -11,12 +11,10 @@ test("on a phone the bottom bar opens each tab and More, and hides nothing", asy
   await page.goto("/");
   const bar = tabs(page);
   await expect(bar).toBeVisible();
-  // The top bar keeps the logo, search, the theme switch and Sign in.
   const header = page.getByRole("banner");
   await expect(header.getByRole("button", { name: "Dark mode" })).toBeVisible();
   await expect(header.getByRole("link", { name: "Sign in", exact: true })).toBeVisible();
   await expect(page.locator("details.site-menu > summary")).toHaveText("More");
-  // The same tabs for everyone: Rankings, Analytics, Home and Crews, then More.
   await expect(bar.locator(":scope > a")).toHaveText([
     "Rankings",
     "Analytics",
@@ -36,20 +34,17 @@ test("on a phone the bottom bar opens each tab and More, and hides nothing", asy
     "page",
   );
 
-  // More holds Watchlists, Blog and Join Discord; the dimmed page closes it.
   const more = page.locator("details.site-menu");
   await more.locator("summary").click();
   await expect(more).toHaveAttribute("open", "");
   const sheet = more.locator(".site-menu-panel");
   const watchlists = sheet.getByRole("link", { name: "Watchlists" });
   await expect(watchlists).toBeVisible();
-  // Only those: Sign in stays in the top bar.
   await expect(sheet.getByRole("link")).toHaveText([
     "Watchlists",
     "Blog",
     /^Join Discord/,
   ]);
-  // Join Discord is a full row in the sheet's own colours, like Watchlists.
   const discord = sheet.getByRole("link", { name: /^Join Discord/ });
   await expect(discord).toBeVisible();
   await expect(discord).toContainText("Join Discord");
@@ -66,7 +61,6 @@ test("on a phone the bottom bar opens each tab and More, and hides nothing", asy
   await expect(more).not.toHaveAttribute("open");
   await expect(more.locator("summary")).toHaveAttribute("aria-current", "page");
 
-  // Scrolled to the end, the footer's last link sits above the bar.
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   const last = (await page.getByRole("link", { name: "Privacy" }).boundingBox())!;
   const top = (await bar.boundingBox())!.y;
@@ -116,7 +110,6 @@ test("a tapped tab is chosen at once and loads once, however often it is tapped"
   const bar = tabs(page);
   const rankings = bar.getByRole("link", { name: "Rankings" });
   const more = page.locator("details.site-menu > summary");
-  // A chosen tab takes the accent colour.
   const chosen = (tab: Locator) =>
     tab.evaluate((el) => {
       const accent = document.createElement("span");
@@ -225,7 +218,6 @@ test("signed in on a phone, every bottom tab keeps the account in the top bar", 
       0,
     );
     await expect(name).toHaveText(shown);
-    // Home, in the middle, opens the dashboard; the account is only on top.
     await expect(bar.locator(":scope > a").nth(2)).toHaveText("Home");
     await expect(more.getByText(shown)).toHaveCount(0);
   };

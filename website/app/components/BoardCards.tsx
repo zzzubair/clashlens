@@ -17,7 +17,6 @@ import { signedOr } from "../lib/number-format";
 import { zoneName } from "../lib/clock-format";
 import { LegendClock } from "./LegendClock";
 
-/** Card: the Legend clock, in the device's time zone. */
 export function ClockCard({
   data,
   nowMs,
@@ -44,7 +43,6 @@ function topLabel(rank: number): string {
   return `Top ${rank.toLocaleString("en-US")}`;
 }
 
-/** Card: the trophies a day needed to finish the Season at the goal rank. */
 export function GoalCard({ data }: { data: GoalData }) {
   const [shield, setShield] = useState(0);
   const plan = goalPlan(data);
@@ -455,7 +453,6 @@ function GoalChart({
   );
 }
 
-/** Card: trophies needed for each picked Top line, with your account slotted in. */
 export function CutoffsCard({ data }: { data: CutoffsData }) {
   const [view, setView] = useState<"live" | "reset">("live");
   const shown = view === "live" || data.reset === null ? data.live : data.reset;
@@ -582,7 +579,6 @@ function netOf(row: RivalRow): number | null {
   return Math.round((row.offense ?? 0) - Math.abs(row.defense ?? 0));
 }
 
-/** Card: the leaderboard just above and below you, live or at the last Reset. */
 export function RivalsCard({ data }: { data: RivalsData }) {
   const [view, setView] = useState<"live" | "season">("live");
   // A phone shows you and 2 either side until asked for every rival.
@@ -642,7 +638,6 @@ export function RivalsCard({ data }: { data: RivalsData }) {
   );
 }
 
-/** Card: how you compare with one of your groups. */
 export function GroupWatchCard({
   data,
   onPick,
