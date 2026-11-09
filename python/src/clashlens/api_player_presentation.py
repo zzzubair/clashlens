@@ -579,7 +579,9 @@ def historical_season_summary(record: dict[str, Any]) -> dict[str, Any]:
         "kind": "player-season-summary",
         "tag": text_value(record["normalized_tag"]),
         "official_season_id": text_value(record["official_season_id"]),
-        **summary_bounds_payload(record["season_start"], record["season_end"]),
+        **summary_bounds_payload(
+            text_value(record["official_season_id"]), record["season_start"], record["season_end"]
+        ),
         "start_trophies": _optional_int(record["start_trophies"]),
         "end_trophies": _optional_int(record["end_trophies"]),
         "final_rank": _optional_int(record["final_rank"]),
@@ -647,7 +649,21 @@ def season_bounds_payload(season_id: str) -> dict[str, Any] | None:
     }
 
 
-def summary_bounds_payload(start: datetime | None, end: datetime | None) -> dict[str, Any]:
+def summary_bounds_payload(
+    season_id: str, start: datetime | None, end: datetime | None
+) -> dict[str, Any]:
+    """A Season's dates from its id, the Season's first Reset, as the website
+    dated Seasons; the saved start and end, often missing when Reset readings
+    are, only for an id that is not a Season start."""
+    bounds = season_bounds_payload(season_id)
+    if bounds is not None:
+        return {
+            "season_start": bounds["start"],
+            "season_end": bounds["end"],
+            "last_day_start": bounds["last_day_start"],
+            "day_count": SEASON_DAY_COUNT,
+        }
+
     def _iso(value: datetime | None) -> str | None:
         return None if value is None else value.astimezone(UTC).isoformat()
 
