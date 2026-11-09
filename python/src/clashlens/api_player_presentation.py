@@ -49,6 +49,14 @@ def heatmap_kind(attacks: int | None, defenses: int | None, net: int | None) -> 
     return "shield" if attacks == 0 and defenses == 0 and net == 0 else "missing" if net is None else "played"
 
 
+def day_net(day: Mapping[str, Any]) -> int | None:
+    """The saved net, or with every battle known, gain less loss."""
+    gain, loss = day["attack_gain"], day["defense_loss"]
+    if day["net_trophy_change"] is not None:
+        return day["net_trophy_change"]
+    return gain - loss if day["battles_complete"] and gain is not None and loss is not None else None
+
+
 def day_presentation(day: Mapping[str, Any], *, is_current: bool) -> dict[str, Any]:
     """Website evidence labels and the bot's deliberately different prefilters.
 
@@ -168,9 +176,7 @@ def display_end(day: Mapping[str, Any], saved: list[dict[str, Any]], weeks: list
     reset = next((item for item in day["adjustments"] if item["type"] in ("weekly_reset", "season_reset")), None)
     amount = 0 if reset is None else reset["amount"]
     after = None if before is None else before + amount
-    dashboard_net = net
-    if dashboard_net is None and day["battles_complete"] and day["attack_gain"] is not None and day["defense_loss"] is not None:
-        dashboard_net = day["attack_gain"] - day["defense_loss"]
+    dashboard_net = day_net(day)
     dashboard = None if start is None or dashboard_net is None else start + dashboard_net + amount
     end = screen_event_timestamp(day["ranked_day_end"])
     following = next((item["display_start"]["trophies"] for item in saved
