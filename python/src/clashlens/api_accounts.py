@@ -15,6 +15,7 @@ from . import (
     api_requests,
 )
 from .api_db import ApiDatabase
+from .api_player_presentation import calendar_payload
 from .api_players import PUBLIC_PLAYER_LIMIT
 from .api_requests import AccountContext, OperationResult, RequestBinding
 from .db_rows import text_value
@@ -393,6 +394,7 @@ def get_public_user_days(
         players = api_leaderboard.linked_season_days(connection, tags, now)
     return {
         "kind": "public-user-days",
+        "calendar": calendar_payload(now),
         "season_start": ranked_day_for(now).season_start.isoformat(),
         "players": players,
     }

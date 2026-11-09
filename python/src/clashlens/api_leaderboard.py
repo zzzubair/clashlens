@@ -18,6 +18,7 @@ from .api_player_presentation import (
     public_snapshot_confidence,
     shown_total,
 )
+from .api_player_season_facts import heatmap_day_numbers
 from .db_rows import text_value
 from .domain import (
     RANKED_DAY_DURATION,
@@ -608,6 +609,10 @@ def linked_season_days(
             "league": text_value(league),
             "entry": None if entry is None else text_value(entry),
         })
+    for player in players.values():
+        player["heatmap_day_numbers"] = heatmap_day_numbers(
+            day.season_start, day.day_number, player["season_weeks"], player["days"]
+        )
     return list(players.values())
 
 

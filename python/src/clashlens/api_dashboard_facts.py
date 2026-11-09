@@ -17,15 +17,20 @@ from .domain import (
 GOAL_PACE_DAYS = 7
 
 
-def dashboard_season(context: dict | None, recent: list[dict], season: list[dict], current: dict | None) -> dict | None:
-    if context is None:
-        return None
+def _season_days(context: dict, recent: list[dict], season: list[dict], current: dict | None) -> dict[int, dict]:
     start = datetime.fromisoformat(context["start"])
     saved = {}
     for day in [*recent, *season, *([] if current is None else [current])]:
         number = (datetime.fromisoformat(day["ranked_day_start"]) - start) // RANKED_DAY_DURATION + 1
         if 1 <= number <= context["current_day_number"]:
             saved.setdefault(number, day)
+    return saved
+
+
+def dashboard_season(context: dict | None, recent: list[dict], season: list[dict], current: dict | None) -> dict | None:
+    if context is None:
+        return None
+    saved = _season_days(context, recent, season, current)
     days = []
     for number in range(1, context["current_day_number"]):
         day = saved.get(number)
@@ -77,6 +82,23 @@ def _rate(days, top, bottom=lambda day: 1):
     pairs = [(top(day), bottom(day)) for day in days]
     known = [(above, below) for above, below in pairs if above is not None and below is not None]
     return _ratio(sum(above for above, _ in known), sum(below for _, below in known))
+
+
+def rival_season(context: dict | None, recent: list[dict], season: list[dict], current: dict | None) -> dict:
+    """Season rival rates without battle arrays or day presentation.
+
+    Hit rate pairs known triples and attacks. Each trophy average counts
+    only known totals on days with a battle on that side, excluding shields.
+    """
+    days = [] if context is None else [
+        day for number, day in _season_days(context, recent, season, current).items()
+        if number < context["current_day_number"]
+    ]
+    return {
+        "hit_rate": _rate(days, lambda day: day["attack_three_star_count"], lambda day: day["attack_count"]),
+        "offense": _rate(days, lambda day: day["attack_gain"] if day["attack_count"] else None),
+        "defense": _rate(days, lambda day: -day["defense_loss"] if day["defense_count"] and day["defense_loss"] is not None else None),
+    }
 
 
 def _form_totals(days):

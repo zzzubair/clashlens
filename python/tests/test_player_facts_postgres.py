@@ -5,6 +5,7 @@ from datetime import timedelta
 
 from domain_test_support import as_api_role, domain_database
 from fastapi.testclient import TestClient
+from test_crews_postgres import Site
 from test_private_api import NOW_SECONDS, TS_CURRENT, signed_headers
 from test_reset_scenarios_postgres import (
     SEASON,
@@ -42,6 +43,22 @@ def day_at(page, start):
     from datetime import datetime
 
     return next(day for day in page["screen_ready"]["days"] if datetime.fromisoformat(day["ranked_day_start"]) == start)
+
+
+def served_public_days(story, tag, now):
+    site = Site(story.connection_info)
+    try:
+        site.account("owner")
+        site.link("owner", tag)
+        app = create_app(site.api, keys={("typescript-website", "current"): TS_CURRENT},
+                         clock=lambda: NOW_SECONDS, now=lambda: now)
+        target = "/v1/users/owner/days"
+        with TestClient(app) as client:
+            response = client.get(target, headers=signed_headers(target))
+        assert response.status_code == 200, response.text
+        return response.json()
+    finally:
+        site.close()
 
 
 def assert_wednesday_facts(story, tuesday, wednesday, tags):
@@ -180,7 +197,8 @@ def test_day_one_goal_uses_5000_baseline(database_url, archive_server, monkeypat
         story.reads(day(2) + timedelta(minutes=20), {tag: 5080})
         story.run_worker()
         assert story.served_board(day(2))["entries"][0]["trophies"] == 5080
-        result = served_player(story, tag, day(2) + timedelta(hours=1), goal_rank=1)["screen_ready"]["dashboard_goal"]
+        full = served_player(story, tag, day(2) + timedelta(hours=1), goal_rank=1)["screen_ready"]
+        result = full["dashboard_goal"]
         assert result["you_then"] == result["line_then"] == 5000
         assert result["history"] == [5000, 5080]
         assert result["plan"]["pace"] == result["plan"]["drift"] == 80
@@ -189,6 +207,40 @@ def test_day_one_goal_uses_5000_baseline(database_url, archive_server, monkeypat
         monkeypatch.setattr(api_players, "decode_army_share_code", lambda code: decoded.append(code))
         totals = served_player(story, tag, day(2) + timedelta(hours=1), battles=False)["screen_ready"]
         assert totals["army_units"] == {} and decoded == []
+        assert totals["rival_season"] == {"hit_rate": 1, "offense": 320, "defense": -240}
+        assert totals["rival_season"] == full["rival_season"]
+        assert all(not saved["offense_events"] and not saved["defense_events"] for saved in totals["days"])
+
+
+def test_season_rival_excludes_shields_from_real_worker_days(database_url, archive_server, monkeypatch):
+    tag = "#2PP"
+    with domain_database(database_url) as info:
+        story = Story(info, archive_server, monkeypatch, {tag: Player(tag)})
+        # W9's six played days total 37/48 triples, +1810 and -1536.
+        plans = {1: (6, 4), 2: (7, 5), 4: (4, 3), 5: (8, 4), 6: (5, 2), 8: (7, 6)}
+        for number, (triples, held) in plans.items():
+            story.players[tag].battles += attacks(day(number), *([40] * triples + [30] * (8 - triples)))
+            story.players[tag].battles += defenses(day(number), *([24] * held + [40] * (8 - held)))
+        story.reset(day(1), {tag: (5000, SEASON)})
+        end = 5000
+        for number in range(1, 9):
+            triples, held = plans.get(number, (0, 0))
+            if number in plans:
+                end += 40 * triples + 30 * (8 - triples) - 24 * held - 40 * (8 - held)
+            story.reads(day(number + 1) - timedelta(minutes=10), {tag: end})
+            story.reset(day(number + 1), {tag: (end, SEASON)})
+            story.reads(day(number + 1) + timedelta(minutes=20), {tag: end})
+            story.run_worker()
+        story.wait(timedelta(hours=1))
+        assert story.served_board(day(9))["entries"][0]["trophies"] == 5274
+        before = [story.saved_day(tag, day(number)) for number in range(1, 9)]
+        assert before[2]["attacks"] == before[2]["defenses"] == before[6]["attacks"] == before[6]["defenses"] == 0
+        assert before[2]["end"] == before[2]["start"] == 5114
+        assert before[6]["end"] == before[6]["start"] == 5188
+        ready = served_player(story, tag, day(9) + timedelta(hours=1), battles=False)["screen_ready"]
+        assert ready["rival_season"] == {"hit_rate": 37 / 48, "offense": 1810 / 6, "defense": -1536 / 6}
+        assert "dashboard_season" not in ready and "battle_statistics" not in ready
+        assert [story.saved_day(tag, day(number)) for number in range(1, 9)] == before
 
 
 def test_full_battles_profile_start_is_only_a_display_projection(database_url, archive_server, monkeypatch):
@@ -260,3 +312,12 @@ def test_leaving_returning_and_signing_up_later_from_saved_game_data(database_ur
         assert ready["battle_statistics"]["7"]["attack"]["played_days"] == 1
         assert len(day_at(page, day(17))["offense_events"]) == 8
         assert story.saved_day(tag, day(17))["end"] == 5080
+        linked = served_public_days(story, tag, day(18) + timedelta(hours=2))
+        assert linked["calendar"]["day_number"] == 18
+        assert linked["calendar"]["as_of"] == (day(18) + timedelta(hours=2)).isoformat()
+        player = linked["players"][0]
+        assert player["reset_position"] == 1
+        # Days 8–14 were outside Legend I; 15–16 were 5,000 before sign-up.
+        # The compact endpoint has no current saved day in this story.
+        assert player["heatmap_day_numbers"] == [*range(1, 8), 17]
+        assert [kept[0] for kept in player["days"] if kept[4]] == [15, 16]

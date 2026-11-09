@@ -18,6 +18,17 @@ from .domain import (
 
 
 def shape_of(start: datetime, today: int, weeks: list[dict], saved: dict[int, dict], *, historical: bool = False) -> dict[str, Any]:
+    unplayed = {
+        number for number, kept in saved.items()
+        if kept.get("attack_count") == 0 and kept.get("defense_count") == 0
+        and kept.get("net_change" if historical else "net_trophy_change") == 0
+        and (kept.get("start_trophies") if historical else kept["display_start"]["trophies"]) == SEASON_START_TROPHIES
+        and (historical or not kept["offense_events"] and not kept["defense_events"])
+    }
+    return _membership(start, today, weeks, {number: kept["ranked_day_start"] for number, kept in saved.items()}, unplayed)
+
+
+def _membership(start: datetime, today: int, weeks: list[dict], saved: dict[int, str], unplayed: set[int]) -> dict[str, Any]:
     by_week = {datetime.fromisoformat(week["week_start"]): week for week in weeks}
 
     def week_of(number):
@@ -40,17 +51,10 @@ def shape_of(start: datetime, today: int, weeks: list[dict], saved: dict[int, di
             number += 1
         signed_up = None
         for candidate in range(first, number + 1):
-            kept = saved.get(candidate)
-            unplayed = kept is not None and (
-                kept.get("attack_count") == 0 and kept.get("defense_count") == 0
-                and kept.get("net_change" if historical else "net_trophy_change") == 0
-                and (kept.get("start_trophies") if historical else kept["display_start"]["trophies"]) == SEASON_START_TROPHIES
-                and (historical or not kept["offense_events"] and not kept["defense_events"])
-            )
-            if kept is not None and not unplayed:
+            if candidate in saved and candidate not in unplayed:
                 signed_up = candidate
                 break
-            if kept is not None and candidate < today:
+            if candidate in saved and candidate < today:
                 kinds[candidate - 1] = "waiting"
         runs.append({
             "first": first, "last": number, "signed_up": signed_up,
@@ -66,9 +70,9 @@ def shape_of(start: datetime, today: int, weeks: list[dict], saved: dict[int, di
         expected += 1
         if number in saved:
             saved_count += 1
-            last_legend = saved[number]["ranked_day_start"]
+            last_legend = saved[number]
     if runs and runs[-1]["dropped"] and runs[-1]["signed_up"] is None:
-        last_legend = saved.get(runs[-1]["last"], {}).get("ranked_day_start", last_legend)
+        last_legend = saved.get(runs[-1]["last"], last_legend)
     return {
         "season_start": start.isoformat(), "today": today, "kinds": kinds, "runs": runs,
         "partial": any(kind in ("outside", "waiting") for kind in kinds),
@@ -76,6 +80,20 @@ def shape_of(start: datetime, today: int, weeks: list[dict], saved: dict[int, di
         "legend_days": {"expected": expected, "saved": saved_count},
         "last_legend_day_start": last_legend,
     }
+
+
+def heatmap_day_numbers(start: datetime, today: int, weeks: list[dict], days: list[list]) -> list[int]:
+    """Public-profile membership from its compact [day, ..., unplayed, listed] tuples.
+
+    Use the same runs and pre-sign-up days as D6, but return only the final
+    selection: 500 linked players need no full player presentation sections.
+    """
+    shape = _membership(
+        start, today, weeks,
+        {kept[0]: (start + (kept[0] - 1) * RANKED_DAY_DURATION).isoformat() for kept in days},
+        {kept[0] for kept in days if kept[4]},
+    )
+    return [kept[0] for kept in days if kept[5] and shape["kinds"][kept[0] - 1] not in ("outside", "waiting")]
 
 
 def historical_facts(summary: dict[str, Any], *, season_start: datetime | None = None) -> None:
