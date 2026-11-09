@@ -12,7 +12,6 @@ from claim_jobs_postgres_support import (
 from domain_test_support import domain_database
 
 from clashlens.db import (
-    PYTHON_BACKFILL_PRIORITY,
     PYTHON_LIVE_PRIORITY,
     PYTHON_RESET_PRIORITY,
     Database,
@@ -20,6 +19,7 @@ from clashlens.db import (
 )
 from clashlens.job_contracts import (
     POPULATION_BUILD_WORK_TYPES,
+    PYTHON_BACKFILL_PRIORITY,
     RESPONSE_WORK_TYPES,
     supported_job_filter,
 )

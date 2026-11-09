@@ -587,12 +587,11 @@ def test_official_total_saved_while_the_last_day_is_calculated_is_not_missed(
 
     from first_battle_log_postgres_support import LOSS, WIN, _log
 
-    from clashlens.db import (
+    from clashlens.db import DEFAULT_PARSER_VERSION, Database
+    from clashlens.job_contracts import (
         ANALYTICS_RULE_VERSION,
-        DEFAULT_PARSER_VERSION,
         DOMAIN_RULE_VERSION,
         PROCESSING_VERSION,
-        Database,
     )
     from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
 

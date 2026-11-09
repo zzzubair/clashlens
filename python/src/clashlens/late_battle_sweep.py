@@ -22,14 +22,13 @@ from time import monotonic
 from typing import Any
 
 from . import reconciliation_db
-from .db import (
+from .db import DEFAULT_PARSER_VERSION, Database
+from .domain import ranked_day_for
+from .job_contracts import (
     ANALYTICS_RULE_VERSION,
-    DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
-    Database,
 )
-from .domain import ranked_day_for
 from .reconciliation import RECONCILIATION_RULE_VERSION
 
 # First check 30 minutes after the Reset, then every 10 minutes until every

@@ -17,12 +17,10 @@ from typing import Any
 from . import battle, day_recalculation, domain, reset_baselines
 from .analytics import unplayed_profile_sql
 from .battle import ParsedBattleRow
-from .db import (
-    PYTHON_BACKFILL_PRIORITY,
-    Database,
-)
+from .db import Database
 from .db_rows import text_value
 from .domain import SEASON_START_TROPHIES, RankedDay
+from .job_contracts import PYTHON_BACKFILL_PRIORITY
 from .reconciliation import (
     BATTLE_LOG_MAX_ROWS,
 )

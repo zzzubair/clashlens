@@ -18,8 +18,8 @@ from reconciliation_postgres_support import (
 )
 
 from clashlens import battle, ranked_day_inputs, reset_baselines
-from clashlens.db import PYTHON_BACKFILL_PRIORITY
 from clashlens.domain import ranked_day_for
+from clashlens.job_contracts import PYTHON_BACKFILL_PRIORITY
 
 
 def _log(odd_row: dict, *, with_battle: bool) -> bytes:

@@ -10,16 +10,7 @@ from psycopg.types.json import Jsonb
 
 from . import boundary, boundary_members, ranked_day_inputs
 from .analytics import unplayed_profile_sql, unplayed_since_sql
-from .db import (
-    ANALYTICS_RULE_VERSION,
-    DEFAULT_PARSER_VERSION,
-    DOMAIN_RULE_VERSION,
-    PROCESSING_VERSION,
-    PYTHON_BACKFILL_PRIORITY,
-    Claim,
-    Database,
-    ended_day_priority,
-)
+from .db import DEFAULT_PARSER_VERSION, Claim, Database, ended_day_priority
 from .db_rows import text_value
 from .domain import (
     RANKED_DAY_DURATION,
@@ -30,6 +21,12 @@ from .domain import (
     is_season_boundary,
     ranked_day_for,
     season_is_current,
+)
+from .job_contracts import (
+    ANALYTICS_RULE_VERSION,
+    DOMAIN_RULE_VERSION,
+    PROCESSING_VERSION,
+    PYTHON_BACKFILL_PRIORITY,
 )
 
 

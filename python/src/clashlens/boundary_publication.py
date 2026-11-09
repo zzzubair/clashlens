@@ -24,16 +24,15 @@ from .analytics import (
     SNAPSHOT_ORDERING_RULE_VERSION,
 )
 from .army_decoder import DECODER_VERSION
-from .db import (
+from .db import Claim, Database
+from .db_rows import text_value
+from .domain import DomainRuleError, battle_window
+from .job_contracts import (
     ANALYTICS_RULE_VERSION,
     ARMY_ANALYTICS_RULE_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
-    Claim,
-    Database,
 )
-from .db_rows import text_value
-from .domain import DomainRuleError, battle_window
 from .past_reset_pacing import (
     OPERATOR_CORRECTION,
     correction_waits,

@@ -37,13 +37,10 @@ from . import league_week
 from .analytics import FRESHNESS_RULE_VERSION, SNAPSHOT_ORDERING_RULE_VERSION
 from .army_decoder import DECODER_VERSION
 from .boundary_battles import moved_sides
-from .db import (
-    ANALYTICS_RULE_VERSION,
-    ARMY_ANALYTICS_RULE_VERSION,
-    Database,
-)
+from .db import Database
 from .db_rows import text_value
 from .domain import RANKED_DAY_DURATION
+from .job_contracts import ANALYTICS_RULE_VERSION, ARMY_ANALYTICS_RULE_VERSION
 from .league_week import week_start
 from .publication_states import CorrectionState, day_snapshot_status, move_correction
 

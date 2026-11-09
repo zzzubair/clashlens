@@ -22,8 +22,9 @@ from clashlens import (
     snapshots,
 )
 from clashlens.analytics import SNAPSHOT_ORDERING_RULE_VERSION, deterministic_tag_hash
-from clashlens.db import PYTHON_BACKFILL_PRIORITY, Database
+from clashlens.db import Database
 from clashlens.domain import RANKED_DAY_DURATION, ranked_day_for
+from clashlens.job_contracts import PYTHON_BACKFILL_PRIORITY
 
 OLDER = "tracked-player-order-v1"
 SEASON = ranked_day_for(BOUNDARY - RANKED_DAY_DURATION).official_season_id

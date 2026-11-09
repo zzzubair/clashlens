@@ -25,14 +25,12 @@ from clashlens.background_pacing import (
     BackgroundMode,
     pacing_mode,
 )
-from clashlens.db import (
+from clashlens.db import DEFAULT_PARSER_VERSION, Database, _claim_select_statement
+from clashlens.job_contracts import (
     ANALYTICS_RULE_VERSION,
     ARMY_ANALYTICS_RULE_VERSION,
-    DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
-    Database,
-    _claim_select_statement,
 )
 
 DAY = datetime(2026, 10, 8, 5, tzinfo=UTC)

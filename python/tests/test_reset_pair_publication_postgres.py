@@ -31,13 +31,13 @@ from clashlens import (
     reset_baselines,
 )
 from clashlens.collector_db import CollectorDatabase
-from clashlens.db import (
+from clashlens.db import DEFAULT_PARSER_VERSION
+from clashlens.domain import ranked_day_for
+from clashlens.job_contracts import (
     ANALYTICS_RULE_VERSION,
-    DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
 )
-from clashlens.domain import ranked_day_for
 from clashlens.league_week import week_start
 from clashlens.profile import PROFILE_PARSER_VERSION
 from clashlens.reconciliation import (

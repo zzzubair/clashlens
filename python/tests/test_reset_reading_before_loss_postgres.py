@@ -31,8 +31,9 @@ from reset_settlement_state_postgres_support import (
 )
 
 from clashlens import queue_refresh, ranked_day_inputs, reconciliation_db
-from clashlens.db import PYTHON_BACKFILL_PRIORITY, Database
+from clashlens.db import Database
 from clashlens.domain import ranked_day_for
+from clashlens.job_contracts import PYTHON_BACKFILL_PRIORITY
 
 
 def _latest_days(connection_info: str, days: tuple = (DAY_B, DAY_C)) -> list[tuple]:

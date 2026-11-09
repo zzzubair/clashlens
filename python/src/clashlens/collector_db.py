@@ -23,14 +23,13 @@ from . import (
     response_novelty,
 )
 from .collector_http import endpoint_target
-from .db import (
+from .db import PYTHON_LIVE_PRIORITY, PYTHON_RESET_PRIORITY
+from .domain import RESET_COLLECTION_WINDOW
+from .job_contracts import (
     ANALYTICS_RULE_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
-    PYTHON_LIVE_PRIORITY,
-    PYTHON_RESET_PRIORITY,
 )
-from .domain import RESET_COLLECTION_WINDOW
 from .raw_body import DELETABLE_SQL, RECORDED_SQL, STILL_PROCESSING_SQL
 from .source_observation_contract import get_source_observation_contract
 
