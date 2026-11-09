@@ -146,6 +146,10 @@ class _Store:
         self.cooldowns: list[tuple[str, int]] = []
         self.pool = MagicMock()
 
+    @staticmethod
+    def admit_discovery_profiles(_now: datetime) -> None:
+        return None
+
     def record_unchanged_response(self, _handoff: Any) -> bool:
         return False
 
