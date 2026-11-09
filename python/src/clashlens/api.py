@@ -372,7 +372,8 @@ def create_app(
 
     @app.get("/v1/players/{tag}")
     def player(
-        tag: str, request: Request, battles: bool = Query(default=True)
+        tag: str, request: Request, battles: bool = Query(default=True),
+        goal_rank: int | None = Query(default=None, ge=1, le=10000),
     ) -> JSONResponse:
         authorize(request, "player.read", production_database)
         normalized_tag = safe_tag(tag)
@@ -386,6 +387,7 @@ def create_app(
                 now=now,
                 freshness_seconds=_DEFAULT_FRESHNESS_SECONDS,
                 battles=battles,
+                goal_rank=goal_rank,
             )
         if result is None:
             raise ApiError(404, "player_not_found")

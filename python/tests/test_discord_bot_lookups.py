@@ -174,6 +174,7 @@ def season_page() -> dict[str, Any]:
         "days": days,
         "current_day_start": days[-1]["ranked_day_start"],
         "season_day_starts": [day["ranked_day_start"] for day in days],
+        "stats_day_starts": [day["ranked_day_start"] for day in days],
         "season": {
             "id": "1786000000",
             "current_day_number": 3,
@@ -282,6 +283,7 @@ def test_season_not_available_yet_still_shows_today(store) -> None:
     store.connect(ME, [card("#2PP", "Drift", 5040)])
     season = season_page()
     season["screen_ready"]["season"] = None
+    season["screen_ready"]["stats_day_starts"] = None
     store.pages["#2PP"] = season
     text = run_command(store, "stats", FakeInteraction(), player=None)["text"]
     assert text.startswith("### Drift #2PP\n## +0 (0)  −40 (1)\n")

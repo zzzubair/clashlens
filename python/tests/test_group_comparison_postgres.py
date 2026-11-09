@@ -590,5 +590,14 @@ def test_a_totals_only_player_read_keeps_every_number_and_lists_no_battles(
     assert any(day["battles_complete"] and day["offense_events"] for day in days)
     for day in days:
         day["offense_events"] = day["defense_events"] = []
+        for key in ("display_start", "display_start_by_reference", "display_end", "presentation"):
+            day.pop(key, None)
     full["screen_ready"]["army_units"] = {}
+    # The new battle-derived projections are deliberately optional on a
+    # totals-only read; every retained old field still agrees exactly.
+    for key in ("battle_statistics", "dashboard_season", "dashboard_windows", "dashboard_goal"):
+        full["screen_ready"].pop(key, None)
+        assert key not in totals["screen_ready"]
+    assert all("presentation" not in day and "display_start" not in day
+               and "display_end" not in day for day in totals["screen_ready"]["days"])
     assert totals == full

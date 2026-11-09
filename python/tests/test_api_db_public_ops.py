@@ -1325,9 +1325,19 @@ def test_busiest_player_page_stays_well_under_the_response_limit(
                         )
                 connection.commit()
 
+            class CountedRead:
+                def __init__(self, connection):
+                    self.connection = connection
+                    self.queries = 0
+
+                def execute(self, *args, **kwargs):
+                    self.queries += 1
+                    return self.connection.execute(*args, **kwargs)
+
             with database.pool.connection() as page_connection:
+                counted = CountedRead(page_connection)
                 player = api_players.read_player_page(
-                    page_connection, "#2PP", now=NOW, freshness_seconds=900
+                    counted, "#2PP", now=NOW, freshness_seconds=900
                 )
 
             assert player is not None
@@ -1354,7 +1364,20 @@ def test_busiest_player_page_stays_well_under_the_response_limit(
                 for day in screen["days"]
             )
             size = len(JSONResponse(content=api_http.json_safe(player)).body)
+            print(f"player page: days={days}, bytes={size}, statements={counted.queries}")
+            assert counted.queries <= 7
             assert size < 0.6 * api._DEFAULT_MAX_RESPONSE_BYTES
+            with database.pool.connection() as page_connection:
+                goal_read = CountedRead(page_connection)
+                with_goal = api_players.read_player_page(
+                    goal_read, "#2PP", now=NOW, freshness_seconds=900, goal_rank=200
+                )
+            goal_size = len(JSONResponse(content=api_http.json_safe(with_goal)).body)
+            print(f"player goal: days={days}, bytes={goal_size}, statements={goal_read.queries}")
+            assert goal_read.queries == counted.queries + 1
+            assert goal_size < 0.6 * api._DEFAULT_MAX_RESPONSE_BYTES
+            assert "dashboard_goal" not in screen
+            assert "dashboard_goal" in with_goal["screen_ready"]
         finally:
             database.close()
 

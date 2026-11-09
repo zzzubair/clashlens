@@ -11,7 +11,7 @@ from test_discord_bot_postgres import DISCORD_ID, _account
 from test_reset_scenarios_postgres import SEASON, Player, Story, attacks, day, defenses
 
 from bot.commands import Commands
-from bot.replies import Site
+from bot.replies import Site, season_days
 from bot.store import Store
 from clashlens.api_db import ApiDatabase
 
@@ -53,6 +53,20 @@ def test_stats_totals_every_saved_day_and_never_hides_a_missing_one(
         story.run_worker()
         story.wait(timedelta(hours=1))
         board = story.served_board(day_3)
+        from test_player_facts_postgres import served_player
+
+        page = served_player(story, FULL, day_3 + timedelta(minutes=30))
+        ready = page["screen_ready"]
+        assert ready["stats_day_starts"] == [day(n).isoformat() for n in (1, 2, 3)]
+        assert ready["season_shape"]["legend_days"] == {"expected": 2, "saved": 2}
+        assert ready["battle_statistics"]["season"]["attack"]["count"] == 7
+        assert ready["battle_statistics"]["season"]["attack"]["stars"] == [0, 0, 2, 5]
+        assert all("presentation" in saved for saved in ready["days"])
+        # A later API read has expected, unpublished days. They remain null
+        # in bot totals, instead of disappearing from the denominator.
+        later = served_player(story, FULL, day(5) + timedelta(hours=1))
+        assert later["screen_ready"]["stats_day_starts"] == [day(n).isoformat() for n in range(1, 6)]
+        assert season_days(later)[-2:] == [None, None]
 
         owner = ApiDatabase(connection_info)
         api = ApiDatabase(as_api_role(connection_info))

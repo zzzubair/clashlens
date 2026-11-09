@@ -9,9 +9,11 @@ from .army_decoder import with_unnamed_ids
 from .catalog import unit_label
 from .db_rows import text_value
 from .domain import (
+    BATTLE_DAY_GRACE,
     RANKED_DAY_DURATION,
     SEASON_DAY_COUNT,
     SEASON_DURATION,
+    SEASON_START_TROPHIES,
     DomainRuleError,
     ranked_day_for,
     validate_legend_season_start,
@@ -26,6 +28,163 @@ from .reconciliation import (
 )
 
 PLAYER_SCREEN_READY_VERSION = "api-player-daily-log-v4"
+
+BATTLE_DOUBT_CODES = frozenset({
+    "perspective_disagreement", "duplicate_contribution_disagreement",
+    "trophy_equation_mismatch", "ranked_version_mismatch",
+    "attack_star_total_mismatch", "defense_star_total_mismatch", "truncated_reasons",
+    "attack_count_exceeds_eight", "defense_count_exceeds_eight",
+})
+PRESENTATION_GAP_CODES = frozenset({
+    "missing_start_battle_log_baseline", "missing_end_battle_log_baseline",
+    "battle_log_row_gap", "battle_log_overlap_gap", "battle_log_stale_window",
+    "battle_log_row_count_exceeds_fifty", "unclassified_rows",
+})
+_LIVE_WAIT_CODES = frozenset({
+    "missing_end_battle_log_baseline", "missing_end_baseline",
+    "automatic_defense_basis_unavailable",
+})
+
+
+def day_presentation(day: Mapping[str, Any], *, is_current: bool) -> dict[str, Any]:
+    """Website evidence labels and the bot's deliberately different prefilters.
+
+    Historical summaries have counts rather than event arrays. Their old
+    website classifier infers completeness only with all eight on both sides.
+    """
+    historical = "net_change" in day
+    codes = list(day.get("flags" if historical else "uncertainty_reasons", []))
+    attack = day.get("attack_count")
+    defense = day.get("defense_count")
+    events = [*day.get("offense_events", []), *day.get("defense_events", [])]
+    has_battles = bool(events) if not historical else bool(attack or defense)
+    counts = (attack, defense) if historical else (
+        len(day.get("offense_events", [])), len(day.get("defense_events", []))
+    )
+    complete = day.get("battles_complete", (
+        counts == (MAX_DAILY_ATTACKS, MAX_DAILY_DEFENSES)
+        and not BATTLE_DOUBT_CODES.intersection(codes)
+    ))
+    coverage = day.get("coverage")
+    if coverage not in ("complete", "partial") and not historical:
+        coverage = day["completeness"]["state"]
+    doubtful = bool(BATTLE_DOUBT_CODES.intersection(codes)) or (
+        not complete and (coverage != "complete" or bool(PRESENTATION_GAP_CODES.intersection(codes)))
+    )
+    net = day.get("net_change" if historical else "net_trophy_change")
+    status = (
+        "uncertain" if net is None or doubtful else
+        "verified" if day["state"] == "Complete" and day.get("confidence") == "exact" and not codes
+        else "calculated"
+    )
+    gain, loss = day.get("attack_gain"), day.get("defense_loss")
+    battle_net = None if gain is None or loss is None else gain - loss
+    caution = [code for code in codes if code not in _LIVE_WAIT_CODES]
+    return {
+        "status": "in_progress" if is_current else "not_enrolled" if "not_enrolled" in codes else status,
+        # The bot suppresses battle-free not-eligible days too, but does not
+        # call a day with battles Not enrolled merely for that saved flag.
+        "day_summary_status": status,
+        "battle_net": None if not is_current and "not_enrolled" in codes else battle_net,
+        "battle_net_complete": battle_net if complete else None,
+        "is_current": is_current,
+        "show_in_player_log": (
+            "player_not_eligible" not in codes or "not_enrolled" in codes or has_battles
+        ),
+        "show_in_day_summary": has_battles or not {"not_enrolled", "player_not_eligible"}.intersection(codes),
+        "live_routine": day["state"] == "Live" and coverage == "partial" and not caution,
+        "reason_codes": codes,
+        "caution_codes": caution,
+    }
+
+
+def display_starts(days: list[dict[str, Any]], profile: Mapping[str, Any]) -> None:
+    """Port calculateStartingTrophies over one consumer reference group."""
+    observed = screen_event_timestamp(profile.get("observed_at"))
+    try:
+        season_start = datetime.fromtimestamp(int(profile.get("current_league_season_id")), UTC)
+    except (ValueError, TypeError, OverflowError, OSError):
+        season_start = None
+    following = None
+    for day in sorted(days, key=lambda item: item["ranked_day_start"], reverse=True):
+        next_day, following = following, day
+        number = day["season_day_number"]
+        saved = day.get("start_trophies")
+        if number == 1 and saved != SEASON_START_TROPHIES:
+            saved = None
+        source = day.get("start_trophies_source")
+        day["display_start"] = {
+            "trophies": saved,
+            "source": "unknown" if saved is None else "season_rule" if source == "season_rule" else "calculated" if source == "previous_day_end" else "saved",
+            "calculation": None,
+        }
+        start = screen_event_timestamp(day["ranked_day_start"])
+        end = screen_event_timestamp(day["ranked_day_end"])
+        if saved is not None or start is None or end is None:
+            continue
+        offense, defense = day["offense_events"], day["defense_events"]
+        gain, loss = day["attack_gain"], day["defense_loss"]
+        events = [*offense, *defense]
+        if (gain is None or loss is None
+            or day["attack_count"] != len(offense) or day["defense_count"] != len(defense)
+            or sum(event["trophy_change"] for event in offense) != gain
+            or -sum(event["trophy_change"] for event in defense) != loss
+            or any(event.get("perspective_disagreement")
+                   or not start + BATTLE_DAY_GRACE <= datetime.fromisoformat(event["battle_timestamp"]) < end + BATTLE_DAY_GRACE
+                   for event in events)):
+            continue
+        net = day["net_trophy_change"]
+        if net is None:
+            net = gain - loss
+        total = None
+        eligible = day["completeness"]["state"] == "complete" or (
+            day["attack_count"] == MAX_DAILY_ATTACKS and day["defense_count"] == MAX_DAILY_DEFENSES)
+        if (not (profile.get("season_reset_pending") and number == 1)
+            and season_start is not None and season_start <= start < season_start + SEASON_DURATION
+            and observed is not None and start <= observed < end and eligible
+            and all(datetime.fromisoformat(event["battle_timestamp"]) <= observed for event in events)):
+            total = profile["trophies"]
+        elif (next_day is not None and next_day["display_start"]["trophies"] is not None
+              and screen_event_timestamp(next_day["ranked_day_start"]) == end
+              and number is not None and next_day["season_day_number"] == number + 1 and eligible):
+            total = next_day["display_start"]["trophies"]
+        if (total is None or not isinstance(total - net, int) or abs(total - net) > 2**53 - 1
+            or total - net < 0 or number == 1 and total - net != SEASON_START_TROPHIES):
+            continue
+        day["display_start"] = {
+            "trophies": total - net, "source": "calculated",
+            "calculation": {"end_trophies": total, "net_change": net},
+        }
+
+
+def display_end(day: Mapping[str, Any], saved: list[dict[str, Any]], weeks: list[dict[str, Any]], now: datetime) -> dict[str, Any]:
+    start = day["display_start"]["trophies"]
+    net = day["net_trophy_change"]
+    before = None if start is None or net is None else start + net
+    reset = next((item for item in day["adjustments"] if item["type"] in ("weekly_reset", "season_reset")), None)
+    amount = 0 if reset is None else reset["amount"]
+    after = None if before is None else before + amount
+    dashboard_net = net
+    if dashboard_net is None and day["battles_complete"] and day["attack_gain"] is not None and day["defense_loss"] is not None:
+        dashboard_net = day["attack_gain"] - day["defense_loss"]
+    dashboard = None if start is None or dashboard_net is None else start + dashboard_net + amount
+    end = screen_event_timestamp(day["ranked_day_end"])
+    following = next((item["display_start"]["trophies"] for item in saved
+                      if screen_event_timestamp(item["ranked_day_start"]) == end), None)
+    left = any(screen_event_timestamp(week["week_start"]) == end and week["league"] == "below_legend_i" for week in weeks)
+    conflict = None
+    if before is not None and following is not None and after != following:
+        conflict = {
+            "battle_end": before, "reset_kind": None if not amount else "weekly" if reset["type"] == "weekly_reset" else "season",
+            "reset_amount": amount, "next_start": following,
+        }
+    return {
+        "before_reset": before, "after_reset": after,
+        "player_log": following if following is not None else after if end is not None and end <= now and (now - end < RANKED_DAY_DURATION or left) else None,
+        "dashboard": following if following is not None else dashboard,
+        "conflict": conflict,
+        "status": "uncertain" if conflict else day_presentation(day, is_current=False)["status"],
+    }
 
 
 def player_confidence(active: bool, eligibility_state: str) -> str:
