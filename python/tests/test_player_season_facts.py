@@ -305,3 +305,17 @@ def test_player_battle_facts_keep_the_shared_crew_denominators(player_index):
             assert actual["trophies"] == want["total"]
             assert actual["played_days"] == want["days"]
             assert actual["per_day"] == want["total"] / want["days"]
+
+
+def test_new_season_with_nothing_saved_still_has_its_28_day_shape():
+    # Minutes after a Season Reset, before any day, week or Season context is
+    # saved, the page still draws the new Season's empty 28 days.
+    now = SEASON + timedelta(minutes=10)
+    page = {"trophies": 5000, "current_league_season_id": None, "observed_at": now.isoformat(),
+            "screen_ready": {"days": [], "current_day_start": None, "season_day_starts": [],
+                             "recent_day_starts": [], "season_weeks": [], "season": None}}
+    player_facts(page, now, battles=False)
+    shape = page["screen_ready"]["season_shape"]
+    assert shape is not None
+    assert shape["today"] == 1
+    assert shape["season_start"] == SEASON.isoformat()
