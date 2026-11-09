@@ -1,4 +1,4 @@
-import DOMAIN from "../../../testdata/w6-domain-contract.json";
+import DOMAIN from "../../../testdata/w6-domain-contract.json" with { type: "json" };
 import { CALENDAR } from "./player-route-data";
 /**
  * Worst-case but realistic account data for groups, the group comparison and

@@ -8,7 +8,6 @@ import {
   isInteger,
   isRecord,
   isUtcTimestamp,
-  isOneOf,
 } from "./python-response.server";
 import { requestJson } from "./python-transport.server";
 
@@ -50,6 +49,12 @@ export interface PublicUserDays {
   }>;
 }
 
+const HEATMAP_KINDS: Record<string, LinkedSeasonDay["kind"]> = {
+  p: "played",
+  s: "shield",
+  m: "missing",
+};
+
 const nullableCount = (value: unknown) =>
   value === null || (isInteger(value) && value >= 0);
 const isBoolean = (value: unknown): value is boolean => typeof value === "boolean";
@@ -81,10 +86,11 @@ export async function getPublicUserDays(username: string): Promise<PublicUserDay
         !isRecord(player) ||
         !isCanonicalPlayerTag(player.tag) ||
         !(player.reset_position === null || isInteger(player.reset_position)) ||
-        !isRecord(player.heatmap_day_kinds) ||
+        typeof player.heatmap_day_kinds !== "string" ||
         !Array.isArray(player.heatmap_day_numbers) ||
         !player.heatmap_day_numbers.every(isInteger) ||
         !Array.isArray(player.days) ||
+        player.heatmap_day_kinds.length !== player.days.length ||
         new Set(player.heatmap_day_numbers).size !== player.heatmap_day_numbers.length
       )
         throw malformed();
@@ -100,7 +106,7 @@ export async function getPublicUserDays(username: string): Promise<PublicUserDay
         heatmapDayNumbers: player.heatmap_day_numbers,
         resetRank: player.reset_position,
         seasonWeeks: mapSeasonWeeks(player.season_weeks),
-        days: player.days.map((day): LinkedSeasonDay => {
+        days: player.days.map((day, index): LinkedSeasonDay => {
           if (
             !Array.isArray(day) ||
             day.length !== 6 ||
@@ -114,16 +120,11 @@ export async function getPublicUserDays(username: string): Promise<PublicUserDay
             !isBoolean(day[5])
           )
             throw malformed();
+          // One letter a day, in the same order as the days: played, shield or missing.
+          const kind = HEATMAP_KINDS[(player.heatmap_day_kinds as string)[index]!];
+          if (kind === undefined) throw malformed();
           return {
-            kind: (() => {
-              const kinds = player.heatmap_day_kinds;
-              if (
-                !isRecord(kinds) ||
-                !isOneOf(kinds[String(day[0])], ["played", "shield", "missing"] as const)
-              )
-                throw malformed();
-              return kinds[String(day[0])] as LinkedSeasonDay["kind"];
-            })(),
+            kind,
             day: day[0],
             attacks: day[1] as number | null,
             defenses: day[2] as number | null,
