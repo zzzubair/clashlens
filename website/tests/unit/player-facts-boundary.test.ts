@@ -70,6 +70,27 @@ describe("player facts response boundary", () => {
     expect(day.seasonId).toBe(CALENDAR.season_id);
     expect(day).not.toHaveProperty("period");
   });
+  it.each([
+    ["saved", null, undefined],
+    ["season_rule", null, "Season rule"],
+    ["calculated", { end_trophies: 1274, net_change: 40 }, "Calculated"],
+  ] as const)(
+    "labels a %s start and keeps its calculation",
+    (source, calculation, label) => {
+      const raw = reply();
+      Object.assign(raw.screen_ready.days[0], {
+        display_start: { trophies: 1234, source, calculation },
+      });
+      Object.assign(raw.screen_ready, { season_day_starts: [CALENDAR.day_start] });
+      const page = mapPlayerPage(raw);
+      const day = page.recentDays[0];
+      expect(day.startTrophies).toBe(1234);
+      expect(day.startTrophiesSource).toBe(label);
+      expect(day.startTrophiesCalculation?.trophies).toBe(calculation?.end_trophies);
+      // A day in both lists reads the same, so the page data carries it once.
+      expect(day).toBe(page.seasonDays[0]);
+    },
+  );
   it("reads the automatic defense loss and other Reset adjustments", () => {
     const load = (adjustments: unknown) => {
       const raw = reply();

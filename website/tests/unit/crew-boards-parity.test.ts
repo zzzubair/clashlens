@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { SeasonSummary } from "../../app/components/SeasonSummary";
+import { signedSide } from "../../app/lib/number-format";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 // The same saved days the Python crew boards test reads
@@ -34,7 +35,6 @@ const fixture = JSON.parse(
 describe("crew and player summary averages", () => {
   for (const saved of fixture.players) {
     it(`renders ${saved.tag}'s Python totals with their played-day denominator`, () => {
-      const result = saved.expected.season;
       const side = (s: Side) => ({
         count: s.battles,
         stars: [0, 0, 0, 0],
@@ -42,15 +42,17 @@ describe("crew and player summary averages", () => {
         perDay: s.total / s.days,
         perBattle: s.total / s.battles,
       });
-      const html = renderToStaticMarkup(
-        createElement(SeasonSummary, {
-          title: "Season summary",
-          rank: ["Rank", "Unknown"],
-          trophies: ["Trophies", "Unknown"],
-          attack: side(result.attack),
-          defense: side(result.defense),
-        }),
-      );
+      const render = (result: typeof saved.expected.season) =>
+        renderToStaticMarkup(
+          createElement(SeasonSummary, {
+            title: "Season summary",
+            rank: ["Rank", "Unknown"],
+            trophies: ["Trophies", "Unknown"],
+            attack: side(result.attack),
+            defense: side(result.defense),
+          }),
+        );
+      const html = render(saved.expected.season);
       const [offense, defense, attack, defended] =
         saved.tag === "#2PP"
           ? ["+60", "−31", "+34.3", "−30.7"]
@@ -59,6 +61,11 @@ describe("crew and player summary averages", () => {
       expect(html).toContain(`Defense per day</dt><dd>${defense}`);
       expect(html).toContain(`<dt>Per attack</dt><dd>${attack}</dd>`);
       expect(html).toContain(`<dt>Per defense</dt><dd>${defended}</dd>`);
+      // The week's totals use the same played-day denominator.
+      const week = saved.expected.week;
+      const weekHtml = render(week);
+      expect(weekHtml).toContain(signedSide(week.attack.total / week.attack.days, 1));
+      expect(weekHtml).toContain(signedSide(week.defense.total / week.defense.days, -1));
     });
   }
 });
