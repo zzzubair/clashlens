@@ -7,12 +7,13 @@ import json
 from datetime import UTC, datetime, timedelta
 
 import psycopg
+from collector_db_postgres_support import NOW, _handoff, _hash, _player
+from collector_db_postgres_support import NOW as _PLAYER_NOW
 from domain_test_support import domain_database, store_observation
-from test_collector_db_postgres import NOW, _handoff, _hash, _player
-from test_first_battle_log_postgres import LOSS, WIN, _log
-from test_reconciliation_postgres import _profile
-from test_reset_reading_before_loss_postgres import DAY_B, DAY_C, DAY_D
-from test_reset_settlement_state_postgres import TAG, _process, _reset_work
+from first_battle_log_postgres_support import LOSS, WIN, _log
+from reconciliation_postgres_support import _profile
+from reset_reading_before_loss_postgres_support import DAY_B, DAY_C, DAY_D
+from reset_settlement_state_postgres_support import TAG, _process, _reset_work
 
 from clashlens import claimed_jobs, queue_refresh, reconciliation_db
 from clashlens.background_pacing import DAY_RECHECK_PRIORITY
@@ -49,7 +50,7 @@ def test_unchanged_battle_log_check_after_a_profile_read_queues_the_day(
     # An unchanged check saves no response, yet covers a profile read since
     # the last check: the day that ended at the latest Reset is queued once.
     with domain_database(database_url) as connection_info:
-        player_id = _player(connection_info)
+        player_id = _player(connection_info, now=_PLAYER_NOW)
         database = CollectorDatabase(connection_info)
         for key, response_hash, endpoint, minutes in (
             ("log-1", _hash("a"), "battle_log", 0),

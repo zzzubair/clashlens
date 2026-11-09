@@ -5,7 +5,10 @@ from datetime import timedelta
 
 import pytest
 from domain_test_support import domain_database, repair_season, store_observation, text
-from test_reconciliation_postgres import (
+from no_opponent_rows_postgres_support import (
+    NO_OPPONENT_ROW,
+)
+from reconciliation_postgres_support import (
     BATTLE_FIXTURE,
     DAY_END,
     DAY_START,
@@ -17,19 +20,6 @@ from test_reconciliation_postgres import (
 from clashlens import battle, ranked_day_inputs, reset_baselines
 from clashlens.db import PYTHON_BACKFILL_PRIORITY
 from clashlens.domain import ranked_day_for
-
-# Live logs keep this row for days: no opponent, no battle.
-NO_OPPONENT_ROW = {
-    "battleType": "legend",
-    "attack": False,
-    "battleTime": 0,
-    "battleTimestamp": "20260803T110000.000Z",
-    "stars": 0,
-    "destructionPercentage": 0,
-    "opponentPlayerTag": None,
-    "opponentName": None,
-    "armyShareCode": None,
-}
 
 
 def _log(odd_row: dict, *, with_battle: bool) -> bytes:

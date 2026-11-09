@@ -14,9 +14,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-import test_reset_scenarios_postgres as scenarios
+import reset_scenarios_postgres_support as scenarios
 from domain_test_support import domain_database
-from test_reset_scenarios_postgres import (
+from reset_scenarios_postgres_support import (
     SEASON,
     Battle,
     _ranked,

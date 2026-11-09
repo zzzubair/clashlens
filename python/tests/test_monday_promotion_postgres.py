@@ -17,8 +17,8 @@ from datetime import timedelta
 
 import psycopg
 from domain_test_support import domain_database, text
-from test_league_week_days_postgres import _public_days
-from test_reset_scenarios_postgres import (
+from league_week_days_postgres_support import _public_days
+from reset_scenarios_postgres_support import (
     PREVIOUS_SEASON,
     SEASON,
     Story,

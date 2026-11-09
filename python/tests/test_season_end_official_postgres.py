@@ -15,7 +15,7 @@ from datetime import timedelta
 
 import psycopg
 from domain_test_support import as_api_role, domain_database, text
-from test_reset_scenarios_postgres import (
+from reset_scenarios_postgres_support import (
     PREVIOUS_SEASON,
     SEASON,
     _ranked,

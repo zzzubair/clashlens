@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from test_collector import _Client, _collector, _Spool, _Store
+from collector_support import _Client, _collector, _Spool, _Store
 
 from clashlens.battle_log_schedule import (
     CAUGHT_UP,

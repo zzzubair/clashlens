@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 import pytest
-from test_ops_keep_running import OPS, stack  # noqa: F401 - the shared fake stack
+from ops_keep_running_support import OPS
 
 ROOT = OPS.parent
 KNOWN = sorted(
@@ -71,7 +71,7 @@ with open(os.environ["CALLS"], "a") as calls:
 """
 
 
-def up(stack, applied: list[int], failing: str = "", reject: str = ""):  # noqa: F811
+def up(stack, applied: list[int], failing: str = "", reject: str = ""):
     tmp_path = stack["tmp_path"]
     fake = tmp_path / "bin"
     fake.mkdir(exist_ok=True)
@@ -103,7 +103,7 @@ def up(stack, applied: list[int], failing: str = "", reject: str = ""):  # noqa:
 
 
 def test_a_release_missing_an_applied_migration_is_refused_before_stopping(
-    stack,  # noqa: F811
+    stack,
 ) -> None:
     result = up(stack, [*KNOWN, 999])
     assert result.returncode != 0
@@ -112,7 +112,7 @@ def test_a_release_missing_an_applied_migration_is_refused_before_stopping(
     assert "psql trial" not in result.calls
 
 
-def test_a_failing_migration_leaves_the_old_release_running(stack) -> None:  # noqa: F811
+def test_a_failing_migration_leaves_the_old_release_running(stack) -> None:
     # Tried in a transaction that is rolled back: nothing is applied. The
     # newest tried migration fails on its first line, whichever that is.
     result = up(stack, TRIED_PENDING, failing=NEWEST_TRIED.read_text().splitlines()[0])
@@ -127,7 +127,7 @@ def test_a_failing_migration_leaves_the_old_release_running(stack) -> None:  # n
 
 
 def test_a_failed_up_after_stopping_restarts_the_alert_schedule(
-    stack,  # noqa: F811
+    stack,
 ) -> None:
     # The newest tried migration is still to apply: it is only tried, and
     # rolled back, before anything stops. This test's up then fails after
@@ -149,7 +149,7 @@ def test_a_failed_up_after_stopping_restarts_the_alert_schedule(
     assert intent.read_text() == "failed\n"
 
 
-def test_a_rejected_unit_file_stops_nothing_and_changes_nothing(stack) -> None:  # noqa: F811
+def test_a_rejected_unit_file_stops_nothing_and_changes_nothing(stack) -> None:
     result = up(stack, KNOWN, reject="1")
     assert result.returncode != 0
     assert "unrendered value in clashlens-worker.container" in result.stderr

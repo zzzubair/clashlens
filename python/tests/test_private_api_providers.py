@@ -5,9 +5,9 @@ import time
 from datetime import UTC, datetime
 
 import pytest
+from api_migration_support import migrated_production_database
 from fastapi.testclient import TestClient
-from test_api_migration import migrated_production_database
-from test_private_api import signed_headers
+from private_api_support import signed_headers
 
 from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase

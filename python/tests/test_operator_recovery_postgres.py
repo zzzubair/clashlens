@@ -7,7 +7,7 @@ from time import monotonic
 
 import psycopg
 import pytest
-from test_api_migration import migrated_production_database
+from api_migration_support import migrated_production_database
 
 from clashlens.cli import main
 from clashlens.collector_db import (

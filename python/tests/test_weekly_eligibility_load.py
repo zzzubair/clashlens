@@ -18,7 +18,7 @@ from time import monotonic
 import psycopg
 import pytest
 from domain_test_support import domain_database
-from test_weekly_eligibility_postgres import MONDAY
+from weekly_eligibility_postgres_support import MONDAY
 
 from clashlens.collector import Collector
 from clashlens.collector_db import CollectorDatabase, CollectorIntent

@@ -11,9 +11,7 @@ import json
 from datetime import timedelta
 from threading import Timer
 
-from domain_test_support import domain_database, store_observation, text
-from fastapi.testclient import TestClient
-from test_army_analytics_publication_postgres import (
+from army_analytics_publication_postgres_support import (
     DAY_START,
     DEFENDER_CODE,
     FIXTURE_CODE,
@@ -25,11 +23,13 @@ from test_army_analytics_publication_postgres import (
     _publish_day,
     _row,
 )
-from test_army_analytics_publication_seasons_postgres import (
+from army_analytics_publication_seasons_postgres_support import (
     _insert_confirmed_anchor,
     _seed_frozen_snapshot_at,
 )
-from test_private_api import NOW_SECONDS, TS_CURRENT, signed_headers
+from domain_test_support import domain_database, store_observation, text
+from fastapi.testclient import TestClient
+from private_api_support import NOW_SECONDS, TS_CURRENT, signed_headers
 
 from clashlens import army_rank_bands
 from clashlens.api import create_app

@@ -5,10 +5,8 @@ import json
 import socket
 import threading
 from concurrent.futures import ThreadPoolExecutor, wait
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
-from typing import ClassVar
 
 import pytest
 from minio.error import S3Error, ServerError
@@ -24,64 +22,6 @@ from clashlens.archive import (
 )
 
 FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
-
-
-class _S3Handler(BaseHTTPRequestHandler):
-    objects: ClassVar[dict[str, bytes]] = {}
-    get_count = 0
-    put_count = 0
-
-    def log_message(self, *_args: object) -> None:
-        return
-
-    def do_GET(self) -> None:
-        key = self.path.split("?", 1)[0].removeprefix("/evidence/")
-        body = self.objects.get(key)
-        if body is None:
-            self.send_response(404)
-            self.end_headers()
-            return
-        type(self).get_count += 1
-        self.send_response(200)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("X-Amz-Meta-Sha256", hashlib.sha256(body).hexdigest())
-        self.end_headers()
-        self.wfile.write(body)
-
-    def do_PUT(self) -> None:
-        key = self.path.split("?", 1)[0].removeprefix("/evidence/")
-        if key in self.objects:
-            self.send_response(412)
-            self.end_headers()
-            return
-        length = int(self.headers.get("Content-Length", "0"))
-        body = self.rfile.read(length)
-        type(self).put_count += 1
-        self.objects[key] = body
-        self.send_response(200)
-        self.send_header("Content-Length", "0")
-        self.end_headers()
-
-
-@pytest.fixture()
-def archive_server():
-    body = FIXTURE.read_bytes()
-    digest = hashlib.sha256(body).hexdigest()
-    key = f"sha256/{digest[:2]}/{digest}"
-    handler = type(
-        "FixtureS3Handler",
-        (_S3Handler,),
-        {"objects": {key: body}, "get_count": 0, "put_count": 0},
-    )
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"127.0.0.1:{server.server_port}", f"s3://evidence/{key}", digest, handler
-    finally:
-        server.shutdown()
-        thread.join(timeout=2)
-        server.server_close()
 
 
 def test_spool_reader_requires_matching_database_archive_instance_before_reuse(tmp_path: Path) -> None:
@@ -358,7 +298,6 @@ def test_s3_archive_reader_rejects_unbounded_resource_settings() -> None:
             secret_key="test",
             read_timeout_seconds=301,
         )
-
 
 
 class _FlakyArchive(S3ArchiveReader):

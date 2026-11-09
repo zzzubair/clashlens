@@ -152,4 +152,3 @@ def test_types_without_variants_and_every_variant_id_is_used_once() -> None:
     assert variant(OTHER, heroes(duke=(60, 53))) == 0
     ids = [v for listed in VARIANTS.values() for v, _name, _items in listed]
     assert len(ids) == len(set(ids)) == 41 and 0 not in ids
-

@@ -8,9 +8,9 @@ from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock
 
 import psycopg
+from collector_support import _Client, _collector, _Spool, _Store
 from domain_test_support import domain_database
 from psycopg_pool import PoolTimeout
-from test_collector import _Client, _collector, _Spool, _Store
 
 from clashlens.collector_db import CollectorDatabase
 from clashlens.collector_http import ApiKey, KeyPool

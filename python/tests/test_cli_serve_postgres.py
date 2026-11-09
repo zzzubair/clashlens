@@ -9,8 +9,8 @@ from uuid import uuid4
 
 import psycopg
 import pytest
+from api_migration_support import migrated_production_database
 from fastapi.testclient import TestClient
-from test_api_migration import migrated_production_database
 
 from clashlens import cli
 from clashlens.hmac_proof import SigningInput, sign

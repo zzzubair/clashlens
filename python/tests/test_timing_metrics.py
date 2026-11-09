@@ -5,8 +5,8 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from collector_support import _Client, _collector, _Spool, _Store
 from psycopg.errors import DeadlockDetected
-from test_collector import _Client, _collector, _Spool, _Store
 
 from clashlens import stage_metrics, worker
 from clashlens.archive import ArchiveReadResult

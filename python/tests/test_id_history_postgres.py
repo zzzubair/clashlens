@@ -6,14 +6,7 @@ from datetime import timedelta
 
 import psycopg
 import pytest
-from domain_test_support import (
-    domain_database,
-    enable_direct_army_fixture,
-    store_observation,
-)
-from fastapi.testclient import TestClient
-from psycopg.types.json import Jsonb
-from test_army_analytics_publication_postgres import (
+from army_analytics_publication_postgres_support import (
     DAY_START,
     SEASON_ID,
     _event,
@@ -21,18 +14,24 @@ from test_army_analytics_publication_postgres import (
     _publish_day,
     _row,
 )
-from test_army_history import fact
-from test_army_season_summaries_postgres import DAY0 as MEASURE_DAY_START
-from test_army_season_summaries_postgres import SEASON as MEASURE_SEASON
-from test_army_season_summaries_postgres import _seed
-from test_private_api import NOW, NOW_SECONDS, TS_CURRENT, signed_headers
-from test_reconciliation_postgres import _processor as _real_processor
-from test_reconciliation_postgres import _store_baseline_pair
-from test_season_detail_retirement_postgres import (  # noqa: F401 - autouse history substitution
-    _assume_expanded_history,
+from army_history_support import fact
+from army_season_summaries_postgres_support import DAY0 as MEASURE_DAY_START
+from army_season_summaries_postgres_support import SEASON as MEASURE_SEASON
+from army_season_summaries_postgres_support import _seed
+from domain_test_support import (
+    domain_database,
+    enable_direct_army_fixture,
+    store_observation,
+)
+from fastapi.testclient import TestClient
+from player_season_summaries_postgres_support import _player
+from private_api_support import NOW, NOW_SECONDS, TS_CURRENT, signed_headers
+from psycopg.types.json import Jsonb
+from reconciliation_postgres_support import _processor as _real_processor
+from reconciliation_postgres_support import _store_baseline_pair
+from season_detail_retirement_postgres_support import (
     _ensure_canonical_anchor,
     _full_season,
-    _player,
     _seed_army,
 )
 

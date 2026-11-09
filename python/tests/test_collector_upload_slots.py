@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 
 import psycopg
 import pytest
-from test_collector import _Client, _collector, _Spool, _Store
+from collector_support import _Client, _collector, _Spool, _Store
 
 import clashlens.collector as collector_module
 from clashlens import collector_commits

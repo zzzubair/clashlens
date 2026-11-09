@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import ClassVar
 
 import pytest
+from alerts_support import runtime  # noqa: F401 - shared pytest fixture
+from discord_bot_support import store  # noqa: F401 - shared pytest fixture
+from ops_keep_running_support import stack  # noqa: F401 - shared pytest fixture
 
 FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
 TEST_GROUPS = ("1", "2", "3", "4")
@@ -45,6 +48,7 @@ def pytest_collection_modifyitems(config, items) -> None:
 class _FixtureS3Handler(BaseHTTPRequestHandler):
     objects: ClassVar[dict[str, bytes]] = {}
     get_count = 0
+    put_count = 0
 
     def log_message(self, format: str, *args: object) -> None:
         del format, args
@@ -86,6 +90,21 @@ class _FixtureS3Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
 
+    def do_PUT(self) -> None:
+        key = self.path.split("?", 1)[0].removeprefix("/evidence/")
+        if key in self.objects:
+            self.send_response(412)
+            self.end_headers()
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        type(self).put_count += 1
+        self.objects[key] = body
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+
 @pytest.fixture()
 def archive_server():
     body = FIXTURE.read_bytes()
@@ -94,7 +113,7 @@ def archive_server():
     handler = type(
         "FixtureS3Handler",
         (_FixtureS3Handler,),
-        {"objects": {key: body}, "get_count": 0},
+        {"objects": {key: body}, "get_count": 0, "put_count": 0},
     )
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     # A short poll interval lets shutdown() return in milliseconds instead of
@@ -151,3 +170,16 @@ def worker_maintenance_services(monkeypatch):
         (worker.live_board, "refresh_live_unplayed"),
     ):
         monkeypatch.setattr(target, name, lambda *_args, **_kwargs: None)
+
+
+@pytest.fixture
+def site(database_url: str):
+    from crews_postgres_support import Site
+    from domain_test_support import domain_database
+
+    with domain_database(database_url) as connection_info:
+        built = Site(connection_info)
+        try:
+            yield built
+        finally:
+            built.close()

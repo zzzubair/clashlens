@@ -17,7 +17,7 @@ from dataclasses import replace
 from datetime import timedelta
 
 import pytest
-from test_reconciliation import DAY, _coverage, _input
+from reconciliation_support import DAY, _battles, _coverage, _input
 
 from clashlens.domain import ranked_day_for
 from clashlens.reading_rule import Reading
@@ -27,14 +27,6 @@ from clashlens.reconciliation import (
     ReconciliationResult,
     reconcile_ranked_day,
 )
-
-
-def _battles(lens: str, amounts: tuple[int, ...]) -> tuple[BattleContribution, ...]:
-    return tuple(
-        BattleContribution(f"{lens}-{n}", lens, amount, battle_timestamp=DAY.start + timedelta(hours=n + 1))
-        for n, amount in enumerate(amounts)
-    )
-
 
 # The four players' Sundays: attacks, defenses, the Reset reading and the
 # 05:15 reading.
@@ -60,7 +52,7 @@ def _sunday(attacks: tuple[int, ...], defenses: tuple[int, ...], reset_reading: 
         next_start_trophies=reset_reading,
         boundary_kind="weekly",
         previous_day=PreviousRankedDay(True, 0, 0, 0, battles_known=True),
-        contributions=_battles("offense", attacks) + _battles("defense", defenses),
+        contributions=_battles("offense", *attacks) + _battles("defense", *defenses),
         start_baseline_evidence={"start_trophies_source": "season_rule"} if first else {},
         end_baseline_evidence={"profile": {"observed_at": (DAY.end + timedelta(minutes=4)).isoformat()}},
         readings=(Reading(DAY.end + timedelta(minutes=15), later_reading),),
@@ -148,7 +140,7 @@ def test_only_a_weekly_reset_reading_before_the_raise_proves_the_end(
         next_start_trophies=4800,
         boundary_kind=boundary,
         previous_day=PreviousRankedDay(True, 0, 0, 0, battles_known=True),
-        contributions=_battles("offense", (40,)) + _battles("defense", (30,) * 8),
+        contributions=_battles("offense", *(40,)) + _battles("defense", *(30,) * 8),
         start_baseline_evidence={"start_trophies_source": "season_rule"},
         end_baseline_evidence={"profile": {"observed_at": (DAY.end + timedelta(minutes=4)).isoformat()}},
     ))
@@ -231,7 +223,7 @@ def test_a_later_reading_before_the_raise_proves_the_end(boundary: str, proven: 
         next_start_trophies=4800,
         boundary_kind=boundary,
         previous_day=PreviousRankedDay(True, 0, 0, 0, battles_known=True),
-        contributions=_battles("defense", (30,) * 8) + (BattleContribution(
+        contributions=_battles("defense", *(30,) * 8) + (BattleContribution(
             "offense-late", "offense", 40, battle_timestamp=DAY.end - timedelta(seconds=330)),),
         start_baseline_evidence={"start_trophies_source": "season_rule"},
         end_baseline_evidence={"profile": {"observed_at": (DAY.end + timedelta(minutes=4)).isoformat()}},
@@ -288,7 +280,7 @@ def test_a_charge_shown_before_the_raise_stands_on_the_day_s_earlier_readings() 
         next_start_trophies=4960,
         boundary_kind="weekly",
         previous_day=PreviousRankedDay(True, 8, 240, 0),
-        contributions=_battles("offense", (40,) * 6),
+        contributions=_battles("offense", *(40,) * 6),
         end_baseline_evidence={"profile": {"observed_at": (DAY.end + timedelta(minutes=4)).isoformat()}},
         readings=(Reading(DAY.start + timedelta(hours=12), 5200), Reading(DAY.end + timedelta(minutes=20), 5000)),
     ))

@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
-from test_collector import _Client, _collector, _Spool, _Store
+from collector_support import _Client, _collector, _Spool, _Store
 
 from clashlens import collector_http
 from clashlens.collector_db import CollectorWork

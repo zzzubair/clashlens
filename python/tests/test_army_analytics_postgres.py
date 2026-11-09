@@ -6,15 +6,16 @@ from unittest.mock import MagicMock
 
 import psycopg
 import pytest
+from army_analytics_publication_postgres_support import _army_job
 from domain_test_support import (
     domain_database,
     enable_direct_army_fixture,
     store_observation,
 )
 from fastapi.testclient import TestClient
+from private_api_support import NOW_SECONDS, TS_CURRENT, signed_headers
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.types.json import Jsonb
-from test_private_api import NOW_SECONDS, TS_CURRENT, signed_headers
 
 from clashlens import api_analytics, army_ingestion, boundary_publication
 from clashlens.api import create_app
@@ -416,19 +417,6 @@ def _mark_day_complete(database: Database, *, trophies: int = 6000) -> None:
         )
         boundary_publication._enqueue_army_analytics(database, connection, ranked_day_start=DAY_START)
         connection.commit()
-
-
-def _job_id(database: Database) -> int:
-    with database.pool.connection() as connection:
-        return int(
-            connection.execute(
-                """
-                SELECT id FROM python_processing_jobs
-                WHERE work_type = 'build_army_analytics'
-                ORDER BY id DESC LIMIT 1
-                """
-            ).fetchone()[0]
-        )
 
 
 def _fact_insert_calls(connection_info: str) -> int | None:
@@ -897,7 +885,7 @@ def test_completed_day_publishes_facts_without_legacy_rollups(
                 )
             _mark_day_complete(database)
 
-            analytics_job = _job_id(database)
+            analytics_job = _army_job(database)
             with database.pool.connection() as connection:
                 assert (
                     connection.execute(
@@ -957,7 +945,7 @@ def test_completed_day_publishes_facts_without_legacy_rollups(
                 processor.process_job(correction_job, owner="correction").outcome
                 == "processed"
             )
-            corrected_job = _job_id(database)
+            corrected_job = _army_job(database)
             assert corrected_job != analytics_job
             assert (
                 processor.process_job(corrected_job, owner="corrected").outcome
@@ -1023,7 +1011,7 @@ def test_army_fact_retries_leave_legacy_rollups_untouched(
             )
             _mark_day_complete(database, trophies=6100)
             assert (
-                processor.process_job(_job_id(database), owner="first-build").outcome
+                processor.process_job(_army_job(database), owner="first-build").outcome
                 == "processed"
             )
 
@@ -1058,7 +1046,7 @@ def test_army_fact_retries_leave_legacy_rollups_untouched(
 
             assert (
                 processor.process_job(
-                    _job_id(database), owner="replacement-build"
+                    _army_job(database), owner="replacement-build"
                 ).outcome
                 == "processed"
             )
@@ -1110,7 +1098,7 @@ def test_army_fact_build_rolls_back_atomically(
                 raise ValueError("dependency_not_ready: forced day failure")
 
             monkeypatch.setattr(army_ingestion, "_ensure_army_day_dependency", fail_day)
-            result = processor.process_job(_job_id(database), owner="atomic-build")
+            result = processor.process_job(_army_job(database), owner="atomic-build")
             assert result.outcome == "retrying"
             with database.pool.connection() as connection:
                 assert (

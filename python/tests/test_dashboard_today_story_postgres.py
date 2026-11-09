@@ -26,7 +26,7 @@ from typing import Any
 import psycopg
 import pytest
 from domain_test_support import as_api_role, domain_database
-from test_reset_scenarios_postgres import _story, attacks, defenses
+from reset_scenarios_postgres_support import _story, attacks, defenses
 
 from clashlens import api_dashboard, api_leaderboard
 from clashlens.api_db import ApiDatabase

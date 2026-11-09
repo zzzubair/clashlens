@@ -9,8 +9,12 @@ from typing import Any
 
 import psycopg
 import pytest
+from boundary_manifest_postgres_support import (
+    PLAYERS,
+    per_player_inputs,
+    seed_population,
+)
 from domain_test_support import domain_database, text
-from test_boundary_manifest_postgres import PLAYERS, per_player_inputs, seed_population
 
 from clashlens import boundary, boundary_members
 from clashlens.boundary_manifest import (

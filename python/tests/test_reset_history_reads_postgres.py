@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import psycopg
 import pytest
 from domain_test_support import domain_database
-from test_reset_scenarios_postgres import (
+from reset_scenarios_postgres_support import (
     SEASON,
     _even,
     _ranked,

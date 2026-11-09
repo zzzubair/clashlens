@@ -6,9 +6,16 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from discord_bot_postgres_support import DISCORD_ID, _account
 from domain_test_support import as_api_role, domain_database
-from test_discord_bot_postgres import DISCORD_ID, _account
-from test_reset_scenarios_postgres import SEASON, Player, Story, attacks, day, defenses
+from reset_scenarios_postgres_support import (
+    SEASON,
+    Player,
+    Story,
+    attacks,
+    day,
+    defenses,
+)
 
 from bot.commands import Commands
 from bot.replies import Site, season_days
@@ -53,7 +60,7 @@ def test_stats_totals_every_saved_day_and_never_hides_a_missing_one(
         story.run_worker()
         story.wait(timedelta(hours=1))
         board = story.served_board(day_3)
-        from test_player_facts_postgres import served_player
+        from player_facts_postgres_support import served_player
 
         page = served_player(story, FULL, day_3 + timedelta(minutes=30))
         ready = page["screen_ready"]

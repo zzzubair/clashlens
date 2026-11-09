@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from test_reconciliation import DAY, _coverage, _input
+from reconciliation_support import DAY, _coverage, _input
 
 from clashlens import loss_rule
 from clashlens.day_result import (

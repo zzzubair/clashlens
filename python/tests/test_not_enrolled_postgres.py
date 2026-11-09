@@ -13,15 +13,15 @@ from datetime import timedelta
 
 import psycopg
 from domain_test_support import domain_database, store_observation
-from test_first_battle_log_postgres import (
+from first_battle_log_postgres_support import (
     DAY_1,
     DAY_2,
     WIN,
     _log,
     _new_season_profile,
 )
-from test_reconciliation_postgres import _profile
-from test_reset_settlement_state_postgres import TAG, _process, _reset_work
+from reconciliation_postgres_support import _profile
+from reset_settlement_state_postgres_support import TAG, _process, _reset_work
 
 DAY_3 = DAY_2 + timedelta(days=1)
 

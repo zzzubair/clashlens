@@ -10,6 +10,9 @@ from pathlib import Path
 
 import psycopg
 import pytest
+from collector_db_postgres_support import _handoff
+from collector_support import _Client, _Spool
+from collector_support import _collector as _fake_collector
 from domain_test_support import (
     _processor,
     decide_leagues,
@@ -18,9 +21,9 @@ from domain_test_support import (
     text,
 )
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
-from test_collector import _Client, _Spool
-from test_collector import _collector as _fake_collector
-from test_collector_db_postgres import _handoff
+from weekly_eligibility_postgres_support import (
+    MONDAY,
+)
 
 from clashlens import profile
 from clashlens.collector_db import CollectorDatabase
@@ -29,7 +32,6 @@ from clashlens.history import prune_completed_history
 from clashlens.profile import PROFILE_PARSER_VERSION
 from clashlens.weekly_eligibility import next_check
 
-MONDAY = datetime(2026, 10, 12, 5, tzinfo=UTC)
 PROFILE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
 
 

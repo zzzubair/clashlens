@@ -5,6 +5,9 @@ from datetime import UTC, datetime, timedelta
 
 import psycopg
 from domain_test_support import domain_database
+from frozen_board_locator_postgres_support import (
+    _rows_read,
+)
 
 from clashlens import api_leaderboard
 from clashlens.api_db import ApiDatabase
@@ -102,16 +105,6 @@ def _seed_published_boards(connection_info: str) -> None:
                 (manifest_id, board),
             )
         connection.execute("ANALYZE")
-
-
-def _rows_read(plan: dict, relation: str) -> int:
-    read = 0
-    if plan.get("Relation Name") == relation:
-        per_loop = plan["Actual Rows"] + plan.get("Rows Removed by Filter", 0)
-        read += round(per_loop * plan["Actual Loops"])
-    for child in plan.get("Plans", []):
-        read += _rows_read(child, relation)
-    return read
 
 
 def test_daily_board_lookup_reads_one_input_row_per_board(

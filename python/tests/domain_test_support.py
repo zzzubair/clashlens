@@ -539,8 +539,6 @@ def _live_battle_row(
     }
 
 
-
-
 class _WorkerRoleDatabase(Database):
     """Test database whose complete pool runs as the production worker role."""
 

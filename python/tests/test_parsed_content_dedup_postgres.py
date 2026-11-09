@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import psycopg
 import pytest
+from discovery_history_prune_postgres_support import _attach_complete_work
 from domain_test_support import (
     _processor,
     apply_migration,
@@ -18,7 +19,9 @@ from domain_test_support import (
     store_observation,
     text,
 )
-from test_discovery_history_prune_postgres import _attach_complete_work
+from parsed_content_dedup_postgres_support import (
+    _replay_job,
+)
 
 from clashlens import (
     alerts,
@@ -36,30 +39,6 @@ PROFILE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.
 BATTLE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_battle_log_v1.json"
 RANKING_FIXTURE = Path(__file__).parents[1] / "testdata" / "global_top_200_v1.json"
 NOW = datetime(2026, 8, 6, 6, tzinfo=UTC)
-
-
-def _replay_job(
-    connection: psycopg.Connection, observation_id: int, parser_version: str
-) -> int:
-    return connection.execute(
-        """
-        INSERT INTO python_processing_jobs (
-            replay_observation_id, work_type, deduplication_key, input_json,
-            parser_version, processing_version, domain_rule_version,
-            analytics_rule_version
-        ) VALUES (
-            %s, 'replay_observation', %s, '{\"replay_request_id\": 1}'::jsonb,
-            %s, 'clashlens-domain-processing-v1', 'clashlens-domain-rules-v1',
-            'legend-analytics-v1'
-        )
-        RETURNING id
-        """,
-        (
-            observation_id,
-            f"dedup-replay:{observation_id}:{parser_version}",
-            parser_version,
-        ),
-    ).fetchone()[0]
 
 
 def test_snapshot_manifest_uses_owning_ranking_version_observed_at(
@@ -542,9 +521,9 @@ def test_concurrent_profiles_for_one_player_complete_without_retry(
 def test_profile_confirmation_backfill_preserves_proven_checks(
     database_url: str, archive_server
 ) -> None:
-    from test_api_db_public_ops import NOW as accepted_at
-    from test_api_db_public_ops import seed_profile
-    from test_api_migration import ROOT, migrated_production_database
+    from api_db_public_ops_support import NOW as accepted_at
+    from api_db_public_ops_support import seed_profile
+    from api_migration_support import ROOT, migrated_production_database
 
     confirmed_at = accepted_at + timedelta(hours=2)
     with migrated_production_database(database_url) as connection_info:
@@ -606,8 +585,8 @@ def test_backfilled_profile_identifier_confirms_checks_after_repair(
 ) -> None:
     import hashlib
 
+    from api_migration_support import ROOT, migrated_production_database
     from psycopg.conninfo import conninfo_to_dict, make_conninfo
-    from test_api_migration import ROOT, migrated_production_database
 
     from clashlens.collector_db import CollectorDatabase, ResponseHandoff
 

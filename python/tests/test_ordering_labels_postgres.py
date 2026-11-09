@@ -4,14 +4,14 @@ import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from domain_test_support import domain_database, seed_battles, store_observation, text
-from psycopg.types.json import Jsonb
-from test_boundary_publication_postgres import (
+from boundary_publication_postgres_support import (
     BOUNDARY,
     DAY_START,
     _player_and_version,
     _sweep_with_members,
 )
+from domain_test_support import domain_database, seed_battles, store_observation, text
+from psycopg.types.json import Jsonb
 
 from clashlens import (
     army_ingestion,

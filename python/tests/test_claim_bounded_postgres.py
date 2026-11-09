@@ -4,12 +4,12 @@ import re
 
 import psycopg
 import pytest
-from domain_test_support import domain_database
-from test_claim_jobs_postgres import (
+from claim_jobs_postgres_support import (
     _insert_job,
     _insert_observation,
     _production_database,
 )
+from domain_test_support import domain_database
 
 from clashlens.db import (
     PYTHON_BACKFILL_PRIORITY,

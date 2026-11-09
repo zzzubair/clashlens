@@ -10,7 +10,7 @@ from dataclasses import replace
 from datetime import timedelta
 
 import pytest
-from test_reconciliation import DAY, _input
+from reconciliation_support import DAY, _battles, _input
 
 from clashlens.reading_rule import Reading, contradiction_during_day
 from clashlens.reconciliation import (
@@ -55,13 +55,6 @@ def test_day_1_read_before_its_reset_landed_stays_complete(noon: int, state: str
     )
 
     assert result.state == state
-
-
-def _battles(lens: str, *amounts: int) -> tuple[BattleContribution, ...]:
-    return tuple(
-        BattleContribution(f"{lens}-{n}", lens, amount, battle_timestamp=DAY.start + timedelta(hours=n + 1))
-        for n, amount in enumerate(amounts)
-    )
 
 
 @pytest.mark.parametrize(("official", "state"), [(5343, "Complete"), (None, "Inconsistent")])

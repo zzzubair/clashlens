@@ -15,14 +15,14 @@ from datetime import timedelta
 
 import psycopg
 from domain_test_support import domain_database, store_observation, text
-from test_reconciliation_postgres import (
+from reconciliation_postgres_support import (
     DAY_END,
     DAY_START,
     _processor,
     _profile,
     _seed_reset_collection_identity,
 )
-from test_snapshot_publication_postgres import _process_snapshot_and_analytics
+from snapshot_publication_postgres_support import _process_snapshot_and_analytics
 
 PLAYERS = ("#2PP", "#8PP", "#9PP", "#YPP")
 
