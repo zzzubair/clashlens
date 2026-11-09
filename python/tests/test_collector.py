@@ -602,6 +602,8 @@ def test_intent_lane_refills_around_active_rows_without_overadmitting(
         (["discovery_profile"] * 6, [1, 2]),
         # Due discovery checks come first and keep their own slots.
         (["discovery_profile"] * 2 + ["reset_settlement"] * 6, [1, 2, 3, 4, 5, 6]),
+        # A full discovery queue never keeps settlement checks from theirs (9 Nov 2026).
+        (["discovery_profile"] * 6 + ["reset_settlement"] * 6, [1, 2, 7, 8, 9, 10]),
         # Same-due Season-end history checks behind them use the other slots.
         (["reset_settlement"] * 6 + ["league_history_refresh"] * 3, [1, 2, 3, 4, 7, 8]),
     ],
@@ -623,9 +625,11 @@ def test_reset_and_settlement_checks_use_the_regular_slots_while_other_work_keep
             self, limit: int, _now: datetime | None = None, *,
             interactive: bool | None = None, reset_limit: int | None = None, **_kwargs: object,
         ) -> list[CollectorIntent]:
+            # As the database query does: Reset work up to reset_limit, other work up to limit.
             pairs = [intent for intent in due if intent.kind in {"reset_baseline", "reset_settlement"}]
-            capped = [] if reset_limit is None else pairs[reset_limit:]
-            return [] if interactive else [i for i in due if i not in capped][:limit]
+            other = [intent for intent in due if intent not in pairs]
+            picked = {*pairs[:reset_limit], *other[:limit]}
+            return [] if interactive else [i for i in due if i in picked]
 
         @staticmethod
         def begin_reset(_boundary: datetime, *, local_regular_inflight: int) -> None:
