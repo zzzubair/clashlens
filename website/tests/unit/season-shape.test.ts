@@ -26,6 +26,8 @@ describe("supplied Season membership", () => {
   });
   it("rejects an unknown membership kind", () => {
     const raw = cases.find((c) => c.rule === "shape_of")!.expected;
-    expect(() => mapShape({ ...raw, kinds: ["invented"] }, [])).toThrow();
+    expect(() =>
+      mapShape({ ...(raw as Record<string, unknown>), kinds: ["invented"] }, []),
+    ).toThrow();
   });
 });

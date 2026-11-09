@@ -50,7 +50,11 @@ describe("Python's recorded battle statistics", () => {
   });
   it("rejects missing, unknown and malformed statistics instead of inventing zero", () => {
     const valid = cases.find((c) => c.rule === "battle_statistics")!.expected;
-    for (const value of [null, {}, { ...valid, season: null }])
+    for (const value of [
+      null,
+      {},
+      { ...(valid as Record<string, unknown>), season: null },
+    ])
       expect(() => mapBattleStatistics(value)).toThrow();
   });
 });
