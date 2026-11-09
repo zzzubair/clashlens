@@ -1,4 +1,5 @@
 import { seasonStartAt } from "../components/SeasonReread";
+import { utcDate } from "./date-format";
 import type {
   HistoricalSeasonDayEntry,
   HistoricalSeasonSummary,
@@ -170,14 +171,7 @@ export function shapeOf<Day>(
 
 /** A Season day's date, such as "Mon 12 Oct". */
 export function seasonDayDate(shape: SeasonShape<unknown>, number: number) {
-  return new Date(shape.seasonStart + (number - 1) * DAY_MS)
-    .toLocaleDateString("en-GB", {
-      weekday: "short",
-      day: "numeric",
-      month: "short",
-      timeZone: "UTC",
-    })
-    .replace("Sept", "Sep");
+  return utcDate(shape.seasonStart + (number - 1) * DAY_MS, { weekday: true });
 }
 
 /** One plain line for each stretch of Legend I this Season. */
