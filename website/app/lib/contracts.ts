@@ -285,12 +285,6 @@ export interface RankedDaySummary {
   end: string | null;
   seasonId: string | null;
   state: "Live" | "Complete" | "Partial" | "Uncertain";
-  // How the saved day was proven: "exact" when its Reset reading matched
-  // every part of its calculation, "inferred" when a part is calculated.
-  confidence?: "exact" | "inferred" | "partial" | "uncertain" | null;
-  // Whether the day's battle logs form an unbroken chain, so no battle can
-  // be missing; separate from completeness, which also needs the readings.
-  logCoverage?: "complete" | "partial";
   startTrophies?: number | null;
   startTrophiesCalculation?: { trophies: number; netChange: number };
   startTrophiesSource?: "Calculated" | "Season rule";
@@ -322,7 +316,6 @@ export interface RankedDaySummary {
     state: "complete" | "partial" | "uncertain";
     reason: string;
   };
-  uncertainty: string[];
 }
 
 export interface PlayerLookup {
@@ -367,6 +360,7 @@ export interface PlayerPage {
     { span: number; counted: number; total: number | null }
   > | null;
   dashboardSeason: import("./dashboard-cards").SeasonData | null;
+  /** Only the Dashboard asks for this; null on any other page. */
   rivalSeason: {
     resetRank: number | null;
     hitRate: number | null;
@@ -374,7 +368,7 @@ export interface PlayerPage {
     defense: number | null;
     netPerDay: number | null;
     finishedDays: number | null;
-  };
+  } | null;
   calendar: Calendar;
   seasonShape: import("./season-shape").SeasonShape | null;
   historyDays: RankedDaySummary[];
@@ -395,8 +389,6 @@ export interface PlayerPage {
       "official_league_history" | "daily_publication" | "weekly_league_record";
     anchorObservedAt: string;
   } | null;
-  /** The calendar Season's weeks the weekly league record has decided, oldest first. */
-  seasonWeeks?: SeasonWeek[];
   currentDay: RankedDaySummary | null;
   /** When `currentDay` was published. */
   currentDayPublishedAt?: string | null;
@@ -416,7 +408,6 @@ export interface PlayerPage {
     label: string;
     detail: string;
   }>;
-  provenance: DataProvenance;
 }
 
 export type RefreshState = "queued" | "running" | "complete" | "unavailable" | "failed";
@@ -458,7 +449,7 @@ export interface HistoricalSeasonDayEntry {
   attacks: number | null;
   defenses: number | null;
   state: string;
-  confidence?: RankedDaySummary["confidence"];
+  confidence?: "exact" | "inferred" | "partial" | "uncertain" | null;
   coverage: string;
   hasAdjustment: boolean;
   adjustmentTotal: number | null;
@@ -557,7 +548,6 @@ export interface DayPresentation {
   battle_net_complete: number | null;
   is_current: boolean;
   show_in_player_log: boolean;
-  show_in_day_summary: boolean;
   live_routine: boolean;
   reason_codes: string[];
   caution_codes: string[];
@@ -566,7 +556,6 @@ export interface DayEnd {
   before_reset: number | null;
   after_reset: number | null;
   player_log: number | null;
-  dashboard: number | null;
   status: DayStatus;
   conflict: null | {
     battle_end: number;

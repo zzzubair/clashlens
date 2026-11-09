@@ -57,7 +57,6 @@ describe("player day honesty", () => {
     offenseEvents: [],
     defenseEvents: [],
     completeness: { state: "partial", reason: "missing_end_baseline" },
-    uncertainty: ["missing_end_baseline"],
   };
   const TODAY: RankedDaySummary = {
     ...ENDED_DAY,
@@ -76,7 +75,6 @@ describe("player day honesty", () => {
     state: "Live",
     offense: { attacks: 0, threeStars: 0, trophyGain: 0 },
     defense: { defenses: 0, threeStarsAgainst: 0, trophyLoss: 0 },
-    uncertainty: ["missing_end_battle_log_baseline", "missing_start_baseline"],
   };
 
   function page(days: RankedDaySummary[], extra: Partial<PlayerPage> = {}) {
@@ -220,7 +218,6 @@ describe("player day honesty", () => {
       "2026-09-30T05:00:00Z",
       [-40, -40, -40, -40, -40, -40, -40, -31],
     ),
-    uncertainty: ["missing_start_battle_log_baseline", "missing_start_baseline"],
   };
 
   it("calls a finished day with all 8 attacks and defenses calculated", async () => {
@@ -271,10 +268,6 @@ describe("player day honesty", () => {
         [40, 40, 40, 40, 40, 40, 40, 15],
       ),
       defenseEvents: battles("d27", "2026-10-03T05:00:00Z", [-40, -40, -40, -19]),
-      uncertainty: [
-        "missing_end_battle_log_baseline",
-        "automatic_defense_basis_unavailable",
-      ],
     };
     const today = dayHtml(await page([day27], { currentDay: day27 }), "2026-10-03");
     expect(today).toContain("In progress");
@@ -305,7 +298,6 @@ describe("player day honesty", () => {
       await page([
         {
           ...complete,
-          confidence: "exact",
           presentation: { ...VERIFIED, battle_net: 26 },
           displayEnd: { ...UNKNOWN_END, status: "verified" },
         },

@@ -37,14 +37,6 @@ const PLAYER = {
   recentDays: [],
   seasonDays: [],
   dataQuality: [],
-  provenance: {
-    source: "api_player_daily_logs",
-    observedAt: OBSERVED_AT,
-    freshness: "fresh",
-    confidence: "high",
-    coverage: "complete",
-    version: "v1",
-  },
 } satisfies PlayerPage;
 
 async function refreshMessage(

@@ -376,7 +376,6 @@ describe("player route historical independence", () => {
         reason_codes: ["attack_count_exceeds_eight"],
       },
       completeness: { state: "partial", reason: "attack_count_exceeds_eight" },
-      uncertainty: ["attack_count_exceeds_eight"],
     };
     const html = await renderRoute(
       {
@@ -784,7 +783,6 @@ describe("automatic tag lookup", () => {
         seasonId: null,
         presentation: VERIFIED,
         displayEnd: UNKNOWN_END,
-        uncertainty: [],
         offenseEvents: SAVED_DAY.offenseEvents.map((event) => ({
           ...event,
           battleId: "confirmed-attack",

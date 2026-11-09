@@ -95,14 +95,6 @@ const page = (clan: string, clanTag: string | null) =>
     recentDays: [],
     seasonDays: [],
     dataQuality: [],
-    provenance: {
-      source: "api_player_daily_logs",
-      observedAt: "2026-10-23T12:00:00Z",
-      freshness: "fresh",
-      confidence: "high",
-      coverage: "complete",
-      version: "v1",
-    },
   }) satisfies PlayerPage;
 
 // Only the first HTML sent, which is all a browser without JavaScript shows,
@@ -318,7 +310,6 @@ describe("the player page header", () => {
           offenseEvents: [],
           defenseEvents: [],
           completeness: { state: "complete", reason: "" },
-          uncertainty: [],
         },
       ],
     } satisfies PlayerPage;
@@ -379,10 +370,6 @@ describe("the player page header", () => {
     const dayOne = {
       ...page("Titans2.0", "#2CLAN"),
       profile: { ...page("Titans2.0", "#2CLAN").profile, freshness: fresh },
-      provenance: {
-        ...page("Titans2.0", "#2CLAN").provenance,
-        observedAt: fresh.observedAt,
-      },
       season: {
         id: "2026-11",
         anchor: "2026-11-02T05:00:00Z",
@@ -410,7 +397,6 @@ describe("the player page header", () => {
           offenseEvents: [],
           defenseEvents: [],
           completeness: { state: "complete", reason: "" },
-          uncertainty: [],
         },
       ],
     } satisfies PlayerPage;

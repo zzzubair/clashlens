@@ -41,12 +41,20 @@ export async function searchPlayers(query: string, limit = 50): Promise<SearchRe
   return mapSearch(payload, query);
 }
 
-export async function getPlayer(tag: string, battles = true): Promise<PlayerPage> {
+/** A player's page. Only the Dashboard asks for its Season and rival facts. */
+export async function getPlayer(
+  tag: string,
+  battles = true,
+  dashboard = false,
+): Promise<PlayerPage> {
+  const query = new URLSearchParams();
+  if (!battles) query.set("battles", "false");
+  if (dashboard) query.set("dashboard", "true");
   const payload = await requestJson<unknown>(
-    `/v1/players/${encodeURIComponent(tag)}${battles ? "" : "?battles=false"}`,
+    `/v1/players/${encodeURIComponent(tag)}${query.size ? `?${query}` : ""}`,
     { method: "GET" },
   );
-  return mapPlayerPage(payload, battles);
+  return mapPlayerPage(payload, battles, dashboard);
 }
 
 export async function getPlayerSeasons(tag: string): Promise<SummarizedSeasonRef[]> {

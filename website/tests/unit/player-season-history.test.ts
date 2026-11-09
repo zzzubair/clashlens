@@ -145,14 +145,6 @@ const PLAYER = {
   recentDays: [],
   seasonDays: [],
   dataQuality: [],
-  provenance: {
-    source: "api_player_daily_logs",
-    observedAt: "2026-10-05T05:10:00Z",
-    freshness: "fresh",
-    confidence: "high",
-    coverage: "complete",
-    version: "v1",
-  },
 } satisfies PlayerPage;
 
 const CURRENT_LINK = '<option value="">This Season</option>';
@@ -208,7 +200,6 @@ const legendDay = (number: number): RankedDaySummary => {
     offenseEvents: [],
     defenseEvents: [],
     completeness: { state: "complete", reason: "Complete" },
-    uncertainty: [],
   };
 };
 

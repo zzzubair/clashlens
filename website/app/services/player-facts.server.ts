@@ -80,7 +80,6 @@ export function mapPresentation(value: unknown): DayPresentation {
     battle_net_complete: nullableNumber(v.battle_net_complete),
     is_current: boolean(v.is_current),
     show_in_player_log: boolean(v.show_in_player_log),
-    show_in_day_summary: boolean(v.show_in_day_summary),
     live_routine: boolean(v.live_routine),
     reason_codes: strings(v.reason_codes),
     caution_codes: strings(v.caution_codes),
@@ -98,7 +97,6 @@ export function mapDisplayEnd(value: unknown): DayEnd {
     before_reset: nullableNumber(v.before_reset),
     after_reset: nullableNumber(v.after_reset),
     player_log: nullableNumber(v.player_log),
-    dashboard: nullableNumber(v.dashboard),
     status: status(v.status),
     conflict: c
       ? {
