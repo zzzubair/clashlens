@@ -21,7 +21,6 @@ from domain_test_support import (
     store_observation,
 )
 from reconciliation_postgres_support import (
-    BATTLE_FIXTURE,
     DAY_END,
     _battle_log,
     _processor,
@@ -56,12 +55,6 @@ def _recorded(monkeypatch) -> None:
     record_seasons_to(monkeypatch, BOUNDARIES["season"] + timedelta(days=28))
 
 
-def _eight_defenses() -> bytes:
-    template = json.loads(BATTLE_FIXTURE.read_bytes())["items"][0]
-    return json.dumps({"items": [
-        {**template, "attack": False, "opponentPlayerTag": f"#{tag}PP"}
-        for tag in "89QGRJCU"
-    ]}).encode()
 
 
 def _rows(connection_info: str, query: str) -> list[tuple]:
