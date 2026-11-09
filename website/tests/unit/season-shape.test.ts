@@ -37,6 +37,23 @@ describe("supplied Season membership", () => {
       "Mon 19 Oct – Tue 20 Oct · In Legend I, not signed up yet · 5,000",
     ]);
   });
+  it("words a drop that lasts to now as before", () => {
+    // Days 1-7 in Legend I, dropped at the 12 October Reset, still out on
+    // Day 24 (shared example 10).
+    const raw = cases.filter((c) => c.rule === "shape_of")[10].expected as {
+      last_legend_day_start: string;
+      kinds: string[];
+      outside_now: boolean;
+    };
+    expect(raw.outside_now).toBe(true);
+    const shape = mapShape(raw, [{ start: raw.last_legend_day_start }])!;
+    expect(runLines(shape)).toEqual([
+      "Days 1–7 · dropped to Legend II at the Mon 12 Oct Reset",
+    ]);
+    expect(logGaps(shape).map((gap) => gapLabel(shape, gap))).toEqual([
+      "Mon 12 Oct – now · Not in Legend I, not tracked",
+    ]);
+  });
   it("keeps no Season context distinct from an empty Season", () => {
     expect(mapShape(null, [])).toBeNull();
     expect(() => mapShape(undefined, [])).toThrow();
