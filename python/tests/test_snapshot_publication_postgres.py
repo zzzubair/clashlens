@@ -22,7 +22,7 @@ from snapshot_publication_postgres_support import (
 )
 
 from clashlens import api_leaderboard, snapshots
-from clashlens.analytics import SNAPSHOT_ORDERING_RULE_VERSION, deterministic_tag_hash
+from clashlens.analytics import SNAPSHOT_ORDERING_RULE_VERSION
 from clashlens.api_db import ApiDatabase
 from clashlens.db import Database
 
@@ -406,14 +406,8 @@ def test_snapshot_orders_with_stable_hash_and_persists_temporal_provenance(
                 assert row[8:16] == (2, 2, 1, 1, 0, 0, 0, 0)
                 assert row[16] == 1
             assert {text(row[2]) for row in entries} == {"#2PP", "#28"}
-            expected_order = [
-                tag
-                for tag, _observation_id in sorted(
-                    (("#2PP", old_id), ("#28", fresh_id)),
-                    key=lambda item: (-6123, deterministic_tag_hash(item[0]), item[0]),
-                )
-            ]
-            assert [text(row[2]) for row in entries] == expected_order
+            # Independently computed MD5s of the ASCII tags: #2PP sorts first.
+            assert [text(row[2]) for row in entries] == ["#2PP", "#28"]
             by_tag = {text(row[2]): row for row in entries}
             assert (
                 by_tag["#2PP"][4],
@@ -446,8 +440,8 @@ def test_snapshot_orders_with_stable_hash_and_persists_temporal_provenance(
                 # No Legend day proves the battles after this reading.
                 "uncertain",
             )
-            assert text(by_tag["#2PP"][10]) == deterministic_tag_hash("#2PP")
-            assert text(by_tag["#28"][10]) == deterministic_tag_hash("#28")
+            assert text(by_tag["#2PP"][10]) == "5ef05df65a25836932d2187d9ec0da8d"
+            assert text(by_tag["#28"][10]) == "f12263d6bada2125758956917e66fe8d"
             assert by_tag["#2PP"][11] == 1
             assert by_tag["#2PP"][13] == boundary - timedelta(minutes=2)
 
@@ -557,10 +551,7 @@ def test_daily_board_orders_equal_trophies_by_latest_trophy_change(
     # The MD5 tag hash puts ``first`` ahead. The older rule's SHA-256 tag
     # hash agrees for #28, so only the latest change puts ``second`` ahead;
     # for #8PY it puts ``second`` ahead, so only that hash does.
-    first, second = sorted(
-        ("#2PP", "#8PY" if frozen_under == "tag-hash" else "#28"),
-        key=deterministic_tag_hash,
-    )
+    first, second = "#2PP", "#8PY" if frozen_under == "tag-hash" else "#28"
     with domain_database(database_url) as connection_info:
         for tag, trophies in ((first, 6123), (second, 6123), ("#2PY", 6200)):
             _process_profile(

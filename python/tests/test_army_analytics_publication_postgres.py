@@ -366,36 +366,14 @@ def test_publication_writer_serves_reproducible_perspective_results(
                     "legend_days": [DAY_NUMBER, DAY_NUMBER],
                     "snapshot_versions": [],
                 }
-                expected_source_hash = hashlib.sha256(
-                    json.dumps(
-                        {
-                            "selection": selection.as_dict(),
-                            "facts": [
-                                (fact["id"], fact["input_hash"])
-                                for fact in expected_facts
-                            ],
-                            "snapshots": [],
-                        },
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ).encode()
-                ).hexdigest()
-                expected_result_hash = hashlib.sha256(
-                    json.dumps(
-                        {"result": expected, "source_evidence": expected_source_hash},
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ).encode()
-                ).hexdigest()
+                # Fixed vectors captured once from this two-attack, one-defense
+                # fixture at ca7fba08; replay/correction checks below protect
+                # the same-input/same-identity and changed-input/new-identity rules.
+                expected_source_hash = "d33df0cf2e8b88465798bb6998cc809d36c31e2a07f290328e235128110e60da"
                 expected["reproducibility"]["source_evidence_hash"] = expected_source_hash
                 expected["selection"] = selection.as_dict()
-                selection_hash = hashlib.sha256(
-                    json.dumps(
-                        selection.as_dict(), sort_keys=True, separators=(",", ":")
-                    ).encode()
-                ).hexdigest()
                 expected["publication_identity"] = (
-                    f"army-publication-{selection_hash[:24]}-{expected_result_hash[:16]}"
+                    "army-publication-d644708939ba930a7053acf0-440c68e11ea15c84"
                 )
                 expected["season_bounds"] = {
                     "id": SEASON_ID, "start": "2026-07-13T05:00:00+00:00",
@@ -553,7 +531,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
                     attacker_id = connection.execute(
                         "SELECT id FROM players WHERE normalized_tag = '#2PP'"
                     ).fetchone()[0]
-                snapshot_id = _seed_frozen_snapshot(
+                _seed_frozen_snapshot(
                     database, [(defender_id,), (attacker_id,)]
                 )
                 army_rank_bands.refresh_rank_band_totals(database)
@@ -571,22 +549,9 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 assert top5_offense["total_attacks"] == 0
                 assert top5_offense["rows"] == []
                 assert fact_queries == []
-                # Top 5 is one rank band (from rank 1) with no facts that day.
-                band_digest = json.dumps([[DAY_NUMBER, 1, None]], separators=(",", ":"))
-                expected_top_source_hash = hashlib.sha256(
-                    json.dumps(
-                        {
-                            "selection": _selection(population="top-5").as_dict(),
-                            "rank_band_facts": hashlib.sha256(band_digest.encode()).hexdigest(),
-                            "snapshots": [snapshot_id],
-                        },
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ).encode()
-                ).hexdigest()
-                assert (
-                    top5_offense["reproducibility"]["source_evidence_hash"]
-                    == expected_top_source_hash
+                # The same fixed fixture's empty Top-5 band, snapshot 1.
+                assert top5_offense["reproducibility"]["source_evidence_hash"] == (
+                    "54ddeef76ae2a40e08acdc4ea71d3199aeffd6d5df66b4eb6c591d3724fe6d99"
                 )
 
                 # A withheld day inside the range names the affected day.
