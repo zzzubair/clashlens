@@ -862,6 +862,7 @@ export function readCards(
     "heat-map": season,
     cutoffs: () => cutoffsData(ctx, pages),
     "season-graph": async () => {
+      // Read the Season list alongside the page instead of after it.
       const seasonsRead = getPlayerSeasons(ctx.selected.tag).catch(() => null);
       const page = await pages(ctx.selected.tag);
       if (page === null) return null;
