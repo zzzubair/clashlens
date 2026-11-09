@@ -1420,4 +1420,9 @@ def test_independent_maintenance_continues_after_one_task_fails(
     finally:
         maintenance.close()
     assert completed == [name for _, _, name in targets if name != failed_task] + ["queue"]
-    assert failed_task in capsys.readouterr().out
+    out = capsys.readouterr().out
+    # The documented failure event, with the task named and only the error type.
+    assert [json.loads(line) for line in out.splitlines()] == [{
+        "event": "worker_maintenance", "status": "failed",
+        "task": failed_task, "error": "RuntimeError",
+    }]
