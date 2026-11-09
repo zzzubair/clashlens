@@ -240,3 +240,41 @@ def board_page(reset: int) -> str:
         f' dateTime="{shown:%Y-%m-%dT%H:%M:%SZ}"'
         f' title="{shown:%-d %b %Y, %H:%M} UTC">{shown:%-d %b %Y, %H:%M} UTC</time></p>'
     )
+
+
+def trigger(rt, condition, value=True):
+    if condition == "tracker":
+        rt.metrics["clashlens_collector_last_success_age_seconds"] = 601 if value else 1
+    elif condition == "spool_bytes":
+        rt.metrics["clashlens_spool_bytes"] = 81 if value else 0
+    elif condition == "spool_objects":
+        rt.metrics["clashlens_spool_objects"] = 81 if value else 0
+    elif condition == "filesystem":
+        rt.disk_used = 81 if value else 10
+    elif condition == "restarts":
+        rt.restarts = ["clashlens-worker.service"] * (4 if value else 0)
+    elif condition == "backup":
+        rt.backup_failed = value
+    elif condition == "reads":
+        rt.reads_failed = value
+    elif condition == "collection":
+        rt.metrics["clashlens_collector_oldest_due_age_seconds"] = 600 if value else 599
+    elif condition == "leaderboard":
+        rt.leaderboard = "1 13000 1201" if value else "0 13000 0"
+    elif condition == "failures":
+        rt.metrics["clashlens_collector_newest_failed_upload_age_seconds"] = (
+            86399 if value else 86400
+        )
+    elif condition in ("processing", "upload"):
+        name = f"clashlens_collector_oldest_pending_{condition}_age_seconds"
+        limit = 1800 if condition == "processing" else 900
+        rt.metrics[name] = limit if value else limit - 1
+    elif condition == "publication":
+        rt.publication = "1" if value else "0"
+    elif condition == "completeness":
+        rt.completeness = "11" if value else "10"
+    elif condition == "battle_day":
+        rt.battle_day = "1" if value else "0"
+    if condition in ("completeness", "battle_day"):
+        rt.now += alerts.SLOW_PROBE_INTERVAL  # Read at its next quarter-hour run.
+

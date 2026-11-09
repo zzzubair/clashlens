@@ -10,6 +10,7 @@ from clashlens.reconciliation import (
     CoverageObservation,
     PreviousRankedDay,
     ReconciliationInput,
+    reconcile_ranked_day,
 )
 
 DAY = ranked_day_for(datetime(2026, 8, 4, 12, tzinfo=UTC))
@@ -78,3 +79,43 @@ def _battles(lens: str, *amounts: int) -> tuple[BattleContribution, ...]:
         BattleContribution(f"{lens}-{n}", lens, amount, battle_timestamp=DAY.start + timedelta(hours=n + 1))
         for n, amount in enumerate(amounts)
     )
+
+
+def _counted_battles(tag: str, lens: str, count: int, total: int) -> tuple[BattleContribution, ...]:
+    amounts = [total // count] * (count - 1) + [total - total // count * (count - 1)]
+    return tuple(
+        BattleContribution(f"{tag}-{lens}-{index}", lens, amount)
+        for index, amount in enumerate(amounts)
+    )
+
+
+def _season_day_1(attacks, defenses, previous_day, next_start_trophies, **overrides):
+    day_1 = ranked_day_for(datetime(2026, 10, 5, 12, tzinfo=UTC))
+    return reconcile_ranked_day(
+        _input(
+            ranked_day=day_1,
+            now=day_1.end + timedelta(minutes=1),
+            start_trophies=5000,
+            next_start_trophies=next_start_trophies,
+            contributions=(
+                *(BattleContribution(f"a{i}", "offense", n) for i, n in enumerate(attacks)),
+                *(BattleContribution(f"d{i}", "defense", n) for i, n in enumerate(defenses)),
+            ),
+            previous_day=previous_day,
+            season_first_day=True,
+            **overrides,
+        )
+    )
+
+
+def _attacks(*amounts: int) -> tuple[BattleContribution, ...]:
+    return tuple(BattleContribution(f"a{i}", "offense", n) for i, n in enumerate(amounts))
+
+
+def _defenses(*amounts: int) -> tuple[BattleContribution, ...]:
+    return tuple(BattleContribution(f"d{i}", "defense", n) for i, n in enumerate(amounts))
+
+
+def _october(day: int, **overrides) -> ReconciliationInput:
+    ranked_day = ranked_day_for(datetime(2026, 10, day, 12, tzinfo=UTC))
+    return _input(ranked_day=ranked_day, now=ranked_day.end + timedelta(minutes=5), **overrides)
