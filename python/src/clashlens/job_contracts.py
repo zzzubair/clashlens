@@ -138,15 +138,23 @@ def supported_job_filter(
         "coordinator": coordinator_input_shape,
         "analytics": f"({coordinator_input_shape} AND ({analytics_input_shape}))",
     }
+    # Kinds with the same checks share one clause, so each check (above all
+    # the source contract) appears once in the statement the planner reads.
+    groups: dict[tuple[Any, ...], list[str]] = {}
+    for kind, spec in JOB_CONTRACTS.items():
+        signature = (spec.analytics_version, spec.source, spec.input_shape)
+        groups.setdefault(signature, []).append(kind)
     clauses = []
-    for number, (kind, spec) in enumerate(JOB_CONTRACTS.items()):
-        key = f"kind_{number}"
+    for number, (kinds, spec) in enumerate(
+        (kinds, JOB_CONTRACTS[kinds[0]]) for kinds in groups.values()
+    ):
+        key = f"kinds_{number}"
         checks = [
-            f"{alias}.work_type = %({key})s",
+            f"{alias}.work_type = ANY(%({key})s::text[])",
             f"{alias}.processing_version = %(processing_version)s",
             f"{alias}.domain_rule_version = %(domain_rule_version)s",
         ]
-        params[key] = kind
+        params[key] = kinds
         if spec.analytics_version:
             checks.append(
                 f"{alias}.analytics_rule_version = %({spec.analytics_version})s"
@@ -164,17 +172,18 @@ def supported_job_filter(
     predicate = "(" + " OR ".join(clauses) + ")"
     if claim:
         # Keep earlier claim generations for queued work and explicit replay.
-        predicate += f"""
-            AND {alias}.claim_compatibility_version IN (1, 2, 3, 4, 5, 6, 7)
+        # The build kinds are written out, as constants the planner can read.
+        builds = ", ".join(f"'{kind}'" for kind in POPULATION_BUILD_WORK_TYPES)
+        predicate = f"""{alias}.claim_compatibility_version IN (1, 2, 3, 4, 5, 6, 7)
+            AND {predicate}
             AND NOT COALESCE(
-                {alias}.work_type = ANY(%(population_builds)s::text[])
+                {alias}.work_type IN ({builds})
                 AND {alias}.input_json->>'boundary_at' < %(past_reset_build_hold)s::text, false)
             AND NOT (%(operator_build_hold)s
-                AND {alias}.work_type = ANY(%(population_builds)s::text[])
+                AND {alias}.work_type IN ({builds})
                 AND {alias}.priority = {db.PYTHON_BACKFILL_PRIORITY})
         """
         params.update(
-            population_builds=list(POPULATION_BUILD_WORK_TYPES),
             past_reset_build_hold=past_reset_build_hold,
             operator_build_hold=operator_build_hold,
         )
