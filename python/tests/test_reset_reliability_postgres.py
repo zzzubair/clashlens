@@ -37,6 +37,7 @@ from clashlens import (
     board_deadline,
     boundary,
     boundary_manifest,
+    boundary_members,
     boundary_publication,
     past_reset_pacing,
     queue_refresh,
@@ -589,7 +590,7 @@ def test_an_army_build_that_gave_up_on_pending_members_runs_at_once_they_settle(
             assert processor.process_job(army_job, owner="army").outcome == "failed"
             # A background check while they are still pending, then one after.
             monkeypatch.setattr(
-                boundary, "_boundary_army_status", lambda *_args, **_kwargs: "pending")
+                boundary_members, "army_status", lambda *_args, **_kwargs: "pending")
             boundary_publication.reevaluate_boundary_publications(database)
             monkeypatch.undo()
             boundary_publication.reevaluate_boundary_publications(database)

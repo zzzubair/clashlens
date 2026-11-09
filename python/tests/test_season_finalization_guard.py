@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
-from clashlens.season_retirement import season_close_block
+from clashlens.season_lifecycle import season_close_block
 
 # September 2026 Season 1788757200: September 7 to October 5 at 05:00 UTC.
 START = datetime(2026, 9, 7, 5, tzinfo=UTC)

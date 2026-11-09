@@ -17,6 +17,7 @@ from . import (
     source_storage,
 )
 from .battle import ParsedBattleLog, ParsedBattleRow
+from .battle_day_repair import refresh_disagreements
 from .db import (
     RESET_LOCK_WAIT,
     Claim,
@@ -128,7 +129,7 @@ def complete_battle_log(
     ) = claimed_jobs.observation_source(claim)
     with database.connection() as connection:
         with connection.transaction():
-            from .season_retirement import acquire_retirement_reader
+            from .season_lifecycle import acquire_retirement_reader
 
             acquire_retirement_reader(connection)
             job = claimed_jobs.lock_live_claim(connection, claim)
@@ -398,7 +399,7 @@ def complete_battle_log(
                     """,
                     (Jsonb(perspectives),),
                 )
-                _refresh_battle_disagreements(
+                refresh_disagreements(
                     connection,
                     sorted(affected_battle_ids),
                 )
@@ -581,7 +582,7 @@ def _guard_battle_rows(connection: Any, rows: list[Any]) -> list[Any]:
     Unknown days remain writable until canonical season metadata exists;
     finalization itself requires canonical bounds and takes the global gate.
     """
-    from .season_retirement import (
+    from .season_lifecycle import (
         acquire_season_lock_shared,
         filter_live_rows,
         retired_day_ranges,
@@ -661,7 +662,7 @@ def _guard_battle_rows(connection: Any, rows: list[Any]) -> list[Any]:
 
 def _recheck_battle_rows(connection: Any, rows: list[Any]) -> None:
     """Recheck the retirement fence while the season locks are held."""
-    from .season_retirement import filter_live_rows, retired_day_ranges
+    from .season_lifecycle import filter_live_rows, retired_day_ranges
 
     if len(
         filter_live_rows(
@@ -674,94 +675,6 @@ def _recheck_battle_rows(connection: Any, rows: list[Any]) -> None:
             "season_detail_retired",
             "battle log crossed a committed season detail fence",
         )
-
-
-def _refresh_battle_disagreements(connection: Any, battle_ids: list[int]) -> None:
-    if not battle_ids:
-        return
-    # Battles are already matched by Legend day, attacker and defender. Keep
-    # each report's timestamp as evidence, but compare the army and result:
-    # different reported times alone do not make this a different attack.
-    connection.execute(
-        """
-        WITH target AS (
-            SELECT unnest(%s::bigint[]) AS battle_id
-        ), normalized AS (
-            SELECT p.battle_id, p.perspective,
-                   e.stars,
-                   e.destruction_percentage, e.army_share_code,
-                   CASE WHEN p.perspective = 'attacker'
-                       THEN e.reporter_trophies ELSE e.opponent_trophies
-                   END AS attacker_trophies,
-                   CASE WHEN p.perspective = 'attacker'
-                       THEN e.opponent_trophies ELSE e.reporter_trophies
-                   END AS defender_trophies,
-                   e.attacker_gain, e.defender_loss
-            FROM battle_perspectives AS p
-            JOIN battle_evidence AS e ON e.id = p.evidence_id
-            JOIN target ON target.battle_id = p.battle_id
-        ), paired AS (
-            SELECT target.battle_id, count(normalized.battle_id) AS evidence_count,
-                   max(stars) FILTER (WHERE perspective = 'attacker') AS a_stars,
-                   max(stars) FILTER (WHERE perspective = 'defender') AS d_stars,
-                   max(destruction_percentage) FILTER (WHERE perspective = 'attacker') AS a_destruction,
-                   max(destruction_percentage) FILTER (WHERE perspective = 'defender') AS d_destruction,
-                   max(army_share_code) FILTER (WHERE perspective = 'attacker') AS a_army,
-                   max(army_share_code) FILTER (WHERE perspective = 'defender') AS d_army,
-                   max(attacker_trophies) FILTER (WHERE perspective = 'attacker') AS a_attacker_trophies,
-                   max(attacker_trophies) FILTER (WHERE perspective = 'defender') AS d_attacker_trophies,
-                   max(defender_trophies) FILTER (WHERE perspective = 'attacker') AS a_defender_trophies,
-                   max(defender_trophies) FILTER (WHERE perspective = 'defender') AS d_defender_trophies,
-                   max(attacker_gain) FILTER (WHERE perspective = 'attacker') AS a_gain,
-                   max(attacker_gain) FILTER (WHERE perspective = 'defender') AS d_gain,
-                   max(defender_loss) FILTER (WHERE perspective = 'attacker') AS a_loss,
-                   max(defender_loss) FILTER (WHERE perspective = 'defender') AS d_loss
-            FROM target
-            LEFT JOIN normalized ON normalized.battle_id = target.battle_id
-            GROUP BY target.battle_id
-        ), classified AS (
-            SELECT battle_id, evidence_count,
-                   array_remove(ARRAY[
-                       CASE WHEN a_stars IS DISTINCT FROM d_stars THEN 'stars' END,
-                       CASE WHEN a_destruction IS DISTINCT FROM d_destruction THEN 'destruction_percentage' END,
-                       CASE WHEN a_army IS DISTINCT FROM d_army THEN 'army_share_code' END,
-                       CASE WHEN a_attacker_trophies IS NOT NULL
-                                  AND d_attacker_trophies IS NOT NULL
-                                  AND a_attacker_trophies IS DISTINCT FROM d_attacker_trophies
-                            THEN 'attacker_trophies' END,
-                       CASE WHEN a_defender_trophies IS NOT NULL
-                                  AND d_defender_trophies IS NOT NULL
-                                  AND a_defender_trophies IS DISTINCT FROM d_defender_trophies
-                            THEN 'defender_trophies' END,
-                       CASE WHEN a_gain IS DISTINCT FROM d_gain THEN 'attacker_gain' END,
-                       CASE WHEN a_loss IS DISTINCT FROM d_loss THEN 'defender_loss' END
-                   ], NULL)::text[] AS fields
-            FROM paired
-        ), resolved AS (
-            SELECT battle_id,
-                   CASE
-                       WHEN evidence_count < 2 THEN 'single_perspective'
-                       WHEN cardinality(fields) = 0 THEN 'agreed'
-                       ELSE 'disagreement'
-                   END AS state,
-                   CASE
-                       WHEN evidence_count < 2 THEN ARRAY[]::text[]
-                       ELSE fields
-                   END AS fields
-            FROM classified
-        )
-        UPDATE legend_battles AS battle
-        SET disagreement_state = resolved.state,
-            disagreement_fields = resolved.fields,
-            updated_at = clock_timestamp()
-        FROM resolved
-        WHERE battle.id = resolved.battle_id
-          -- A re-report that leaves the result unchanged writes nothing.
-          AND (battle.disagreement_state, battle.disagreement_fields)
-              IS DISTINCT FROM (resolved.state, resolved.fields)
-        """,
-        (battle_ids,),
-    )
 
 
 def _report_hash(battle_log: ParsedBattleLog, row: ParsedBattleRow) -> str:

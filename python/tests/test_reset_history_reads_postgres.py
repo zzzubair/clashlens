@@ -25,7 +25,7 @@ from test_reset_scenarios_postgres import (
     day,
 )
 
-from clashlens import boundary, boundary_members, snapshots
+from clashlens import boundary_members, snapshots
 
 SWEPT, HISTORY = 30, 400
 HISTORY_TABLES = ("player_profile_versions", "player_profile_effects")
@@ -109,7 +109,7 @@ def test_reset_board_reads_no_members_whole_profile_history(
             taken = boundary_members.board_members(explaining, monday, swept)
             taking = _history_rows(plans)
             plans.clear()
-            status = boundary._boundary_snapshot_status(
+            status = boundary_members.snapshot_status(
                 explaining, player_id=player_id, ranked_day_version_id=version_id,
                 boundary_at=monday)
             checking = _history_rows(plans)

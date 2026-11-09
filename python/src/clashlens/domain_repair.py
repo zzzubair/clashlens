@@ -89,7 +89,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import domain
+from . import day_recalculation, domain, league_week
 from .army_decoder import DECODER_VERSION
 from .db import PYTHON_BACKFILL_PRIORITY, Database
 from .db_rows import text_value
@@ -229,7 +229,7 @@ def season_repair(
                     ORDER BY player_id
                     """,
                     {"start": start, "end": start + SEASON_DURATION,
-                     "recorded": max(start, league_days.RECORDED_FROM)},
+                     "recorded": max(start, league_week.RECORDED_FROM)},
                 ).fetchall()
             ]
         through = receipt.days_queued_through if receipt is not None else 0
@@ -291,7 +291,7 @@ def season_repair(
         # A Season before the record is calculated without it. Evidence
         # marked since the repair began is new: the decider recalculates the
         # days its decisions change, so only older marks are waited for, and
-        # none of a player it set aside (league_week._decide_batch).
+        # none of a player it set aside (league_decider._decide_batch).
         undecided = connection.execute(
             """
             SELECT count(*) FROM league_week_dirty
@@ -299,7 +299,7 @@ def season_repair(
               AND marked_at < (SELECT started_at FROM season_repairs
                                WHERE official_season_id = %s AND rule_revision = %s)
             """,
-            (max(start, league_days.RECORDED_FROM), start + SEASON_DURATION,
+            (max(start, league_week.RECORDED_FROM), start + SEASON_DURATION,
              season_id, revision),
         ).fetchone()[0]
         settled = {} if undecided else league_days.settle(database, connection, start, max_jobs)
@@ -463,7 +463,7 @@ def _stale_summaries(connection: Any, season_id: str) -> dict[str, Any]:
 def _stale_players(connection: Any, season_id: str) -> tuple[int, list[int]]:
     """How many summaries the Season has saved, and the players whose saved
     summary differs from its days now."""
-    from .season_summaries import _digest, _project
+    from .season_summaries import matches_current_days
 
     stale = []
     rows = connection.execute(
@@ -474,8 +474,7 @@ def _stale_players(connection: Any, season_id: str) -> tuple[int, list[int]]:
         (season_id,),
     ).fetchall()
     for player_id, digest in rows:
-        projected = _project(int(player_id), season_id, connection)
-        if projected is None or _digest(projected) != text_value(digest):
+        if not matches_current_days(connection, int(player_id), season_id, text_value(digest)):
             stale.append(int(player_id))
     return len(rows), stale
 
@@ -622,12 +621,11 @@ def _queue_days(
     player queued. From the record on, that is every day through the
     current one, saved or not: a Legend I week has a Legend day each day.
     Before it, the saved days only."""
-    from . import first_battle_log, league_days
 
     with database.pool.connection() as connection, connection.transaction():
         _guard_days(connection, season_id)
         today = domain.ranked_day_for(datetime.now(UTC)).start
-        recorded = start >= league_days.RECORDED_FROM
+        recorded = start >= league_week.RECORDED_FROM
         for player, first_day in connection.execute(
             """
             SELECT player_id, min(day) FROM (
@@ -642,7 +640,7 @@ def _queue_days(
             """,
             {"players": players, "start": start, "end": start + SEASON_DURATION},
         ).fetchall():
-            first_battle_log._queue(
+            day_recalculation.request(
                 connection, int(player), first_day, None,
                 key=_repair_key(revision, season_id, int(player)), trigger="season_repair",
                 priority=PYTHON_BACKFILL_PRIORITY, every_day=recorded,
@@ -792,23 +790,6 @@ def target_versions() -> dict[str, str]:
         "army_decoder": DECODER_VERSION,
         "reconciliation_rule": RECONCILIATION_RULE_VERSION,
     }
-
-
-def boundary_held(connection: Any, boundary_at: datetime) -> bool:
-    """Whether an active or paused campaign still holds this Reset."""
-    return connection.execute(
-        """
-        SELECT EXISTS (
-            SELECT 1 FROM domain_repair_items AS item
-            JOIN domain_repair_campaigns AS campaign ON campaign.id = item.campaign_id
-            WHERE item.kind = 'publication' AND item.boundary_at = %s
-              AND item.state IN ('pending', 'failed')
-              -- 'paused' is declared by the schema; nothing enters it yet.
-              AND campaign.state IN ('active', 'paused')
-        )
-        """,
-        (boundary_at,),
-    ).fetchone()[0]
 
 
 _INVENTORY = """
@@ -1043,7 +1024,7 @@ def _open(connection: Any, season_id: str, now: datetime | None, *, write: bool)
     if not write:
         now = now or connection.execute("SELECT clock_timestamp()").fetchone()[0]
         return start, deadline, now
-    from .season_retirement import acquire_season_lock_shared
+    from .season_lifecycle import acquire_season_lock_shared
 
     acquire_season_lock_shared(connection, season_id)
     if connection.execute(

@@ -66,7 +66,14 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import claimed_jobs, db, domain, domain_repair, first_battle_log, league_days
+from . import (
+    claimed_jobs,
+    day_recalculation,
+    db,
+    domain,
+    domain_repair,
+    league_days,
+)
 
 WORK_TYPE = "reconcile_pass"
 BATCH_DAYS = 500
@@ -448,7 +455,7 @@ def record(connection: Any, day: datetime, judgment: Judgment, *, read_at: datet
         if state is FindingState.OPEN:
             if fix and finding.check in FIXED_CHECKS and counts["queued"] < fix_room:
                 # Due now at backfill priority; once, under the finding's own key.
-                first_battle_log._queue(
+                day_recalculation.request(
                     connection, finding.player_id, day, None, key=f"{FIX_KEY}{finding_id}",
                     trigger="reconcile_pass", later_days=False,
                     priority=db.PYTHON_BACKFILL_PRIORITY)

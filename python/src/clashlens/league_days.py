@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
@@ -34,14 +34,6 @@ from .league_week import (
     league_of,
 )
 
-# The first Season the record decides from its start. It decides no week
-# before it, so a day before it is calculated as a Legend I day whose
-# Season's first day starts at 5,000 and whose week ends in no drop, though
-# hundreds of players dropped each Monday then. Those Seasons take no new
-# evidence (corrections stop a week after a Season ends), so their days are
-# calculated again only by a Season repair run for one, which would count
-# such drops wrongly.
-RECORDED_FROM = datetime(2026, 10, 5, 5, tzinfo=UTC)
 _STARTS_AT_5000 = frozenset({Entry.SEASON_START, Entry.PROMOTED, Entry.FIRST_SEEN})
 
 
@@ -98,7 +90,7 @@ def day_league(connection: Any, player_id: int, day: RankedDay, *, lock: bool = 
     week = league_week.week_start(day.start)
     ends_week = day.end.weekday() == 0
     weeks = [start for start in ([week, week + WEEK] if ends_week else [week])
-             if start >= RECORDED_FROM]
+             if start >= league_week.RECORDED_FROM]
     rows = {
         row[0]: (League(row[1]), Entry(row[2]) if row[2] else None)
         for row in connection.execute(
@@ -112,13 +104,13 @@ def day_league(connection: Any, player_id: int, day: RankedDay, *, lock: bool = 
     } if weeks else {}
     unknown = (League.UNKNOWN, None)
     before_record = (League.LEGEND_I, None)
-    league, entry = rows.get(week, unknown) if week >= RECORDED_FROM else before_record
-    if week < RECORDED_FROM and day.start == day.season_start:
+    league, entry = rows.get(week, unknown) if week >= league_week.RECORDED_FROM else before_record
+    if week < league_week.RECORDED_FROM and day.start == day.season_start:
         entry = Entry.SEASON_START
     return DayLeague(
         league,
         entry if day.start == week else None,
-        rows.get(week + WEEK, unknown if week + WEEK >= RECORDED_FROM else before_record)[0]
+        rows.get(week + WEEK, unknown if week + WEEK >= league_week.RECORDED_FROM else before_record)[0]
         if ends_week else None,
     )
 
@@ -320,7 +312,7 @@ def _queue_week(
     Sunday not a Legend day has none to change: each lower-league player
     with evidence in a new week would otherwise queue a job at Reset
     priority on Monday for nothing."""
-    from .first_battle_log import _queue
+    from . import day_recalculation
 
     if before[0] is not after[0]:
         first, last = week, week + WEEK - timedelta(days=1)
@@ -334,10 +326,10 @@ def _queue_week(
     else:
         first = last = week
     last = min(last, domain.ranked_day_for(now).start)
-    if first > last or last < RECORDED_FROM:
+    if first > last or last < league_week.RECORDED_FROM:
         return
-    first = max(first, RECORDED_FROM)
-    _queue(
+    first = max(first, league_week.RECORDED_FROM)
+    day_recalculation.request(
         connection, player_id, first, None,
         key=f"reconcile:league-week:{player_id}:{week:%Y-%m-%dT%H:%M:%SZ}:{decision_number}",
         trigger="league_week", last_day=last, every_day=True,
@@ -350,7 +342,7 @@ def withdraw(database: Any, connection: Any, player_id: int, weeks: list[datetim
     """Delete the public days of ``weeks``, which are not Legend I weeks:
     a below Legend I or unknown week has no Legend days. The saved results
     stay as history. Returns how many public copies went."""
-    weeks = [week for week in weeks if week >= RECORDED_FROM]
+    weeks = [week for week in weeks if week >= league_week.RECORDED_FROM]
     if not weeks:
         return 0
     deleted = connection.execute(
@@ -369,17 +361,18 @@ def withdraw(database: Any, connection: Any, player_id: int, weeks: list[datetim
 
 def _leave_boards(database: Any, connection: Any, player_id: int, weeks: list[datetime]) -> None:
     """Once ``weeks`` are saved out of Legend I, take the player off each
-    board ranking a day of them, saved or not (``boundary_members.leave``)."""
-    from .boundary_members import leave
+    board ranking a day of them, saved or not (``boundary.remove_league_members``)."""
+    from .boundary import remove_league_members
 
-    leave(database, connection, player_id, [
+    remove_league_members(database, connection, player_id, [
         week + timedelta(days=offset)
-        for week in weeks if week >= RECORDED_FROM for offset in range(7)])
+        for week in weeks if week >= league_week.RECORDED_FROM for offset in range(7)])
 
 
 def _refresh_summaries(connection: Any, player_id: int, seasons: set[Any]) -> None:
     """Store again each saved Season summary those days were in."""
-    from .season_summaries import acquire_player_season_lock, materialize_player_season
+    from .season_lifecycle import acquire_player_season_lock
+    from .season_summaries import materialize_player_season
 
     for season_id in sorted(str(season) for season in seasons if season not in {None, "unknown"}):
         acquire_player_season_lock(connection, player_id, season_id)
@@ -397,7 +390,7 @@ def settle(
     public days of at most ``limit`` players saved before their weeks were.
     Each in a week not Legend I is deleted (``withdraw``); each other names
     its week (migration 0118). How many players, deleted and named."""
-    start = max(season_start, RECORDED_FROM)
+    start = max(season_start, league_week.RECORDED_FROM)
     end = season_start + domain.SEASON_DURATION
     players = [int(row[0]) for row in connection.execute(
         """

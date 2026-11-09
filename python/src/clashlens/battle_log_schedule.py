@@ -33,10 +33,20 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import Literal
 
-from .battle import LIVE_SOURCE_PARSER_VERSION, _parse_row, is_no_opponent_row
-from .domain import RANKED_DAY_DURATION, battle_day_for, ranked_day_for
+from .battle import (
+    LIVE_SOURCE_PARSER_VERSION,
+    BattleLogParseError,
+    is_no_opponent_row,
+    parse_row,
+)
+from .domain import (
+    MAX_DAILY_ATTACKS,
+    MAX_DAILY_DEFENSES,
+    RANKED_DAY_DURATION,
+    battle_day_for,
+    ranked_day_for,
+)
 from .profile import PROFILE_PARSER_VERSION, ProfileParseError, parse_profile
-from .reconciliation import MAX_DAILY_ATTACKS, MAX_DAILY_DEFENSES
 
 # Read from each valid profile. A defender's profile shows a battle at once;
 # an attacker's often shows an attack many minutes late.
@@ -538,8 +548,8 @@ def _battles(
         if is_no_opponent_row(item, LIVE_SOURCE_PARSER_VERSION):
             continue
         try:
-            row = _parse_row(index, item, normalized_tag, LIVE_SOURCE_PARSER_VERSION)
-        except Exception:  # noqa: BLE001 - one bad row never stops collection
+            row = parse_row(index, item, normalized_tag, LIVE_SOURCE_PARSER_VERSION)
+        except BattleLogParseError:
             malformed.add(_row_identity(item))
             continue
         if row.outcome == "ignored_non_legend":

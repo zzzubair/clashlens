@@ -27,6 +27,7 @@ from psycopg.types.json import Jsonb
 from . import boundary_members, ranked_day_inputs
 from .analytics import latest_trophy_changes, unplayed_since_sql, unplayed_sql
 from .army_decoder import CURRENT_DECODES, DECODER_VERSION
+from .boundary_battles import moved_decode_ids, moved_side_arrays
 from .db import (
     ANALYTICS_RULE_VERSION,
     ARMY_ANALYTICS_RULE_VERSION,
@@ -43,7 +44,7 @@ from .domain import (
 )
 from .league_week import week_start
 from .newest_profiles import ACCEPTED_VERSIONS, ANY_VERSIONS, NEWEST_PROFILES_SQL
-from .publication_states import ManifestStage
+from .publication_states import ManifestStage, day_snapshot_status
 from .reconciliation import DISPUTED_BATTLE_REASONS
 
 _STATUS_CLASSIFICATIONS = {
@@ -55,14 +56,6 @@ _STATUS_CLASSIFICATIONS = {
     "inconsistent": "Inconsistent",
     "malformed": "Malformed",
 }
-_RANKED_SNAPSHOT_STATUSES = {
-    "Complete": "complete",
-    "Partial": "partial",
-    "Inconsistent": "inconsistent",
-    "Malformed": "malformed",
-}
-
-
 # A failed freeze's build, saved by freeze_boundary_manifest.
 FREEZE_TIMED_OUT = "freeze_timed_out"
 
@@ -657,19 +650,17 @@ def _snapshot_rows(
         player_id, version_id, input_hash, status = _member(row, "snapshot")
         classification = _STATUS_CLASSIFICATIONS.get(status, "Pending")
         # A member ranked at 5,000 before their first Legend battle was saved
-        # missing, as boundary._boundary_snapshot_status finds no accepted
+        # missing, as boundary_members.snapshot_status finds no accepted
         # profile.
         if _rechecks(status, version_id) or (
             status == "missing" and (player_id in unplayed or player_id in late)
             and version_id is not None
         ):
             # The member's status, checked again against its ranked day and
-            # accepted profile now, as boundary._boundary_snapshot_status.
-            snapshot_status = _RANKED_SNAPSHOT_STATUSES.get(
-                ranked_states.get((version_id, player_id), ""), "pending"
+            # accepted profile now, as boundary_members.snapshot_status.
+            snapshot_status = day_snapshot_status(
+                ranked_states.get((version_id, player_id), ""), has_profile=player_id in profiles
             )
-            if snapshot_status == "complete" and player_id not in profiles:
-                snapshot_status = "missing"
             classification = _STATUS_CLASSIFICATIONS.get(snapshot_status, "Missing")
         identity: dict[str, Any] = {
             "artifact_kind": "snapshot",
@@ -1183,7 +1174,7 @@ def _army_selections(
 ) -> dict[int, tuple[list[int], list[int], list[int]]]:
     """Each daily log's listed battles, frozen decodes and listed reports.
 
-    The same as boundary._army_decode_selection plus each listed side's
+    The same as boundary_battles.army_decode_selection plus each listed side's
     report on the battle it is on now, per log, read for all logs at once.
     """
     sides_by_day = {day: _sides(battles) for day, battles in battles_by_day.items()}
@@ -1440,7 +1431,7 @@ def _season_inputs(connection: Any, members: list[Any]) -> dict[str, Any] | None
                     (DECODER_VERSION, season_battle_ids),
                 ).fetchall()
             ),
-            *_moved_decode_ids(connection, season_moved),
+            *moved_decode_ids(connection, season_moved),
         }
     )
     season_evidence_ids = sorted(
@@ -1456,7 +1447,7 @@ def _season_inputs(connection: Any, members: list[Any]) -> dict[str, Any] | None
                       AS side (battle_id, perspective)
                       USING (battle_id, perspective)
                     """,
-                    _moved_side_arrays(season_moved),
+                    moved_side_arrays(season_moved),
                 ).fetchall()
             ),
         }
@@ -1468,30 +1459,3 @@ def _season_inputs(connection: Any, members: list[Any]) -> dict[str, Any] | None
         "decode_ids": season_decode_ids,
         "evidence_ids": season_evidence_ids,
     }
-
-
-def _moved_side_arrays(moved: dict[tuple[int, str], int]) -> tuple[list[int], list[str]]:
-    return (
-        list(moved.values()),
-        ["attacker" if lens == "offense" else "defender" for _id, lens in moved],
-    )
-
-
-def _moved_decode_ids(
-    connection: Any, moved: dict[tuple[int, str], int]
-) -> list[int]:
-    """Current decodes of moved sides, read on the battles they are on now."""
-    if not moved:
-        return []
-    return [
-        int(row[0])
-        for row in connection.execute(
-            f"""
-            SELECT decode.id
-            FROM {CURRENT_DECODES} AS decode
-            JOIN unnest(%s::bigint[], %s::text[]) AS side (battle_id, perspective)
-              USING (battle_id, perspective)
-            """,
-            (DECODER_VERSION, list(moved.values()), *_moved_side_arrays(moved)),
-        ).fetchall()
-    ]

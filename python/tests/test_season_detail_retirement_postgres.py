@@ -31,11 +31,13 @@ from clashlens.api_db import ApiDatabase
 from clashlens.army_season_summaries import materialize_completed_army_season
 from clashlens.db import Database
 from clashlens.domain import DomainRuleError
-from clashlens.season_retirement import (
+from clashlens.season_lifecycle import (
     SEASON_DETAIL_RETIRED,
-    finalize_season_detail,
     is_detail_retired_for_day,
     is_season_detail_retired,
+)
+from clashlens.season_retirement import (
+    finalize_season_detail,
     measure_season_storage,
     project_six_months,
     retire_season_detail,
@@ -1107,7 +1109,7 @@ def test_rolling_log_waits_for_finalization_when_ranked_day_is_missing(
     database_url: str,
 ) -> None:
     """An unresolved writer cannot cross the committed finalization fence."""
-    from clashlens.season_retirement import acquire_retirement_reader
+    from clashlens.season_lifecycle import acquire_retirement_reader
 
     with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:

@@ -23,10 +23,9 @@ from test_season_detail_retirement_postgres import (
 from clashlens import season_finalization_guard
 from clashlens.api_db import ApiDatabase
 from clashlens.season_finalization_guard import (
-    SeasonClosure,
     close_blockers,
-    season_closure,
 )
+from clashlens.season_lifecycle import SeasonClosure, season_closure
 from clashlens.season_retirement import finalize_season_detail, retire_season_detail
 
 ELIGIBLE = SEASON_END + timedelta(days=7)

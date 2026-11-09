@@ -1305,7 +1305,7 @@ def test_army_readiness_counts_a_battle_merged_after_its_day(
                 target = _merge_into_day_before(connection, old)
 
                 def readiness() -> str:
-                    return boundary._boundary_army_status(
+                    return boundary_members.army_status(
                         database,
                         connection,
                         player_id=player,
@@ -1332,7 +1332,7 @@ def test_reevaluation_recovers_armies_saved_pending_after_a_merge(
     # battle was saved army-pending, and nothing checked them again: the
     # Reset's army build never started.
     monkeypatch.setattr(
-        boundary, "_boundary_army_status", lambda *_args, **_kwargs: "pending"
+        boundary_members, "army_status", lambda *_args, **_kwargs: "pending"
     )
     with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
@@ -1422,7 +1422,7 @@ def test_reevaluation_settles_members_left_pending_on_an_older_reset(
     # though its day's log was complete and decoded, was checked again only
     # if a repair had moved one of its battles: the board never built.
     monkeypatch.setattr(
-        boundary, "_boundary_army_status", lambda *_args, **_kwargs: "pending"
+        boundary_members, "army_status", lambda *_args, **_kwargs: "pending"
     )
     with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)

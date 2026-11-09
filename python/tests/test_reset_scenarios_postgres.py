@@ -30,7 +30,7 @@ from clashlens import (
     army_types,
     board_deadline,
     boundary_publication,
-    league_days,
+    league_decider,
     league_week,
     past_reset_pacing,
     reconcile_pass,
@@ -186,9 +186,9 @@ class Story:
         self.monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
         # The weekly league record decides every story's Seasons, as it
         # decides each from 5 October 2026, on the story's clock.
-        self.monkeypatch.setattr(league_days, "RECORDED_FROM", PREVIOUS_SEASON - timedelta(days=28))
-        self.monkeypatch.setattr(league_week, "_now", lambda: self.clock)
-        self.monkeypatch.setattr(league_week, "_retry_at", float("-inf"))
+        self.monkeypatch.setattr(league_week, "RECORDED_FROM", PREVIOUS_SEASON - timedelta(days=28))
+        self.monkeypatch.setattr(league_decider, "_now", lambda: self.clock)
+        self.monkeypatch.setattr(league_decider, "_retry_at", float("-inf"))
 
     def _at(self, at: datetime) -> None:
         self.clock = max(self.clock, at)
@@ -316,7 +316,7 @@ class Story:
         try:
             for _ in range(20):
                 if self.decides:
-                    league_week.decide_due(database)
+                    league_decider.decide_due(database)
                 boundary_publication.reevaluate_boundary_publications(database)
                 processed = processor.process_until_idle(owner="story", max_jobs=10_000)
                 boundary_publication.reevaluate_boundary_publications(database)

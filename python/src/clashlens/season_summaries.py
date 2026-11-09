@@ -20,10 +20,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
-from .domain import SEASON_ANCHOR_RULE_VERSION
+from .season_lifecycle import acquire_player_season_lock, season_completed
 
 # v2 added eod_change and its evidence states; readers report them unknown for v1.
 PROJECTION_VERSION = "player-season-summary-v2"
@@ -416,9 +416,9 @@ def season_final_rank(
     placement is never used here.
     """
     if season_end is None and season_id is not None:
-        from .season_retirement import _canonical_season_bounds
+        from .season_lifecycle import canonical_season_bounds
 
-        bounds = _canonical_season_bounds(connection, season_id)
+        bounds = canonical_season_bounds(connection, season_id)
         season_end = None if bounds is None else bounds[1]
     if season_end is None:
         return without_board
@@ -478,14 +478,15 @@ def _digest(summary: dict[str, Any]) -> str:
     ).hexdigest()
 
 
-def acquire_player_season_lock(
-    connection: Any, player_id: int, season_id: str
-) -> None:
-    """Serialize writers for one player-season summary pair."""
-    connection.execute(
-        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-        (f"player-season-summary:{int(player_id)}:{season_id}",),
-    )
+def current_days_digest(connection: Any, player_id: int, season_id: str) -> str | None:
+    """Digest of the player's current saved-day projection, or None without days."""
+    projected = _project(player_id, season_id, connection)
+    return _digest(projected) if projected is not None else None
+
+
+def matches_current_days(connection: Any, player_id: int, season_id: str, digest: str) -> bool:
+    """Whether a stored summary digest still matches the player's saved days."""
+    return current_days_digest(connection, player_id, season_id) == digest
 
 
 def materialize_player_season(
@@ -502,7 +503,7 @@ def materialize_player_season(
     """
     if not season_id or len(season_id) > 128:
         raise ValueError("official season id is outside the supported range")
-    from .season_retirement import (
+    from .season_lifecycle import (
         SEASON_DETAIL_RETIRED,
         acquire_season_lock_shared,
         is_season_detail_retired,
@@ -592,59 +593,6 @@ def materialize_player_season(
     return {"status": "published", "content_digest": digest}
 
 
-def _season_completed(
-    connection: Any, season_id: str, now: datetime
-) -> tuple[bool, str]:
-    """Decide whether a season is completed for explicit backfill.
-
-    Authoritative season timing wins where available: a season matching
-    the confirmed anchor's current id is completed once its exact 28 days
-    have elapsed, and a season matching the previous id is completed
-    because a newer season began. Noncanonical legacy ids fail closed
-    unless a completed day-28 publication establishes the boundary.
-    Returns (completed, reason) with reason empty when completed.
-    """
-    now_utc = now.astimezone(UTC)
-    history = connection.execute(
-        "SELECT 1 FROM api_player_daily_logs WHERE official_season_id = %s LIMIT 1",
-        (season_id,),
-    ).fetchone()
-    if history is None:
-        return False, "no_history"
-    anchor = connection.execute(
-        """
-        SELECT current_league_season_id, previous_league_season_id, current_start
-        FROM legend_season_anchors
-        WHERE state = 'confirmed' AND anchor_rule_version = %s
-        """,
-        (SEASON_ANCHOR_RULE_VERSION,),
-    ).fetchone()
-    if anchor is not None:
-        current_id = _text(anchor[0])
-        previous_id = _text(anchor[1])
-        if season_id == current_id and anchor[2] is not None:
-            if anchor[2].astimezone(UTC) + timedelta(days=_SEASON_LENGTH_DAYS) <= now_utc:
-                return True, ""
-            return False, "season_not_completed"
-        if season_id == previous_id:
-            return True, ""
-    boundary = connection.execute(
-        """
-        SELECT 1 FROM api_player_daily_logs
-        WHERE official_season_id = %s
-          AND season_day_number = 28
-          AND state = 'Complete'
-          AND ranked_day_end IS NOT NULL
-          AND ranked_day_end <= %s
-        LIMIT 1
-        """,
-        (season_id, now_utc),
-    ).fetchone()
-    if boundary is not None:
-        return True, ""
-    return False, "season_not_completed"
-
-
 def materialize_completed_seasons(
     connection: Any,
     *,
@@ -675,7 +623,7 @@ def materialize_completed_seasons(
         or after_player_id < 0
     ):
         raise ValueError("backfill cursor is outside the supported range")
-    from .season_retirement import (
+    from .season_lifecycle import (
         SEASON_DETAIL_RETIRED,
         acquire_season_lock_shared,
         is_season_detail_retired,
@@ -693,7 +641,7 @@ def materialize_completed_seasons(
             "failures": [],
             "next_after_player_id": None,
         }
-    completed, reason = _season_completed(connection, season_id, now)
+    completed, reason = season_completed(connection, season_id, now)
     if not completed:
         return {
             "season_id": season_id,

@@ -17,7 +17,7 @@ from .army_rank_bands import counted_boards
 
 # The completed-season gate is shared with the player summaries so both
 # slices agree on when a season is finalizable.
-from .season_summaries import _season_completed
+from .season_lifecycle import season_completed
 
 PROJECTION_VERSION = "army-unit-usage-v3"
 LENSES = ("offense", "defense")
@@ -301,7 +301,7 @@ def materialize_army_season(
     other.
     """
     _check_season_lens(season_id, lens)
-    from .season_retirement import (
+    from .season_lifecycle import (
         SEASON_DETAIL_RETIRED,
         acquire_season_lock_shared,
         is_season_detail_retired,
@@ -516,7 +516,7 @@ def materialize_completed_army_season(
     """
     if not season_id or len(season_id) > 80:
         raise ValueError("official season id is outside the supported range")
-    from .season_retirement import (
+    from .season_lifecycle import (
         SEASON_DETAIL_RETIRED,
         acquire_season_lock_shared,
         is_season_detail_retired,
@@ -530,7 +530,7 @@ def materialize_completed_army_season(
             "reason": SEASON_DETAIL_RETIRED,
             "lenses": {},
         }
-    completed, reason = _season_completed(connection, season_id, now)
+    completed, reason = season_completed(connection, season_id, now)
     if not completed:
         return {
             "season_id": season_id,

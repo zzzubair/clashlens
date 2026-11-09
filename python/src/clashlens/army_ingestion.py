@@ -436,7 +436,7 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                 season_id = claim.input_json.get("official_season_id")
             if ranked_day_str is None or season_id is None:
                 raise ValueError("army analytics requires ranked-day and season inputs")
-            from .season_retirement import (
+            from .season_lifecycle import (
                 SEASON_DETAIL_RETIRED,
                 acquire_season_lock_shared,
                 is_season_detail_retired,
@@ -1245,10 +1245,7 @@ def _refresh_army_season_summaries(database, connection: Any, season_id: str) ->
     green; the other lens still refreshes. Seasons with no summaries
     yet cost three locks plus one existence lookup.
     """
-    from .season_retirement import (
-        acquire_season_lock_shared,
-        is_season_detail_retired,
-    )
+    from .season_lifecycle import acquire_season_lock_shared, is_season_detail_retired
 
     # Retired detail stays retired: a late day build must not replace
     # verified summaries from a reduced post-retirement sample.
@@ -1364,7 +1361,7 @@ def _redecode_group(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                 (f"army-redecode:{claim.job_id}",),
             )
-            from .season_retirement import (
+            from .season_lifecycle import (
                 SEASON_DETAIL_RETIRED,
                 acquire_season_lock_shared,
                 is_season_detail_retired,

@@ -21,7 +21,7 @@ from domain_test_support import (
 )
 from psycopg.types.json import Jsonb
 
-from clashlens import battle, battle_day_repair, domain, reconciliation_db
+from clashlens import battle, battle_day_repair, domain, reconciliation_db, republish
 from clashlens.db import (
     ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
@@ -304,7 +304,7 @@ def test_saved_boundary_battles_move_to_the_day_before_and_days_republish(
             )
             _sql(connection_info, _DELETE_JOBS, [active])
 
-            failed = battle_day_repair.enqueue_current_season_republication(
+            failed = republish.enqueue_current_season_republication(
                 database, max_jobs=10
             )
             assert len(failed["job_ids"]) == 1
@@ -316,7 +316,7 @@ def test_saved_boundary_battles_move_to_the_day_before_and_days_republish(
                 " attempt_count = max_attempts WHERE id = ANY(%s)",
                 failed["job_ids"],
             )
-            blocked = battle_day_repair.enqueue_current_season_republication(
+            blocked = republish.enqueue_current_season_republication(
                 database, max_jobs=10
             )
             assert blocked["failed_blockers"] == [
@@ -329,7 +329,7 @@ def test_saved_boundary_battles_move_to_the_day_before_and_days_republish(
             ]
             assert _rebuild_jobs(connection_info) == 1
             _sql(connection_info, _DELETE_JOBS, failed["job_ids"])
-            report = battle_day_repair.enqueue_current_season_republication(
+            report = republish.enqueue_current_season_republication(
                 database, max_jobs=10
             )
             assert len(report["job_ids"]) == 1
@@ -340,7 +340,7 @@ def test_saved_boundary_battles_move_to_the_day_before_and_days_republish(
             # its attacks fall from eight to seven: the eighth was the day
             # before's. The unpublished day before DAY is not created.
             assert _counts(connection_info) == {DAY: (6, 8), NEXT: (7, 8)}
-            again = battle_day_repair.enqueue_current_season_republication(
+            again = republish.enqueue_current_season_republication(
                 database, max_jobs=10
             )
             assert not any(
@@ -349,7 +349,7 @@ def test_saved_boundary_battles_move_to_the_day_before_and_days_republish(
             # Finished jobs are deleted after 48 hours; the corrected days,
             # not the job, show the rebuild is done.
             _sql(connection_info, _DELETE_JOBS, report["job_ids"])
-            battle_day_repair.enqueue_current_season_republication(
+            republish.enqueue_current_season_republication(
                 database, max_jobs=10
             )
             assert _rebuild_jobs(connection_info) == 0

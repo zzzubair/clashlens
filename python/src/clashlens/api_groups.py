@@ -23,8 +23,8 @@ from .api_db import (
 )
 from .api_players import left_legend_i
 from .domain import awaits_season_reset, ranked_day_for, season_opening_reset
+from .season_lifecycle import retired_day_ranges
 from .season_reset_sql import frozen_trophies_sql, opening_day_battles_sql
-from .season_retirement import retired_day_ranges
 
 # A comparison is for a group of 10-20 players. Saving refuses larger groups;
 # older ones saved before that limit are refused here, so one request reads a

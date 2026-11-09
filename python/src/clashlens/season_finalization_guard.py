@@ -12,7 +12,6 @@ few example ids, not a count.
 from __future__ import annotations
 
 from datetime import timedelta
-from enum import StrEnum
 from typing import Any
 
 import psycopg
@@ -150,52 +149,6 @@ _CHECKS = {
         ORDER BY work.id LIMIT %(limit)s
     """,
 }
-
-
-class SeasonClosure(StrEnum):
-    """Where a Season's closure is, from its ``season_detail_retirements``
-    record (``season_closure``).
-
-    - ``open``: no record; the Season still takes corrections.
-      ``finalize_season_detail`` saves the record once the Season has ended
-      and seven days passed, its stored window agrees, its summaries match
-      their days and ``close_blockers`` finds nothing. On this code it
-      always finds ``promised_history``, so no Season leaves ``open``.
-    - ``finalized``: the record is saved with its summary digests and fences
-      writers; no detail is deleted yet.
-    - ``retiring``: finalized, and ``retire_season_detail`` has deleted at
-      least one batch (its ``progress`` saved). The record still says
-      ``finalized``.
-    - ``retired``: every eligible row is deleted; status ``retired``.
-
-    Only those two commands move it, each under the Season's lock. Every
-    retirement call rechecks the window, the wait, the stored digests and
-    ``close_blockers``, so a blocker found later holds deletion. A batch
-    interrupted before its progress is saved is counted again by the next
-    call, so a restart only repeats a count.
-    """
-
-    OPEN = "open"
-    FINALIZED = "finalized"
-    RETIRING = "retiring"
-    RETIRED = "retired"
-
-
-def season_closure(connection: Any, season_id: str) -> SeasonClosure:
-    """The Season's closure state. The caller checks the record table exists."""
-    row = connection.execute(
-        """
-        SELECT status, progress ? 'last_deleted' FROM season_detail_retirements
-        WHERE official_season_id = %s
-        """,
-        (season_id,),
-    ).fetchone()
-    if row is None:
-        return SeasonClosure.OPEN
-    status = row[0].decode() if isinstance(row[0], bytes) else row[0]
-    if status == SeasonClosure.RETIRED:
-        return SeasonClosure.RETIRED
-    return SeasonClosure.RETIRING if row[1] else SeasonClosure.FINALIZED
 
 
 def promised_history_gap(connection: Any, season_id: str) -> str | None:

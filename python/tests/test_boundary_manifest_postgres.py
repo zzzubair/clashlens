@@ -13,10 +13,10 @@ from typing import Any
 import psycopg
 from domain_test_support import domain_database, legend_i_week, store_observation, text
 
-from clashlens import battle_day_repair, boundary, boundary_members
+from clashlens import battle_day_repair, boundary, boundary_battles, boundary_members
 from clashlens.analytics import SNAPSHOT_ORDERING_RULE_VERSION, latest_trophy_changes
 from clashlens.army_decoder import CURRENT_DECODES, DECODER_VERSION
-from clashlens.boundary_manifest import _moved_decode_ids, _moved_side_arrays
+from clashlens.boundary_battles import moved_decode_ids, moved_side_arrays
 from clashlens.catalog import CATALOG_VERSION
 from clashlens.db import Database
 from clashlens.db_rows import text_value
@@ -425,7 +425,7 @@ def per_player_inputs(
                     "inconsistent": "Inconsistent",
                     "malformed": "Malformed",
                 }.get(
-                    boundary._boundary_snapshot_status(
+                    boundary_members.snapshot_status(
                         connection,
                         player_id=player_id,
                         ranked_day_version_id=version_id,
@@ -600,7 +600,7 @@ def per_player_inputs(
                 (version_id,),
             ).fetchone()
             identity["daily_log_id"] = int(daily_log[0]) if daily_log else None
-            battle_ids, decode_ids, moved = boundary._army_decode_selection(
+            battle_ids, decode_ids, moved = boundary_battles.army_decode_selection(
                 connection, daily_log[1] if daily_log is not None else None
             )
             evidence_ids: list[int] = []
@@ -696,7 +696,7 @@ def per_player_inputs(
                             (DECODER_VERSION, season_battle_ids),
                         ).fetchall()
                     ),
-                    *_moved_decode_ids(connection, season_moved),
+                    *moved_decode_ids(connection, season_moved),
                 }
             )
             season_evidence_ids = sorted(
@@ -712,7 +712,7 @@ def per_player_inputs(
                               AS side (battle_id, perspective)
                               USING (battle_id, perspective)
                             """,
-                            _moved_side_arrays(season_moved),
+                            moved_side_arrays(season_moved),
                         ).fetchall()
                     ),
                 }

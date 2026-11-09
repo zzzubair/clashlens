@@ -22,8 +22,8 @@ from clashlens import (
     background_pacing,
     boundary,
     boundary_publication,
+    day_recalculation,
     db,
-    first_battle_log,
     queue_refresh,
     reconciliation_db,
     reset_baselines,
@@ -57,7 +57,7 @@ def _at_the_reset(story: Story, monkeypatch, clock: list[datetime]) -> None:
         return db.PYTHON_RESET_PRIORITY if ended <= clock[0] < ended + timedelta(days=1) \
             else db.PYTHON_LIVE_PRIORITY
 
-    for module in (boundary, snapshots, reset_baselines, first_battle_log, reconciliation_db):
+    for module in (boundary, snapshots, reset_baselines, day_recalculation, reconciliation_db):
         monkeypatch.setattr(module, "ended_day_priority", ended_day_priority)
     story.reset(RESET, {tag: (5330, SEASON) for tag in TAGS}, run=False)
     for tag in TAGS:

@@ -690,9 +690,9 @@ def test_current_season_republication_command_is_bounded_and_reports_jobs(
         assert max_jobs == 7
         return {"job_ids": [41, 42], "evaluated_count": 0, "failure_reasons": {}}
 
-    monkeypatch.setattr("clashlens.battle_day_repair.Database", FakeDatabase)
+    monkeypatch.setattr("clashlens.republish.Database", FakeDatabase)
     monkeypatch.setattr(
-        "clashlens.battle_day_repair.enqueue_current_season_republication",
+        "clashlens.republish.enqueue_current_season_republication",
         fake_enqueue,
     )
 
@@ -731,7 +731,7 @@ def test_season_repair_needs_a_season_and_runs_alone(
     monkeypatch, extra: list[str], action: str | None
 ) -> None:
     calls = []
-    monkeypatch.setattr("clashlens.battle_day_repair.Database",
+    monkeypatch.setattr("clashlens.republish.Database",
                         lambda url: SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(
         "clashlens.domain_repair.season_repair",
@@ -755,7 +755,7 @@ def test_army_corrections_command_passes_its_cap_and_fails_when_refused(
     monkeypatch, report: dict[str, object], status: int
 ) -> None:
     calls = []
-    monkeypatch.setattr("clashlens.battle_day_repair.Database",
+    monkeypatch.setattr("clashlens.republish.Database",
                         lambda url: SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(
         "clashlens.boundary.queue_army_corrections",

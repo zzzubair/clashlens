@@ -122,10 +122,13 @@ def parse_battle_log(
             error.category, "observation player tag is invalid"
         ) from error
 
-    rows = tuple(
-        _parse_row(index, item, reporting_tag, parser_version)
-        for index, item in enumerate(items)
-    )
+    rows = []
+    for index, item in enumerate(items):
+        try:
+            rows.append(parse_row(index, item, reporting_tag, parser_version))
+        except BattleLogParseError as error:
+            rows.append(_gap(index, item, error.category))
+    rows = tuple(rows)
     return ParsedBattleLog(
         normalized_tag=reporting_tag,
         observed_at=observed_at.astimezone(UTC),
@@ -177,20 +180,21 @@ def no_opponent_row_sql(row: str, parser_version: str) -> str:
     ), false)"""
 
 
-def _parse_row(
+def parse_row(
     index: int,
     source: Any,
     reporting_tag: str,
     parser_version: str,
 ) -> ParsedBattleRow:
+    """Parse one row; malformed rows raise BattleLogParseError. Other modes are ignored."""
     if not isinstance(source, dict):
-        return _gap(index, source, "unsupported_legend_row")
+        raise BattleLogParseError("unsupported_legend_row", "row must be an object")
     if source.get("battleType") != "legend":
         if is_unrecognised_battle_row(source):
             # A type that is not text, or "legend" spelt another way, may
             # be a Legend battle in a shape we do not read: a gap, not a
             # row of another mode to ignore.
-            return _gap(index, source, "unsupported_legend_row")
+            raise BattleLogParseError("unsupported_legend_row", "unrecognised battle type")
         return ParsedBattleRow(
             source_row_index=index,
             outcome="ignored_non_legend",
@@ -229,19 +233,19 @@ def _parse_row(
             if is_attacker
             else (opponent_tag, reporting_tag)
         )
-        day = battle_day_for(timestamp)
+        try:
+            day = battle_day_for(timestamp)
+        except OverflowError as error:
+            raise BattleLogParseError(
+                "invalid_battle_timestamp", "battle date is outside the Legend day calendar"
+            ) from error
         reporter_trophies = _optional_int(
             source.get("trophies", source.get("playerTrophies")), "reporter trophies"
         )
     except DomainRuleError as error:
-        return _gap(index, source, error.category)
-    except (BattleLogParseError, KeyError, TypeError) as error:
-        category = (
-            error.category
-            if isinstance(error, BattleLogParseError)
-            else "unsupported_legend_row"
-        )
-        return _gap(index, source, category)
+        raise BattleLogParseError(error.category, str(error)) from error
+    except (KeyError, TypeError) as error:
+        raise BattleLogParseError("unsupported_legend_row", str(error)) from error
 
     return ParsedBattleRow(
         source_row_index=index,

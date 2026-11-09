@@ -795,7 +795,7 @@ def _record_boundary_baseline(
             int(ranked_state[0]) if ranked_state and ranked_state[0] is not None else None
         )
         snapshot_status = (
-            boundary._boundary_snapshot_status(
+            boundary_members.snapshot_status(
                 connection,
                 player_id=player_id,
                 ranked_day_version_id=ranked_version_id,
@@ -805,7 +805,7 @@ def _record_boundary_baseline(
             else "pending"
         )
         army_status = (
-            boundary._boundary_army_status(database,
+            boundary_members.army_status(database,
                 connection,
                 player_id=player_id,
                 ranked_day_version_id=ranked_version_id,
@@ -814,19 +814,9 @@ def _record_boundary_baseline(
             if ranked_version_id is not None
             else "pending"
         )
-    member_status = (
-        "unavailable"
-        if snapshot_status == "unavailable"
-        else ("terminal" if snapshot_status != "pending" else "pending")
-    )
-    connection.execute(
-        """
-        UPDATE boundary_publication_generation_members
-        SET status = %s, snapshot_status = %s, army_status = %s,
-            updated_at = clock_timestamp()
-        WHERE generation_id = %s AND player_id = %s
-        """,
-        (member_status, snapshot_status, army_status, generation[0], player_id),
+    boundary_members.write_member_result(
+        connection, int(generation[0]), player_id, snapshot_status, army_status,
+        status="unavailable" if snapshot_status == "unavailable" else None,
     )
     if not shared:
         boundary._try_enqueue_boundary_artifacts(database,
