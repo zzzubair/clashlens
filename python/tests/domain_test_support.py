@@ -29,7 +29,14 @@ def text(value: Any) -> Any:
 
 
 def enable_direct_army_fixture(database: Any, monkeypatch: Any) -> None:
-    """Exercise historical army calculation through a v5-shaped fixture job."""
+    """Exercise historical army calculation without a collected Reset board.
+
+    The production historical enqueue emits only day/Season fields, while
+    job_contracts.supported_job_filter requires generation and manifest fields.
+    These isolated analytics tests cannot submit that historical job until
+    the source contract is reconciled. Real Reset publication is covered by
+    test_id_history_postgres and the Reset stories, without this substitution.
+    """
     original_complete = army_ingestion.complete_army_analytics
     original_enqueue = boundary_publication._enqueue_army_analytics
 
@@ -49,8 +56,6 @@ def enable_direct_army_fixture(database: Any, monkeypatch: Any) -> None:
                 player_ids=player_ids,
                 swept=swept,
             )
-        if getattr(database, "_suppress_fixture_enqueue", False):
-            return
         ranked_day_start = ranked_day_start.astimezone(UTC)
         completed = connection.execute(
             """

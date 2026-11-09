@@ -482,6 +482,7 @@ def test_a_battle_with_reports_from_two_days_stays_where_it_is(
             database.close()
 
 
+
 def test_a_day_of_eight_attacks_and_defenses_publishes_its_net(
     database_url: str, archive_server
 ) -> None:

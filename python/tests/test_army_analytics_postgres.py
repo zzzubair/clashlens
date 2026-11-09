@@ -8,6 +8,9 @@ import psycopg
 import pytest
 from army_analytics_publication_postgres_support import _army_job
 from domain_test_support import (
+    _processor as _real_processor,
+)
+from domain_test_support import (
     domain_database,
     enable_direct_army_fixture,
     store_observation,
@@ -445,7 +448,11 @@ def _build_fact_population(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[int, int, int, tuple]:
     with domain_database(database_url) as connection_info:
-        database, processor = _processor(connection_info, archive_server, monkeypatch)
+        # This test isolates fact storage, not Reset publication.
+        monkeypatch.setattr(
+            boundary_publication, "_enqueue_army_analytics", lambda *_, **__: None
+        )
+        database, processor = _real_processor(connection_info, archive_server)
         try:
             opponents = ["#8PP", "#9PP"]
             rows = [
@@ -540,7 +547,6 @@ def _build_fact_population(
             monkeypatch.setattr(psycopg.Cursor, "execute", counted_execute)
             before_pg = _fact_insert_calls(connection_info)
             before_app = calls[0]
-            database._suppress_fixture_enqueue = True
             summary_calls = [0]
             refresh_summary = army_ingestion._refresh_army_season_summaries
 
@@ -647,7 +653,11 @@ def test_frozen_build_counts_a_decode_saved_under_an_older_catalog(
     frozen_none: bool,
 ) -> None:
     with domain_database(database_url) as connection_info:
-        database, processor = _processor(connection_info, archive_server, monkeypatch)
+        # This test isolates fact storage, not Reset publication.
+        monkeypatch.setattr(
+            boundary_publication, "_enqueue_army_analytics", lambda *_, **__: None
+        )
+        database, processor = _real_processor(connection_info, archive_server)
         try:
             _observation, battle_job = store_observation(
                 connection_info,
@@ -675,7 +685,6 @@ def test_frozen_build_counts_a_decode_saved_under_an_older_catalog(
                 == "processed"
             )
             _mark_day_complete(database)
-            database._suppress_fixture_enqueue = True
             with database.pool.connection() as connection:
                 player_id, battle_id = connection.execute(
                     """
@@ -752,7 +761,11 @@ def test_battle_moved_to_the_next_day_is_counted_once_in_the_season(
     from clashlens.army_season_summaries import _project_lens
 
     with domain_database(database_url) as connection_info:
-        database, processor = _processor(connection_info, archive_server, monkeypatch)
+        # This test isolates fact storage, not Reset publication.
+        monkeypatch.setattr(
+            boundary_publication, "_enqueue_army_analytics", lambda *_, **__: None
+        )
+        database, processor = _real_processor(connection_info, archive_server)
         try:
             _observation, battle_job = store_observation(
                 connection_info,
@@ -780,7 +793,6 @@ def test_battle_moved_to_the_next_day_is_counted_once_in_the_season(
                 "processed_with_gaps",
             }
             _mark_day_complete(database)
-            database._suppress_fixture_enqueue = True
             next_day = DAY_START + timedelta(days=1)
             with database.pool.connection() as connection:
                 player_id = connection.execute(
