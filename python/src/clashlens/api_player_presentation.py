@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
+from functools import lru_cache
 from typing import Any
 
 from .db_rows import text_value
@@ -434,8 +435,13 @@ def screen_event(
 
 
 def screen_event_timestamp(value: Any) -> datetime | None:
-    if not isinstance(value, str):
-        return None
+    return _parsed_timestamp(value) if isinstance(value, str) else None
+
+
+# A page's day facts compare each day's times with every other day's, so the
+# same few strings are parsed again and again; keep the parsed values.
+@lru_cache(maxsize=4096)
+def _parsed_timestamp(value: str) -> datetime | None:
     try:
         if value.endswith("Z") and "-" not in value:
             timestamp = datetime.strptime(value, "%Y%m%dT%H%M%S.%fZ").replace(
