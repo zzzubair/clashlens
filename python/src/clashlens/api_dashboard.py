@@ -70,12 +70,13 @@ from typing import Any, Literal
 from . import army_types, projected_place
 from .api_db import ApiDatabase
 from .api_leaderboard import LiveBoardCache
-from .api_player_presentation import screen_events
+from .api_player_presentation import calendar_payload, screen_events
 from .db_rows import text_value
 from .domain import (
     CHAIN_BREAK_REASONS,
     MAX_BATTLE_TROPHIES,
     RANKED_DAY_DURATION,
+    SEASON_DAY_COUNT,
     SEASON_DURATION,
     allocate_trophies,
     ranked_day_for,
@@ -106,9 +107,7 @@ PAST_DAY_SECONDS = 3600
 # waits longer than this for its turn is refused as busy, unless its day
 # was read meanwhile.
 PAST_DAY_WAIT_SECONDS = 8
-# The army cards look back at most this many finished Legend days; Armies
-# on offense offers only these, "season" being this Season's finished days.
-MAX_ARMY_DAYS = 28
+# Armies on offense offers these windows; "season" covers its finished days.
 OFFENSE_ARMY_DAYS = (3, army_types.OFFENSE_CARD_DAYS, "season")
 _MAX_OPPONENTS = MAX_DAILY_ATTACKS
 
@@ -900,6 +899,7 @@ def get_player_today(
     )
     return {
         "tag": tag,
+        "calendar": calendar_payload(now),
         "ranked_day_start": _iso(day.start),
         "season_day_number": day.day_number,
         "board_computed_at": None if board is None else _iso(board.computed_at),
@@ -1007,7 +1007,7 @@ class ArmyDays:
                         )
                 # Older days than any card can ask for go.
                 for key in sorted(self._days, key=lambda key: key[1])[
-                    : -4 * MAX_ARMY_DAYS
+                    : -4 * SEASON_DAY_COUNT
                 ]:
                     del self._days[key]
             return [self._days[(lens, start)][1] for start, _marker in days]

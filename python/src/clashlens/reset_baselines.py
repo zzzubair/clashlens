@@ -10,7 +10,6 @@ from psycopg.types.json import Jsonb
 
 from . import boundary, boundary_members, ranked_day_inputs
 from .analytics import unplayed_profile_sql, unplayed_since_sql
-from .collection_rules import COLLECTION_WINDOW
 from .db import (
     ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
@@ -24,6 +23,7 @@ from .db import (
 from .db_rows import text_value
 from .domain import (
     RANKED_DAY_DURATION,
+    RESET_COLLECTION_WINDOW,
     SEASON_ANCHOR_RULE_VERSION,
     SEASON_START_TROPHIES,
     battle_window,
@@ -947,7 +947,7 @@ def _load_reset_endpoint_evidence(
         if row[4] is None or row[4] < boundary_at:
             reasons.append(f"{endpoint}_stale")
             hard_failure = True
-        elif row[4] >= boundary_at + COLLECTION_WINDOW:
+        elif row[4] >= boundary_at + RESET_COLLECTION_WINDOW:
             reasons.append(f"{endpoint}_late")
             hard_failure = True
         if processing_outcome is None:

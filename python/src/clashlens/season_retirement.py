@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .archive_retention import RECOVERY_WINDOW_DAYS
+from .domain import SEASON_DAY_COUNT
 from .season_finalization_guard import close_blockers
 from .season_lifecycle import (
     acquire_retirement_writer,
@@ -891,7 +892,7 @@ def project_six_months(
     live_detail_bytes_per_day: float | None,
     daily_bookkeeping_bytes_per_day: float | None,
     players: int = 12500,
-    season_days: int = 28,
+    season_days: int = SEASON_DAY_COUNT,
     months: int = 6,
     usable_bytes: int | None = None,
     headroom_fraction: float = 0.2,

@@ -382,6 +382,8 @@ def test_group_comparison_counts_samples_and_keeps_missing_days_empty(
             assert result is not None
             # The Season holding 2026-08-06, which opened at 2026-07-13 05:00 UTC.
             assert result["season"] == "1783918800"
+            assert result["limits"] == {"max_groups": 10, "max_players": 20, "comparison_days": [3, 7, 14]}
+            assert result["calendar"]["day_start"] == TODAY.isoformat()
             players = {player["tag"]: player for player in result["players"]}
             leader = players["#2PP"]
             # Cleaned-up days read as history no longer kept, missing days stay

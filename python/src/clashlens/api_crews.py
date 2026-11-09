@@ -260,6 +260,8 @@ def list_crews(database: ApiDatabase, account_id: int) -> dict[str, Any]:
         "crews": crews,
         "crew_count": len(crews),
         "max_crews": MAX_CREWS_PER_ACCOUNT,
+        "limits": {"min_size": MIN_CREW_SIZE, "max_size": MAX_CREW_SIZE,
+                   "default_size": DEFAULT_CREW_SIZE},
     }
 
 

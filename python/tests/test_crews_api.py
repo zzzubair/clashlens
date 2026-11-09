@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -105,6 +107,13 @@ def test_a_crew_made_and_joined_through_the_api(served) -> None:
     assert created.status_code == 201
     crew_id = created.json()["crew_id"]
     assert created.json() == {"crew_id": crew_id, "name": "Owls", "size": 50}
+    limits = call(client, "akira", "GET", "/v1/account/crews").json()["limits"]
+    contract = json.loads((Path(__file__).parents[2] / "testdata/w6-domain-contract.json").read_text())
+    assert limits == contract["crews"]
+    for size in (limits["min_size"], limits["max_size"], limits["default_size"]):
+        updated = call(client, "akira", "PATCH", f"/v1/account/crews/{crew_id}", {"size": size})
+        assert updated.status_code == 200
+        assert updated.json()["size"] == size
 
     invite = call(client, "akira", "POST", f"/v1/account/crews/{crew_id}/invites", {})
     assert invite.status_code == 200

@@ -13,6 +13,9 @@ BOOTSTRAP_CURRENT_SEASON_ID = "1783918800"
 BOOTSTRAP_PREVIOUS_SEASON_ID = "1781499600"
 RANKED_DAY_DURATION = timedelta(days=1)
 SEASON_DURATION = timedelta(days=28)
+SEASON_DAY_COUNT = SEASON_DURATION // RANKED_DAY_DURATION
+# Reset work stops collecting at 04:55 UTC the next day.
+RESET_COLLECTION_WINDOW = timedelta(hours=23, minutes=55)
 # Every Legend I player starts a Season at exactly this many trophies.
 SEASON_START_TROPHIES = 5000
 # One attack or defense moves trophies by at most this many.

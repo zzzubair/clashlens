@@ -205,6 +205,8 @@ def submit_refresh(
         with connection.transaction():
             existing = api_requests.reserve_request(connection, binding)
             if existing is not None:
+                if "status" in existing.payload:
+                    existing.payload["display_state"] = refresh_display_state(existing.payload["status"])
                 return existing
             row = api_db.execute_without_waiting(
                 connection,
@@ -246,6 +248,7 @@ def submit_refresh(
                 },
             )
             api_requests.complete_request(connection, binding.request_id, result)
+            result.payload["display_state"] = refresh_display_state(result.payload["status"])
             return result
 
 
@@ -267,6 +270,7 @@ def get_refresh_status(database: ApiDatabase, refresh_id: str) -> dict[str, Any]
             "refresh_id": str(row[0]),
             "tag": text_value(row[1]),
             "status": text_value(row[2]),
+            "display_state": refresh_display_state(text_value(row[2])),
             "outcome": text_value(row[3]),
         }
 
@@ -577,3 +581,8 @@ def account_context(row: Any) -> AccountContext:
         username=text_value(row[2]),
         display_name=text_value(row[3]),
     )
+
+
+def refresh_display_state(status: str) -> str:
+    return {"pending": "queued", "waiting_retry": "queued", "leased": "running",
+            "complete": "complete", "failed": "failed", "cancelled": "failed"}[status]

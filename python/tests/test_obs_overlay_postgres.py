@@ -59,6 +59,17 @@ def test_overlay_saves_reads_by_link_and_a_new_link_retires_the_old(database_url
             assert first["players"] == [{"tag": "#2PP", "name": None, "league": None}]
             assert first["tag"] is None and first["version"] == 1
             assert first["settings"] == api_overlays.DEFAULTS
+            contract = first["settings_contract"]
+            assert contract["defaults"] == first["settings"]
+            assert contract["numeric_max"] == 4000
+            for key, values in contract["choices"].items():
+                for value in values:
+                    assert api_overlays.clean_settings({key: value}) == {key: value}
+            for key in contract["numeric_keys"]:
+                assert api_overlays.clean_settings({key: "4000"}) == {key: "4000"}
+                assert api_overlays.clean_settings({key: "4001"}) == {}
+            assert api_overlays.clean_settings({"show": ",".join(contract["parts"])}) == {
+                "show": ",".join(contract["parts"])}
             # Asking again keeps the same link: one row per account.
             assert api_overlays.get_overlay(api, mine)["link"] == first["link"]
 
@@ -76,6 +87,7 @@ def test_overlay_saves_reads_by_link_and_a_new_link_retires_the_old(database_url
             shown = api_overlays.read_link(api, first["link"])
             assert shown == {
                 "kind": "obs-overlay-link",
+                "settings_contract": contract,
                 "tag": "#2PP",
                 "version": 2,
                 # Unknown settings and values are dropped.

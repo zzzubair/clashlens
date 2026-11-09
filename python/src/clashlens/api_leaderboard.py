@@ -383,6 +383,7 @@ def get_live_leaderboard(
     page = offset // limit + 1
     return {
         "kind": "live",
+        "focus_neighbors": _FOCUS_NEIGHBORS,
         "ordering_rule_version": _LIVE_ORDER_VERSION,
         "generated_at": now.astimezone(UTC).isoformat(),
         "tracked_population": board.tracked_population,

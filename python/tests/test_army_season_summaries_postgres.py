@@ -459,6 +459,7 @@ def test_historical_season_endpoint_serves_summary_without_facts(
                 assert response.status_code == 200
                 payload = response.json()
                 assert payload["kind"] == "army-analytics"
+                assert payload["season_bounds"] is None  # Legacy fixture ID is off the Legend phase.
                 assert payload["selection"]["population"] == "all"
                 assert payload["total_attacks"] == 5
                 assert payload["usable_army_sample"] == 4
@@ -482,11 +483,22 @@ def test_historical_season_endpoint_serves_summary_without_facts(
                 listing = "/v1/analytics/armies/seasons"
                 assert client.get(listing).status_code == 401
                 listed = client.get(listing, headers=signed_headers(listing))
-                assert listed.json() == {"seasons": [SEASON]}
+                assert listed.json() == {"seasons": [SEASON], "season_details": []}
+                with database.pool.connection() as connection:
+                    connection.execute("UPDATE army_season_summaries SET official_season_id = '1791176400'")
+                bounds = {"id": "1791176400", "start": "2026-10-05T05:00:00+00:00",
+                          "end": "2026-11-02T05:00:00+00:00",
+                          "last_day_start": "2026-11-01T05:00:00+00:00", "day_count": 28}
+                listed = client.get(listing, headers=signed_headers(listing))
+                assert listed.json() == {"seasons": ["1791176400"], "season_details": [bounds]}
+                canonical = target.replace(SEASON, "1791176400")
+                detail = client.get(canonical, headers=signed_headers(canonical))
+                assert detail.status_code == 200
+                assert detail.json()["season_bounds"] == bounds
                 with database.pool.connection() as connection:
                     connection.execute("DELETE FROM army_season_summaries")
                 listed = client.get(listing, headers=signed_headers(listing))
-                assert listed.json() == {"seasons": []}
+                assert listed.json() == {"seasons": [], "season_details": []}
         finally:
             database.close()
 

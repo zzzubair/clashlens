@@ -19,6 +19,7 @@ from . import api_player_lookup, api_requests
 from .api_db import ApiDatabase
 from .api_player_presentation import (
     battles_so_far_complete,
+    calendar_payload,
     screen_daily_log,
     screen_events,
     shown_total,
@@ -33,6 +34,7 @@ from .season_reset_sql import frozen_trophies_sql, opening_day_battles_sql
 # A comparison is for a group of 10-20 players. Saving refuses larger groups;
 # older ones saved before that limit are refused here, so one request reads a
 # bounded number of players.
+MAX_GROUPS = 10
 MAX_COMPARED_MEMBERS = 20
 COMPARISON_DAYS = (3, 7, 14)
 
@@ -163,6 +165,8 @@ def get_group_comparison(
     _add_group_difference(results)
     return {
         "kind": "group-comparison",
+        "calendar": calendar_payload(now),
+        "limits": group_limits(),
         "group_id": group_id,
         "name": group_name,
         "days": days,
@@ -359,7 +363,7 @@ def _add_group_difference(players: list[dict[str, Any]]) -> None:
 
 
 # Saving starts at most the comparison limit of new player checks.
-GROUP_LOOKUP_LIMIT = 20
+GROUP_LOOKUP_LIMIT = MAX_COMPARED_MEMBERS
 
 def create_group(
     database: ApiDatabase,
@@ -701,3 +705,8 @@ def _group_players(
         (season_opening_reset(now), season_opening_reset(now), group_id),
     ).fetchall()
     return [group_player(connection, row, now) for row in rows]
+
+
+def group_limits() -> dict[str, Any]:
+    return {"max_groups": MAX_GROUPS, "max_players": MAX_COMPARED_MEMBERS,
+            "comparison_days": list(COMPARISON_DAYS)}

@@ -1068,7 +1068,7 @@ def _reset_total(
         # nothing and the reading must agree, unless the weekly one was read
         # before the raise landed and matched the day's end (``clean``).
         end_reset = text_value(boundary_kind) == "season" or (
-            text_value(boundary_kind) == "weekly" and int(final) <= 5000 and not read_clean
+            text_value(boundary_kind) == "weekly" and int(final) <= SEASON_START_TROPHIES and not read_clean
         )
         return settled - int(after_reset), (not end_reset or total == settled) and (
             text_value(confidence) == "exact" or bool(read_clean)

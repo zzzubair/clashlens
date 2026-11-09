@@ -458,6 +458,12 @@ def test_partial_season_marks_missing_and_null_boundaries(database_url: str) -> 
             # Day 1 evidence is absent, so no season start boundary.
             assert summary["start_trophies"] is None
             assert summary["season_start"] is None
+            for public in (api_players.get_player_season_summary(database, "#2PP", SEASON),
+                           api_players.list_player_seasons(database, "#2PP")[0]):
+                assert public["season_start"] is None
+                assert public["season_end"] is None
+                assert public["last_day_start"] is None
+                assert public["day_count"] == 28
             assert summary["end_trophies"] is None
             assert "missing_days" in summary["unresolved_flags"]
         finally:
@@ -937,6 +943,11 @@ def test_historical_read_is_detail_independent(database_url: str) -> None:
             page = api_players.get_player_season_summary(database, "#2PP", SEASON)
             assert page is not None
             assert page["tag"] == "#2PP"
+            for summary in (page, api_players.list_player_seasons(database, "#2PP")[0]):
+                assert summary["day_count"] == 28
+                assert summary["season_start"] == DAY0.isoformat()
+                assert summary["season_end"] == SEASON_END.isoformat()
+                assert summary["last_day_start"] == (SEASON_END - timedelta(days=1)).isoformat()
             assert page["attack_count"] == 56
             assert len(page["daily_entries"]) == 28
             assert page["daily_entries"][0]["season_day_number"] == 1

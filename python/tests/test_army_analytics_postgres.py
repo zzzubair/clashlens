@@ -11,10 +11,13 @@ from domain_test_support import (
     enable_direct_army_fixture,
     store_observation,
 )
+from fastapi.testclient import TestClient
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.types.json import Jsonb
+from test_private_api import NOW_SECONDS, TS_CURRENT, signed_headers
 
 from clashlens import api_analytics, army_ingestion, boundary_publication
+from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
 from clashlens.archive import S3ArchiveReader
 from clashlens.army_analytics import (
@@ -1317,6 +1320,26 @@ def test_api_role_reads_current_season_army_analytics(
                 assert result is not None
                 assert result["total_attacks"] == 1
                 assert result["reproducibility"]["official_season_id"] == SEASON_ID
+                assert result["season_bounds"] == {
+                    "id": SEASON_ID, "start": "2026-07-13T05:00:00+00:00",
+                    "end": "2026-08-10T05:00:00+00:00", "day_count": 28,
+                    "last_day_start": "2026-08-09T05:00:00+00:00"}
+                now = DAY_START + timedelta(days=1)
+                app = create_app(api, keys={("typescript-website", "current"): TS_CURRENT},
+                                 clock=lambda: NOW_SECONDS, now=lambda: now)
+                target = "/v1/analytics/armies?season=current&start_day=23&end_day=23&population=trophies-5000-9000"
+                with TestClient(app) as client:
+                    first_response = client.get(target, headers=signed_headers(target))
+                    assert first_response.status_code == 200, first_response.text
+                    first = first_response.json()
+                    assert first["calendar"]["as_of"] == now.isoformat()
+                    now += timedelta(hours=1)
+                    cached_response = client.get(target, headers=signed_headers(target))
+                    assert cached_response.status_code == 200, cached_response.text
+                    cached = cached_response.json()
+                    assert cached["calendar"]["as_of"] == now.isoformat()
+                    assert cached["season_bounds"] == first["season_bounds"]
+                    assert cached["publication_identity"] == first["publication_identity"]
             finally:
                 api.close()
         finally:
