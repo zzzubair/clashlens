@@ -8,7 +8,12 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from . import api_leaderboard, api_player_lookup, live_board
-from .api_dashboard_facts import dashboard_goal, dashboard_season, dashboard_windows
+from .api_dashboard_facts import (
+    dashboard_goal,
+    dashboard_season,
+    dashboard_windows,
+    rival_season,
+)
 from .api_db import ApiDatabase
 from .api_player_presentation import (
     PLAYER_SCREEN_READY_VERSION,
@@ -509,6 +514,7 @@ def read_player_page(
 
     recent, season, current = player_facts(result, now, battles=battles)
     ready = result["screen_ready"]
+    ready["rival_season"] = rival_season(ready["season"], recent, season, current)
     if battles:
         ready["dashboard_season"] = dashboard_season(ready["season"], recent, season, current)
         if ready["dashboard_season"] is not None:

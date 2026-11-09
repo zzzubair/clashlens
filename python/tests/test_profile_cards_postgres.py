@@ -295,7 +295,7 @@ def test_profile_without_linked_players_does_not_read_the_live_board(
     ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
-            create_owner(database)
+            account_id = create_owner(database)
             # A copy the shared board read now would stay current.
             cache = api_leaderboard.LiveBoardCache(clock=lambda: 0.0)
             assert api_accounts.get_public_user(
@@ -313,6 +313,17 @@ def test_profile_without_linked_players_does_not_read_the_live_board(
                 database, limit=50, now=NOW, cache=cache
             )
             assert [entry["tag"] for entry in board["entries"]] == ["#2PP"]
+            counted = _CountedReads(database)
+            empty = api_accounts.get_public_user_days(counted, "groupowner", now=NOW)
+            assert empty is not None and empty["players"] == []
+            assert empty["calendar"]["day_number"] == 25
+            assert counted.reads == 2
+            with database.pool.connection() as connection:
+                connection.execute("INSERT INTO players (normalized_tag) VALUES ('#8PP')")
+            link_player(database, account_id, "#8PP")
+            linked = api_accounts.get_public_user_days(database, "groupowner", now=NOW)
+            assert linked["players"][0]["days"] == []
+            assert linked["players"][0]["heatmap_day_numbers"] == []
         finally:
             database.close()
 
@@ -379,12 +390,14 @@ def test_profile_days_read_every_linked_player_at_once_up_to_the_cards_limit(
             database.close()
 
     assert days is not None
+    print(f"public user days: players={len(days['players'])}, bytes={len(json.dumps(days, separators=(',', ':')).encode())}, statements={counted.reads}")
     # Read the account, its players, their days and Reset places, and their
     # weeks in at most five reads, however many players are linked.
     assert counted.reads <= 5
     players = days["players"]
     assert [player["tag"] for player in players] == sorted(["#2PP", *more])[:500]
     assert days["season_start"] == "2026-07-13T05:00:00+00:00"
+    assert days["calendar"]["day_number"] == 25
     shown = next(player for player in players if player["tag"] == "#2PP")
     # No Daily board is published here, so no place at the last Reset.
     assert shown["reset_position"] is None
@@ -392,10 +405,12 @@ def test_profile_days_read_every_linked_player_at_once_up_to_the_cards_limit(
     # Yesterday and today as [Season day, attacks, defenses, result,
     # unplayed, listed], oldest first; the previous Season's day is left out.
     assert shown["days"] == [[24, 8, 8, -20, False, True], [25, 1, 1, None, False, True]]
+    assert shown["heatmap_day_numbers"] == [24, 25]
     # Every other one has all 25 days, and 500 players' Seasons so far stay
     # well under the website's 2 MiB limit for one answer.
     assert {len(player["days"]) for player in players if player["tag"] != "#2PP"} == {25}
     assert players[1]["days"][0] == [1, 8, 8, -1234, False, True]
+    assert all(player["heatmap_day_numbers"] == list(range(1, 26)) for player in players if player["tag"] != "#2PP")
     assert len(json.dumps(days).encode()) < 1024 * 1024
 
 

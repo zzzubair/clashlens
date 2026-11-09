@@ -1378,6 +1378,18 @@ def test_busiest_player_page_stays_well_under_the_response_limit(
             assert goal_size < 0.6 * api._DEFAULT_MAX_RESPONSE_BYTES
             assert "dashboard_goal" not in screen
             assert "dashboard_goal" in with_goal["screen_ready"]
+            with database.pool.connection() as page_connection:
+                light_read = CountedRead(page_connection)
+                light = api_players.read_player_page(
+                    light_read, "#2PP", now=NOW, freshness_seconds=900, battles=False
+                )
+            light_size = len(JSONResponse(content=api_http.json_safe(light)).body)
+            print(f"player lightweight: days={days}, bytes={light_size}, statements={light_read.queries}")
+            assert light_read.queries == counted.queries
+            assert light_size < 0.1 * api._DEFAULT_MAX_RESPONSE_BYTES
+            assert light["screen_ready"]["army_units"] == {}
+            assert all(not day["offense_events"] and not day["defense_events"]
+                       for day in light["screen_ready"]["days"])
         finally:
             database.close()
 
