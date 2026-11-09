@@ -91,7 +91,7 @@ def test_season_end_history_checks_are_picked_beside_same_due_settlement_checks(
         due = SEASON_RESET + timedelta(minutes=20)
 
         picked = database.pending_intents(
-            limit=4, now=due, interactive=False, reset_limit=2
+            limit=2, now=due, interactive=False, reset_limit=2
         )
 
         assert [intent.kind for intent in picked] == [
