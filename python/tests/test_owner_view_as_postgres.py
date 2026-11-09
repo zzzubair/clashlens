@@ -17,6 +17,8 @@ from test_private_api import NOW, NOW_SECONDS, TS_CURRENT, signed_headers
 
 from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
+from clashlens.api_player_presentation import calendar_payload
+from clashlens.domain import ranked_day_for
 
 APPLICATION_ROLES = (
     "clashlens_archive_retention",
@@ -103,6 +105,8 @@ def test_only_the_recorded_owner_gets_any_players_card(site, capsys) -> None:
         answer = _ask(client, OWNER, tag).json()
         assert answer["owner"] is True
         assert answer["player"]["tag"] == expected
+        assert answer["calendar"]["as_of"] == NOW.isoformat()
+        assert answer["calendar"]["day_end"] == ranked_day_for(NOW).end.isoformat()
         assert set(answer["player"]) <= {
             "tag", "name", "clan", "state", "reason", "trophies",
             "season_reset_pending", "rank", "league", "today", "left_legend_i",
@@ -118,6 +122,7 @@ def test_only_the_recorded_owner_gets_any_players_card(site, capsys) -> None:
         assert _ask(client, OWNER, tag).json() == {
             "kind": "view-as", "owner": True, "player": None, "pinned": None,
             "follow": {"attack": False, "day_summary": False},
+            "calendar": calendar_payload(NOW),
         }
 
     # Every other account: one answer whatever it sends, so it cannot learn
