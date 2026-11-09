@@ -67,6 +67,12 @@ def _profile(info, archive, *, at, eligible=False, tag="#2PP", tier=None, parser
     return observation
 
 
+def _collector_pass(database, now):
+    """One collector pass: the discovery admission, then the pick behind it."""
+    database.admit_discovery_profiles(now)
+    return database.pending_intents(limit=1, now=now, interactive=False)
+
+
 @pytest.mark.parametrize("offset,expected", [
     (-1, MONDAY - timedelta(days=7)), (0, MONDAY), (1, MONDAY),
     (7 * 86400 - 1, MONDAY), (7 * 86400, MONDAY + timedelta(days=7)),
@@ -251,7 +257,7 @@ def test_discovery_admission_reuses_external_profile_and_finishes_history(
             ))
             now = MONDAY + timedelta(seconds=58)
             admitted = (next_check(database, now, schedule=False) if weekly else
-                        database.pending_intents(limit=1, now=now, interactive=False)[0])
+                        _collector_pass(database, now)[0])
             assert admitted is not None and admitted.league_history_required
             assert admitted.profile_required is not after_reset
             if after_reset:
@@ -289,7 +295,7 @@ def test_discovery_restart_fetches_only_unfinished_endpoints(database_url, weekl
                 work = connection.execute("SELECT id FROM collector_work").fetchone()[0]
             now = MONDAY + timedelta(seconds=1)
             first = (next_check(database, now, schedule=False) if weekly else
-                     database.pending_intents(limit=1, now=now, interactive=False)[0])
+                     _collector_pass(database, now)[0])
             assert first is not None and first.profile_required and first.league_history_required
             database.record_response(_handoff(
                 occurrence_key="own-profile", response_hash="a" * 64,
@@ -304,7 +310,7 @@ def test_discovery_restart_fetches_only_unfinished_endpoints(database_url, weekl
             database.close()
             database = _collector(info)
             resumed = (next_check(database, now, schedule=False) if weekly else
-                       database.pending_intents(limit=1, now=now, interactive=False)[0])
+                       _collector_pass(database, now)[0])
             assert resumed is not None and resumed.work_id == work
             assert not resumed.profile_required
             assert resumed.league_history_required is not history_recorded
@@ -373,7 +379,7 @@ def test_processed_eligible_profile_preserves_history_across_restart(
             database.close()
             database = _collector(info)
             resumed = (next_check(database, at, schedule=False) if weekly else
-                       database.pending_intents(limit=1, now=at, interactive=False)[0])
+                       _collector_pass(database, at)[0])
             assert resumed is not None and resumed.work_id == work
             assert not resumed.profile_required and resumed.league_history_required
             assert not database.complete_intent(work)
@@ -983,7 +989,7 @@ def test_temporary_failure_retries_the_same_weeks_work_until_the_api_answers(
             def admitted():
                 now = start + timedelta(minutes=1)
                 return (next_check(database, now, schedule=False) if weekly else
-                        database.pending_intents(limit=1, now=now, interactive=False)[0])
+                        _collector_pass(database, now)[0])
 
             spool = _Spool()
             # The profile arrives; league history answers 503 once, then 200.
@@ -1036,7 +1042,7 @@ def test_failed_check_retries_only_temporary_failures_and_a_bounded_number_of_ti
             while True:
                 now = start + timedelta(minutes=1)
                 intent = (next_check(database, now, schedule=False) if weekly else
-                          next(iter(database.pending_intents(limit=1, now=now, interactive=False)), None))
+                          next(iter(_collector_pass(database, now)), None))
                 if intent is None:
                     break
                 outcomes.append(asyncio.run(collector.collect_intent(intent)))
@@ -1115,7 +1121,7 @@ def test_recognized_profile_keeps_retrying_failed_league_history(
                                    (start + timedelta(minutes=1), player))
             now = start + timedelta(minutes=1)
             retry = (next_check(database, now, schedule=False) if weekly else
-                     database.pending_intents(limit=1, now=now, interactive=False)[0])
+                     _collector_pass(database, now)[0])
             assert retry is not None and retry.work_id == work
             assert not retry.profile_required and retry.league_history_required
             spool = _Spool()
