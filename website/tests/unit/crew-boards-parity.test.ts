@@ -51,8 +51,14 @@ describe("crew and player summary averages", () => {
           defense: side(result.defense),
         }),
       );
-      expect(html).toContain("Season summary");
-      expect(html).toContain("Trophies");
+      const [offense, defense, attack, defended] =
+        saved.tag === "#2PP"
+          ? ["+60", "−31", "+34.3", "−30.7"]
+          : ["+53", "−10", "+35.0", "−10.0"];
+      expect(html).toContain(`Offense per day</dt><dd>${offense}`);
+      expect(html).toContain(`Defense per day</dt><dd>${defense}`);
+      expect(html).toContain(`<dt>Per attack</dt><dd>${attack}</dd>`);
+      expect(html).toContain(`<dt>Per defense</dt><dd>${defended}</dd>`);
     });
   }
 });

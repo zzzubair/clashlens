@@ -23,8 +23,6 @@ import type {
 } from "../lib/dashboard-armies";
 import { ARMY_DEFAULT_DAYS, ARMY_MAX_DAYS, isArmyDays } from "../lib/dashboard-armies";
 import {
-  GOAL_PACE_DAYS,
-  SEASON_START_TROPHIES,
   type CardDataMap,
   type CardReads,
   type ClockData,
@@ -235,8 +233,6 @@ export function seasonData(page: PlayerPage): SeasonData {
 function legendDay(page: PlayerPage, today: PlayerToday | null): PlayerDay {
   const day = page.currentDay;
   const complete = day?.battlesComplete === true;
-  const gain = day?.offense.trophyGain ?? null;
-  const loss = day?.defense.trophyLoss ?? null;
   // The finished day that ended at the Reset that started today.
   const dayStartMs = Date.parse(page.calendar.day_start);
   const previous = [...page.recentDays, ...page.seasonDays].find(
@@ -254,9 +250,12 @@ function legendDay(page: PlayerPage, today: PlayerToday | null): PlayerDay {
     dayCount: page.season?.dayCount ?? null,
     battles: clockData(page).battles,
     complete,
-    net:
-      day?.trophyChange ??
-      (complete && gain !== null && loss !== null ? gain - loss : null),
+    net: day?.trophyChange ?? day?.presentation?.battle_net_complete ?? null,
+    gained: day?.offense.trophyGain ?? null,
+    lost:
+      day?.defense.trophyLoss === null || day?.defense.trophyLoss === undefined
+        ? null
+        : -day.defense.trophyLoss,
     attacks: day?.offense.attacks ?? null,
     defenses: day?.defense.defenses ?? null,
     lastResetRank: previous?.resetRank ?? null,
@@ -307,7 +306,7 @@ async function lastReset(ctx: CardContext, pages: PageReader) {
   const page = await pages(ctx.selected.tag);
   if (page === null) return null;
   const season = seasonData(page);
-  const finished = season.today === null ? 0 : season.today - 1;
+  const finished = page.rivalSeason.finishedDays;
   return {
     page,
     season,
@@ -414,53 +413,10 @@ function rivalsIn(board: TrackedLeaderboard, tag: string): TrackedPlayerEntry[] 
 }
 
 async function goalData(ctx: CardContext, pages: PageReader): Promise<GoalData | null> {
-  const reset = await lastReset(ctx, pages);
-  if (reset === null) return null;
-  const { finished, season, seasonId } = reset;
-  const window = Math.min(GOAL_PACE_DAYS, finished);
-  const firstDay = finished - window;
-  const end = (day: number) =>
-    day === 0
-      ? SEASON_START_TROPHIES
-      : (season.days.find((saved) => saved.day === day)?.endTrophies ?? null);
-  const lineOn = async (day: number) => {
-    if (day === 0) return SEASON_START_TROPHIES;
-    if (seasonId === null) return null;
-    const entry = await trophiesAt(ctx.settings.goal, {
-      officialSeasonId: seasonId,
-      dayNumber: day,
-    });
-    return entry?.trophies ?? null;
-  };
-  const onBoard = (day: number) =>
-    day === 0
-      ? SEASON_START_TROPHIES
-      : boardTrophies(
-          ctx,
-          seasonId,
-          season.days.find((saved) => saved.day === day),
-        );
-  const [line, lineThen, history] =
-    finished === 0
-      ? [null, null, []]
-      : await Promise.all([
-          lineOn(finished),
-          lineOn(firstDay),
-          Promise.all(
-            Array.from({ length: window + 1 }, (_, index) => onBoard(firstDay + index)),
-          ),
-        ]);
-  return {
-    rank: ctx.settings.goal,
-    name: ctx.selected.name ?? ctx.selected.tag,
-    finished,
-    window,
-    you: finished === 0 ? null : end(finished),
-    youThen: finished === 0 ? null : end(firstDay),
-    line,
-    lineThen,
-    history,
-  };
+  const page = await pages(ctx.selected.tag);
+  return page?.dashboardGoal
+    ? { ...page.dashboardGoal, name: ctx.selected.name ?? ctx.selected.tag }
+    : null;
 }
 
 async function cutoffsData(
@@ -474,7 +430,7 @@ async function cutoffsData(
     Promise.all(lines.map((top) => trophiesAt(top))),
   ]);
   const selector =
-    reset && reset.finished > 0 && reset.seasonId
+    reset && reset.finished !== null && reset.finished > 0 && reset.seasonId
       ? { officialSeasonId: reset.seasonId, dayNumber: reset.finished }
       : null;
   const [saved, youSaved] = selector
@@ -585,7 +541,13 @@ async function rivalsData(
   const seasonRows = async () => {
     const reset = await resetRead;
     const rank = reset?.you?.rank ?? null;
-    if (reset === null || rank === null || reset.seasonId === null) return null;
+    if (
+      reset === null ||
+      reset.finished === null ||
+      rank === null ||
+      reset.seasonId === null
+    )
+      return null;
     const selector = { officialSeasonId: reset.seasonId, dayNumber: reset.finished };
     const read = (offset: number) =>
       getTrackedLeaderboard(BOARD_PAGE, "daily", offset, selector);
@@ -740,7 +702,11 @@ export function readCards(
     if (!read.has(tag))
       read.set(
         tag,
-        unlessMissing(getPlayer(tag)).then((page) => {
+        unlessMissing(
+          tag === ctx.selected.tag && cards.includes("goal")
+            ? getPlayer(tag, true, ctx.settings.goal)
+            : getPlayer(tag),
+        ).then((page) => {
           if (tag === ctx.selected.tag && page) calendar = page.calendar;
           return page;
         }),

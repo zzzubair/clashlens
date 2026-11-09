@@ -1,3 +1,4 @@
+import { parseGroupLimits, type GroupLimits } from "./account-contracts";
 import { parseCalendar } from "./calendar";
 import type { Calendar } from "./contracts";
 /**
@@ -8,8 +9,7 @@ import type { Calendar } from "./contracts";
 
 import { parseLeftLegendI, type LeftLegendI } from "./left-legend";
 
-export const COMPARISON_DAYS = [3, 7, 14] as const;
-export type ComparisonDays = (typeof COMPARISON_DAYS)[number];
+export type ComparisonDays = number;
 
 export type MemberStatus =
   | "tracking"
@@ -77,6 +77,7 @@ export interface ComparedPlayer {
 }
 
 export interface GroupComparison {
+  limits: GroupLimits;
   calendar: Calendar;
   groupId: string;
   name: string;
@@ -113,7 +114,7 @@ export function mapGroupComparison(value: unknown): GroupComparison | null {
     value.kind !== "group-comparison" ||
     !isString(value.group_id) ||
     !isString(value.name) ||
-    !COMPARISON_DAYS.includes(value.days as ComparisonDays) ||
+    !Number.isSafeInteger(value.days) ||
     !Array.isArray(value.day_starts) ||
     !value.day_starts.every(isTimestamp) ||
     value.day_starts.length !== value.days ||
@@ -123,6 +124,8 @@ export function mapGroupComparison(value: unknown): GroupComparison | null {
     !Array.isArray(value.players)
   )
     return null;
+  const limits = parseGroupLimits(value.limits);
+  if (!limits || !limits.comparison_days.includes(Number(value.days))) return null;
   const calendar = parseCalendar(value.calendar);
   if (calendar === null) return null;
   const players: ComparedPlayer[] = [];
@@ -133,6 +136,7 @@ export function mapGroupComparison(value: unknown): GroupComparison | null {
   }
   return {
     calendar,
+    limits,
     groupId: value.group_id,
     name: value.name,
     days: value.days as ComparisonDays,

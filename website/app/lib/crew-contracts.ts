@@ -12,11 +12,6 @@ import { parseLeftLegendI, type LeftLegendI } from "./left-legend";
 import { validPlayerTag } from "./player-tag";
 import { isCanonicalUuid } from "./validation";
 
-export const MAX_CREWS = 5;
-export const MIN_CREW_SIZE = 2;
-export const MAX_CREW_SIZE = 100;
-export const DEFAULT_CREW_SIZE = 50;
-
 export type CrewRole = "owner" | "admin" | "member";
 const ROLES: readonly CrewRole[] = ["owner", "admin", "member"];
 
@@ -30,6 +25,7 @@ export interface ListedCrew {
 }
 
 export interface CrewList {
+  limits: { min_size: number; max_size: number; default_size: number };
   crews: ListedCrew[];
   maxCrews: number;
 }
@@ -316,7 +312,27 @@ export function mapCrewList(value: unknown): CrewList | null {
     }
     crews.push({ ...header, role: item.role, myTags: item.my_tags });
   }
-  return { crews, maxCrews: value.max_crews };
+  const limits = value.limits;
+  if (
+    !isRecord(limits) ||
+    !isCount(limits.min_size) ||
+    !isCount(limits.max_size) ||
+    !isCount(limits.default_size) ||
+    limits.min_size < 1 ||
+    limits.max_size < limits.min_size ||
+    limits.default_size < limits.min_size ||
+    limits.default_size > limits.max_size
+  )
+    return null;
+  return {
+    crews,
+    maxCrews: value.max_crews,
+    limits: {
+      min_size: limits.min_size,
+      max_size: limits.max_size,
+      default_size: limits.default_size,
+    },
+  };
 }
 
 export function mapCrew(value: unknown): Crew | null {
@@ -467,25 +483,28 @@ const ACCOUNT_REFUSALS: Record<string, (tag: string) => string> = {
 export function crewRefusal(
   code: string | null,
   details: { tag?: unknown; open_places?: unknown; used?: unknown } = {},
+  capacity?: Pick<CrewList, "maxCrews" | "limits">,
 ): string | null {
   if (code === null) return null;
   const tag = typeof details.tag === "string" ? details.tag : "An account";
   if (code in ACCOUNT_REFUSALS) return ACCOUNT_REFUSALS[code]!(tag);
   const open = isCount(details.open_places) ? details.open_places : null;
   const used = isCount(details.used) ? details.used : null;
+  if ((code === "crew_limit_reached" || code === "invalid_crew_size") && !capacity)
+    return null;
   const messages: Record<string, string> = {
     crew_full:
       open === null || open === 0
         ? "The crew is full."
         : `Only ${open} ${open === 1 ? "place is" : "places are"} open. Pick fewer accounts.`,
-    crew_limit_reached: `You're already in ${MAX_CREWS} crews, the most you can be in.`,
+    crew_limit_reached: `You're already in ${capacity?.maxCrews} crews, the most you can be in.`,
     crew_forbidden: "Only the owner or an admin can do that.",
     crew_not_found: "This crew no longer exists, or you're no longer in it.",
     crew_size_below_used:
       used === null
         ? "The crew can't have fewer places than accounts in it."
         : `${used} places are in use. Pick ${used} or more, or kick accounts first.`,
-    invalid_crew_size: `Places must be from ${MIN_CREW_SIZE} to ${MAX_CREW_SIZE}.`,
+    invalid_crew_size: `Places must be from ${capacity?.limits.min_size} to ${capacity?.limits.max_size}.`,
     invalid_crew_name: "Choose a different crew name.",
     owner_must_hand_over: "As owner, hand over the crew or delete it first.",
     owner_role_fixed: "The owner's role can only change by handing over.",

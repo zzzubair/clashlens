@@ -1,3 +1,4 @@
+import DOMAIN from "../../../testdata/w6-domain-contract.json";
 import { CALENDAR } from "./player-route-data";
 /**
  * Worst-case but realistic account data for groups, the group comparison and
@@ -143,6 +144,7 @@ function comparedPlayer(index: number, days: number): ComparedPlayer {
 export function worstComparison(days: 3 | 7 | 14 = 14): GroupComparison {
   return {
     calendar: CALENDAR,
+    limits: DOMAIN.groups,
     groupId: "6c1e3f8a-2a44-4b7d-9c0e-1f2a3b4c5d6e",
     name: WORST_GROUP_NAME,
     days,
@@ -176,6 +178,7 @@ export function worstGroups(): ListedGroup[] {
   }));
   const group = (groupId: string, name: string, members: typeof players) => ({
     calendar: CALENDAR,
+    limits: DOMAIN.groups,
     groupId,
     name,
     tags: members.map((player) => player.tag),

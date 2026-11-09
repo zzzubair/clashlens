@@ -1,3 +1,4 @@
+import DOMAIN from "../../../testdata/w6-domain-contract.json";
 import { CALENDAR } from "../fixtures/player-route-data";
 vi.mock("../../app/services/public-user.server", async (importOriginal) => {
   const actual =
@@ -139,6 +140,7 @@ function fakeClient(overrides: Partial<PythonClient> = {}): PythonClient {
     updateAccount: vi.fn(async () => ({ ...ACCOUNT })),
     listGroups: vi.fn(async () => ({
       calendar: CALENDAR,
+      limits: DOMAIN.groups,
       groups: [],
       season: "1791176400",
     })),
@@ -265,6 +267,7 @@ describe("account routes", () => {
         client.listGroups = vi.fn(async () => ({
           season: "1791176400",
           calendar: CALENDAR,
+          limits: DOMAIN.groups,
           groups: [{ groupId: GROUP_ID, name: "Clanmates", tags: [], players: [] }],
         }));
         client[write] = vi
@@ -535,6 +538,7 @@ describe("account routes", () => {
       client.listGroups = vi.fn(async () => ({
         season: "1791176400",
         calendar: CALENDAR,
+        limits: DOMAIN.groups,
         groups: [
           {
             groupId: GROUP_ID,
@@ -609,6 +613,7 @@ describe("account routes", () => {
       client.listGroups = vi.fn(async () => ({
         season: "1791176400",
         calendar: CALENDAR,
+        limits: DOMAIN.groups,
         groups: Array.from({ length: 10 }, (_, index) => ({
           groupId: `${GROUP_ID.slice(0, -2)}${String(index).padStart(2, "0")}`,
           name: `Watchlist ${index}`,

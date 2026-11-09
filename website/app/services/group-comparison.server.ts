@@ -21,7 +21,7 @@ export async function getGroupComparison(
     { method: "GET", identity: identity },
   );
   const comparison = mapGroupComparison(payload);
-  if (comparison === null || comparison.groupId !== groupId) {
+  if (comparison === null || comparison.groupId !== groupId || comparison.days !== days) {
     throw new PythonApiError(502, { error: "malformed" });
   }
   return comparison;

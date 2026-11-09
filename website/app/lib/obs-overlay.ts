@@ -9,6 +9,7 @@
 export type OverlaySettings = Record<string, string>;
 
 export interface OverlayAccount {
+  settingsContract: OverlaySettingsContract;
   /** The private link's id; the overlay's address is /o/<link>. */
   link: string;
   settings: OverlaySettings;
@@ -19,6 +20,7 @@ export interface OverlayAccount {
 }
 
 export interface OverlayLink {
+  settingsContract: OverlaySettingsContract;
   settings: OverlaySettings;
   version: number;
   tag: string | null;
@@ -54,16 +56,53 @@ export interface OverlayPlayer {
   };
 }
 
-/** The parts a Clasher can show or hide. */
-export const OVERLAY_PARTS = [
-  "trophies",
-  "rank",
-  "attacks",
-  "defenses",
-  "net",
-  "day",
-  "updated",
-] as const;
+export interface OverlaySettingsContract {
+  choices: Record<string, string[]>;
+  numeric_keys: string[];
+  numeric_max: number;
+  parts: string[];
+  defaults: OverlaySettings;
+}
+export function parseSettingsContract(value: unknown): OverlaySettingsContract | null {
+  if (
+    !isRecord(value) ||
+    !isRecord(value.choices) ||
+    !Array.isArray(value.numeric_keys) ||
+    !value.numeric_keys.every((key) => typeof key === "string") ||
+    typeof value.numeric_max !== "number" ||
+    !Number.isSafeInteger(value.numeric_max) ||
+    value.numeric_max < 1 ||
+    !Array.isArray(value.parts) ||
+    !value.parts.every((key) => typeof key === "string")
+  )
+    return null;
+  const defaults = settingsOf(value.defaults);
+  const choices: Record<string, string[]> = {};
+  for (const [key, values] of Object.entries(value.choices)) {
+    if (!Array.isArray(values) || !values.every((item) => typeof item === "string"))
+      return null;
+    choices[key] = values;
+  }
+  if (
+    !defaults ||
+    !["w", "h", "x", "y", "cw", "ch", "text", "bg", "fit", "snap"].every(
+      (key) => typeof defaults[key] === "string",
+    ) ||
+    !["text", "bg", "fit", "font"].every(
+      (key) => Array.isArray(choices[key]) && choices[key].length > 0,
+    ) ||
+    value.parts.length === 0 ||
+    !["text", "bg", "fit"].every((key) => choices[key].includes(defaults[key]))
+  )
+    return null;
+  return {
+    choices,
+    numeric_keys: value.numeric_keys,
+    numeric_max: value.numeric_max,
+    parts: value.parts,
+    defaults,
+  };
+}
 
 export const OVERLAY_FONTS = {
   clashlens: "Clash Lens",
@@ -98,14 +137,21 @@ function settingsOf(value: unknown): OverlaySettings | null {
 
 export function parseOverlayLink(payload: unknown): OverlayLink | null {
   if (!isRecord(payload) || payload.kind !== "obs-overlay-link") return null;
+  const settingsContract = parseSettingsContract(payload.settings_contract);
   const settings = settingsOf(payload.settings);
   if (
+    settingsContract === null ||
     settings === null ||
     !Number.isInteger(payload.version) ||
     !(payload.tag === null || typeof payload.tag === "string")
   )
     return null;
-  return { settings, version: payload.version as number, tag: payload.tag };
+  return {
+    settingsContract,
+    settings,
+    version: payload.version as number,
+    tag: payload.tag,
+  };
 }
 
 export function parseOverlayAccount(payload: unknown): OverlayAccount | null {

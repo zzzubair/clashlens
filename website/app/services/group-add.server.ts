@@ -1,5 +1,4 @@
 import type { GroupPlayer, ListedGroup } from "../lib/account-contracts";
-import { MAX_GROUP_TAGS } from "../lib/account-validation";
 import type { PlayerLookup } from "../lib/contracts";
 import type { LoginIdentity } from "../server/auth.server";
 import { addGroupPlayer, checkPlayerTag } from "./group-players.server";
@@ -8,13 +7,15 @@ import { addGroupPlayer, checkPlayerTag } from "./group-players.server";
 
 export const INVALID_TAG =
   "Enter one valid player tag, like #2PY0LQ. Tags use only 0, 2, 8, 9 and the letters P Y L Q G R J C U V.";
-export const GROUP_FULL = `This watchlist already has ${MAX_GROUP_TAGS} players, the most a comparison shows. Remove a player to add another.`;
+export const groupFull = (max: number) =>
+  `This watchlist already has ${max} players, the most a comparison shows. Remove a player to add another.`;
 
 /** The message under the tag field for a refused add or remove, if it has one. */
-export function groupTagError(code: unknown, tag: string): string | null {
+export function groupTagError(code: unknown, tag: string, max?: number): string | null {
+  if (code === "group_full" && max === undefined) return null;
   const messages: Record<string, string> = {
     group_player_exists: `${tag} is already in this watchlist.`,
-    group_full: GROUP_FULL,
+    group_full: max === undefined ? "" : groupFull(max),
     player_not_found: notFound(tag),
     player_not_checked: stillChecking(tag),
     rate_limited:
@@ -62,13 +63,14 @@ export async function addToGroup(
   group: ListedGroup,
   tag: string,
   idempotencyKey: string,
+  max: number,
 ): Promise<AddToGroupResult> {
   const member = group.players.find((player) => player.tag === tag);
   if (member !== undefined) {
     const who = member.name === null ? member.tag : `${member.name} (${member.tag})`;
     return { status: 409, tagError: `${who} is already in this watchlist.` };
   }
-  if (group.tags.length >= MAX_GROUP_TAGS) return { status: 422, tagError: GROUP_FULL };
+  if (group.tags.length >= max) return { status: 422, tagError: groupFull(max) };
   const refusal = lookupRefusal(await checkPlayerTag(clientAddress, tag), tag);
   if (refusal !== null) return refusal;
   try {
@@ -82,7 +84,7 @@ export async function addToGroup(
       typeof payload === "object" && payload !== null
         ? (payload as Record<string, unknown>).error
         : undefined;
-    const tagError = groupTagError(code, tag);
+    const tagError = groupTagError(code, tag, max);
     if (tagError === null) throw cause;
     return { status: status ?? 422, tagError };
   }

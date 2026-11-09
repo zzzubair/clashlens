@@ -375,6 +375,8 @@ export interface PlayerDay {
   /** Every battle of the day so far is in `battles`. */
   complete: boolean;
   net: number | null;
+  gained: number | null;
+  lost: number | null;
   attacks: number | null;
   defenses: number | null;
   /** Rank on the board frozen at the Reset that started this Legend day. */

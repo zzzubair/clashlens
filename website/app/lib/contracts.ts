@@ -366,6 +366,7 @@ export interface PlayerPage {
     "7" | "14",
     { span: number; counted: number; total: number | null }
   > | null;
+  dashboardGoal: Omit<import("./dashboard-cards").GoalData, "name"> | null;
   dashboardSeason: import("./dashboard-cards").SeasonData | null;
   rivalSeason: {
     resetRank: number | null;
@@ -552,6 +553,7 @@ export interface SeasonBounds {
 export type DayStatus =
   "in_progress" | "verified" | "calculated" | "uncertain" | "not_enrolled";
 export interface DayPresentation {
+  heatmap_kind: "played" | "shield" | "missing";
   status: DayStatus;
   battle_net: number | null;
   battle_net_complete: number | null;

@@ -29,6 +29,8 @@ export function emptyDay(overrides: Partial<PlayerDay> = {}): PlayerDay {
     battles: [],
     complete: false,
     net: null,
+    gained: null,
+    lost: null,
     attacks: null,
     defenses: null,
     lastResetRank: null,

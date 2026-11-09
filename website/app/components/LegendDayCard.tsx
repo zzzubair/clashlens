@@ -99,8 +99,6 @@ export function LegendDayCard({
   const attacks = battles.filter((battle) => battle.kind === "attack");
   const defenses = battles.filter((battle) => battle.kind === "defense");
   const complete = day?.complete === true;
-  const sum = (list: ClockBattle[]) =>
-    list.reduce((total, battle) => total + battle.trophyChange, 0);
   const attackCount = complete ? attacks.length : (day?.attacks ?? null);
   const defenseCount = complete ? defenses.length : (day?.defenses ?? null);
   const net = day?.net ?? null;
@@ -257,14 +255,14 @@ export function LegendDayCard({
         <BattleRow
           battles={attacks}
           count={attackCount}
-          total={complete ? sum(attacks) : null}
+          total={complete ? day.gained : null}
           noun="attack"
           kind="attack"
         />
         <BattleRow
           battles={defenses}
           count={defenseCount}
-          total={complete ? sum(defenses) : null}
+          total={complete ? day.lost : null}
           noun="defense"
           kind="defense"
         />

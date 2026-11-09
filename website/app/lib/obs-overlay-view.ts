@@ -12,14 +12,16 @@ import { elapsedUnits } from "./age-format";
  */
 import {
   OVERLAY_FONTS,
-  OVERLAY_PARTS,
+  parseSettingsContract,
+  parseOverlayLink,
+  type OverlaySettingsContract,
   PLAYER_POLL_MS,
   SETTINGS_POLL_MS,
   type OverlayBattle,
   type OverlayPlayer,
 } from "./obs-overlay";
 
-type Part = (typeof OVERLAY_PARTS)[number];
+type Part = string;
 type Font = keyof typeof OVERLAY_FONTS;
 type Arrangement = "card" | "wide" | "strip" | "column";
 
@@ -94,37 +96,37 @@ const esc = (s: unknown) =>
   );
 
 /** The overlay's settings from an address query. */
-export function readConfig(search: string): Config {
+export function readConfig(search: string, contract: OverlaySettingsContract): Config {
   const q = new URLSearchParams(search);
-  const pick = <T extends string>(
-    value: string | null,
-    allowed: readonly T[],
-    fallback: T,
-  ) => (allowed.includes(value as T) ? (value as T) : fallback);
+  const pick = (key: string) => {
+    const value = q.get(key);
+    return value !== null && contract.choices[key]?.includes(value)
+      ? value
+      : contract.defaults[key];
+  };
   const number = (key: string) =>
-    Math.min(4000, Math.max(0, Number.parseInt(q.get(key) ?? "", 10) || 0));
-  const show = q.has("show")
-    ? new Set(
-        (q.get("show") ?? "")
-          .split(",")
-          .filter((part): part is Part =>
-            (OVERLAY_PARTS as readonly string[]).includes(part),
-          ),
-      )
-    : new Set<Part>(OVERLAY_PARTS);
+    contract.numeric_keys.includes(key)
+      ? Math.min(
+          contract.numeric_max,
+          Math.max(0, Number.parseInt(q.get(key) ?? "", 10) || 0),
+        )
+      : 0;
   return {
     tag: (q.get("p") ?? "").replace(/^#/, "").toUpperCase(),
-    show,
-    text: q.get("text") === "dark" ? "dark" : "light",
-    bg: pick(q.get("bg"), ["card", "tint", "none"], "card"),
-    popup: q.get("popup") !== "0",
-    // Full-screen mode: the browser source is the whole stream and the
-    // overlay sits at x, y inside it, where the streamer placed it.
-    screen: q.get("fit") === "screen",
+    show: new Set(
+      q.has("show")
+        ? (q.get("show") ?? "").split(",").filter((part) => contract.parts.includes(part))
+        : contract.parts,
+    ),
+    text: pick("text") as Config["text"],
+    bg: pick("bg") as Config["bg"],
+    popup: pick("popup") !== "0",
+    // An absent viewer size stays blank; an absent fit stays inline, as before.
+    screen: q.get("fit") === "screen" && contract.choices.fit.includes("screen"),
     x: number("x"),
     y: number("y"),
-    demo: q.get("demo") === "1",
-    font: pick(q.get("font"), Object.keys(OVERLAY_FONTS) as Font[], "clashlens"),
+    demo: pick("demo") === "1",
+    font: (pick("font") ?? "clashlens") as Font,
     w: number("w"),
     h: number("h"),
   };
@@ -299,11 +301,15 @@ export function overlayTimers() {
  */
 export function mountOverlay(
   root: HTMLElement,
-  { link, search = "" }: { link: string | null; search?: string },
+  {
+    link,
+    search = "",
+    contract,
+  }: { link: string | null; search?: string; contract?: OverlaySettingsContract | null },
 ): () => void {
   root.innerHTML = `<div class="ov-stage"></div>${ICONS}`;
   const stage = root.querySelector<HTMLElement>(".ov-stage")!;
-  let cfg = readConfig("");
+  let cfg: Config;
   let data: View | null = null;
   let read: BattleRead = { kind: "first" };
   let freshIds = new Set<string>();
@@ -502,6 +508,7 @@ export function mountOverlay(
   }
 
   function render() {
+    if (!cfg) return;
     if (!clock.running()) return;
     if (!cfg.w || !cfg.h) {
       stage.innerHTML = "";
@@ -688,9 +695,12 @@ export function mountOverlay(
   }
 
   function apply(next: string, first: boolean) {
-    const prev = cfg;
-    cfg = readConfig(next);
-    if (cfg.font !== prev.font && cfg.font !== "clashlens") {
+    if (!contract) return;
+    const initial = cfg === undefined;
+    const nextConfig = readConfig(next, contract);
+    const prev = cfg ?? nextConfig;
+    cfg = nextConfig;
+    if ((initial || cfg.font !== prev.font) && cfg.font !== "clashlens") {
       // Lay out again once the font is in, so the fit is measured with it.
       document.fonts.load(`700 24px "${FONT_FAMILY[cfg.font]}"`).then(render, () => {});
     }
@@ -722,10 +732,13 @@ export function mountOverlay(
 
   const onMessage = (event: MessageEvent) => {
     if (event.origin !== location.origin || link !== null) return;
-    const msg = (event.data ?? {}) as { type?: string; search?: string; kind?: string };
+    const msg = event.data;
+    if (typeof msg !== "object" || msg === null) return;
+    const metadata = parseSettingsContract(msg.contract);
+    if (metadata) contract = metadata;
     if (msg.type === "cl-overlay-settings" && typeof msg.search === "string")
       apply(msg.search, false);
-    if (msg.type === "cl-overlay-test") {
+    if (msg.type === "cl-overlay-test" && cfg) {
       const kind = msg.kind === "defense" ? "defense" : "attack";
       showToast([{ ...demoBattle(kind, Math.floor(Math.random() * 8)), id: "test" }]);
     }
@@ -733,7 +746,7 @@ export function mountOverlay(
   window.addEventListener("message", onMessage);
   // Keep "Updated N min ago" honest.
   const tick = setInterval(() => {
-    if (data && overlaySource(cfg) !== "demo") render();
+    if (cfg && data && overlaySource(cfg) !== "demo") render();
   }, 30_000);
   void document.fonts.ready.then(render);
 
@@ -751,17 +764,20 @@ export function mountOverlay(
           // A replaced link shows nothing, and checks rarely.
           cancel(pollTimer);
           stopDemo();
-          cfg = readConfig("");
+          if (cfg) cfg = { ...cfg, w: 0, h: 0 };
           data = null;
           stage.innerHTML = "";
           followed = { kind: "retired" };
           wait = 60_000;
         } else if (res.ok) {
-          const saved = (await res.json()) as {
-            settings: Record<string, string>;
-            version: number;
-            tag: string | null;
-          };
+          const reply = await res.json();
+          const saved = parseOverlayLink({
+            ...reply,
+            kind: "obs-overlay-link",
+            settings_contract: reply?.settingsContract,
+          });
+          if (!saved) throw new Error("Malformed overlay settings");
+          contract = saved.settingsContract;
           const key = `${saved.version} ${saved.tag}`;
           if (followed.kind !== "following" || followed.key !== key) {
             const first = followed.kind !== "following";

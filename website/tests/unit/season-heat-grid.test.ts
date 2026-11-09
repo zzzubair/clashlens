@@ -3,19 +3,26 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { HeatMapCard } from "../../app/components/SeasonCards";
-import { heatCells, isShieldDay, type SeasonData } from "../../app/lib/dashboard-cards";
+import { heatCells, type SeasonData } from "../../app/lib/dashboard-cards";
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
 
 // Day 1 began at the 05:00 UTC Reset on 1 October.
 const START = Date.UTC(2026, 9, 1, 5);
 const season = (days: SeasonData["days"], today = 9): SeasonData => ({
+  dayCount: 28,
+  endMs: null,
+  windows: { "3": null, "7": null, season: null },
+  averages: { offense: 301.6666666666667, defense: -256 },
   today,
   startMs: START,
   days,
 });
 const day = (number: number, net: number, changes = {}) => ({
   day: number,
+  kind: "played" as const,
+  attackSlots: 8,
+  maximumAttackGain: 320,
   attacks: 8,
   defenses: 8,
   offense: 300,
@@ -38,7 +45,14 @@ describe("Season heat map", () => {
     const data = season([
       saved([1, 300, -256, 5044, 900]),
       saved([2, 310, -240, 5114, 700]),
-      day(3, 0, { attacks: 0, defenses: 0, offense: 0, defense: 0, endTrophies: 5114 }),
+      day(3, 0, {
+        kind: "shield",
+        attacks: 0,
+        defenses: 0,
+        offense: 0,
+        defense: 0,
+        endTrophies: 5114,
+      }),
       saved([4, 280, -272, 5122, 800]),
       saved([5, 320, -256, 5186, 500]),
       saved([6, 290, -288, 5188, 520]),
@@ -80,7 +94,7 @@ describe("Season heat map", () => {
         day(1, 10),
         day(2, 10),
         day(3, 30),
-        day(4, 0, { attacks: 0, defenses: 0 }),
+        day(4, 0, { kind: "shield", attacks: 0, defenses: 0 }),
         day(5, -20),
       ]),
       "net",
@@ -110,9 +124,10 @@ describe("Season heat map", () => {
   it("ranks a day with no battles but an automatic loss, not as a shield day", () => {
     const quiet = { attacks: 0, defenses: 0, offense: 0, defense: 0 };
     const lost = day(3, -304, quiet);
-    expect([lost, day(2, 0, quiet)].map((d) => isShieldDay(d))).toEqual([false, true]);
-    expect(isShieldDay({ ...day(4, 0, quiet), net: null })).toBe(false);
-    const cells = heatCells(season([day(1, 40), day(2, 0, quiet), lost]), "net");
+    const cells = heatCells(
+      season([day(1, 40), day(2, 0, { ...quiet, kind: "shield" }), lost]),
+      "net",
+    );
     expect(cells.slice(0, 3).map((cell) => [cell.kind, cell.shade])).toEqual([
       ["played", 1],
       ["shield", null],

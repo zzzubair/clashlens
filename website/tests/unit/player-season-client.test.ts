@@ -192,6 +192,7 @@ describe("historical player-season client boundary", () => {
                       refresh_id: workId,
                       tag: "#2PP",
                       status: "complete",
+                      display_state: "complete",
                       outcome: "Complete",
                     }
                   : payload,

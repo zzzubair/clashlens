@@ -246,6 +246,9 @@ export function heatDays(
   return history.map(({ day, dayNumber }): SeasonDay => {
     const loss = day.defense.trophyLoss;
     return {
+      kind: day.presentation!.heatmap_kind,
+      attackSlots: null,
+      maximumAttackGain: null,
       day: dayNumber ?? day.dayNumber!,
       attacks: day.offense.attacks,
       defenses: day.defense.defenses,
@@ -273,18 +276,20 @@ export const heatMapShown = (today: number) => today >= 2;
 export function SeasonHeatMap({
   days,
   seasonStart,
+  dayCount,
   today,
   still = false,
 }: {
   days: SeasonDay[];
   seasonStart: number;
+  dayCount: number;
   today: number;
   still?: boolean;
 }) {
   const [picked, setPicked] = useState<number | null>(null);
   const [pointed, setPointed] = useState<number | null>(null);
   if (!heatMapShown(today)) return null;
-  const cells = heatCells({ today, days }, "net");
+  const cells = heatCells({ today, days, dayCount }, "net");
   const label =
     "Each day's trophy change this Season, coloured against the player's own days: best deep ember, worst plain";
   if (still) return <SeasonHeatGrid cells={cells} label={label} loss />;

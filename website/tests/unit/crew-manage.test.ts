@@ -1,5 +1,14 @@
+import DOMAIN from "../../../testdata/w6-domain-contract.json";
 vi.mock("../../app/services/python-transport.server", () => ({
-  requestJson: mocks.requestJson,
+  requestJson: (...args: unknown[]) =>
+    args[0] === "/v1/account/crews" && (args[1] as { method?: string })?.method === "GET"
+      ? Promise.resolve({
+          kind: "crew-list",
+          crews: [],
+          max_crews: 5,
+          limits: DOMAIN.crews,
+        })
+      : mocks.requestJson(...args),
 }));
 vi.mock("../../app/services/public-user.server", async (importOriginal) => {
   const actual =
@@ -294,7 +303,9 @@ describe("refusal messages", () => {
     ["invite_not_found", {}, "That link is already off or expired."],
     ["invite_invalid", {}, "This invite link has expired or was turned off."],
   ])("%s with %o reads %j", (code, details, message) => {
-    expect(crewRefusal(code, details)).toBe(message);
+    expect(crewRefusal(code, details, { maxCrews: 5, limits: DOMAIN.crews })).toBe(
+      message,
+    );
   });
 
   it("names no account when the refusal doesn't say which, and has no message for other codes", () => {

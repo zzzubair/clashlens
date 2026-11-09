@@ -9,6 +9,13 @@ export const MAIN = "#LQ2V8PJ0";
 export const TUNDRA = "#8PYQ2LJ0";
 export const iso = (ms: number) => new Date(ms).toISOString().replace(".000Z", "+00:00");
 export const dayStart = (day: number) => ANCHOR + (day - 1) * DAY;
+const WINDOWS = cases.filter((c) => c.rule === "dashboard_windows");
+export const suppliedWindows = (index = 11) =>
+  structuredClone(
+    WINDOWS[
+      ({ 4: 2, 6: 4, 9: 3, 10: 0, 11: 1, 12: 5 } as Record<number, number>)[index] ?? 1
+    ].expected,
+  );
 const SEASONS = cases.filter((c) => c.rule === "dashboard_season");
 export const suppliedSeason = (index: number) =>
   structuredClone(SEASONS[index].expected) as {
@@ -110,6 +117,14 @@ function today(
   const [attacks, triples, gain, defenses, loss] = totals;
   return {
     ...RAW_DAY_FACTS,
+    presentation: {
+      ...RAW_DAY_FACTS.presentation,
+      status: "in_progress",
+      is_current: true,
+      live_routine: true,
+      battle_net: gain - loss,
+      battle_net_complete: null,
+    },
     ranked_day_start: iso(start),
     ranked_day_end: iso(start + DAY),
     season_day_number: 9,
@@ -159,6 +174,7 @@ function playerPage(
     screen_ready: {
       ...RAW_PLAYER_FACTS,
       dashboard_season: suppliedSeason(11),
+      dashboard_windows: suppliedWindows(),
       rival_season: {
         reset_rank: 318,
         hit_rate: 37 / 48,
@@ -247,6 +263,7 @@ export function mainPage(day6: Partial<DayPlan> = {}, seasonCase = 11) {
     }),
   );
   page.screen_ready.dashboard_season = suppliedSeason(seasonCase);
+  page.screen_ready.dashboard_windows = suppliedWindows(seasonCase);
   return page;
 }
 

@@ -96,6 +96,7 @@ describe("player facts response boundary", () => {
     "season_shape",
     "history_day_starts",
     "history_day_numbers",
+    "dashboard_windows",
     "battle_statistics",
     "dashboard_season",
     "rival_season",
@@ -107,7 +108,13 @@ describe("player facts response boundary", () => {
   });
   it("accepts lightweight replies without full battle-derived sections", () => {
     const raw = reply();
-    for (const key of ["battle_statistics", "dashboard_season", "trophy_trends"])
+    for (const key of [
+      "battle_statistics",
+      "dashboard_season",
+      "dashboard_windows",
+      "dashboard_goal",
+      "trophy_trends",
+    ])
       delete (raw.screen_ready as Record<string, unknown>)[key];
     expect(mapPlayerPage(raw, false).battleStatistics).toBeNull();
     expect(() => mapPlayerPage(raw)).toThrow();

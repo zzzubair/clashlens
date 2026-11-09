@@ -6,6 +6,7 @@ const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 function emptyLivePayload() {
   return {
     kind: "live",
+    focus_neighbors: 5,
     calendar: CALENDAR,
     generated_at: "2026-08-06T12:00:00Z",
     source_observations: {
@@ -311,6 +312,7 @@ describe("server-only Python client response boundary", () => {
           refresh_id: "7c4d7f3a-4ff1-4fdd-889e-2284debc622d",
           tag: "#2PQ",
           status: "pending",
+          display_state: "queued",
           outcome: "created",
         }),
         { status: 200, headers: { "content-type": "application/json" } },
@@ -345,6 +347,7 @@ describe("server-only Python client response boundary", () => {
               refresh_id: "7c4d7f3a-4ff1-4fdd-889e-2284debc622d",
               tag: "#2PP",
               status,
+              display_state: state,
               outcome: "created",
             }),
             { status: 200, headers: { "content-type": "application/json" } },
@@ -396,6 +399,7 @@ describe("server-only Python client response boundary", () => {
           refresh_id: "7c4d7f3a-4ff1-4fdd-889e-2284debc622d",
           tag: "#2PP",
           status: "pending",
+          display_state: "queued",
           outcome: "created",
         }),
         { status: 202, headers: { "content-type": "application/json" } },
@@ -449,6 +453,7 @@ describe("server-only Python client response boundary", () => {
         new Response(
           JSON.stringify({
             kind: "live",
+            focus_neighbors: 5,
             calendar: CALENDAR,
             ordering_rule_version: "tracked-trophies-md5-v1",
             generated_at: "2026-08-06T12:00:00+00:00",
@@ -1150,4 +1155,80 @@ describe("server-only Python client response boundary", () => {
     expect(event.perspectiveDisagreement).toBe(true);
     expect(mapped.currentDay?.offenseEvents[1]?.perspectiveDisagreement).toBe(false);
   });
+});
+
+describe("Python's refresh display state", () => {
+  const environment = {
+    NODE_ENV: process.env.NODE_ENV,
+    CLASHLENS_PYTHON_API_URL: process.env.CLASHLENS_PYTHON_API_URL,
+    CLASHLENS_PYTHON_HMAC_SECRET_B64: process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64,
+  };
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    for (const [key, value] of Object.entries(environment)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+  it.each([
+    ["pending", "queued"],
+    ["leased", "running"],
+    ["waiting_retry", "queued"],
+    ["complete", "complete"],
+    ["failed", "failed"],
+    ["cancelled", "failed"],
+  ])("reads %s as the supplied %s", async (status, state) => {
+    process.env.NODE_ENV = "test";
+    process.env.CLASHLENS_PYTHON_API_URL = "http://python-fixture.test/";
+    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+    const key = "7c4d7f3a-4ff1-4fdd-889e-2284debc622d";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json(
+          {
+            refresh_id: key,
+            tag: "#2PP",
+            status,
+            display_state: state,
+            outcome: "saved",
+          },
+          { status: 202 },
+        ),
+      ),
+    );
+    const result = await (
+      await import("../../app/services/players.server")
+    ).requestRefresh("#2PP", key);
+    expect(result.state).toBe(state);
+    vi.unstubAllGlobals();
+  });
+  it.each([undefined, "invented"])(
+    "rejects missing or unknown display state %s",
+    async (state) => {
+      process.env.NODE_ENV = "test";
+      process.env.CLASHLENS_PYTHON_API_URL = "http://python-fixture.test/";
+      process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+      const key = "7c4d7f3a-4ff1-4fdd-889e-2284debc622d";
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          Response.json(
+            {
+              refresh_id: key,
+              tag: "#2PP",
+              status: "pending",
+              display_state: state,
+              outcome: "saved",
+            },
+            { status: 202 },
+          ),
+        ),
+      );
+      await expect(
+        (await import("../../app/services/players.server")).requestRefresh("#2PP", key),
+      ).rejects.toMatchObject({ status: 502 });
+      vi.unstubAllGlobals();
+    },
+  );
 });

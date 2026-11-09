@@ -8,6 +8,7 @@ import {
   isInteger,
   isRecord,
   isUtcTimestamp,
+  isOneOf,
 } from "./python-response.server";
 import { requestJson } from "./python-transport.server";
 
@@ -17,6 +18,7 @@ const PUBLIC_USER_DAYS_TIMEOUT_MS = 4_000;
 
 /** One saved Legend day of a linked player this Season, as its card draws it. */
 export interface LinkedSeasonDay {
+  kind: "played" | "shield" | "missing";
   /** The Season day number, 1 to 28. */
   day: number;
   attacks: number | null;
@@ -79,6 +81,7 @@ export async function getPublicUserDays(username: string): Promise<PublicUserDay
         !isRecord(player) ||
         !isCanonicalPlayerTag(player.tag) ||
         !(player.reset_position === null || isInteger(player.reset_position)) ||
+        !isRecord(player.heatmap_day_kinds) ||
         !Array.isArray(player.heatmap_day_numbers) ||
         !player.heatmap_day_numbers.every(isInteger) ||
         !Array.isArray(player.days) ||
@@ -112,6 +115,15 @@ export async function getPublicUserDays(username: string): Promise<PublicUserDay
           )
             throw malformed();
           return {
+            kind: (() => {
+              const kinds = player.heatmap_day_kinds;
+              if (
+                !isRecord(kinds) ||
+                !isOneOf(kinds[String(day[0])], ["played", "shield", "missing"] as const)
+              )
+                throw malformed();
+              return kinds[String(day[0])] as LinkedSeasonDay["kind"];
+            })(),
             day: day[0],
             attacks: day[1] as number | null,
             defenses: day[2] as number | null,

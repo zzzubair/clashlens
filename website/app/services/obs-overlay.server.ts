@@ -11,7 +11,7 @@ import {
 import { type LoginIdentity } from "../server/auth.server";
 import { searchLeaderboard } from "./leaderboard-search.server";
 import { getPlayer } from "./players.server";
-import { PythonApiError } from "./python-response.server";
+import { PythonApiError, isRecord } from "./python-response.server";
 import { requestJson } from "./python-transport.server";
 
 /** The account's overlay, made on first ask, and its verified players. */
@@ -64,7 +64,7 @@ export async function readOverlayLink(link: string): Promise<OverlayLink | null>
     method: "GET",
     allowedStatuses: [404],
   });
-  if ((payload as { error?: unknown } | null)?.error === "overlay_not_found") return null;
+  if (isRecord(payload) && payload.error === "overlay_not_found") return null;
   const overlay = parseOverlayLink(payload);
   if (overlay === null) throw new PythonApiError(502, { error: "malformed" });
   return overlay;

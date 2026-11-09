@@ -1,3 +1,4 @@
+import DOMAIN from "../../../testdata/w6-domain-contract.json";
 import { CALENDAR } from "../fixtures/player-route-data";
 vi.mock("../../app/services/python-transport.server", () => ({
   requestJson: mocks.requestJson,
@@ -80,6 +81,7 @@ function player(overrides: Record<string, unknown> = {}) {
 function payload(players = [player()]) {
   return {
     kind: "group-comparison",
+    limits: DOMAIN.groups,
     calendar: CALENDAR,
     group_id: GROUP_ID,
     name: "Rivals",
@@ -140,10 +142,10 @@ describe("group comparison", () => {
       `/v1/account/groups/${GROUP_ID}/comparison?days=3`,
       { method: "GET", identity: IDENTITY },
     );
-    mocks.requestJson.mockResolvedValue({
-      ...payload(),
-      days: 7,
-      day_starts: [...DAYS, ...DAYS, DAYS[0]],
+    mocks.requestJson.mockImplementation(async (path: string) => {
+      if (path.endsWith("days=999"))
+        throw new PythonApiError(422, { error: "invalid_days" });
+      return { ...payload(), days: 7, day_starts: [...DAYS, ...DAYS, DAYS[0]] };
     });
     const fallback = await load(
       `/account/watchlists/${GROUP_ID}?days=999&sort=__proto__`,

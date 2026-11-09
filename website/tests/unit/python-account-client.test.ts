@@ -1,3 +1,4 @@
+import DOMAIN from "../../../testdata/w6-domain-contract.json";
 import { CALENDAR } from "../fixtures/player-route-data";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -280,6 +281,7 @@ describe("server-only Python account client", () => {
       .mockResolvedValueOnce(
         jsonResponse({
           calendar: CALENDAR,
+          limits: DOMAIN.groups,
           season: "1791176400",
           groups: [
             {
@@ -304,6 +306,7 @@ describe("server-only Python account client", () => {
 
     await expect(client.listGroups()).resolves.toEqual({
       calendar: CALENDAR,
+      limits: DOMAIN.groups,
       season: "1791176400",
       groups: [
         {

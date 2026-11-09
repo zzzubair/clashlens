@@ -1,3 +1,4 @@
+import DOMAIN from "../../../testdata/w6-domain-contract.json";
 import { CALENDAR } from "../fixtures/player-route-data";
 vi.mock("../../app/services/python-transport.server", () => ({
   requestJson: mocks.requestJson,
@@ -135,6 +136,7 @@ beforeEach(() => {
 it("asks a Clasher with no watchlists to name one, then puts the player straight in", async () => {
   mocks.listGroups.mockResolvedValue({
     calendar: CALENDAR,
+    limits: DOMAIN.groups,
     season: "1791176400",
     groups: [],
   });
@@ -162,6 +164,7 @@ it("asks a Clasher with no watchlists to name one, then puts the player straight
 it("leaves no empty watchlist behind for a tag the game does not know", async () => {
   mocks.listGroups.mockResolvedValue({
     calendar: CALENDAR,
+    limits: DOMAIN.groups,
     season: "1791176400",
     groups: [],
   });
@@ -181,6 +184,7 @@ it("leaves no empty watchlist behind for a tag the game does not know", async ()
 it("adds to the only watchlist and names it", async () => {
   mocks.listGroups.mockResolvedValue({
     calendar: CALENDAR,
+    limits: DOMAIN.groups,
     season: "1791176400",
     groups: [group(FRIENDS, "Friends", [])],
   });
@@ -198,6 +202,7 @@ it("adds to the only watchlist and names it", async () => {
 it("makes a Clasher with several watchlists choose, and explains the ones that cannot take the player", async () => {
   mocks.listGroups.mockResolvedValue({
     calendar: CALENDAR,
+    limits: DOMAIN.groups,
     season: "1791176400",
     groups: [
       group(FRIENDS, "Friends", ["#2PP"]),
@@ -252,6 +257,7 @@ it("keeps the player through account setup", async () => {
 it("reloads the watchlist choices after a refused save", async () => {
   mocks.listGroups.mockResolvedValue({
     calendar: CALENDAR,
+    limits: DOMAIN.groups,
     season: "1791176400",
     groups: [],
   });

@@ -9,16 +9,7 @@ import type {
   SeasonDay,
   SeasonGraphData,
 } from "../lib/dashboard-cards";
-import {
-  DAILY_BATTLES,
-  SEASON_DAYS,
-  heatCells,
-  heatValue,
-  isShieldDay,
-  offenseConsistency,
-  recentForm,
-  sideAverages,
-} from "../lib/dashboard-cards";
+import { heatCells, heatValue } from "../lib/dashboard-cards";
 import { Stars } from "./GameIcons";
 import { HeatFoot, HeatKey, SeasonHeatGrid } from "./SeasonHeatGrid";
 import {
@@ -122,7 +113,7 @@ function dayReadout(
   const result =
     cell.kind in NO_RESULT || day === undefined
       ? (NO_RESULT[cell.kind as keyof typeof NO_RESULT] ?? NO_RESULT.missing)
-      : `${isShieldDay(day) ? "no battles" : `${signedOr(cell.value)} ${mode}`} · ended on ${count(day.endTrophies)}`;
+      : `${day.kind === "shield" ? "no battles" : `${signedOr(cell.value)} ${mode}`} · ended on ${count(day.endTrophies)}`;
   return (
     <>
       <span className="season-heat-readout-day">{name}</span>
@@ -174,7 +165,7 @@ function DayNumbers({ day }: { day: SeasonDay }) {
 
 function SeasonNumbers({ data, mode }: { data: SeasonData; mode: HeatMode }) {
   const played = data.days.filter(
-    (day) => !isShieldDay(day) && heatValue(day, mode) !== null,
+    (day) => !(day.kind === "shield") && heatValue(day, mode) !== null,
   );
   if (played.length === 0) return null;
   const value = (day: SeasonDay) => heatValue(day, mode) as number;
@@ -204,8 +195,8 @@ function SeasonNumbers({ data, mode }: { data: SeasonData; mode: HeatMode }) {
     );
   }
   const side = mode === "offense" ? "positive" : "negative";
-  const average = sideAverages(data.days)[mode];
-  const shields = data.days.filter(isShieldDay).length;
+  const average = data.averages[mode];
+  const shields = data.days.filter((day) => day.kind === "shield").length;
   return (
     <>
       <Pair label="Avg a day" value={signedOr(average)} className={side} />
@@ -258,6 +249,7 @@ export function SeasonGraphCard({ data }: { data: SeasonGraphData }) {
         </CardNote>
       ) : (
         <SeasonChart
+          dayCount={data.dayCount}
           points={points}
           mode={mode}
           tip={tip}
@@ -280,12 +272,14 @@ export function SeasonGraphCard({ data }: { data: SeasonGraphData }) {
 }
 
 function SeasonChart({
+  dayCount,
   points,
   mode,
   tip,
   onTip,
   days,
 }: {
+  dayCount: number;
   points: { day: number; value: number }[];
   mode: "trophies" | "rank";
   tip: number | null;
@@ -300,7 +294,7 @@ function SeasonChart({
       : Math.max(1, Math.min(...values) * 0.6);
   const high =
     mode === "trophies" ? Math.max(...values) + 60 : Math.max(...values) * 1.25 + 1;
-  const x = (day: number) => left + ((day - 1) * (right - left)) / (SEASON_DAYS - 1);
+  const x = (day: number) => left + ((day - 1) * (right - left)) / (dayCount - 1);
   // Trophies rise upwards; rank 1 sits at the top on a log scale.
   const y =
     mode === "trophies"
@@ -348,7 +342,7 @@ function SeasonChart({
             </text>
           </g>
         ))}
-        {[1, 7, 14, 21, 28].map((day) => (
+        {[1, 7, 14, 21, dayCount].map((day) => (
           <text
             key={day}
             className="graph-axis"
@@ -429,7 +423,7 @@ function Trend({
 export function RecentFormCard({ data }: { data: SeasonData }) {
   const [days, setDays] = useState<DaysOption>("7");
   const size = Number(days);
-  const form = recentForm(data, size);
+  const form = data.windows[days]?.form ?? null;
   const before = form?.before ?? undefined;
   return (
     <>
@@ -509,8 +503,9 @@ const STAR_CLASSES = ["stars-3", "stars-2", "stars-1", "stars-0"] as const;
 export function OffenseConsistencyCard({ data }: { data: SeasonData }) {
   const [days, setDays] = useState<OffenseDaysOption>("7");
   const season = days === "season";
-  const size = season ? SEASON_DAYS : Number(days);
-  const stats = offenseConsistency(data, size);
+  const size = season ? data.dayCount : Number(days);
+  const attackSlots = data.days.find((day) => day.attackSlots !== null)?.attackSlots;
+  const stats = data.windows[days]?.consistency ?? null;
   return (
     <>
       <CardHead
@@ -578,7 +573,7 @@ export function OffenseConsistencyCard({ data }: { data: SeasonData }) {
             </div>
           </dl>
           <div className="consistency-days">
-            <span className="dash-muted">Triples each day, out of {DAILY_BATTLES}</span>
+            <span className="dash-muted">Triples each day, out of {attackSlots}</span>
             <ol className={season ? "is-season" : undefined}>
               {stats.perDay.map((day) => (
                 <li
@@ -586,12 +581,12 @@ export function OffenseConsistencyCard({ data }: { data: SeasonData }) {
                   title={
                     day.triples === null
                       ? `Day ${day.day}: not available, some attacks may be missing`
-                      : `Day ${day.day}: ${day.triples} of ${DAILY_BATTLES} tripled`
+                      : `Day ${day.day}: ${day.triples} of ${attackSlots} tripled`
                   }
                 >
                   <span className="consistency-box">
                     {day.triples === null ? null : (
-                      <i style={{ height: `${(day.triples / DAILY_BATTLES) * 100}%` }} />
+                      <i style={{ height: `${(day.triples / attackSlots!) * 100}%` }} />
                     )}
                     <b>{count(day.triples)}</b>
                   </span>

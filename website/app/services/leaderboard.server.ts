@@ -14,7 +14,6 @@ import {
   mapRecentDays,
 } from "./python-response.server";
 import { requestJson } from "./python-transport.server";
-const FOCUS_NEIGHBORS = 5;
 
 export async function getTrackedLeaderboard(
   limit = 25,
@@ -100,7 +99,10 @@ function mapLeaderboard(
     payload.has_next !== payload.page < payload.page_count ||
     neighborsBefore < 0 ||
     neighborsAfter < 0 ||
-    Math.max(neighborsBefore, neighborsAfter) > FOCUS_NEIGHBORS ||
+    (payload.kind === "live" &&
+      (!isInteger(payload.focus_neighbors) ||
+        payload.focus_neighbors < 0 ||
+        Math.max(neighborsBefore, neighborsAfter) > payload.focus_neighbors)) ||
     firstPosition + payload.entries.length - 1 > payload.total_entries ||
     (focusTag
       ? !payload.entries.some((entry) => isRecord(entry) && entry.tag === focusTag)

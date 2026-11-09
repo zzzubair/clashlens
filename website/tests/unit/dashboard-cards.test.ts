@@ -1,3 +1,5 @@
+import cases from "../../../testdata/w6-presentation-parity.json";
+import DOMAIN from "../../../testdata/w6-domain-contract.json";
 import {
   HOUR,
   DAY,
@@ -39,17 +41,7 @@ vi.mock("../../app/server/actions.server", async (importOriginal) => {
 
 import { ClockCard } from "../../app/components/BoardCards";
 import { CARDS, serializeSettings, type CardId } from "../../app/lib/dashboard";
-import {
-  around,
-  goalPlan,
-  offenseConsistency,
-  recentForm,
-  sideAverages,
-  type CardDataSet,
-  type CardReads,
-  type GoalData,
-  type SeasonData,
-} from "../../app/lib/dashboard-cards";
+import { around, type CardDataSet, type CardReads } from "../../app/lib/dashboard-cards";
 import type { DashboardLoaderData } from "../../app/lib/dashboard-data";
 import DashboardRoute, { loader } from "../../app/routes/dashboard";
 import { loadWebsiteConfig } from "../../app/server/config.server";
@@ -157,7 +149,7 @@ function leaderboard(query: URLSearchParams) {
   const pages = Math.ceil(BOARD_SIZE / limit);
   return {
     kind: day === null ? "live" : "frozen",
-    ...(day === null ? { calendar: CALENDAR } : {}),
+    ...(day === null ? { calendar: CALENDAR, focus_neighbors: 5 } : {}),
     generated_at: iso(NOW),
     ...(day === null
       ? {
@@ -254,6 +246,7 @@ function compared(
 function comparison() {
   return {
     kind: "group-comparison",
+    limits: DOMAIN.groups,
     calendar: CALENDAR,
     group_id: CLAN_MATES,
     name: "Clan mates",
@@ -480,7 +473,15 @@ function answer(url: URL): [status: number, body: unknown] {
       },
     ];
   if (path === "/v1/account/groups")
-    return [200, { calendar: CALENDAR, season: SEASON_ID, groups: python.groups }];
+    return [
+      200,
+      {
+        calendar: CALENDAR,
+        limits: DOMAIN.groups,
+        season: SEASON_ID,
+        groups: python.groups,
+      },
+    ];
   if (path === `/v1/account/groups/${CLAN_MATES}/comparison`) return [200, comparison()];
   if (path === `/v1/players/${MAIN}/seasons`)
     return [
@@ -525,10 +526,55 @@ function answer(url: URL): [status: number, body: unknown] {
         net_per_day: 128,
         finished_days: 8,
       };
+    const goalRank = url.searchParams.get("goal_rank");
+    if (goalRank) {
+      const goals = cases.filter((c) => c.rule === "goal_plan");
+      const goalCase =
+        goals[
+          result.screen_ready.season.current_day_number === 1
+            ? 0
+            : python.mainBoard[8]?.[1] === 5444
+              ? 5
+              : 3
+        ];
+      const raw = structuredClone(goalCase.args[0]) as {
+        history: (number | null)[];
+        rank: number;
+      };
+      raw.rank = Number(goalRank);
+      raw.history = [
+        5044,
+        5114,
+        5114,
+        5122,
+        5186,
+        5188,
+        null,
+        python.mainBoard[8]?.[1] ?? 5324,
+      ];
+      Object.assign(result.screen_ready, {
+        dashboard_goal: { ...raw, plan: goalCase.expected },
+      });
+    }
     if (url.searchParams.get("battles") === "false") {
+      for (const key of [
+        "dashboard_season",
+        "dashboard_windows",
+        "dashboard_goal",
+        "battle_statistics",
+        "trophy_trends",
+      ])
+        delete (result.screen_ready as Record<string, unknown>)[key];
       for (const day of result.screen_ready.days) {
         day.offense_events = [];
         day.defense_events = [];
+        for (const key of [
+          "presentation",
+          "display_start",
+          "display_start_by_reference",
+          "display_end",
+        ])
+          delete (day as Record<string, unknown>)[key];
       }
     }
     return [200, result];
@@ -798,7 +844,10 @@ describe("dashboard cards, from Python's replies through the reads to the page",
       query: { limit: "7", offset: "0", focus_tag: MAIN },
     });
     expect(python.requests).toContainEqual(frozen(199, 8));
-    expect(python.requests).toContainEqual(frozen(199, 1));
+    expect(python.requests).toContainEqual({
+      path: `/v1/players/${MAIN}`,
+      query: { goal_rank: "200" },
+    });
     expect(python.requests).toContainEqual({
       path: "/v1/leaderboards/live",
       query: { limit: "1", offset: "4999" },
@@ -1114,10 +1163,10 @@ describe("dashboard cards, from Python's replies through the reads to the page",
       "This card could not be loaded right now. Reload the page to try again.";
     python.down = ["/v1/leaderboards/frozen"];
     const data = await load();
-    expect(data.cards.goal).toBeNull();
+    expect(data.cards.goal).not.toBeNull();
     expect(data.cards["rivals-watch"]).toBeNull();
     const cards = cardsIn(await render(data));
-    expect(text(cards.goal!)).toContain(unavailable);
+    expect(text(cards.goal!)).toContain("Need +44 /day a day");
     expect(text(cards.goal!)).not.toContain("not on a saved Reset board");
     expect(text(cards["heat-map"]!)).not.toContain("could not be loaded");
     python.down = [`/v1/players/${MAIN}`];
@@ -1166,6 +1215,8 @@ describe("dashboard cards, from Python's replies through the reads to the page",
 
   it("waits for the first Reset on Day 1", async () => {
     const page = mainPage();
+    page.screen_ready.dashboard_windows = { "3": null, "7": null, season: null };
+    page.screen_ready.rival_season.finished_days = 0;
     page.screen_ready.season.current_day_number = 1;
     page.screen_ready.dashboard_season = { ...suppliedSeason(11), today: 1, days: [] };
     page.screen_ready.season_day_starts = [];
@@ -1184,103 +1235,6 @@ describe("dashboard cards, from Python's replies through the reads to the page",
 });
 
 describe("dashboard card numbers", () => {
-  const season = (days: SeasonData["days"], today = 9): SeasonData => ({
-    today,
-    startMs: null,
-    days,
-  });
-  const day = (number: number, net: number, changes = {}) => ({
-    day: number,
-    attacks: 8,
-    defenses: 8,
-    offense: 300,
-    defense: net - 300,
-    net,
-    triples: 6,
-    held: 4,
-    endTrophies: 5000 + net,
-    rank: null,
-    hits: [],
-    ...changes,
-  });
-
-  it("compares the last 3 days with the 3 before once the Season has them", () => {
-    const form = recentForm(
-      season([day(3, 0), day(4, 8), day(5, 64), day(6, 2), day(8, 86)]),
-      3,
-    );
-    expect(form?.window).toMatchObject({ first: 6, last: 8, span: 3 });
-    expect(form?.now.net).toBe(44);
-    expect(form?.before?.net).toBe(24);
-    // Day 3 of the Season: only 2 finished days and nothing before them.
-    expect(recentForm(season([day(1, 10), day(2, 20)], 3), 3)?.before).toBeNull();
-    expect(recentForm(season([], 1), 7)).toBeNull();
-  });
-
-  it("averages each side over only the days with a battle on it", () => {
-    // 280 attack trophies over 7 days, 5 with battles: 56 a day, not 40. The
-    // other 2 lost trophies only to the automatic defense loss.
-    const quiet = { attacks: 0, defenses: 0, offense: 0, defense: 0 };
-    const played = [1, 2, 3, 4, 5].map((n) => day(n, 26, { offense: 56, defense: -30 }));
-    const days = [...played, day(6, -40, quiet), day(7, -40, quiet)];
-    expect(sideAverages(days)).toEqual({ offense: 56, defense: -30 });
-  });
-
-  it("counts every slot of a short day as a miss", () => {
-    const stats = offenseConsistency(
-      season([
-        day(8, 0, {
-          hits: [
-            [3, 40],
-            [3, 40],
-            [1, 12],
-          ],
-        }),
-      ]),
-      3,
-    );
-    expect(stats).toMatchObject({
-      attacks: 3,
-      slots: 8,
-      triples: 2,
-      stars: [2, 0, 1, 0],
-    });
-    expect(stats?.missed).toBe(92 - 320);
-    expect(stats?.perMiss).toBe(12);
-  });
-
-  it("says ahead, on pace or behind, with what each shield costs", () => {
-    const goal = (changes: Partial<GoalData>): GoalData => ({
-      rank: 200,
-      name: "Lens Main",
-      finished: 8,
-      window: 7,
-      you: 5324,
-      youThen: 5044,
-      line: 5400,
-      lineThen: 5120,
-      history: [5044, changes.you ?? 5324],
-      ...changes,
-    });
-    expect(goalPlan(goal({}))?.status).toBe("behind");
-    expect(goalPlan(goal({ youThen: 5000 }))?.status).toBe("on");
-    expect(goalPlan(goal({ you: 5600, youThen: 5300, lineThen: 5400 }))).toMatchObject({
-      status: "ahead",
-      gap: 200,
-    });
-    // On Day 27 a shield of 1 still leaves a day; 2 and 3 do not.
-    expect(goalPlan(goal({ finished: 26 }))?.shields.map((item) => item.days)).toEqual([
-      1,
-    ]);
-    expect(goalPlan(goal({ line: null }))).toBeNull();
-    // The gap goes by your trophies on the board; the pace by your day ends.
-    expect(goalPlan(goal({ history: [5044, 5444] }))).toMatchObject({
-      gap: 44,
-      pace: 40,
-    });
-    expect(goalPlan(goal({ history: [5044, null] }))).toBeNull();
-  });
-
   it("keeps 3 above and 3 below, filling from the other side at the edges", () => {
     const rows = Array.from({ length: 11 }, (_, index) => index + 1);
     expect(around(rows, 5, 3, 3)).toEqual([3, 4, 5, 6, 7, 8, 9]);
