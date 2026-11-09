@@ -217,7 +217,8 @@ other threads idle. Queue maintenance and the Reset publication checks run on
 their own timer thread every 10 seconds while the spool is readable, with
 their own two database connections, so they neither
 wait for a job or a connection nor hold one a thread needs. A failed
-round is logged as `worker_maintenance` with only its error type and retried
+round, or one failed task in it (named as `task`, while the later tasks still
+run), is logged as `worker_maintenance` with only its error type and retried
 10 seconds later. Any other worker still claims `--max-jobs` jobs per batch
 and runs maintenance between batches.
 
