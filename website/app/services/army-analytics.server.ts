@@ -1,6 +1,6 @@
 import { parseCalendar } from "../lib/calendar";
 import { mapSeasonBounds } from "./player-facts.server";
-import type { ArmyAnalytics, SeasonBounds } from "../lib/contracts";
+import type { ArmyAnalytics } from "../lib/contracts";
 import {
   PythonApiError,
   isFiniteNumber,
@@ -55,7 +55,13 @@ export async function getArmySeasonSummary(
 }
 
 // Finished seasons with saved attack summaries, newest first.
-export async function getArmySeasons(): Promise<SeasonBounds[]> {
+export interface ArmySeason {
+  id: string;
+  start: string | null;
+  end: string | null;
+}
+
+export async function getArmySeasons(): Promise<ArmySeason[]> {
   const payload = await requestJson<unknown>("/v1/analytics/armies/seasons", {
     method: "GET",
   });
@@ -71,7 +77,9 @@ export async function getArmySeasons(): Promise<SeasonBounds[]> {
   const details = payload.season_details.map(mapSeasonBounds);
   if (details.some((detail) => detail === null))
     throw new PythonApiError(502, { error: "malformed" });
-  return details as SeasonBounds[];
+  return payload.seasons.map(
+    (id) => details.find((detail) => detail?.id === id) ?? { id, start: null, end: null },
+  );
 }
 
 export class NoCompletedLegendDaysError extends Error {

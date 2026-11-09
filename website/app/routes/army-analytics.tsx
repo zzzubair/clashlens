@@ -1,4 +1,4 @@
-import type { SeasonBounds } from "../lib/contracts";
+import type { ArmySeason } from "../services/army-analytics.server";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import {
   data,
@@ -115,7 +115,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
           seasonEmpty: null,
           historicalSummary: false,
           requestedSeason: "current",
-          pastSeasons: [] as SeasonBounds[],
+          pastSeasons: [] as ArmySeason[],
         },
         { status: 422 },
       );
@@ -127,13 +127,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
       seasonEmpty: null,
       historicalSummary: false,
       requestedSeason: "current",
-      pastSeasons: [] as SeasonBounds[],
+      pastSeasons: [] as ArmySeason[],
     };
   }
   // Attacks only, over the whole Season: the API's defaults are the attack
   // view and every finished Legend day from Day 1.
   const sort = source.get("sort") ?? "usage-rate";
-  let pastSeasonsRead: Promise<SeasonBounds[]> = Promise.resolve([]);
+  let pastSeasonsRead: Promise<ArmySeason[]> = Promise.resolve([]);
   try {
     pastSeasonsRead = armySeasons();
     if (season !== "current") {

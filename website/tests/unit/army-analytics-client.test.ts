@@ -345,7 +345,11 @@ describe("army analytics response boundary", () => {
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
     await expect(
       (await import("../../app/services/army-analytics.server")).getArmySeasons(),
-    ).resolves.toEqual([SEASON_BOUNDS["1785714000"], SEASON_BOUNDS["1783296000"]]);
+    ).resolves.toEqual([
+      SEASON_BOUNDS["1785714000"],
+      { id: "legacy-unresolved", start: null, end: null },
+      SEASON_BOUNDS["1783296000"],
+    ]);
     expect((fetchMock.mock.calls[0][0] as URL).pathname).toBe(
       "/v1/analytics/armies/seasons",
     );

@@ -164,6 +164,23 @@ describe("army analytics route historical reads", () => {
     mocks.createPythonClient.mockReset();
   });
 
+  it("keeps unresolved legacy Seasons selectable as Past Season beside dated Seasons", async () => {
+    mocks.createPythonClient.mockReturnValue({
+      getArmySeasonSummary: vi
+        .fn()
+        .mockResolvedValue(currentAnalytics("all", [1, 28], 0)),
+      getArmySeasons: vi
+        .fn()
+        .mockResolvedValue([
+          SEASON_BOUNDS[SEASON],
+          { id: "legacy-unresolved", start: null, end: null },
+        ]),
+    });
+    const html = await renderArmyRoute(`season=${SEASON}&category=troops`);
+    expect(html).toContain('<option value="legacy-unresolved">Past Season</option>');
+    expect(html).toContain(`<option value="${SEASON}" selected="">`);
+  });
+
   it("serves a historical season's attacks from the whole-season summary without day or population filters", async () => {
     const getArmySeasonSummary = vi.fn().mockResolvedValue({ selection: {} });
     const getArmyAnalytics = vi.fn();
