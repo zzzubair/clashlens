@@ -1283,7 +1283,7 @@ def test_collection_cutoff_keeps_both_origins_and_next_reset_board(
                 connection.execute("SELECT set_config('clashlens.test_now', %s, false)", (now.isoformat(),))
                 yield connection
 
-        monkeypatch.setattr(collector, "_connection", frozen_connection)
+        monkeypatch.setattr(collector, "connection", frozen_connection)
         for work, origin in ((reset_work, monday), (regular, created)):
             cutoff = origin + timedelta(hours=23, minutes=55)
             now = cutoff - timedelta(microseconds=1)
