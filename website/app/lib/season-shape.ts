@@ -1,4 +1,5 @@
 import type { RankedDaySummary } from "./contracts";
+import { utcDate } from "./date-format";
 
 const DAY_MS = 86_400_000;
 
@@ -42,14 +43,7 @@ export interface SeasonShape<Day = RankedDaySummary> {
 
 /** A Season day's date, such as "Mon 12 Oct". */
 export function seasonDayDate(shape: SeasonShape<unknown>, number: number) {
-  return new Date(shape.seasonStart + (number - 1) * DAY_MS)
-    .toLocaleDateString("en-GB", {
-      weekday: "short",
-      day: "numeric",
-      month: "short",
-      timeZone: "UTC",
-    })
-    .replace("Sept", "Sep");
+  return utcDate(shape.seasonStart + (number - 1) * DAY_MS, { weekday: true });
 }
 
 /** One plain line for each stretch of Legend I this Season. */

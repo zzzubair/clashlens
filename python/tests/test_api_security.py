@@ -293,21 +293,22 @@ def test_operator_freshness_cache_expires_and_never_hides_refresh_failure(monkey
 def test_player_read_passes_a_totals_only_request_to_the_page(monkeypatch) -> None:
     asked = []
 
-    def page(database, tag, *, now, freshness_seconds, battles, goal_rank):
-        asked.append((tag, battles, goal_rank))
+    def page(database, tag, *, now, freshness_seconds, battles, goal_rank, dashboard):
+        asked.append((tag, battles, goal_rank, dashboard))
         return {"tag": tag}
 
     monkeypatch.setattr("clashlens.api_players.read_player_page", page)
     with TestClient(_app(FakeDatabase())) as client:
         for target in ("/v1/players/%232PP", "/v1/players/%232PP?battles=false",
-                       "/v1/players/%232PP?goal_rank=200"):
+                       "/v1/players/%232PP?goal_rank=200", "/v1/players/%232PP?dashboard=true"):
             response = client.get(target, headers=_signed_headers(target))
             assert response.status_code == 200, response.text
         for rank in ("0", "10001", "unknown"):
             target = f"/v1/players/%232PP?goal_rank={rank}"
             assert client.get(target, headers=_signed_headers(target)).status_code == 422
 
-    assert asked == [("#2PP", True, None), ("#2PP", False, None), ("#2PP", True, 200)]
+    assert asked == [("#2PP", True, None, False), ("#2PP", False, None, False),
+                     ("#2PP", True, 200, False), ("#2PP", True, None, True)]
 
 
 def test_player_freshness_counts_from_arrival_not_from_a_free_connection(
@@ -322,7 +323,7 @@ def test_player_freshness_counts_from_arrival_not_from_a_free_connection(
         instant[0] += 2
         yield object()
 
-    def page(connection, tag, *, now, freshness_seconds, battles, goal_rank):
+    def page(connection, tag, *, now, freshness_seconds, battles, goal_rank, dashboard):
         asked.append(now)
         return {"tag": tag}
 
