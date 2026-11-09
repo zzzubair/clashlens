@@ -143,8 +143,9 @@ export async function loader({ request }: Route.LoaderArgs) {
     });
   }
   const viewing = owner.owner && query.has(VIEW_AS_PARAM) ? owner.player : undefined;
-  if (viewing !== undefined) {
+  if (viewing !== undefined && owner.owner) {
     players = viewing === null ? [] : [viewing];
+    playersCalendar = owner.calendar;
     playersUnavailable = false;
   }
 
