@@ -103,6 +103,10 @@ def test_goal_and_windows_from_fourteen_real_worker_boards(database_url, archive
         for key in ("battle_statistics", "season_shape", "trophy_trends", "history_day_starts"):
             assert plain[key] == ready[key]
         assert [saved["presentation"] for saved in plain["days"]] == [saved["presentation"] for saved in ready["days"]]
+        assert all("dashboard" in saved["display_end"] for saved in ready["days"])
+        assert [{**saved["display_end"], "dashboard": None} for saved in plain["days"]] == [
+            {**saved["display_end"], "dashboard": None} for saved in ready["days"]]
+        assert not any("dashboard" in saved["display_end"] for saved in plain["days"])
         assert [story.saved_day(you, day(number)) for number in range(1, 15)] == before
 
 
