@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
+
+import psycopg
+from psycopg_pool import PoolTimeout
 
 from . import collector_handover
 from .collector_db import CollectorDatabase, CollectorIntent
@@ -147,15 +151,27 @@ async def run(collector: Collector, stop_requested: asyncio.Event) -> None:
     while not stop_requested.is_set():
         started = time.monotonic()
         schedule = started >= next_schedule
-        intent = await collector.database_call(
-            next_check,
-            collector.database,
-            datetime.now(UTC),
-            schedule=schedule,
-            held=collector.commits.held_work(),
-        )
-        if schedule:
-            next_schedule = started + SCHEDULE_INTERVAL_SECONDS
+        try:
+            intent = await collector.database_call(
+                next_check,
+                collector.database,
+                datetime.now(UTC),
+                schedule=schedule,
+                held=collector.commits.held_work(),
+            )
+        except (psycopg.Error, PoolTimeout) as error:
+            # Its discovery admission ran 30 to 60 s after the 9 Nov 2026
+            # Monday Reset; a pass that times out is tried again, as the
+            # saved due times say, instead of stopping the collector.
+            intent = None
+            collector._count("weekly_eligibility_failed")
+            print(json.dumps({
+                "event": "weekly_eligibility", "status": "failed",
+                "error": type(error).__name__,
+            }), flush=True)
+        else:
+            if schedule:
+                next_schedule = started + SCHEDULE_INTERVAL_SECONDS
         if intent is not None:
             await collector.intents.collect(intent)
         delay = max(0.0, CHECK_INTERVAL_SECONDS - (time.monotonic() - started))
