@@ -874,6 +874,7 @@ export function readCards(
     goal: () => goalData(ctx, pages),
     "rivals-watch": () => rivalsData(ctx, pages, totals),
     "heat-map": season,
+    "season-overview": season,
     cutoffs: () => cutoffsData(ctx, pages),
     "season-graph": async () => {
       // Read the Season list alongside the page instead of after it.

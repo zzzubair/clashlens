@@ -224,6 +224,7 @@ describe("dashboard settings", () => {
     expect(shownCards(null)).toEqual(DEFAULT_LAYOUT);
     expect(shownCards("default")).toEqual(DEFAULT_LAYOUT);
     expect(addableCards(shownCards("default"))).toEqual([
+      "season-overview",
       "cutoffs",
       "season-graph",
       "recent-form",

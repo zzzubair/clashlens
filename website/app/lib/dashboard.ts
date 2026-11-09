@@ -36,7 +36,7 @@ export const CARD_SIZE_LABELS: Record<CardSize, string> = {
   l: "Large",
 };
 
-/** The 13 cards in the order of the owner's card list (docs/dashboard.md). */
+/** The 14 cards in the order of the owner's card list (docs/dashboard.md). */
 const CARD_LIST = {
   "legend-day": {
     title: "Legend day",
@@ -83,6 +83,12 @@ const CARD_LIST = {
     title: "Season heat map",
     size: "s",
     description: "Every day of the Season coloured by your gain or loss.",
+    built: true,
+  },
+  "season-overview": {
+    title: "Season overview",
+    size: "s",
+    description: "Your trophies and rank at the end of each day this Season.",
     built: true,
   },
   cutoffs: {

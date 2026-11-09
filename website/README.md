@@ -262,7 +262,7 @@ status message; with no linked player the page shows how to link one. On a
 phone every card is full width, the Customise bar stays at the bottom and
 dialogs open as bottom sheets.
 
-All 13 cards are built. Each card reads saved player pages, tracked
+All 14 cards are built. Each card reads saved player pages, tracked
 leaderboards and groups through the private API; a player page is read once
 per load however many cards use it, and a card whose reads fail says it could
 not be loaded without taking the other cards down. Switching account shows its

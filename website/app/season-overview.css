@@ -1,0 +1,97 @@
+/*
+ * The Season overview card: each finished day's number, its trophies at the
+ * Reset that ended it, its rank there with places moved since the day before,
+ * and its net. It reads like Rivals watch's table, with the same type and
+ * spacing, and borrows its rank plate and move (rank-mark, rival-moved).
+ */
+.overview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  table-layout: fixed;
+}
+
+.overview-table th {
+  padding: 0.2rem 0.35rem;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  text-align: right;
+}
+
+.overview-table td {
+  padding: 0.28rem 0.35rem;
+  font-family: var(--cl-font);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* The day's number heads its row, quieter than the numbers after it. */
+.overview-table tbody th {
+  color: var(--cl-ink);
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.overview-table :is(th, td):first-child {
+  width: 2.75rem;
+  text-align: left;
+}
+
+.overview-table :is(th, td):nth-child(2) {
+  width: 4.25rem;
+}
+
+/* Rank and its move read as one column, set off from the trophies. */
+.overview-table :is(th, td):nth-child(3) {
+  padding-left: 1rem;
+  text-align: left;
+}
+
+.overview-table :is(th, td):nth-child(4) {
+  width: 3.75rem;
+}
+
+.overview-table .rank-mark {
+  height: 1.35rem;
+  padding: 0 0.45rem 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+.overview-table .overview-today td {
+  color: var(--cl-muted);
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-align: left;
+}
+
+.dash-card > .overview-table {
+  flex-grow: 1;
+}
+
+@media (max-width: 40rem) {
+  .overview-table th {
+    padding-inline: 0.25rem;
+  }
+
+  .overview-table td {
+    padding-inline: 0.2rem;
+  }
+
+  .overview-table :is(th, td):nth-child(3) {
+    padding-left: 0.75rem;
+  }
+
+  .overview-table .rank-mark {
+    padding-inline: 0.4rem 0.35rem;
+  }
+
+  .overview-table .rival-moved {
+    margin-left: 0.25rem;
+    font-size: 0.8125rem;
+  }
+}
