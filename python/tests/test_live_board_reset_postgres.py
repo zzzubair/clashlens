@@ -339,7 +339,12 @@ def test_today_starts_from_the_days_settled_start_as_on_the_dashboard(
     5,120. STEADY plays all 16 battles a day for 80."""
     with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
-            today = ranked_day_for(connection.execute("SELECT clock_timestamp()").fetchone()[0])
+            now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
+        today = ranked_day_for(now)
+        if now < today.start + 6 * HOUR + 5 * MINUTE:
+            # The story reads to 11:00 today and the Live board follows the
+            # database's own clock, so before then its later work is not due.
+            pytest.skip("before 11:05 UTC")
         if today.day_number <= 3:
             # Two whole days before today, after the Season's Day 1 reset to 5,000.
             pytest.skip(f"Season Day {today.day_number}")
