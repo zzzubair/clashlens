@@ -16,7 +16,9 @@ describe("player trophy trends from Python", () => {
         createElement(PlayerTrends, { player: { ...PLAYER, trophyTrends } }),
       );
       if (trophyTrends === null) expect(html).toBe("");
-      else
+      // The cards carry no explanation paragraph.
+      else expect(html).not.toContain("<p");
+      if (trophyTrends !== null)
         for (const key of ["7", "14"] as const) {
           const { total, counted, span } = trophyTrends[key];
           // Each window's numbers sit in its own card, under its own heading.
