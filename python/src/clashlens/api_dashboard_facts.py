@@ -27,6 +27,14 @@ def _season_days(context: dict, recent: list[dict], season: list[dict], current:
     return saved
 
 
+def _net(day: dict) -> int | None:
+    """The saved net, or with every battle known, gain less loss."""
+    gain, loss = day["attack_gain"], day["defense_loss"]
+    if day["net_trophy_change"] is not None:
+        return day["net_trophy_change"]
+    return gain - loss if day["battles_complete"] and gain is not None and loss is not None else None
+
+
 def dashboard_season(context: dict | None, recent: list[dict], season: list[dict], current: dict | None) -> dict | None:
     if context is None:
         return None
@@ -37,9 +45,7 @@ def dashboard_season(context: dict | None, recent: list[dict], season: list[dict
         if day is None:
             continue
         gain, loss = day["attack_gain"], day["defense_loss"]
-        net = day["net_trophy_change"]
-        if net is None and day["battles_complete"] and gain is not None and loss is not None:
-            net = gain - loss
+        net = _net(day)
         attacks, defenses = day["attack_count"], day["defense_count"]
         tripled = day["defense_three_star_count"]
         events = day["offense_events"]
@@ -89,6 +95,7 @@ def rival_season(context: dict | None, recent: list[dict], season: list[dict], c
 
     Hit rate pairs known triples and attacks. Each trophy average counts
     only known totals on days with a battle on that side, excluding shields.
+    Net a day counts days with any battle, as the Season cards do.
     """
     days = [] if context is None else [
         day for number, day in _season_days(context, recent, season, current).items()
@@ -98,6 +105,8 @@ def rival_season(context: dict | None, recent: list[dict], season: list[dict], c
         "hit_rate": _rate(days, lambda day: day["attack_three_star_count"], lambda day: day["attack_count"]),
         "offense": _rate(days, lambda day: day["attack_gain"] if day["attack_count"] else None),
         "defense": _rate(days, lambda day: -day["defense_loss"] if day["defense_count"] and day["defense_loss"] is not None else None),
+        "net_per_day": _rate(days, lambda day: _net(day) if day["attack_count"] or day["defense_count"] else None),
+        "finished_days": None if context is None else context["current_day_number"] - 1,
     }
 
 
