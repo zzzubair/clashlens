@@ -15,7 +15,7 @@ import {
   mapVerificationResult,
 } from "../lib/account-contracts";
 import {
-  MAX_VERIFICATION_TOKEN_LENGTH,
+  isVerificationToken,
   normalizeDisplayName,
   normalizeGroupName,
   normalizeSubmittedPlayerTag,
@@ -364,19 +364,6 @@ async function changeProviderIdentity(
     throw new PythonApiError(502, { error: "malformed" });
   }
   return { providers: [...payload.providers] };
-}
-
-/** Exact Python token rule: 1-512 printable ASCII characters, no whitespace. */
-function isVerificationToken(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length >= 1 &&
-    value.length <= MAX_VERIFICATION_TOKEN_LENGTH &&
-    [...value].every((character) => {
-      const code = character.charCodeAt(0);
-      return code >= 0x21 && code <= 0x7e;
-    })
-  );
 }
 
 async function verifyPlayerToken(

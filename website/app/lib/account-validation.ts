@@ -27,6 +27,19 @@ export const RESERVED_USERNAMES: ReadonlySet<string> = new Set([
 export const MAX_NAME_LENGTH = 80;
 export const MAX_VERIFICATION_TOKEN_LENGTH = 512;
 
+/** Python's token rule: 1-512 printable ASCII characters, no whitespace. */
+export function isVerificationToken(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length >= 1 &&
+    value.length <= MAX_VERIFICATION_TOKEN_LENGTH &&
+    [...value].every((character) => {
+      const code = character.charCodeAt(0);
+      return code >= 0x21 && code <= 0x7e;
+    })
+  );
+}
+
 /** Canonical player tag for account forms, which accept an optional leading `#`. */
 export function normalizeSubmittedPlayerTag(value: string): string | null {
   const trimmed = value.trim();
