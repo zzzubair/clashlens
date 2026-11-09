@@ -38,12 +38,19 @@ def served_player(story, tag, now, *, goal_rank=None, battles=True):
         import json
 
         ready = result["screen_ready"]
-        for field in ("history_day_numbers", "trophy_trends"):
+        for field in ("history_day_numbers", "trophy_trends", "rival_season"):
             if field in ready:
                 before = dict(ready)
                 before.pop(field)
                 size = lambda value: len(json.dumps(value, separators=(",", ":")).encode())
                 print(f"{field} bytes ({'full' if battles else 'light'}, {len(ready['days'])} saved days): +{size(ready) - size(before)}")
+        rival = ready["rival_season"]
+        without_rank = {key: value for key, value in rival.items() if key != "reset_rank"}
+        print(f"rival reset_rank bytes: +{size(rival) - size(without_rank)}")
+        if battles and ready["days"]:
+            shown = ready["days"][0]["presentation"]
+            before = {key: value for key, value in shown.items() if key != "heatmap_kind"}
+            print(f"heatmap_kind bytes per day: +{size(shown) - size(before)}")
         return result
     finally:
         api.close()
@@ -66,7 +73,14 @@ def served_public_days(story, tag, now):
         with TestClient(app) as client:
             response = client.get(target, headers=signed_headers(target))
         assert response.status_code == 200, response.text
-        return response.json()
+        result = response.json()
+        import json
+
+        for player in result["players"]:
+            before = {key: value for key, value in player.items() if key != "heatmap_day_kinds"}
+            size = lambda value: len(json.dumps(value, separators=(",", ":")).encode())
+            print(f"public heatmap_day_kinds bytes ({len(player['days'])} saved days): +{size(player) - size(before)}")
+        return result
     finally:
         site.close()
 
@@ -345,4 +359,7 @@ def test_leaving_returning_and_signing_up_later_from_saved_game_data(database_ur
         # Days 8–14 were outside Legend I; 15–16 were 5,000 before sign-up.
         # The compact endpoint has no current saved day in this story.
         assert player["heatmap_day_numbers"] == [*range(1, 8), 17]
+        assert player["heatmap_day_kinds"]["17"] == "played"
+        assert player["heatmap_day_kinds"]["15"] == "shield"
+        assert day_at(page, day(17))["presentation"]["heatmap_kind"] == "played"
         assert [kept[0] for kept in player["days"] if kept[4]] == [15, 16]

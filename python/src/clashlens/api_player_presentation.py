@@ -46,6 +46,11 @@ _LIVE_WAIT_CODES = frozenset({
 })
 
 
+def heatmap_kind(attacks: int | None, defenses: int | None, net: int | None) -> str:
+    """The existing website heat-map cell, independent of worker shield evidence."""
+    return "shield" if attacks == 0 and defenses == 0 and net == 0 else "missing" if net is None else "played"
+
+
 def day_presentation(day: Mapping[str, Any], *, is_current: bool) -> dict[str, Any]:
     """Website evidence labels and the bot's deliberately different prefilters.
 
@@ -85,6 +90,7 @@ def day_presentation(day: Mapping[str, Any], *, is_current: bool) -> dict[str, A
         # The bot suppresses battle-free not-eligible days too, but does not
         # call a day with battles Not enrolled merely for that saved flag.
         "day_summary_status": status,
+        "heatmap_kind": heatmap_kind(attack, defense, net),
         "battle_net": None if not is_current and "not_enrolled" in codes else battle_net,
         "battle_net_complete": battle_net if complete else None,
         "is_current": is_current,

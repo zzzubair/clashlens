@@ -279,3 +279,29 @@ def test_exact_history_before_and_after_season_reset(context, new_day, now, expe
     ready = page["screen_ready"]
     assert [ready["history_day_numbers"][value] for value in ready["history_day_starts"]] == expected
     assert [day["season_day_number"] for day in ready["days"]] == dates
+
+
+@pytest.mark.parametrize("player_index", [0, 1])
+def test_player_battle_facts_keep_the_shared_crew_denominators(player_index):
+    import json
+    from pathlib import Path
+
+    fixture = json.loads((Path(__file__).parents[2] / "testdata/crew-boards-parity.json").read_text())
+    player = fixture["players"][player_index]
+    days = []
+    for raw in player["days"]:
+        days.append(saved_day(
+            raw["start"],
+            offense_events=[event for event in raw["battles"] if event["lens"] == "offense"],
+            defense_events=[event for event in raw["battles"] if event["lens"] == "defense"],
+        ))
+    facts = battle_statistics(days, days, datetime.fromisoformat(fixture["season_start"]),
+                              datetime.fromisoformat(fixture["now"]), None)
+    for period, key in (("season", "season"), ("7", "week")):
+        for side in ("attack", "defense"):
+            want = player["expected"][key][side]
+            actual = facts[period][side]
+            assert actual["count"] == want["battles"]
+            assert actual["trophies"] == want["total"]
+            assert actual["played_days"] == want["days"]
+            assert actual["per_day"] == want["total"] / want["days"]

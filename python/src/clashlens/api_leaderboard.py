@@ -12,6 +12,7 @@ from .analytics import (
 from .api_db import ApiDatabase
 from .api_player_presentation import (
     calendar_payload,
+    heatmap_kind,
     json_array,
     net_so_far,
     player_confidence,
@@ -610,6 +611,7 @@ def linked_season_days(
             "entry": None if entry is None else text_value(entry),
         })
     for player in players.values():
+        player["heatmap_day_kinds"] = {str(kept[0]): heatmap_kind(kept[1], kept[2], kept[3]) for kept in player["days"]}
         player["heatmap_day_numbers"] = heatmap_day_numbers(
             day.season_start, day.day_number, player["season_weeks"], player["days"]
         )
