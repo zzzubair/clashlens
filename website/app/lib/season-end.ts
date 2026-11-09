@@ -75,7 +75,8 @@ export function seasonRange(start: Date, end: Date): string {
   return `${first.format(start)} – ${SEASON_DATE.format(last)}`.replaceAll("Sept", "Sep");
 }
 
-// Kept for error wording when both Python Season reads fail; never a fact or decision.
+// Kept for wording only, where Python has no dates for a Season: the error when
+// both Season reads fail, and an older army Season it could not date. Never a fact or decision.
 export function unavailableSeasonDates(id: string): string {
   const start = new Date(Number(id) * 1000);
   return Number.isFinite(start.getTime())

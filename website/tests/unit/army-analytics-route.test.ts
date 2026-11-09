@@ -164,7 +164,7 @@ describe("army analytics route historical reads", () => {
     mocks.createPythonClient.mockReset();
   });
 
-  it("keeps unresolved legacy Seasons selectable as Past Season beside dated Seasons", async () => {
+  it("keeps unresolved legacy Seasons selectable beside dated Seasons, named from their id as before", async () => {
     mocks.createPythonClient.mockReturnValue({
       getArmySeasonSummary: vi
         .fn()
@@ -173,10 +173,12 @@ describe("army analytics route historical reads", () => {
         .fn()
         .mockResolvedValue([
           SEASON_BOUNDS[SEASON],
+          { id: "1783296000", start: null, end: null },
           { id: "legacy-unresolved", start: null, end: null },
         ]),
     });
     const html = await renderArmyRoute(`season=${SEASON}&category=troops`);
+    expect(html).toContain('<option value="1783296000">6 Jul – 2 Aug 2026</option>');
     expect(html).toContain('<option value="legacy-unresolved">Past Season</option>');
     expect(html).toContain(`<option value="${SEASON}" selected="">`);
   });

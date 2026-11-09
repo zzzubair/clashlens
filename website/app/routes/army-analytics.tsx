@@ -40,7 +40,7 @@ import {
 } from "../lib/army-stats";
 import { publicPageMeta } from "../lib/blog";
 import type { WebsiteErrorResponse } from "../lib/contracts";
-import { seasonDates } from "../lib/season-end";
+import { seasonDates, unavailableSeasonDates } from "../lib/season-end";
 import type { Route } from "./+types/army-analytics";
 
 export function links() {
@@ -1091,16 +1091,17 @@ export default function ArmyAnalyticsRoute() {
                     : []),
                 ].map((season) => (
                   <option key={season} value={season}>
-                    {seasonDates(
-                      (() => {
-                        const bounds =
-                          pastSeasons.find((bounds) => bounds.id === season) ??
-                          result.analytics?.seasonBounds;
-                        return bounds
-                          ? { seasonStart: bounds.start, seasonEnd: bounds.end }
-                          : null;
-                      })(),
-                    )}
+                    {(() => {
+                      const bounds =
+                        pastSeasons.find((bounds) => bounds.id === season) ??
+                        result.analytics?.seasonBounds;
+                      return bounds?.start && bounds.end
+                        ? seasonDates({
+                            seasonStart: bounds.start,
+                            seasonEnd: bounds.end,
+                          })
+                        : unavailableSeasonDates(season);
+                    })()}
                   </option>
                 ))}
               </select>
