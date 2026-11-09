@@ -96,7 +96,26 @@ def heatmap_day_numbers(start: datetime, today: int, weeks: list[dict], days: li
     return [kept[0] for kept in days if kept[5] and shape["kinds"][kept[0] - 1] not in ("outside", "waiting")]
 
 
+def historical_statistics(summary: dict[str, Any]) -> dict[str, Any]:
+    """Historical card averages, preserving the compact-detail denominator.
+
+    Retired daily detail is absent, so its unknown quiet days remain in the
+    saved observed-day denominator. Do not infer them from Season membership.
+    """
+    def side(key, count_key, trophies_key):
+        count, trophies = summary[count_key], summary[trophies_key]
+        played = summary["days_observed"] - sum(entry.get(key) == 0 for entry in summary["daily_entries"])
+        return {
+            "per_day": None if trophies is None or played == 0 else trophies / played,
+            "per_battle": None if trophies is None or count in (None, 0) else trophies / count,
+        }
+
+    return {"attack": side("attack_count", "attack_count", "attack_gain"),
+            "defense": side("defense_count", "defense_count", "defense_loss")}
+
+
 def historical_facts(summary: dict[str, Any], *, season_start: datetime | None = None) -> None:
+    summary["summary_statistics"] = historical_statistics(summary)
     saved = {}
     for entry in summary["daily_entries"]:
         entry["presentation"] = day_presentation(entry, is_current=False)
@@ -177,6 +196,30 @@ def battle_statistics(recent: list[dict], season: list[dict], start: datetime, n
     return result
 
 
+def trophy_trends(recent: list[dict], start: datetime, now: datetime) -> dict | None:
+    """The deferred trend card's complete-day totals, separate from battle averages."""
+    from .api_player_presentation import screen_event_timestamp
+
+    today = ranked_day_for(now).start
+    finished = (today - start) // RANKED_DAY_DURATION
+    if finished <= 0:
+        return None
+    saved = {day["ranked_day_start"]: day for day in recent}
+    result = {}
+    for window in (7, 14):
+        span = min(window, finished)
+        values = []
+        for day in saved.values():
+            at = screen_event_timestamp(day["ranked_day_start"])
+            end = screen_event_timestamp(day["ranked_day_end"])
+            if (at is not None and today - span * RANKED_DAY_DURATION <= at < today
+                and ranked_day_for(at).start == at and end == at + RANKED_DAY_DURATION
+                and day["completeness"]["state"] == "complete" and day["net_trophy_change"] is not None):
+                values.append(day["net_trophy_change"])
+        result[str(window)] = {"span": span, "counted": len(values), "total": sum(values) if values else None}
+    return result
+
+
 def player_facts(page: dict[str, Any], now: datetime, *, battles: bool) -> tuple[list[dict], list[dict], dict | None]:
     ready = page["screen_ready"]
     by_start = {day["ranked_day_start"]: day for day in ready["days"]}
@@ -223,11 +266,15 @@ def player_facts(page: dict[str, Any], now: datetime, *, battles: bool) -> tuple
     # selectPlayerHistory's anchor guard deliberately differs from seasonShape.
     history_start = datetime.fromisoformat(context["start"]) if context and now < datetime.fromisoformat(context["end"]) else calendar.season_start
     history = {}
+    history_numbers = {}
     for day in saved:
         number = (datetime.fromisoformat(day["ranked_day_start"]) - history_start) // RANKED_DAY_DURATION + 1
         if 1 <= number <= SEASON_DAY_COUNT and day["presentation"]["show_in_player_log"]:
             history.setdefault(day["ranked_day_start"][:10], day["ranked_day_start"])
+            history_numbers.setdefault(day["ranked_day_start"], number)
     ready["history_day_starts"] = [history[key] for key in sorted(history, reverse=True)]
+    ready["history_day_numbers"] = {start: history_numbers[start] for start in ready["history_day_starts"]}
     if battles:
+        ready["trophy_trends"] = trophy_trends(recent, start, now)
         ready["battle_statistics"] = battle_statistics(recent, season, start, now, ready["season_shape"])
     return recent, season, current[0] if current else None

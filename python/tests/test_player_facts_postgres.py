@@ -34,7 +34,17 @@ def served_player(story, tag, now, *, goal_rank=None, battles=True):
         with TestClient(app) as client:
             response = client.get(target, headers=signed_headers(target))
         assert response.status_code == 200, response.text
-        return response.json()
+        result = response.json()
+        import json
+
+        ready = result["screen_ready"]
+        for field in ("history_day_numbers", "trophy_trends"):
+            if field in ready:
+                before = dict(ready)
+                before.pop(field)
+                size = lambda value: len(json.dumps(value, separators=(",", ":")).encode())
+                print(f"{field} bytes ({'full' if battles else 'light'}, {len(ready['days'])} saved days): +{size(ready) - size(before)}")
+        return result
     finally:
         api.close()
 
@@ -126,10 +136,19 @@ def assert_season_end_facts(story, tag, last, reset):
         from clashlens.api_players import get_player_season_summary
 
         summary = get_player_season_summary(api, tag, str(int((reset - timedelta(days=28)).timestamp())))
+        import json
+
+        with_facts = len(json.dumps(summary, separators=(",", ":")).encode())
+        without_facts = len(json.dumps({key: value for key, value in summary.items() if key != "summary_statistics"}, separators=(",", ":")).encode())
+        print(f"historical summary bytes: {without_facts} -> {with_facts} (+{with_facts - without_facts})")
         assert summary["end_trophies"] == 5320
         assert summary["official_history"]["eod_trophies"] == 5320
         assert summary["season_shape"]["today"] == 29
         assert len(summary["season_shape"]["kinds"]) == 28
+        assert summary["summary_statistics"] == {
+            "attack": {"per_day": 100, "per_battle": 40},
+            "defense": {"per_day": 240, "per_battle": 30},
+        }
         assert summary["daily_entries"]
         assert all("presentation" in entry for entry in summary["daily_entries"])
     finally:
@@ -198,6 +217,7 @@ def test_day_one_goal_uses_5000_baseline(database_url, archive_server, monkeypat
         story.run_worker()
         assert story.served_board(day(2))["entries"][0]["trophies"] == 5080
         full = served_player(story, tag, day(2) + timedelta(hours=1), goal_rank=1)["screen_ready"]
+        assert full["trophy_trends"]["7"] == {"span": 1, "counted": 1, "total": 80}
         result = full["dashboard_goal"]
         assert result["you_then"] == result["line_then"] == 5000
         assert result["history"] == [5000, 5080]
@@ -206,6 +226,7 @@ def test_day_one_goal_uses_5000_baseline(database_url, archive_server, monkeypat
         decoded = []
         monkeypatch.setattr(api_players, "decode_army_share_code", lambda code: decoded.append(code))
         totals = served_player(story, tag, day(2) + timedelta(hours=1), battles=False)["screen_ready"]
+        assert "trophy_trends" not in totals
         assert totals["army_units"] == {} and decoded == []
         assert totals["rival_season"] == {"hit_rate": 1, "offense": 320, "defense": -240,
                                           "net_per_day": 80, "finished_days": 1}
@@ -305,6 +326,7 @@ def test_leaving_returning_and_signing_up_later_from_saved_game_data(database_ur
         assert story.served_board(day(18))["entries"][0]["trophies"] == 5040
         page = served_player(story, tag, day(18) + timedelta(hours=2))
         ready = page["screen_ready"]
+        assert ready["history_day_numbers"][day(17).isoformat()] == 17
         assert ready["season_shape"]["kinds"][:18] == ["legend"] * 7 + ["outside"] * 7 + ["waiting"] * 2 + ["legend"] * 2
         assert ready["season_shape"]["legend_days"] == {"expected": 8, "saved": 8}
         assert [run["signed_up"] for run in ready["season_shape"]["runs"]] == [1, 17]

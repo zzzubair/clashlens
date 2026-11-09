@@ -98,6 +98,8 @@ def test_historical_shape_needs_no_retained_daily_detail():
         for number in range(1, 15)
     ]
     summary = {"season_start": start.isoformat(), "daily_entries": entries,
+               "days_observed": 14, "attack_count": 112, "defense_count": 112,
+               "attack_gain": None, "defense_loss": None,
                "season_weeks": [{"week_start": (start + offset * DAY).isoformat(),
                                  "league": "legend_i" if offset < 14 else "below_legend_i", "entry": None}
                                 for offset in (0, 7, 14, 21)]}
@@ -274,5 +276,6 @@ def test_exact_history_before_and_after_season_reset(context, new_day, now, expe
                              "recent_day_starts": [day["ranked_day_start"] for day in days], "season_weeks": [],
                              "season": {"start": start.isoformat(), "end": SEASON.isoformat(), "current_day_number": 28} if context else None}}
     player_facts(page, datetime.fromisoformat(now), battles=True)
-    anchor = SEASON if "05:10" in now else start
-    assert [(datetime.fromisoformat(value) - anchor).days + 1 for value in page["screen_ready"]["history_day_starts"]] == expected
+    ready = page["screen_ready"]
+    assert [ready["history_day_numbers"][value] for value in ready["history_day_starts"]] == expected
+    assert [day["season_day_number"] for day in ready["days"]] == dates

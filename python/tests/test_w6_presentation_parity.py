@@ -35,6 +35,8 @@ def test_original_website_example(case):
             args[3] = {int(key): value for key, value in args[3].items()}
     elif case["rule"] == "battle_statistics":
         args[2], args[3] = datetime.fromisoformat(args[2]), datetime.fromisoformat(args[3])
+    elif case["rule"] == "trophy_trends":
+        args[1], args[2] = datetime.fromisoformat(args[1]), datetime.fromisoformat(args[2])
     module = next(module for module in (api_player_presentation, api_player_season_facts, api_dashboard_facts)
                   if hasattr(module, case["rule"]))
     result = getattr(module, case["rule"])(*args, **kwargs)
