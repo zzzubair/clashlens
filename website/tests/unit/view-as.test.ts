@@ -389,7 +389,7 @@ describe("the owner's View as", () => {
     if (data.kind !== "signed-in") throw new Error("expected signed in");
     expect(Object.keys(data.cards)).toEqual(["goal"]);
     await Promise.all(Object.values(data.cards));
-    expect(client.getPlayer).toHaveBeenCalledWith(VIEWED, true, true);
+    expect(client.getPlayer).toHaveBeenCalledWith(VIEWED, true, true, 50);
     expect(client.getPlayer.mock.calls.map(([tag]) => tag)).not.toContain(MINE);
     expect(client.listGroups).not.toHaveBeenCalled();
     // Python is asked as the owner's own account.

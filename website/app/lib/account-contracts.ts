@@ -64,7 +64,35 @@ export interface ListedGroup extends PrivateGroup {
   createdAt?: string | null;
 }
 
+export interface GroupLimits {
+  max_groups: number;
+  max_players: number;
+  comparison_days: number[];
+}
+export function parseGroupLimits(value: unknown): GroupLimits | null {
+  if (
+    !isRecord(value) ||
+    typeof value.max_groups !== "number" ||
+    !Number.isSafeInteger(value.max_groups) ||
+    value.max_groups < 1 ||
+    typeof value.max_players !== "number" ||
+    !Number.isSafeInteger(value.max_players) ||
+    value.max_players < 1 ||
+    !Array.isArray(value.comparison_days) ||
+    value.comparison_days.length === 0 ||
+    !value.comparison_days.every(
+      (day) => typeof day === "number" && Number.isSafeInteger(day) && day > 0,
+    )
+  )
+    return null;
+  return {
+    max_groups: value.max_groups,
+    max_players: value.max_players,
+    comparison_days: value.comparison_days,
+  };
+}
 export interface GroupList {
+  limits: GroupLimits;
   calendar: Calendar;
   groups: ListedGroup[];
   /** The Season the trophies were read in: its first Reset, in Unix seconds. */
@@ -343,7 +371,8 @@ export function mapGroups(value: unknown): GroupList | null {
   }
   const calendar = parseCalendar(value.calendar);
   if (calendar === null) return null;
-  return { groups, season: value.season, calendar };
+  const limits = parseGroupLimits(value.limits);
+  return limits ? { groups, season: value.season, calendar, limits } : null;
 }
 
 export function mapGroupResult(value: unknown): PrivateGroup | null {

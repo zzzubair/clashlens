@@ -146,6 +146,7 @@ for (const view of ["list", "comparison"] as const) {
     const data: GroupsLoaderData | GroupCompareLoaderData =
       view === "list"
         ? {
+            limits: comparison.limits,
             season: comparison.season,
             seasonEnd: comparison.calendar.season_end,
             groups: [

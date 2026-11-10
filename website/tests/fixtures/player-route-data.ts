@@ -17,6 +17,7 @@ export const CALENDAR = {
   day_count: 28,
 };
 export const VERIFIED = {
+  heatmap_kind: "played" as const,
   status: "verified" as const,
   battle_net: 40,
   battle_net_complete: 40,
@@ -62,8 +63,13 @@ export const EMPTY_STATISTICS = {
   },
 };
 export const EMPTY_PLAYER_FACTS = {
+  dashboardGoal: null,
   trophyTrends: null,
   dashboardSeason: {
+    dayCount: 28,
+    endMs: null,
+    windows: { "3": null, "7": null, season: null },
+    averages: { offense: null, defense: null },
     today: null,
     startMs: null,
     days: [] as import("../../app/lib/dashboard-cards").SeasonDay[],
@@ -123,6 +129,7 @@ export const RAW_STATISTICS = {
   },
 };
 export const RAW_PLAYER_FACTS = {
+  dashboard_windows: { "3": null, "7": null, season: null },
   trophy_trends: null,
   dashboard_season: null,
   rival_season: {

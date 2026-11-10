@@ -115,6 +115,7 @@ const liveEntry = (position: number, tag: string) => ({
 const livePage = (entries: unknown[]) =>
   Response.json({
     kind: "live",
+    focus_neighbors: 5,
     calendar: CALENDAR,
     generated_at: "2026-08-06T12:00:00+00:00",
     source_observations: {
@@ -173,3 +174,18 @@ it.each([
     ),
   ).rejects.toMatchObject({ status: 502 });
 });
+
+it.each([0, 1, undefined])(
+  "obeys the supplied focus-neighbor allowance %s",
+  async (allowance) => {
+    const payload = await livePage(neighborEntries).json();
+    payload.focus_neighbors = allowance;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(payload)));
+    const read = (
+      await import("../../app/services/leaderboard.server")
+    ).getTrackedLeaderboard(2, "live", 2, undefined, "#2PP");
+    if (allowance === 1)
+      expect((await read).entries.map((entry) => entry.rank)).toEqual([2, 3, 4]);
+    else await expect(read).rejects.toMatchObject({ status: 502 });
+  },
+);

@@ -61,6 +61,7 @@ function fakeInteractiveApi() {
               refresh_id: crypto.randomUUID(),
               tag,
               status: "pending",
+              display_state: "queued",
               outcome: "created",
             },
       ),

@@ -17,6 +17,7 @@ const PUBLIC_USER_DAYS_TIMEOUT_MS = 4_000;
 
 /** One saved Legend day of a linked player this Season, as its card draws it. */
 export interface LinkedSeasonDay {
+  kind: "played" | "shield" | "missing";
   /** The Season day number, 1 to 28. */
   day: number;
   attacks: number | null;
@@ -47,6 +48,12 @@ export interface PublicUserDays {
     days: LinkedSeasonDay[];
   }>;
 }
+
+const HEATMAP_KINDS: Record<string, LinkedSeasonDay["kind"]> = {
+  p: "played",
+  s: "shield",
+  m: "missing",
+};
 
 const nullableCount = (value: unknown) =>
   value === null || (isInteger(value) && value >= 0);
@@ -79,9 +86,11 @@ export async function getPublicUserDays(username: string): Promise<PublicUserDay
         !isRecord(player) ||
         !isCanonicalPlayerTag(player.tag) ||
         !(player.reset_position === null || isInteger(player.reset_position)) ||
+        typeof player.heatmap_day_kinds !== "string" ||
         !Array.isArray(player.heatmap_day_numbers) ||
         !player.heatmap_day_numbers.every(isInteger) ||
         !Array.isArray(player.days) ||
+        player.heatmap_day_kinds.length !== player.days.length ||
         new Set(player.heatmap_day_numbers).size !== player.heatmap_day_numbers.length
       )
         throw malformed();
@@ -97,7 +106,7 @@ export async function getPublicUserDays(username: string): Promise<PublicUserDay
         heatmapDayNumbers: player.heatmap_day_numbers,
         resetRank: player.reset_position,
         seasonWeeks: mapSeasonWeeks(player.season_weeks),
-        days: player.days.map((day): LinkedSeasonDay => {
+        days: player.days.map((day, index): LinkedSeasonDay => {
           if (
             !Array.isArray(day) ||
             day.length !== 6 ||
@@ -111,7 +120,11 @@ export async function getPublicUserDays(username: string): Promise<PublicUserDay
             !isBoolean(day[5])
           )
             throw malformed();
+          // One letter a day, in the same order as the days: played, shield or missing.
+          const kind = HEATMAP_KINDS[(player.heatmap_day_kinds as string)[index]!];
+          if (kind === undefined) throw malformed();
           return {
+            kind,
             day: day[0],
             attacks: day[1] as number | null,
             defenses: day[2] as number | null,

@@ -579,6 +579,7 @@ describe("create a crew", () => {
       size: 20,
       tags: [TAGS[0]],
     });
+    expect(mocks.requestJson).toHaveBeenCalledTimes(1);
   });
 
   it("asks for an account before sending anything", async () => {

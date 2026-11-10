@@ -12,6 +12,7 @@ import { parseLeftLegendI, type LeftLegendI } from "./left-legend";
 import { validPlayerTag } from "./player-tag";
 import { isCanonicalUuid } from "./validation";
 
+// These paths have no limits reply: forms and refusals keep their pre-request bounds.
 export const MAX_CREWS = 5;
 export const MIN_CREW_SIZE = 2;
 export const MAX_CREW_SIZE = 100;
@@ -30,6 +31,7 @@ export interface ListedCrew {
 }
 
 export interface CrewList {
+  limits: { min_size: number; max_size: number; default_size: number };
   crews: ListedCrew[];
   maxCrews: number;
 }
@@ -316,7 +318,27 @@ export function mapCrewList(value: unknown): CrewList | null {
     }
     crews.push({ ...header, role: item.role, myTags: item.my_tags });
   }
-  return { crews, maxCrews: value.max_crews };
+  const limits = value.limits;
+  if (
+    !isRecord(limits) ||
+    !isCount(limits.min_size) ||
+    !isCount(limits.max_size) ||
+    !isCount(limits.default_size) ||
+    limits.min_size < 1 ||
+    limits.max_size < limits.min_size ||
+    limits.default_size < limits.min_size ||
+    limits.default_size > limits.max_size
+  )
+    return null;
+  return {
+    crews,
+    maxCrews: value.max_crews,
+    limits: {
+      min_size: limits.min_size,
+      max_size: limits.max_size,
+      default_size: limits.default_size,
+    },
+  };
 }
 
 export function mapCrew(value: unknown): Crew | null {

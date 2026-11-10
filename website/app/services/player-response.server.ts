@@ -1,6 +1,8 @@
 import { parseCalendar } from "../lib/calendar";
 import {
   mapTrophyTrends,
+  mapDashboardWindows,
+  mapDashboardGoal,
   mapDashboardSeason,
   mapRivalSeason,
   mapShape,
@@ -359,10 +361,13 @@ export function mapPlayerPage(
       )
     )
       malformed();
-    const adjustments = (value.adjustments ?? []) as {
-      type: string;
-      amount: number;
-    }[];
+    const adjustments = (Array.isArray(value.adjustments) ? value.adjustments : []).map(
+      (item) => {
+        if (!isRecord(item) || !isString(item.type) || !isInteger(item.amount))
+          malformed();
+        return { type: item.type, amount: item.amount };
+      },
+    );
     const automatic = adjustments.find((item) => item.type === "automatic_defense");
     const reset = adjustments.find(
       (item) => item.type === "weekly_reset" || item.type === "season_reset",
@@ -457,24 +462,41 @@ export function mapPlayerPage(
     return primaryDays.get(start)!;
   };
   const historyStarts = screen.history_day_starts;
+  if (battles && !isRecord(screen.history_day_numbers)) malformed();
   if (battles && (!Array.isArray(historyStarts) || !historyStarts.every(isUtcTimestamp)))
     malformed();
   const seasonDays = screen.season_day_starts.map((start) => dayAt(start, "season"));
   const recentDays = screen.recent_day_starts.map((start) => dayAt(start, "recent"));
   const currentDay =
     screen.current_day_start === null ? null : dayAt(screen.current_day_start, "current");
+  const calendar = parseCalendar(screen.calendar);
+  if (!calendar) malformed();
+  // Only the Dashboard asks for its Season and rival facts.
+  const dashboardSeason =
+    battles && dashboard
+      ? mapDashboardSeason(screen.dashboard_season, calendar.day_count)
+      : null;
+  const rivalSeason = dashboard ? mapRivalSeason(screen.rival_season) : null;
+  if (dashboardSeason && rivalSeason) {
+    dashboardSeason.windows = mapDashboardWindows(
+      screen.dashboard_windows,
+      dashboardSeason,
+    );
+    dashboardSeason.averages = {
+      offense: rivalSeason.offense,
+      defense: rivalSeason.defense,
+    };
+  }
   const player: PlayerPage = {
     kind: "player-page",
     trophyTrends: battles ? mapTrophyTrends(screen.trophy_trends) : null,
-    // Only the Dashboard asks for its Season and rival facts.
-    dashboardSeason:
-      battles && dashboard ? mapDashboardSeason(screen.dashboard_season) : null,
-    rivalSeason: dashboard ? mapRivalSeason(screen.rival_season) : null,
-    calendar:
-      parseCalendar(screen.calendar) ??
-      (() => {
-        throw new PythonApiError(502, { error: "malformed" });
-      })(),
+    dashboardSeason,
+    dashboardGoal:
+      battles && screen.dashboard_goal !== undefined
+        ? mapDashboardGoal(screen.dashboard_goal)
+        : null,
+    rivalSeason,
+    calendar,
     seasonShape: battles
       ? mapShape(screen.season_shape, [
           ...seasonDays,

@@ -46,14 +46,23 @@ export async function getPlayer(
   tag: string,
   battles = true,
   dashboard = false,
+  goalRank?: number,
 ): Promise<PlayerPage> {
   const query = new URLSearchParams();
   if (!battles) query.set("battles", "false");
   if (dashboard) query.set("dashboard", "true");
+  if (goalRank !== undefined) query.set("goal_rank", String(goalRank));
   const payload = await requestJson<unknown>(
     `/v1/players/${encodeURIComponent(tag)}${query.size ? `?${query}` : ""}`,
     { method: "GET" },
   );
+  if (
+    goalRank !== undefined &&
+    (!isRecord(payload) ||
+      !isRecord(payload.screen_ready) ||
+      !("dashboard_goal" in payload.screen_ready))
+  )
+    throw new PythonApiError(502, { error: "malformed" });
   return mapPlayerPage(payload, battles, dashboard);
 }
 
@@ -98,7 +107,7 @@ export async function getRefreshStatus(
     `/v1/refreshes/${encodeURIComponent(workId)}`,
     { method: "GET" },
   );
-  const status = mapRefresh(payload, "refresh-status") as RefreshStatus;
+  const status = mapRefresh(payload, "refresh-status");
   if (status.tag !== tag) {
     throw new PythonApiError(409, { error: "conflict" });
   }
@@ -108,6 +117,8 @@ export async function getRefreshStatus(
   return status;
 }
 
+function mapRefresh(payload: unknown, kind: "refresh-work"): RefreshWork;
+function mapRefresh(payload: unknown, kind: "refresh-status"): RefreshStatus;
 function mapRefresh(
   payload: unknown,
   kind: "refresh-work" | "refresh-status",
@@ -125,36 +136,29 @@ function mapRefresh(
       "failed",
       "cancelled",
     ] as const) ||
+    !isOneOf(payload.display_state, [
+      "queued",
+      "running",
+      "complete",
+      "failed",
+    ] as const) ||
     !isString(payload.outcome)
   ) {
     throw new PythonApiError(502, { error: "malformed" });
   }
-  const raw = payload as {
-    refresh_id: string;
-    tag: string;
-    status: "pending" | "leased" | "waiting_retry" | "complete" | "failed" | "cancelled";
-    outcome: string;
-  };
-  const state =
-    raw.status === "pending" || raw.status === "waiting_retry"
-      ? "queued"
-      : raw.status === "leased"
-        ? "running"
-        : raw.status === "complete"
-          ? "complete"
-          : "failed";
+  const state = payload.display_state;
   const value = {
     kind,
-    workId: raw.refresh_id,
-    tag: raw.tag,
+    workId: payload.refresh_id,
+    tag: payload.tag,
     state,
     progressPercent: state === "queued" ? 0 : state === "running" ? 50 : 100,
-    message: raw.outcome,
+    message: payload.outcome,
     publishedAt: null,
   } as const;
   return kind === "refresh-status"
-    ? ({ ...value, kind: "refresh-status", player: null } as RefreshStatus)
-    : ({ ...value, kind: "refresh-work" } as RefreshWork);
+    ? { ...value, kind: "refresh-status", player: null }
+    : { ...value, kind: "refresh-work" };
 }
 
 function mapSearch(payload: unknown, submittedQuery: string): SearchResponse {

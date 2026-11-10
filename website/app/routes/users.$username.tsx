@@ -51,7 +51,7 @@ export interface LinkedDay {
   /** The place on the last Reset's Daily board. */
   resetRank: number | null;
   /** The Season heat map, as the player page's Season summary draws it. */
-  season: { start: number; today: number; days: SeasonDay[] } | null;
+  season: { dayCount: number; start: number; today: number; days: SeasonDay[] } | null;
 }
 
 /** The status line on each of the owner's tools; null when it could not be read. */
@@ -127,6 +127,9 @@ function linkedDays(read: PublicUserDays): Record<string, LinkedDay> {
       const days = player.heatmapDayNumbers
         .map((number) => player.days.find((day) => day.day === number)!)
         .map((kept): SeasonDay => ({
+          kind: kept.kind,
+          attackSlots: null,
+          maximumAttackGain: null,
           day: kept.day,
           attacks: kept.attacks,
           defenses: kept.defenses,
@@ -143,7 +146,10 @@ function linkedDays(read: PublicUserDays): Record<string, LinkedDay> {
         player.tag,
         {
           resetRank: player.resetRank,
-          season: days.length > 0 ? { start: seasonStart, today, days } : null,
+          season:
+            days.length > 0
+              ? { dayCount: read.calendar.day_count, start: seasonStart, today, days }
+              : null,
         },
       ];
     }),
@@ -537,6 +543,7 @@ function LinkedPlayer({
       {day?.season && heatMapShown(day.season.today) ? (
         <div className="linked-player-heat">
           <SeasonHeatMap
+            dayCount={day.season.dayCount}
             days={day.season.days}
             seasonStart={day.season.start}
             today={day.season.today}

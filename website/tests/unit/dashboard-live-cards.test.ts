@@ -138,6 +138,8 @@ describe("Legend day card", () => {
         trophies: 5702,
         complete: true,
         net: 66,
+        gained: 71,
+        lost: -5,
         attacks: 2,
         defenses: 1,
         lastResetRank: 331,

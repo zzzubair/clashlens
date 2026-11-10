@@ -1,3 +1,4 @@
+import DOMAIN from "../../../testdata/w6-domain-contract.json";
 import { CALENDAR } from "../fixtures/player-route-data";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
@@ -90,6 +91,7 @@ async function submit(fields: Record<string, string>): Promise<Outcome> {
 function groupWith(tags: string[]) {
   return {
     calendar: CALENDAR,
+    limits: DOMAIN.groups,
     season: "1791176400",
     groups: [
       {
@@ -161,6 +163,7 @@ describe("adding and removing one group player", () => {
     );
     const listed = mapGroups({
       calendar: CALENDAR,
+      limits: DOMAIN.groups,
       season: "1791176400",
       groups: [
         {
@@ -185,6 +188,7 @@ describe("adding and removing one group player", () => {
         Component: GroupsRoute,
         loader: () => ({
           calendar: CALENDAR,
+          limits: DOMAIN.groups,
           groups: listed?.groups ?? [],
           previews: {},
           // No Season: this checks the server's waiting flag, not the clock.
@@ -349,6 +353,7 @@ describe("adding and removing one group player", () => {
     };
     mocks.listGroups.mockResolvedValue({
       calendar: CALENDAR,
+      limits: DOMAIN.groups,
       season: "1791176400",
       groups,
     });
@@ -528,6 +533,7 @@ async function renderGroups(
       action: () => actionData,
       loader: () => ({
         calendar: CALENDAR,
+        limits: DOMAIN.groups,
         groups,
         previews,
         previewDays,

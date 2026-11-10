@@ -4,7 +4,7 @@ import { PlacesMeter, RoleChip } from "../components/CrewBoards";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { Crest } from "../components/GameIcons";
 import type { WebsiteErrorResponse } from "../lib/contracts";
-import { MAX_CREWS, type CrewList } from "../lib/crew-contracts";
+import { type CrewList } from "../lib/crew-contracts";
 import type { Route } from "./+types/crews";
 import "../crews.css";
 
@@ -44,7 +44,7 @@ export function headers() {
 export default function CrewsRoute() {
   const { list, error } = useLoaderData<typeof loader>();
   const crews = list?.crews ?? [];
-  const max = list?.maxCrews ?? MAX_CREWS;
+  const max = list?.maxCrews;
   return (
     <main id="main-content" tabIndex={-1} className="page-shell crew-page">
       <header className="page-hero">
@@ -55,7 +55,7 @@ export default function CrewsRoute() {
         <ErrorNotice error={error} />
       ) : (
         <p className="crew-create">
-          {crews.length < max ? (
+          {max !== undefined && crews.length < max ? (
             <Link className="button button-primary" to="/crews/new">
               Create a crew
             </Link>

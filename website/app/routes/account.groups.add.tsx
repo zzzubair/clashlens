@@ -13,12 +13,11 @@ import { ErrorNotice } from "../components/ErrorNotice";
 import type { ListedGroup } from "../lib/account-contracts";
 import {
   isInappropriateName,
-  MAX_GROUP_TAGS,
   normalizeGroupName,
   normalizeSubmittedPlayerTag,
 } from "../lib/account-validation";
 import type { WebsiteErrorResponse } from "../lib/contracts";
-import { addedNotice, GROUP_LIMIT } from "../lib/group-text";
+import { addedNotice, groupLimit } from "../lib/group-text";
 import { addToGroupPath, canonicalPlayerPath } from "../lib/player-tag";
 import type { Route } from "./+types/account.groups.add";
 import "../account-groups.css";
@@ -36,6 +35,7 @@ interface GroupChoice {
 
 export interface AddToGroupLoaderData {
   /** The player to add, or null when the address holds no readable tag. */
+  limits: import("../lib/account-contracts").GroupLimits | null;
   tag: string | null;
   groups: GroupChoice[];
   addIdempotencyKey: string;
@@ -82,6 +82,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   const tag = normalizeSubmittedPlayerTag(params.tag);
   const loaded: AddToGroupLoaderData = {
     tag,
+    limits: null,
     groups: [],
     addIdempotencyKey: freshIdempotencyKey(),
     createIdempotencyKey: freshIdempotencyKey(),
@@ -90,8 +91,11 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   if (tag === null) return data(loaded, { status: 400, headers: NO_STORE });
   try {
     const { createPythonClient } = await import("../services/python.server");
-    const { groups } = await createPythonClient(identity).listGroups();
-    return data({ ...loaded, groups: choices(groups, tag) }, { headers: NO_STORE });
+    const { groups, limits } = await createPythonClient(identity).listGroups();
+    return data(
+      { ...loaded, groups: choices(groups, tag), limits },
+      { headers: NO_STORE },
+    );
   } catch (cause) {
     const actions = await import("../server/actions.server");
     if (actions.isAccountNotFoundError(cause)) throw await setupRedirect(request);
@@ -152,10 +156,10 @@ export async function action({ request, context }: Route.ActionArgs) {
 
   const { clientAddressContext } = await import("../server/client-address.server");
   const clientAddress = context?.get(clientAddressContext);
+  const { createPythonClient } = await import("../services/python.server");
+  const client = createPythonClient(identity);
   try {
-    const { createPythonClient } = await import("../services/python.server");
-    const client = createPythonClient(identity);
-    const { groups } = await client.listGroups();
+    const { groups, limits } = await client.listGroups();
     let group: ListedGroup | undefined;
     if (creating) {
       // The form only offers a new group to an account that has none.
@@ -192,7 +196,14 @@ export async function action({ request, context }: Route.ActionArgs) {
         });
       }
     }
-    const added = await adding.addToGroup(identity, clientAddress, group, tag, addKey);
+    const added = await adding.addToGroup(
+      identity,
+      clientAddress,
+      group,
+      tag,
+      addKey,
+      limits.max_players,
+    );
     if (!("player" in added)) {
       const tagError = creating
         ? `Created ${group.name}, but: ${added.tagError}`
@@ -211,7 +222,16 @@ export async function action({ request, context }: Route.ActionArgs) {
       payload?: { error?: unknown };
     };
     const code = payload?.error;
-    const tagError = adding.groupTagError(code, tag);
+    let limits;
+    if (code === "group_full" || code === "group_limit_reached") {
+      try {
+        limits = (await client.listGroups()).limits;
+      } catch (failure) {
+        const { safeWebsiteError } = await import("../server/errors.server");
+        return reply(503, { generalError: safeWebsiteError(failure) });
+      }
+    }
+    const tagError = adding.groupTagError(code, tag, limits?.max_players);
     if (tagError !== null)
       return reply(status ?? 422, { fieldErrors: { tag: tagError } });
     if (code === "group_name_conflict") {
@@ -220,7 +240,7 @@ export async function action({ request, context }: Route.ActionArgs) {
       });
     }
     if (code === "group_limit_reached")
-      return reply(422, { fieldErrors: { name: GROUP_LIMIT } });
+      return reply(422, { fieldErrors: { name: groupLimit(limits!.max_groups) } });
     const { safeWebsiteError } = await import("../server/errors.server");
     return reply(503, { generalError: safeWebsiteError(cause) });
   }
@@ -247,7 +267,9 @@ export default function AddToGroupRoute() {
   const addKey = actionData?.addIdempotencyKey ?? loaderData.addIdempotencyKey;
   const createKey = actionData?.createIdempotencyKey ?? loaderData.createIdempotencyKey;
   const errors = actionData?.fieldErrors ?? {};
-  const open = groups.filter((group) => !group.member && group.count < MAX_GROUP_TAGS);
+  const open = groups.filter(
+    (group) => !group.member && group.count < loaderData.limits!.max_players,
+  );
   const only = groups.length === 1 ? groups[0] : undefined;
 
   return (
@@ -324,8 +346,8 @@ export default function AddToGroupRoute() {
                 <p className="form-help">
                   {only.member
                     ? `${tag} is already in ${only.name}, your only watchlist.`
-                    : only.count >= MAX_GROUP_TAGS
-                      ? `${only.name} already has ${MAX_GROUP_TAGS} players, the most a watchlist holds. Remove a player there to add another.`
+                    : only.count >= loaderData.limits!.max_players
+                      ? `${only.name} already has ${loaderData.limits!.max_players} players, the most a watchlist holds. Remove a player there to add another.`
                       : `${only.name} is your only watchlist, so ${tag} goes there.`}
                 </p>
                 <button
@@ -342,7 +364,7 @@ export default function AddToGroupRoute() {
                 <fieldset className="group-choices" aria-labelledby="add-form-title">
                   <input type="hidden" name="action" value="add" />
                   {groups.map((group) => {
-                    const full = group.count >= MAX_GROUP_TAGS;
+                    const full = group.count >= loaderData.limits!.max_players;
                     return (
                       <label key={group.groupId} className="group-choice">
                         <input
@@ -359,8 +381,8 @@ export default function AddToGroupRoute() {
                             {group.member
                               ? `${tag} is already in this watchlist`
                               : full
-                                ? `Full: ${MAX_GROUP_TAGS} of ${MAX_GROUP_TAGS} players`
-                                : `${group.count} of ${MAX_GROUP_TAGS} players`}
+                                ? `Full: ${loaderData.limits!.max_players} of ${loaderData.limits!.max_players} players`
+                                : `${group.count} of ${loaderData.limits!.max_players} players`}
                           </span>
                         </span>
                       </label>

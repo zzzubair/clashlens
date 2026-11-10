@@ -6,11 +6,12 @@ import type {
   ClockData,
   CutoffsData,
   GoalData,
+  GoalPlan,
   GroupWatchData,
   RivalRow,
   RivalsData,
 } from "../lib/dashboard-cards";
-import { around, goalPlan } from "../lib/dashboard-cards";
+import { around } from "../lib/dashboard-cards";
 import { canonicalPlayerPath } from "../lib/player-tag";
 import { CardHead, CardNote, Name, Switch, count, percent, tone } from "./DashboardParts";
 import { signedOr } from "../lib/number-format";
@@ -51,7 +52,7 @@ function topLabel(rank: number): string {
 
 export function GoalCard({ data }: { data: GoalData }) {
   const [shield, setShield] = useState(0);
-  const plan = goalPlan(data);
+  const plan = data.plan;
   const title = topLabel(data.rank);
   // The plan's menu, once there is a plan, at the header's end.
   const head = (meta?: ReactNode) => (
@@ -88,7 +89,8 @@ export function GoalCard({ data }: { data: GoalData }) {
   }
   const days = `${data.window} day${data.window === 1 ? "" : "s"}`;
   // Days off picked (none at first) set the trophies a day needed and the verdict.
-  const picked = plan.shields.find((item) => item.days === shield);
+  const picked =
+    shield === 0 ? undefined : plan.shields.find((item) => item.days === shield);
   const need = picked?.need ?? plan.need;
   const status = !picked
     ? plan.status
@@ -102,10 +104,10 @@ export function GoalCard({ data }: { data: GoalData }) {
   return (
     <>
       {head(
-        plan.shields.length > 0 ? (
+        plan.shields.some((item) => item.days > 0) ? (
           <SkipPlan
             days={skip}
-            options={[0, ...plan.shields.map((item) => item.days)]}
+            options={plan.shields.map((item) => item.days)}
             choose={setShield}
           />
         ) : null,
@@ -273,7 +275,7 @@ function GoalChart({
   rank,
 }: {
   data: GoalData;
-  plan: NonNullable<ReturnType<typeof goalPlan>>;
+  plan: GoalPlan;
   rest: number;
   rank: string;
 }) {

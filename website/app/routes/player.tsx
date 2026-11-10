@@ -422,6 +422,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     : [];
   const heatMap = shape ? (
     <SeasonHeatMap
+      dayCount={player!.calendar.day_count}
       days={heatDays(history)}
       seasonStart={shape.seasonStart}
       today={shape.today}

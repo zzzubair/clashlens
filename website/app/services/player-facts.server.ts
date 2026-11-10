@@ -74,7 +74,9 @@ export function mapSeasonBounds(value: unknown): SeasonBounds | null {
 }
 export function mapPresentation(value: unknown): DayPresentation {
   const v = record(value);
+  if (!isOneOf(v.heatmap_kind, ["played", "shield", "missing"] as const)) malformed();
   return {
+    heatmap_kind: v.heatmap_kind,
     status: status(v.status),
     battle_net: nullableNumber(v.battle_net),
     battle_net_complete: nullableNumber(v.battle_net_complete),
@@ -196,11 +198,25 @@ export function mapBattleStatistics(
 
 export function mapDashboardSeason(
   value: unknown,
+  dayCount: number,
 ): import("../lib/dashboard-cards").SeasonData {
-  if (value === null) return { today: null, startMs: null, days: [] };
+  if (value === null)
+    return {
+      today: null,
+      startMs: null,
+      endMs: null,
+      dayCount,
+      days: [],
+      windows: { "3": null, "7": null, season: null },
+      averages: { offense: null, defense: null },
+    };
   const v = record(value);
   if (!Array.isArray(v.days)) malformed();
   return {
+    dayCount: integer(v.day_count),
+    endMs: Date.parse(timestamp(v.end)),
+    windows: { "3": null, "7": null, season: null },
+    averages: { offense: null, defense: null },
     today: integer(v.today),
     startMs: Date.parse(timestamp(v.start)),
     days: v.days.map((value) => {
@@ -213,7 +229,11 @@ export function mapDashboardSeason(
           ))
       ))
         malformed();
+      if (!isOneOf(d.kind, ["played", "shield", "missing"] as const)) malformed();
       return {
+        kind: d.kind,
+        attackSlots: nullableNumber(d.attack_slots),
+        maximumAttackGain: nullableNumber(d.maximum_attack_gain),
         day: integer(d.day),
         attacks: nullableNumber(d.attacks),
         defenses: nullableNumber(d.defenses),
@@ -255,4 +275,114 @@ export function mapTrophyTrends(
     };
   };
   return { "7": window(v["7"]), "14": window(v["14"]) };
+}
+
+export function mapDashboardWindows(
+  value: unknown,
+  season: import("../lib/dashboard-cards").SeasonData,
+) {
+  const values = record(value);
+  const totals = (value: unknown) => {
+    const v = record(value);
+    return {
+      net: nullableNumber(v.net),
+      perAttack: nullableNumber(v.per_attack),
+      tripled: nullableNumber(v.tripled),
+      perDefense: nullableNumber(v.per_defense),
+      held: nullableNumber(v.held),
+    };
+  };
+  const read = (value: unknown) => {
+    if (value === null) return null;
+    const v = record(value),
+      f = record(v.form);
+    if (!Array.isArray(v.day_numbers) || !v.day_numbers.every(isInteger)) malformed();
+    const days = v.day_numbers.map((number) => {
+      const day = season.days.find((day) => day.day === number);
+      if (!day) malformed();
+      return day;
+    });
+    const window = {
+      first: integer(v.first),
+      last: integer(v.last),
+      span: integer(v.span),
+      days,
+    };
+    const c = v.consistency === null ? null : record(v.consistency);
+    if (
+      c &&
+      (!Array.isArray(c.stars) ||
+        c.stars.length !== 4 ||
+        !c.stars.every(isInteger) ||
+        !Array.isArray(c.per_day))
+    )
+      malformed();
+    return {
+      form: {
+        window,
+        counted: integer(f.counted),
+        total: nullableNumber(f.total),
+        now: totals(f.now),
+        before: f.before === null ? null : totals(f.before),
+      },
+      consistency: c
+        ? {
+            window,
+            attacks: integer(c.attacks),
+            slots: integer(c.slots),
+            triples: integer(c.triples),
+            stars: c.stars as [number, number, number, number],
+            perAttack: nullableNumber(c.per_attack),
+            perMiss: nullableNumber(c.per_miss),
+            missed: number(c.missed),
+            perDay: (c.per_day as unknown[]).map((value) => {
+              const d = record(value);
+              return { day: integer(d.day), triples: nullableNumber(d.triples) };
+            }),
+          }
+        : null,
+    };
+  };
+  return { "3": read(values["3"]), "7": read(values["7"]), season: read(values.season) };
+}
+export function mapDashboardGoal(
+  value: unknown,
+): Omit<import("../lib/dashboard-cards").GoalData, "name"> | null {
+  if (value === null) return null;
+  const v = record(value),
+    p = v.plan === null ? null : record(v.plan);
+  if (!Array.isArray(v.history)) malformed();
+  if (
+    p &&
+    (!isOneOf(p.status, ["ahead", "on", "behind"] as const) || !Array.isArray(p.shields))
+  )
+    malformed();
+  return {
+    rank: integer(v.rank),
+    finished: integer(v.finished),
+    window: integer(v.window),
+    you: nullableNumber(v.you),
+    youThen: nullableNumber(v.you_then),
+    line: nullableNumber(v.line),
+    lineThen: nullableNumber(v.line_then),
+    history: v.history.map(nullableNumber),
+    plan: p
+      ? {
+          need: number(p.need),
+          pace: number(p.pace),
+          drift: number(p.drift),
+          gap: number(p.gap),
+          daysLeft: integer(p.days_left),
+          status: p.status as "ahead" | "on" | "behind",
+          shields: (p.shields as unknown[]).map((value) => {
+            const s = record(value);
+            return {
+              days: integer(s.days),
+              need: number(s.need),
+              onPace: boolean(s.on_pace),
+            };
+          }),
+        }
+      : null,
+  };
 }

@@ -21,11 +21,9 @@ import { dayBar, rowScale } from "../lib/day-bars";
 import { dayRange } from "../lib/date-format";
 import { LastDays } from "../components/LastDays";
 import type { GroupPlayer, ListedGroup } from "../lib/account-contracts";
-import { addedNotice, GROUP_LIMIT, STATE_LABELS } from "../lib/group-text";
+import { addedNotice, groupLimit, STATE_LABELS } from "../lib/group-text";
 import {
   isInappropriateName,
-  MAX_GROUP_TAGS,
-  MAX_GROUPS,
   normalizeGroupName,
   normalizeSubmittedPlayerTag,
 } from "../lib/account-validation";
@@ -52,6 +50,7 @@ export interface PreviewPlayer extends GroupPlayer {
 }
 
 export interface GroupsLoaderData {
+  limits: import("../lib/account-contracts").GroupLimits | null;
   groups: ListedGroup[];
   /** Each list's players as its comparison reads them, with the Clasher's own
    *  players beside them, by group; a list whose comparison could not be read
@@ -104,6 +103,7 @@ export async function loader({ request }: Route.LoaderArgs): Promise<GroupsLoade
   const identity = await requireLogin(request);
   const { freshIdempotencyKey } = await import("../server/actions.server");
   const empty = {
+    limits: null,
     groups: [],
     previews: {},
     season: null,
@@ -117,7 +117,8 @@ export async function loader({ request }: Route.LoaderArgs): Promise<GroupsLoade
   };
   try {
     const { createPythonClient } = await import("../services/python.server");
-    const { groups, season, calendar } = await createPythonClient(identity).listGroups();
+    const { groups, season, calendar, limits } =
+      await createPythonClient(identity).listGroups();
     const { getGroupComparison } = await import("../services/group-comparison.server");
     // Each card shows today and the last 7 days without opening it: every
     // list's comparison is read at once, and one that fails only loses its bars.
@@ -143,6 +144,7 @@ export async function loader({ request }: Route.LoaderArgs): Promise<GroupsLoade
       ),
       season,
       seasonEnd: calendar.season_end,
+      limits,
     };
     for (const group of groups) {
       loaded.updateIdempotencyKeys[group.groupId] = freshIdempotencyKey();
@@ -242,9 +244,9 @@ export async function action({ request, context }: Route.ActionArgs) {
     return reply(400, { fieldErrors: { tag: adding.INVALID_TAG } });
   }
 
+  const { createPythonClient } = await import("../services/python.server");
+  const client = createPythonClient(identity);
   try {
-    const { createPythonClient } = await import("../services/python.server");
-    const client = createPythonClient(identity);
     if (actionMode === "create") {
       const created = await client.createGroup(
         { name: normalizedName as string },
@@ -265,9 +267,8 @@ export async function action({ request, context }: Route.ActionArgs) {
       return reply(200, { notice: `Removed ${tag} from the watchlist.` });
     } else {
       // Refuse duplicates and a full group before spending a player lookup.
-      const group = (await client.listGroups()).groups.find(
-        (row) => row.groupId === groupId,
-      );
+      const list = await client.listGroups();
+      const group = list.groups.find((row) => row.groupId === groupId);
       if (group === undefined) return reply(404, { generalError: GROUP_GONE });
       const { clientAddressContext } = await import("../server/client-address.server");
       const added = await adding.addToGroup(
@@ -276,6 +277,7 @@ export async function action({ request, context }: Route.ActionArgs) {
         group,
         tag as string,
         idempotencyKey,
+        list.limits.max_players,
       );
       return "player" in added
         ? reply(200, { notice: addedNotice(added.player) })
@@ -286,7 +288,16 @@ export async function action({ request, context }: Route.ActionArgs) {
     if (actions.isAccountNotFoundError(cause)) throw redirect("/account/setup");
     const pythonError = cause as { status?: number; payload?: unknown };
     const code = isRecord(pythonError.payload) ? pythonError.payload.error : undefined;
-    const tagError = adding.groupTagError(code, tag ?? "");
+    let limits;
+    if (code === "group_full" || code === "group_limit_reached") {
+      try {
+        limits = (await client.listGroups()).limits;
+      } catch (failure) {
+        const { safeWebsiteError } = await import("../server/errors.server");
+        return reply(503, { generalError: safeWebsiteError(failure) });
+      }
+    }
+    const tagError = adding.groupTagError(code, tag ?? "", limits?.max_players);
     if (tagError !== null) {
       return reply(pythonError.status ?? 422, { fieldErrors: { tag: tagError } });
     }
@@ -296,7 +307,9 @@ export async function action({ request, context }: Route.ActionArgs) {
       });
     }
     if (code === "group_limit_reached") {
-      return reply(422, { fieldErrors: { name: GROUP_LIMIT } });
+      return reply(422, {
+        fieldErrors: { name: groupLimit(limits!.max_groups) },
+      });
     }
     if (
       pythonError.status === 422 &&
@@ -412,7 +425,8 @@ export default function GroupsRoute() {
       ? actionData.createIdempotencyKey
       : loaderData.createIdempotencyKey;
   const createErrors = actionData?.action === "create" ? actionData.fieldErrors : {};
-  const atLimit = !loaderData.error && groups.length >= MAX_GROUPS;
+  const atLimit =
+    !loaderData.error && groups.length >= (loaderData.limits?.max_groups ?? Infinity);
   const listTitle = useRef<HTMLHeadingElement>(null);
   const shownGroups = useRef(groups.length);
   useEffect(() => {
@@ -434,9 +448,11 @@ export default function GroupsRoute() {
           value={actionData?.action === "create" ? actionData.values.name : ""}
           error={createErrors.name}
           help={
-            atLimit
-              ? GROUP_LIMIT
-              : `Up to ${MAX_GROUPS} watchlists. Add players once it exists.`
+            !loaderData.limits
+              ? ""
+              : atLimit
+                ? groupLimit(loaderData.limits!.max_groups)
+                : `Up to ${loaderData.limits!.max_groups} watchlists. Add players once it exists.`
           }
         />
         <button
@@ -485,6 +501,7 @@ export default function GroupsRoute() {
           <ul className="group-card-list">
             {groups.map((group) => (
               <GroupCard
+                maxPlayers={loaderData.limits!.max_players}
                 key={group.groupId}
                 group={group}
                 preview={preview(group.groupId)}
@@ -512,11 +529,13 @@ const PANELS = ["add", "edit"] as const;
 type Panel = (typeof PANELS)[number];
 
 function GroupCard({
+  maxPlayers,
   group,
   preview,
   loaderData,
   actionData,
 }: {
+  maxPlayers: number;
   group: ListedGroup;
   /** The list's players with today and their days, when the comparison was read. */
   preview: PreviewPlayer[] | null;
@@ -656,7 +675,7 @@ function GroupCard({
             </p>
           ) : (
             <p id={`group-add-${id}-message`} className="form-help">
-              {count} of {MAX_GROUP_TAGS} players. Each tag is checked with Clash of Clans
+              {count} of {maxPlayers} players. Each tag is checked with Clash of Clans
               before it joins.
             </p>
           )}

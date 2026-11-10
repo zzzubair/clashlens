@@ -18,7 +18,6 @@ import { LastDays } from "../components/LastDays";
 import { formatAge } from "../lib/age-format";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import {
-  COMPARISON_DAYS,
   type ComparedPlayer,
   type ComparisonDays,
   type DayResult,
@@ -69,7 +68,8 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   const identity = await requireLogin(request);
   const url = new URL(request.url);
   const requestedDays = Number(url.searchParams.get("days") ?? "7");
-  const days = COMPARISON_DAYS.find((value) => value === requestedDays) ?? 7;
+  // Unsupported address values keep the old default without a rejected Python read.
+  const days = [3, 7, 14].find((value) => value === requestedDays) ?? 7;
   // The days compared are what the page is for, so it opens best gain first;
   // the Trophies heading still sorts by trophies now.
   const requestedSort = url.searchParams.get("sort") ?? "net";
@@ -94,7 +94,10 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   try {
     const { getGroupComparison } = await import("../services/group-comparison.server");
     const comparison = await getGroupComparison(identity, groupId, days);
-    return data<GroupCompareLoaderData>({ ...empty, comparison }, { headers: NO_STORE });
+    return data<GroupCompareLoaderData>(
+      { ...empty, comparison, days },
+      { headers: NO_STORE },
+    );
   } catch (cause) {
     const { isAccountNotFoundError } = await import("../server/actions.server");
     if (isAccountNotFoundError(cause)) {
@@ -287,7 +290,7 @@ export default function GroupCompareRoute() {
         ) : null}
         <div className="compare-controls">
           <nav aria-label="Days compared" className="leaderboard-view-switch">
-            {COMPARISON_DAYS.map((value) => (
+            {comparison.limits.comparison_days.map((value) => (
               <Link
                 key={value}
                 className="button secondary"
@@ -378,7 +381,7 @@ export default function GroupCompareRoute() {
                     })
                   }
                 >
-                  {COMPARISON_DAYS.map((value) => (
+                  {comparison.limits.comparison_days.map((value) => (
                     <option key={value} value={value}>
                       {value} days
                     </option>

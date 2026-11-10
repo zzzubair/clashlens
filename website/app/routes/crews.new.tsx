@@ -18,10 +18,9 @@ import {
   canJoin,
   crewRefusal,
   DEFAULT_CREW_SIZE,
-  type LinkedAccount,
-  MAX_CREW_SIZE,
-  MAX_CREWS,
   MIN_CREW_SIZE,
+  MAX_CREW_SIZE,
+  type LinkedAccount,
 } from "../lib/crew-contracts";
 import { normalizePlayerTag } from "../lib/player-tag";
 import type { Route } from "./+types/crews.new";
@@ -38,6 +37,7 @@ export function meta() {
 }
 
 export interface NewCrewLoaderData {
+  capacity: import("../lib/crew-contracts").CrewList | null;
   crewCount: number;
   accounts: LinkedAccount[];
   idempotencyKey: string;
@@ -79,14 +79,26 @@ export async function loader({ request }: Route.LoaderArgs) {
       linkedAccounts(identity),
     ]);
     return data<NewCrewLoaderData>(
-      { crewCount: list.crews.length, accounts, idempotencyKey, error: null },
+      {
+        capacity: list,
+        crewCount: list.crews.length,
+        accounts,
+        idempotencyKey,
+        error: null,
+      },
       { headers: NO_STORE },
     );
   } catch (cause) {
     await setupRedirect(request, cause);
     const { safeWebsiteError } = await import("../server/errors.server");
     return data<NewCrewLoaderData>(
-      { crewCount: 0, accounts: [], idempotencyKey, error: safeWebsiteError(cause) },
+      {
+        capacity: null,
+        crewCount: 0,
+        accounts: [],
+        idempotencyKey,
+        error: safeWebsiteError(cause),
+      },
       { status: 503, headers: NO_STORE },
     );
   }
@@ -201,7 +213,7 @@ export default function NewCrewRoute() {
   const navigation = useNavigation();
   const sizeInput = useRef<HTMLInputElement>(null);
   const creating = navigation.state === "submitting";
-  const { accounts, crewCount } = loaderData;
+  const { accounts, crewCount, capacity } = loaderData;
   const errors = actionData?.fieldErrors ?? {};
   const firstJoinable = accounts.find(canJoin)?.tag;
   const picked = (tag: string) =>
@@ -209,8 +221,13 @@ export default function NewCrewRoute() {
   const step = (by: number) => {
     const input = sizeInput.current;
     if (input === null) return;
-    const current = Number(input.value) || DEFAULT_CREW_SIZE;
-    input.value = String(Math.min(MAX_CREW_SIZE, Math.max(MIN_CREW_SIZE, current + by)));
+    const current = Number(input.value) || capacity!.limits.default_size;
+    input.value = String(
+      Math.min(
+        capacity!.limits.max_size,
+        Math.max(capacity!.limits.min_size, current + by),
+      ),
+    );
   };
   const generalError = actionData?.generalError;
 
@@ -225,7 +242,7 @@ export default function NewCrewRoute() {
       ) : generalError ? (
         <ErrorNotice error={generalError} />
       ) : null}
-      {loaderData.error ? null : crewCount >= MAX_CREWS ? (
+      {loaderData.error ? null : crewCount >= capacity!.maxCrews ? (
         <p className="notice">You're in {crewCount} crews, the most you can be in.</p>
       ) : accounts.length === 0 ? (
         <p className="notice crew-notice-action">
@@ -277,10 +294,12 @@ export default function NewCrewRoute() {
                 name="size"
                 type="number"
                 inputMode="numeric"
-                min={MIN_CREW_SIZE}
-                max={MAX_CREW_SIZE}
+                min={capacity!.limits.min_size}
+                max={capacity!.limits.max_size}
                 required
-                defaultValue={actionData?.values.size ?? String(DEFAULT_CREW_SIZE)}
+                defaultValue={
+                  actionData?.values.size ?? String(capacity!.limits.default_size)
+                }
                 aria-invalid={errors.size ? true : undefined}
                 aria-describedby={errors.size ? "crew-size-error" : "crew-size-help"}
               />
@@ -299,7 +318,7 @@ export default function NewCrewRoute() {
               </p>
             ) : (
               <p id="crew-size-help" className="form-help">
-                One per Clash of Clans account, up to {MAX_CREW_SIZE}
+                One per Clash of Clans account, up to {capacity!.limits.max_size}
               </p>
             )}
           </div>

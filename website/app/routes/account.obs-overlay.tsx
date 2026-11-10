@@ -13,7 +13,6 @@ import type { BackHandle } from "../components/BackLink";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import {
   OVERLAY_FONTS,
-  OVERLAY_PARTS,
   type OverlayAccount,
   type OverlaySettings,
 } from "../lib/obs-overlay";
@@ -62,7 +61,7 @@ export function headers() {
 
 type Shape = OverlaySize["layout"];
 type Fit = "screen" | "overlay";
-type Part = (typeof OVERLAY_PARTS)[number];
+type Part = string;
 type Corner = "tl" | "tc" | "tr" | "bl" | "bc" | "br";
 
 // Starting sizes for each shape, in stream pixels (each one's natural size).
@@ -147,35 +146,37 @@ export interface Place {
 }
 
 function fromSaved(overlay: OverlayAccount): { form: Form; place: Place } {
+  const contract = overlay.settingsContract;
   const st: OverlaySettings = overlay.settings;
+  const parts = Object.keys(PART_LABELS).filter((part) => contract.parts.includes(part));
   const pick = <T extends string>(
     value: string | undefined,
     allowed: readonly T[],
     fallback: T,
   ) => (allowed.includes(value as T) ? (value as T) : fallback);
-  const cw = Number(st.cw) || 1920;
-  const ch = Number(st.ch) || 1080;
+  const cw = Number(st.cw) || Number(contract.defaults.cw);
+  const ch = Number(st.ch) || Number(contract.defaults.ch);
   return {
     form: {
       tag: overlay.tag ?? overlay.players[0]?.tag ?? null,
-      text: pick(st.text, ["light", "dark"], "light"),
-      bg: pick(st.bg, ["card", "tint", "none"], "card"),
+      text: pick(st.text, contract.choices.text, contract.defaults.text) as Form["text"],
+      bg: pick(st.bg, contract.choices.bg, contract.defaults.bg) as Form["bg"],
       font: pick(
         st.font,
-        Object.keys(OVERLAY_FONTS) as Array<keyof typeof OVERLAY_FONTS>,
-        "clashlens",
-      ),
+        contract.choices.font,
+        contract.defaults.font ?? "clashlens",
+      ) as Form["font"],
       show:
         st.show === undefined
-          ? [...OVERLAY_PARTS]
-          : OVERLAY_PARTS.filter((part) => st.show.split(",").includes(part)),
+          ? [...parts]
+          : parts.filter((part) => st.show.split(",").includes(part)),
       popup: st.popup !== "0",
       demo: st.demo === "1",
       fit: st.fit === "overlay" ? "overlay" : "screen",
     },
     place: {
-      w: Number(st.w) || PRESETS.card[0],
-      h: Number(st.h) || PRESETS.card[1],
+      w: Number(st.w) || Number(contract.defaults.w),
+      h: Number(st.h) || Number(contract.defaults.h),
       cw,
       ch,
       x: Number(st.x) || margin(cw),
@@ -188,7 +189,7 @@ function fromSaved(overlay: OverlayAccount): { form: Form; place: Place } {
 }
 
 /** The overlay's address query: what it shows, at what size. */
-function overlayQuery(form: Form, place: Place): Record<string, string> {
+function overlayQuery(form: Form, place: Place, parts: string[]): Record<string, string> {
   const q: Record<string, string> = {
     p: (form.tag ?? "").replace("#", ""),
     w: String(Math.round(place.w)),
@@ -197,15 +198,15 @@ function overlayQuery(form: Form, place: Place): Record<string, string> {
     bg: form.bg,
   };
   if (form.font !== "clashlens") q.font = form.font;
-  if (form.show.length !== OVERLAY_PARTS.length) q.show = form.show.join(",");
+  if (form.show.length !== parts.length) q.show = form.show.join(",");
   if (!form.popup) q.popup = "0";
   if (form.demo) q.demo = "1";
   return q;
 }
 
 /** Everything saved against the private link: the query, and where it sits. */
-function savedSettings(form: Form, place: Place): OverlaySettings {
-  const q = overlayQuery(form, place);
+function savedSettings(form: Form, place: Place, parts: string[]): OverlaySettings {
+  const q = overlayQuery(form, place, parts);
   delete q.p;
   return {
     ...q,
@@ -486,6 +487,9 @@ export function previewMessage(data: unknown): "ready" | PreviewLink | null {
 }
 
 function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: string }) {
+  const parts = Object.keys(PART_LABELS).filter((part) =>
+    overlay.settingsContract.parts.includes(part),
+  );
   const initial = useRef(fromSaved(overlay));
   const [form, setForm] = useState<Form>(initial.current.form);
   const [place, setPlace] = useState<Place>(() => clamp(initial.current.place));
@@ -502,16 +506,16 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
   const wrap = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
   const [initialQuery] = useState(() =>
-    new URLSearchParams(overlayQuery(form, place)).toString(),
+    new URLSearchParams(overlayQuery(form, place, parts)).toString(),
   );
-  const query = new URLSearchParams(overlayQuery(form, place)).toString();
-  const settings = savedSettings(form, place);
+  const query = new URLSearchParams(overlayQuery(form, place, parts)).toString();
+  const settings = savedSettings(form, place, parts);
   const savedJson = JSON.stringify({ tag: form.tag, settings });
   const autosave = useRef<Autosave>({
     phase: "idle",
     saved: JSON.stringify({
       tag: overlay.tag,
-      settings: savedSettings(initial.current.form, initial.current.place),
+      settings: savedSettings(initial.current.form, initial.current.place, parts),
     }),
   });
   const latest = useRef<Choices>({ json: savedJson, tag: form.tag, settings });
@@ -538,7 +542,11 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
   // The preview takes every change at once, without loading again.
   useEffect(() => {
     frame.current?.contentWindow?.postMessage(
-      { type: "cl-overlay-settings", search: `?${query}` },
+      {
+        type: "cl-overlay-settings",
+        contract: overlay.settingsContract,
+        search: `?${query}`,
+      },
       location.origin,
     );
   }, [query]);
@@ -554,7 +562,11 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
       const answer = previewMessage(event.data);
       if (answer === "ready") {
         frame.current?.contentWindow?.postMessage(
-          { type: "cl-overlay-settings", search: `?${queryRef.current}` },
+          {
+            type: "cl-overlay-settings",
+            contract: overlay.settingsContract,
+            search: `?${queryRef.current}`,
+          },
           location.origin,
         );
         return;
@@ -783,7 +795,7 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
         <section className="form-panel" aria-labelledby="obs-shows">
           <h2 id="obs-shows">What it shows</h2>
           <div className="obs-checks">
-            {OVERLAY_PARTS.map((part) => (
+            {parts.map((part) => (
               <label key={part}>
                 <input
                   type="checkbox"
@@ -792,7 +804,7 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
                   checked={form.show.includes(part)}
                   onChange={(event) =>
                     update({
-                      show: OVERLAY_PARTS.filter((each) =>
+                      show: parts.filter((each) =>
                         each === part ? event.target.checked : form.show.includes(each),
                       ),
                     })

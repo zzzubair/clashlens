@@ -35,15 +35,15 @@ const fixture = JSON.parse(
 describe("crew and player summary averages", () => {
   for (const saved of fixture.players) {
     it(`renders ${saved.tag}'s Python totals with their played-day denominator`, () => {
-      for (const result of [saved.expected.season, saved.expected.week]) {
-        const side = (s: Side) => ({
-          count: s.battles,
-          stars: [0, 0, 0, 0],
-          unknown: 0,
-          perDay: s.total / s.days,
-          perBattle: s.total / s.battles,
-        });
-        const html = renderToStaticMarkup(
+      const side = (s: Side) => ({
+        count: s.battles,
+        stars: [0, 0, 0, 0],
+        unknown: 0,
+        perDay: s.total / s.days,
+        perBattle: s.total / s.battles,
+      });
+      const render = (result: typeof saved.expected.season) =>
+        renderToStaticMarkup(
           createElement(SeasonSummary, {
             title: "Season summary",
             rank: ["Rank", "Unknown"],
@@ -52,14 +52,20 @@ describe("crew and player summary averages", () => {
             defense: side(result.defense),
           }),
         );
-        expect(html).toContain("Season summary");
-        expect(html).toContain("Trophies");
-        // Each side's trophies a Legend day: its total over the days it played.
-        expect(html).toContain(signedSide(result.attack.total / result.attack.days, 1));
-        expect(html).toContain(
-          signedSide(result.defense.total / result.defense.days, -1),
-        );
-      }
+      const html = render(saved.expected.season);
+      const [offense, defense, attack, defended] =
+        saved.tag === "#2PP"
+          ? ["+60", "−31", "+34.3", "−30.7"]
+          : ["+53", "−10", "+35.0", "−10.0"];
+      expect(html).toContain(`Offense per day</dt><dd>${offense}`);
+      expect(html).toContain(`Defense per day</dt><dd>${defense}`);
+      expect(html).toContain(`<dt>Per attack</dt><dd>${attack}</dd>`);
+      expect(html).toContain(`<dt>Per defense</dt><dd>${defended}</dd>`);
+      // The week's totals use the same played-day denominator.
+      const week = saved.expected.week;
+      const weekHtml = render(week);
+      expect(weekHtml).toContain(signedSide(week.attack.total / week.attack.days, 1));
+      expect(weekHtml).toContain(signedSide(week.defense.total / week.defense.days, -1));
     });
   }
 });
