@@ -2,6 +2,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useMemo,
   useReducer,
   useRef,
   useState,
@@ -255,8 +256,7 @@ function DashboardTools({
   tag: string;
   saving: boolean;
   fresh: ReactNode;
-  /** Null in View as, which changes nothing. */
-  customise: (() => void) | null;
+  customise: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
@@ -297,20 +297,18 @@ function DashboardTools({
         <Link className="dash-tool" to={canonicalPlayerPath(tag)}>
           <DashboardIcon name="open" /> Player page
         </Link>
-        {customise ? (
-          <button
-            type="button"
-            className="dash-tool dash-customise"
-            aria-label="Customise dashboard"
-            disabled={saving}
-            onClick={() => {
-              setOpen(false);
-              customise();
-            }}
-          >
-            <DashboardIcon name="gear" /> Customise
-          </button>
-        ) : null}
+        <button
+          type="button"
+          className="dash-tool dash-customise"
+          aria-label="Customise dashboard"
+          disabled={saving}
+          onClick={() => {
+            setOpen(false);
+            customise();
+          }}
+        >
+          <DashboardIcon name="gear" /> Customise
+        </button>
       </div>
     </div>
   );
@@ -653,16 +651,38 @@ function FirstVisit({
 }
 
 /**
+ * The one way the dashboard saves its settings (Done, card settings, the
+ * first-visit pick and Group watch's group). In View as it sends nothing.
+ */
+export function saveSettings(
+  fetcher: Pick<FetcherWithComponents<DashboardActionData>, "data" | "submit">,
+  viewAs: string | null,
+  idempotencyKey: string,
+  next: DashboardSettings,
+): void {
+  if (viewAs !== null) return;
+  void fetcher.submit(
+    {
+      idempotencyKey: fetcher.data?.idempotencyKey ?? idempotencyKey,
+      settings: JSON.stringify(serializeSettings(next)),
+    },
+    { method: "post" },
+  );
+}
+
+/**
  * The divider with "⚙ Customise dashboard", the card grid and Customise.
  * Customise edits a draft of the card order; Done saves it. Card settings
  * and the group picked on Group watch save at once, through `fetcher`, which
  * outlives a switch to another player. A save keeps the cards already shown
- * and reads only those it changes or adds. In View as nothing saves.
+ * and reads only those it changes or adds. In View as nothing saves: Done
+ * shows the new card order in this page only, until a reload or Exit, and
+ * card settings stay closed.
  */
 export function Dashboard({
   tag,
   viewAs = null,
-  settings,
+  settings: accountSettings,
   data,
   dayOver,
   idempotencyKey,
@@ -680,6 +700,15 @@ export function Dashboard({
   fetcher: FetcherWithComponents<DashboardActionData>;
 }) {
   const refresher = useFetcher<DashboardLoaderData>();
+  // View as only: the card order Done last set, kept in this page alone.
+  const [ownLayout, setOwnLayout] = useState<DashboardSettings["layout"]>(null);
+  const settings = useMemo(
+    () =>
+      viewAs === null || ownLayout === null
+        ? accountSettings
+        : { ...accountSettings, layout: ownLayout },
+    [accountSettings, viewAs, ownLayout],
+  );
   // Cards read again after a save, and cards waiting for that read.
   const [cardData, dispatchCards] = useReducer(cardRefreshStep, CARDS_FROM_LOAD);
   const { stale } = cardData;
@@ -749,14 +778,7 @@ export function Dashboard({
   }, [saved]);
 
   const save = (next: DashboardSettings) =>
-    viewAs === null &&
-    fetcher.submit(
-      {
-        idempotencyKey: fetcher.data?.idempotencyKey ?? idempotencyKey,
-        settings: JSON.stringify(serializeSettings(next)),
-      },
-      { method: "post" },
-    );
+    saveSettings(fetcher, viewAs, idempotencyKey, next);
 
   const cards = shownCards(editing ? draft : settings.layout);
   const wide = cardPlaces(cards, 3, !editing);
@@ -832,11 +854,7 @@ export function Dashboard({
               <Freshness reads={reads} nowMs={nowMs} />
             )
           }
-          customise={
-            viewAs === null
-              ? () => dispatch({ type: "customise", layout: settings.layout })
-              : null
-          }
+          customise={() => dispatch({ type: "customise", layout: settings.layout })}
         />
       ) : null}
       {editing ? (
@@ -878,6 +896,10 @@ export function Dashboard({
             className="button button-primary"
             disabled={saving}
             onClick={() => {
+              if (viewAs !== null) {
+                setOwnLayout(draft);
+                return dispatch({ type: "kept" });
+              }
               dispatch({ type: "done", after: fetcher.data });
               save({ ...settings, layout: draft });
             }}
@@ -930,7 +952,7 @@ export function Dashboard({
                   <DashboardIcon name={CARDS[card].icon} />
                   {CARDS[card].title}
                 </span>
-                {CARDS[card].settings ? (
+                {CARDS[card].settings && viewAs === null ? (
                   <button
                     type="button"
                     className="button button-secondary dash-card-settings"

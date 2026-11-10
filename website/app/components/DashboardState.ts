@@ -18,7 +18,8 @@ export type DashboardSheet =
  *   the first one other than the answer that was showing when Done was pressed.
  *
  * Events: Customise, card changes, Use default, Add, settings, dragging,
- * Done, the save's answer, and Cancel. Only `dashboardEditStep` moves it.
+ * Done, the save's answer, `kept` (Done in View as, which saves nothing and
+ * ends editing at once), and Cancel. Only `dashboardEditStep` moves it.
  * Done's answer ends editing only when it saved; a failed save keeps the
  * draft and shows the error, and Done can be pressed again. A saved answer
  * closes an open settings sheet. Cancel and Escape discard the draft. The
@@ -50,7 +51,8 @@ export type DashboardEditEvent =
   | { type: "dragEnd" }
   | { type: "done"; after: DashboardActionData | undefined }
   | { type: "answered"; answer: DashboardActionData | undefined }
-  | { type: "saved" };
+  | { type: "saved" }
+  | { type: "kept" };
 
 export const DASHBOARD_VIEWING: DashboardEdit = { mode: "viewing", status: "" };
 
@@ -114,6 +116,8 @@ export function dashboardEditStep(
         : { ...state, dragging: null, status: `Moved ${CARDS[state.dragging].title}` };
     case "done":
       return { ...state, finishing: { after: event.after } };
+    case "kept":
+      return { mode: "viewing", status: state.status };
     case "answered":
       if (state.finishing === null || event.answer === state.finishing.after)
         return state;
