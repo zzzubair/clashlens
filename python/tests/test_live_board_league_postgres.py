@@ -19,8 +19,8 @@ from datetime import timedelta
 
 import psycopg
 from domain_test_support import as_api_role, domain_database
-from test_league_week_days_postgres import Climber
-from test_reset_scenarios_postgres import Story, attacks, day, defenses
+from league_week_days_postgres_support import Climber
+from reset_scenarios_postgres_support import Story, attacks, day, defenses
 
 from clashlens import api_leaderboard, live_board
 from clashlens.api_db import ApiDatabase

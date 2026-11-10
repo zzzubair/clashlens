@@ -5,12 +5,12 @@ from datetime import timedelta
 from urllib.parse import urlencode
 
 import pytest
+from api_db_public_ops_support import NOW, seed_profile
+from api_migration_support import migrated_production_database
 from domain_test_support import as_api_role, seed_attacks
 from fastapi.testclient import TestClient
-from test_api_db_public_ops import NOW, seed_profile
-from test_api_migration import migrated_production_database
-from test_freshness_metrics_postgres import seed_check
-from test_private_api import NOW_SECONDS, TS_CURRENT, signed_headers
+from freshness_metrics_postgres_support import seed_check
+from private_api_support import NOW_SECONDS, TS_CURRENT, signed_headers
 
 from clashlens import analytics, api_leaderboard, api_players
 from clashlens.analytics import tie_order_key

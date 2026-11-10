@@ -186,11 +186,13 @@ def test_home_and_cc_spells_pool_while_origin_recoverable() -> None:
 
 def test_cc_troops_and_siege_never_leak_into_home() -> None:
     r = decode_army_share_code("i1x0u1x51")
-    assert all(f.origin == "home" for f in r.home_troops) if r.home_troops else True
-    assert all(f.origin == "clan_castle" for f in r.cc_troops)
-    assert len(r.home_troops) == 0
-    assert len(r.cc_troops) == 1
-    assert len(r.siege) == 1 and r.siege[0].origin == "home"
+    assert r.home_troops == ()
+    assert [(f.typed_id, f.quantity, f.origin) for f in r.cc_troops] == [
+        ("troop:0", 1, "clan_castle")
+    ]
+    assert [(f.typed_id, f.quantity, f.origin) for f in r.siege] == [
+        ("troop:51", 1, "home")
+    ]
 
 
 def test_hero_modifier_raw_preserved_not_in_identity() -> None:

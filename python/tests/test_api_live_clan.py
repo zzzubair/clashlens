@@ -13,9 +13,9 @@ from pathlib import Path
 from typing import ClassVar
 
 import pytest
+from api_migration_support import migrated_production_database
 from fastapi.testclient import TestClient
-from test_api_migration import migrated_production_database
-from test_private_api import NOW, NOW_SECONDS, TS_CURRENT, signed_headers
+from private_api_support import NOW, NOW_SECONDS, TS_CURRENT, signed_headers
 
 from clashlens import api_live_clan, api_verification
 from clashlens.api import create_app

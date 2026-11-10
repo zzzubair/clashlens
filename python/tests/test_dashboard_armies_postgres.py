@@ -5,11 +5,9 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 
-from domain_test_support import as_api_role, domain_database, store_observation, text
-from fastapi.testclient import TestClient
-from test_api_security import KEY, _signed_headers
-from test_api_security import NOW as SIGNED_AT
-from test_army_analytics_publication_postgres import (
+from api_security_support import KEY, _signed_headers
+from api_security_support import NOW as SIGNED_AT
+from army_analytics_publication_postgres_support import (
     DAY_NUMBER,
     DAY_START,
     _army_job,
@@ -18,6 +16,8 @@ from test_army_analytics_publication_postgres import (
     _publish_day,
     _row,
 )
+from domain_test_support import as_api_role, domain_database, store_observation, text
+from fastapi.testclient import TestClient
 
 from clashlens import army_types
 from clashlens.api import create_app

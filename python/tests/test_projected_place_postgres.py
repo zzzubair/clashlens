@@ -11,10 +11,17 @@ from __future__ import annotations
 from datetime import timedelta
 
 import psycopg
+from dashboard_bases_postgres_support import Facing
 from domain_test_support import as_api_role, domain_database
-from test_dashboard_bases_postgres import Facing
-from test_reconciliation_postgres import _processor
-from test_reset_scenarios_postgres import SEASON, Battle, _story, attacks, day, defenses
+from reconciliation_postgres_support import _processor
+from reset_scenarios_postgres_support import (
+    SEASON,
+    Battle,
+    _story,
+    attacks,
+    day,
+    defenses,
+)
 
 from clashlens import api_dashboard, projected_place, queue_refresh, worker
 from clashlens.api_db import ApiDatabase

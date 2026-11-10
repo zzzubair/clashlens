@@ -29,7 +29,14 @@ def text(value: Any) -> Any:
 
 
 def enable_direct_army_fixture(database: Any, monkeypatch: Any) -> None:
-    """Exercise historical army calculation through a v5-shaped fixture job."""
+    """Exercise historical army calculation without a collected Reset board.
+
+    The production historical enqueue emits only day/Season fields, while
+    job_contracts.supported_job_filter requires generation and manifest fields.
+    These isolated analytics tests cannot submit that historical job until
+    the source contract is reconciled. Real Reset publication is covered by
+    test_id_history_postgres and the Reset stories, without this substitution.
+    """
     original_complete = army_ingestion.complete_army_analytics
     original_enqueue = boundary_publication._enqueue_army_analytics
 
@@ -49,8 +56,6 @@ def enable_direct_army_fixture(database: Any, monkeypatch: Any) -> None:
                 player_ids=player_ids,
                 swept=swept,
             )
-        if getattr(database, "_suppress_fixture_enqueue", False):
-            return
         ranked_day_start = ranked_day_start.astimezone(UTC)
         completed = connection.execute(
             """
@@ -193,7 +198,7 @@ def _domain_template(database_url: str) -> str:
 
 
 @contextmanager
-def domain_database(database_url: str) -> Iterator[str]:
+def domain_database(database_url: str, *, clock: Any | None = None) -> Iterator[str]:
     template = _domain_template(database_url)
     database = f"python_domain_{uuid4().hex}"
     with psycopg.connect(database_url, autocommit=True) as admin:
@@ -202,6 +207,8 @@ def domain_database(database_url: str) -> Iterator[str]:
         database_url, dbname=database, options=f"-c search_path={DOMAIN_SCHEMA}"
     )
     try:
+        if clock is not None:
+            connection_info = clock.bind(connection_info)
         yield connection_info
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:
@@ -537,8 +544,6 @@ def _live_battle_row(
         "opponentTownHallLevel": opponent_town_hall_level,
         "battleType": battle_type,
     }
-
-
 
 
 class _WorkerRoleDatabase(Database):

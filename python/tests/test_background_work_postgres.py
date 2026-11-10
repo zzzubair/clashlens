@@ -14,8 +14,8 @@ import time
 from datetime import UTC, datetime, timedelta
 
 import psycopg
-from domain_test_support import domain_database, store_observation, text
-from test_army_ingestion_postgres import _live_row, _processor
+from army_ingestion_postgres_support import _live_row
+from domain_test_support import _processor, domain_database, store_observation, text
 
 from clashlens import army_ingestion, background_pacing, claimed_jobs
 from clashlens.background_pacing import (

@@ -17,18 +17,18 @@ from datetime import datetime, timedelta
 
 import psycopg
 import pytest
+from boundary_publication_manifests_postgres_support import _freeze_army_inputs
 from domain_test_support import as_api_role, domain_database, store_observation, text
 from psycopg.types.json import Jsonb
-from test_boundary_publication_manifests_postgres import _freeze_army_inputs
-from test_reconciliation_postgres import (
+from reconciliation_postgres_support import (
     DAY_END,
     DAY_START,
     _processor,
     _profile,
     _seed_reset_collection_identity,
 )
-from test_reset_acceptance_postgres import _as_worker
-from test_reset_scenarios_postgres import _tag
+from reset_acceptance_postgres_support import _as_worker
+from reset_scenarios_postgres_support import _tag
 
 from clashlens import (
     alerts,

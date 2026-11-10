@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
-from test_discord_bot import (
+from discord_bot_support import (
     ME,
     NOW,
     RESET,

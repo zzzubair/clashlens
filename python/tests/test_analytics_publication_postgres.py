@@ -5,12 +5,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import psycopg
-from domain_test_support import domain_database, store_observation, text
+from domain_test_support import _processor, domain_database, store_observation, text
 from psycopg.types.json import Jsonb
-from test_snapshot_publication_postgres import (
+from snapshot_publication_postgres_support import (
     _process_profile,
     _process_snapshot_and_analytics,
-    _processor,
     _seed_snapshot_job,
 )
 

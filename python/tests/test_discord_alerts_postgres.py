@@ -14,8 +14,14 @@ from uuid import uuid4
 import psycopg
 import pytest
 from aiohttp import web
-from domain_test_support import as_api_role, domain_database, seed_battles
-from test_discord_alerts import (
+from discord_alerts_postgres_support import (
+    SITE,
+    FakeDiscord,
+    _defend,
+    _summary_switch,
+    _switch,
+)
+from discord_alerts_support import (
     DARK,
     LIGHT,
     _rate_limited,
@@ -24,8 +30,9 @@ from test_discord_alerts import (
     delivered,
     stand_in_discord,
 )
-from test_discord_bot_postgres import DISCORD_ID, _account, _verify
-from test_reset_scenarios_postgres import (
+from discord_bot_postgres_support import DISCORD_ID, _account, _verify
+from domain_test_support import as_api_role, domain_database
+from reset_scenarios_postgres_support import (
     RESULTS,
     SEASON,
     Battle,
@@ -38,89 +45,17 @@ from test_reset_scenarios_postgres import (
 )
 
 from bot import picture
-from bot.alerts import AlertLoop, AlertStore, Refused, Unreachable
+from bot.alerts import AlertLoop, AlertStore
 from bot.commands import Commands
 from bot.discord_app import DiscordMessenger
-from bot.replies import PLAYER_COLOURS, Reply, Site
+from bot.replies import PLAYER_COLOURS
 from bot.store import Store
 from clashlens import api_discord_alerts, provider_membership
 from clashlens.api_db import ApiDatabase
 from clashlens.api_requests import RequestBinding
 
-SITE = Site("https://clashlens.test")
 DEFENDER = "#2PP"
 NAME = "Synthetic Legend I"
-
-
-class FakeDiscord:
-    """Records each try by its nonce, each DM delivered, which is known by
-    its nonce, and each picture added to one; refuses users in `refusing` as
-    Discord would, and cannot be reached for the next `outages` tries, asking
-    to wait `retry_after`."""
-
-    def __init__(self) -> None:
-        self.sent: list[tuple[str, Reply]] = []
-        self.pictures: list[tuple[int, bytes]] = []
-        self.tries: list[int] = []
-        self.refusing: dict[str, str] = {}
-        self.outages = 0
-        self.retry_after = 0.0
-
-    async def send_dm(
-        self, discord_user_id: str, reply: Reply, nonce: int, _time_left: float
-    ) -> int:
-        self.tries.append(nonce)
-        if discord_user_id in self.refusing:
-            raise Refused(self.refusing[discord_user_id])
-        if self.outages:
-            self.outages -= 1
-            raise Unreachable(self.retry_after)
-        self.sent.append((discord_user_id, reply))
-        return nonce
-
-    async def add_picture(self, message: int, png: bytes) -> None:
-        self.pictures.append((message, png))
-
-
-def _switch(database: ApiDatabase, account_id: int, tag: str, on: bool) -> int:
-    """Turn alerts on or off as the website does, through the private API."""
-    return api_discord_alerts.set_attack_alert(
-        database,
-        RequestBinding(
-            request_id=str(uuid4()),
-            caller="typescript-website",
-            provider="discord",
-            provider_subject=DISCORD_ID,
-            account_id=account_id,
-            operation="account.update",
-            method="POST",
-            request_target="/v1/account/discord-alerts",
-            identity={"attack_alert": tag, "on": on},
-        ),
-        normalized_tag=tag,
-        on=on,
-    ).status_code
-
-
-def _summary_switch(database: ApiDatabase, account_id: int, tag: str, on: bool) -> int:
-    """Turn a player's Legend day summary on or off as the website does,
-    through the private API."""
-    return api_discord_alerts.set_day_summary(
-        database,
-        RequestBinding(
-            request_id=str(uuid4()),
-            caller="typescript-website",
-            provider="discord",
-            provider_subject=DISCORD_ID,
-            account_id=account_id,
-            operation="account.update",
-            method="POST",
-            request_target="/v1/account/discord-alerts",
-            identity={"day_summary": tag, "on": on},
-        ),
-        normalized_tag=tag,
-        on=on,
-    ).status_code
 
 
 def _dark_picture_switch(database: ApiDatabase, account_id: int, on: bool) -> int:
@@ -141,17 +76,6 @@ def _dark_picture_switch(database: ApiDatabase, account_id: int, on: bool) -> in
         ),
         on=on,
     ).status_code
-
-
-def _defend(connection_info: str, player_id: int, *, saved_ago: timedelta = timedelta(0)) -> None:
-    """A defense of the player by a new untracked opponent, saved `saved_ago` ago."""
-    with psycopg.connect(connection_info, autocommit=True) as connection:
-        seed_battles(connection, player_id, [(SEASON + timedelta(hours=3), -16)])
-        connection.execute(
-            "UPDATE legend_battles SET created_at = clock_timestamp() - %s"
-            " WHERE id = (SELECT max(id) FROM legend_battles)",
-            (saved_ago,),
-        )
 
 
 @contextmanager

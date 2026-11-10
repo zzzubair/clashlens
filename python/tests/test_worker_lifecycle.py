@@ -12,6 +12,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from worker_lifecycle_support import (
+    _worker_namespace,
+)
 
 from clashlens import claimed_jobs, cli, ingestion, reconciliation_db, worker
 from clashlens.db import (
@@ -831,26 +834,6 @@ def test_maintenance_runs_while_every_lane_holds_a_connection(
     assert not worker_thread.is_alive()
     assert [pool.max_size for pool in pools] == [3, 2]
     assert "worker_maintenance" not in capsys.readouterr().out
-
-
-def _worker_namespace(**overrides: object) -> Namespace:
-    values: dict[str, object] = {
-        "database_url": "postgresql://prototype@postgres/db",
-        "database_url_file": "",
-        "archive_endpoint": "archive.example:9000",
-        "owner": "cli-worker",
-        "max_jobs": 3,
-        "lease_seconds": 30,
-        "run_forever": False,
-        "poll_interval_seconds": 0.01,
-        "concurrency": 1,
-        "database_pool_size": None,
-        "archive_pool_size": None,
-        "operating_snapshot_file": "",
-        "disable_player_discovery": False,
-    }
-    values.update(overrides)
-    return Namespace(**values)
 
 
 def test_operating_snapshot_refreshes_while_a_batch_is_blocked(

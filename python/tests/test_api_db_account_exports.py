@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from test_api_db_organization import account_binding, create_owner
-from test_api_db_public_ops import NOW, seed_profile
-from test_api_migration import migrated_production_database, text
+from api_db_organization_support import account_binding, create_owner
+from api_db_public_ops_support import NOW, seed_profile
+from api_migration_support import migrated_production_database, text
 
 from clashlens import api_accounts, api_leaderboard
 from clashlens.api_db import ApiDatabase

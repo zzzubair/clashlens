@@ -7,16 +7,16 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from domain_test_support import _processor, decide_leagues, store_observation
-from psycopg.conninfo import make_conninfo
-from test_api_db_public_ops import (
+from api_db_public_ops_support import (
     NOW,
     anonymous_binding,
     seed_league_history,
     seed_profile,
 )
-from test_api_migration import migrated_production_database
-from test_collector_db_postgres import _handoff, _hash
+from api_migration_support import migrated_production_database
+from collector_db_postgres_support import _handoff, _hash
+from domain_test_support import _processor, decide_leagues, store_observation
+from psycopg.conninfo import make_conninfo
 
 from clashlens import api_leaderboard, api_player_lookup, api_players, live_board
 from clashlens.api_db import ApiDatabase

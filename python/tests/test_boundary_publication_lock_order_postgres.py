@@ -2,25 +2,25 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation, text
-from test_army_analytics_publication_seasons_postgres import (
-    _insert_confirmed_anchor,
+from army_analytics_publication_seasons_postgres_support import _insert_confirmed_anchor
+from army_ingestion_postgres_support import _live_row, _unswept_battles
+from boundary_publication_lock_order_postgres_support import (
+    _wait_for_waiters,
 )
-from test_army_ingestion_postgres import _live_row, _unswept_battles
-from test_boundary_publication_postgres import (
+from boundary_publication_postgres_support import (
     BOUNDARY,
     DAY_START,
     _board_published,
     _player_and_version,
     _sweep_with_members,
 )
-from test_reconciliation_postgres import (
+from domain_test_support import domain_database, store_observation, text
+from reconciliation_postgres_support import (
     BATTLE_FIXTURE,
     _processor,
     _store_baseline_pair,
@@ -35,21 +35,6 @@ from clashlens import (
     snapshots,
 )
 from clashlens.db import Database
-
-
-def _advisory_waiters(connection) -> int:
-    return int(
-        connection.execute(
-            "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted"
-        ).fetchone()[0]
-    )
-
-
-def _wait_for_waiters(connection, count: int, errors: list[BaseException]) -> None:
-    deadline = time.monotonic() + 30
-    while _advisory_waiters(connection) < count and not errors:
-        assert time.monotonic() < deadline, "work never queued on the Reset lock"
-        time.sleep(0.02)
 
 
 def _run_rebuild_while_build_runs(

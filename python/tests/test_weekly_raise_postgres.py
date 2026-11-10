@@ -14,9 +14,9 @@ from dataclasses import replace
 from datetime import timedelta
 
 import psycopg
-import test_reset_scenarios_postgres as scenarios
+import reset_scenarios_postgres_support as scenarios
 from domain_test_support import domain_database, text
-from test_reset_scenarios_postgres import (
+from reset_scenarios_postgres_support import (
     PREVIOUS_SEASON,
     _ranked,
     _saturday,
@@ -25,13 +25,19 @@ from test_reset_scenarios_postgres import (
     day,
     defenses,
 )
+from weekly_raise_postgres_support import (
+    DEFENDED,
+    LATE_CREDIT,
+    LATE_RAISE,
+    LOSS_TOO,
+    QUIET,
+    RAISE_UNDONE,
+    _instant_raise,
+)
 
 from clashlens import reading_rule, reconciliation
 from clashlens.db import Database
 from clashlens.domain_repair import season_repair
-
-LATE_RAISE, LOSS_TOO, RAISE_UNDONE, LATE_CREDIT, QUIET, DEFENDED = (
-    "#2PP", "#8PP", "#9PP", "#PPP", "#LPP", "#YPP")
 
 
 def _loss_states(connection_info: str, start) -> dict[str, str]:
@@ -171,21 +177,6 @@ def test_monday_reset_reading_before_the_weekly_raise(
     assert {entry["tag"]: entry["confidence"] for entry in tuesday_board["entries"]} == {
         LATE_RAISE: "confirmed", LOSS_TOO: "confirmed", **dict.fromkeys(
             (RAISE_UNDONE, LATE_CREDIT, QUIET, DEFENDED), "uncertain")}
-
-
-def _instant_raise(judge):
-    """``judge`` as before 13 October 2026, which took the weekly raise as
-    landed at the Reset: a value below 5,000 read unraised fit only when the
-    automatic loss had taken it there."""
-    def judged(reading, **rule):
-        result = judge(reading, **rule)
-        if result is None or rule.get("floor") is None or rule.get("reset"):
-            return result
-        ways = frozenset(
-            (loss, up, shown) for loss, up, shown in result.ways
-            if up or reading.trophies - result.new_day_change + loss >= rule["floor"])
-        return replace(result, matched=bool(ways), ways=ways)
-    return judged
 
 
 def _saved_before_the_fix(connection_info: str, archive_server, monkeypatch):

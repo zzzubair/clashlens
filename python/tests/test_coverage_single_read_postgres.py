@@ -5,14 +5,14 @@ from datetime import timedelta
 
 import psycopg
 from domain_test_support import domain_database, store_observation
-from test_no_opponent_rows_postgres import NO_OPPONENT_ROW
-from test_reconciliation_postgres import (
+from no_opponent_rows_postgres_support import NO_OPPONENT_ROW
+from reconciliation_postgres_support import (
     BATTLE_FIXTURE,
     DAY_END,
     DAY_START,
     _processor,
 )
-from test_reset_scenarios_postgres import SEASON, _story, attacks, day, defenses
+from reset_scenarios_postgres_support import SEASON, _story, attacks, day, defenses
 
 from clashlens import ranked_day_inputs
 from clashlens.domain import ranked_day_for

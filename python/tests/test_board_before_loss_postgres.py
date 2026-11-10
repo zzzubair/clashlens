@@ -7,13 +7,13 @@ from __future__ import annotations
 import json
 
 import psycopg
-from domain_test_support import domain_database
-from test_boundary_manifest_postgres import (
+from boundary_manifest_postgres_support import (
     _build_board,
     _october,
     _seed_board,
     _seed_days,
 )
+from domain_test_support import domain_database
 
 from clashlens.db import Database
 

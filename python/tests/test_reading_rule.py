@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
-import test_reconciliation
+import reconciliation_support as test_reconciliation
 
 from clashlens.domain import allocate_trophies, ranked_day_for
 from clashlens.reading_rule import Effect, Reading, contradiction_during_day, decide

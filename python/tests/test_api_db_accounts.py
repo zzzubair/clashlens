@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from test_api_db_organization import account_binding, create_owner
-from test_api_db_public_ops import NOW, seed_profile
-from test_api_db_verification import verification_binding
-from test_api_migration import migrated_production_database
+from api_db_organization_support import account_binding, create_owner
+from api_db_public_ops_support import NOW, seed_profile
+from api_db_verification_support import verification_binding
+from api_migration_support import migrated_production_database
 
 from clashlens import api_accounts, api_groups, api_verification
 from clashlens.api_db import ApiDatabase

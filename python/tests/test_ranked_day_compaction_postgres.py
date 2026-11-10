@@ -14,31 +14,31 @@ from time import monotonic
 
 import psycopg
 import pytest
+from bookkeeping_storage_postgres_support import _visible
 from domain_test_support import (
     LIVE_BATTLE_PARSER_VERSION,
+    _live_battle_row,
     _role_connection,
+    _seed_battle_anchor,
     as_api_role,
     domain_database,
     store_observation,
 )
-from test_bookkeeping_storage_postgres import _visible
-from test_late_battle_sweep_postgres import (
+from domain_test_support import _processor as _sweep_processor
+from late_battle_sweep_postgres_support import (
     ANCHOR,
     DAY,
     OPPONENT,
     TAG,
     _finish_reset_sweep,
     _late_defense,
-    _live_battle_row,
     _previous_day_version,
     _process,
     _published,
     _save_log,
     _saved_disagreement,
-    _seed_battle_anchor,
 )
-from test_late_battle_sweep_postgres import _processor as _sweep_processor
-from test_reconciliation_postgres import (
+from reconciliation_postgres_support import (
     BATTLE_FIXTURE,
     DAY_END,
     DAY_START,

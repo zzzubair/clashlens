@@ -8,12 +8,9 @@ import subprocess
 from datetime import UTC, datetime
 
 import pytest
-import test_alerts
-from test_alerts import FAKE_WEBHOOK
+from alerts_support import FAKE_WEBHOOK
 
 from clashlens import alerts
-
-runtime = test_alerts.runtime
 
 PREFIX = "clashlens_collector_"
 DAILY = f"{PREFIX}oldest_job_reconcile_ranked_day_age_seconds"
@@ -525,8 +522,6 @@ def test_an_unexpected_website_page_error_leaves_only_that_check_unknown(
     error = capsys.readouterr().err
     assert "Reset publication status unavailable; run ./ops logs website" in error
     assert "private" not in error
-
-
 
 
 @pytest.mark.parametrize("path", ["/discord", "/leaderboards/tracked", "/metrics"])

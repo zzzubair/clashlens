@@ -13,7 +13,7 @@ from datetime import timedelta
 
 import psycopg
 from domain_test_support import domain_database
-from test_reset_settlement_collection_postgres import (
+from reset_settlement_collection_postgres_support import (
     MONDAY_RESET,
     SEASON_RESET,
     _collector,

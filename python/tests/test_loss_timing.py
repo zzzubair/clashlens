@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from test_reconciliation import DAY, _input
+from reconciliation_support import DAY, _input
 
 from clashlens.reading_rule import Reading
 from clashlens.reconciliation import (
