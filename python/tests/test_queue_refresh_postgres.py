@@ -48,7 +48,7 @@ def test_unchanged_battle_log_check_after_a_profile_read_queues_the_day(
 ) -> None:
     # An unchanged check saves no response, yet covers a profile read since
     # the last check: the day that ended at the latest Reset is queued once.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         for key, response_hash, endpoint, minutes in (
@@ -75,7 +75,7 @@ def test_only_new_battle_reports_queue_their_day_and_the_day_before(
     day_b = [(DAY_B + timedelta(hours=hour), False) for hour in range(1, 9)]
     attack = (DAY_C + timedelta(hours=1), True)
     late_defense = (DAY_C + timedelta(hours=20), False)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(
             connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
         )
@@ -147,7 +147,7 @@ def test_unchanged_covering_check_lets_a_later_reading_contradict_the_day(
     end_b = 6000 + WIN - 8 * LOSS
     reset_log = _log(*day_b)
     digest = hashlib.sha256(reset_log).hexdigest()
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(
             connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
         )
@@ -207,7 +207,7 @@ def test_late_opponent_report_settles_the_battles_day_for_both_players(
     attack = {**json.loads(_log((DAY_B, True)))["items"][0],
               "opponentPlayerTag": TAG, "battleTimestamp": at}
     corrected = {**attack, "stars": 2, "destructionPercentage": 60}
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(
             connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
         )
@@ -249,7 +249,7 @@ def test_one_new_battle_in_a_full_log_queues_only_its_two_players(
         **full["items"][0], "opponentPlayerTag": "#GQPP",
         "battleTimestamp": f"{DAY_B + timedelta(hours=20):%Y%m%dT%H%M%S.000Z}",
     })
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(
             connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
         )
@@ -297,7 +297,7 @@ def test_unchanged_full_log_check_covers_nothing(database_url: str, archive_serv
     full = _log(filler=[DAY_C + timedelta(minutes=minute) for minute in range(50)])
     season_zero = json.loads(_profile(end_b))
     season_zero["currentLeagueSeasonId"] = 0
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(
             connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
         )
@@ -352,7 +352,7 @@ def test_a_report_changed_back_queues_its_days_again(
     # queues day C and day B, the change back included.
     day_b = [(DAY_B + timedelta(hours=hour), False) for hour in range(1, 9)]
     attack = json.loads(_log((DAY_C + timedelta(hours=1), True)))["items"][0]
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(
             connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
         )
@@ -447,7 +447,7 @@ def test_a_late_reading_queues_its_own_ended_day_and_the_day_before(
 ) -> None:
     # A profile read at 05:20 on day C judges day B from its end and day C
     # during it. Processed after day C ended, it queues both.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = []
         for day in (DAY_B, DAY_C, DAY_D):
             jobs += _reset_work(
@@ -505,7 +505,7 @@ def _quiet_days(connection_info: str, archive_server, days: list) -> int:
 
 def test_a_third_shielded_day_in_a_row_is_saved(database_url: str, archive_server) -> None:
     # Shields stack, so a 2-day and a 1-day shield make a 3-day run.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         days = [DAY_B, DAY_C, DAY_D]
         _quiet_days(connection_info, archive_server, days)
         with psycopg.connect(connection_info) as connection:
@@ -531,7 +531,7 @@ def test_the_daily_recheck_queues_the_last_two_ended_days(
     # held Season repair and day-end recalculations back for hours, and due
     # over the next hours, so a recheck for new evidence waits behind only
     # the ones already due.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         player_id = _quiet_days(connection_info, archive_server, [DAY_B, DAY_C])
         database = Database(connection_info)
         try:
@@ -560,7 +560,7 @@ def test_evidence_merges_only_into_a_daily_recheck_already_due(
 ) -> None:
     # The pass's first day is due now and reads the evidence when it runs;
     # one due hours later would leave that evidence waiting behind it.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         player_id = _quiet_days(connection_info, archive_server, [DAY_B, DAY_C])
         database = Database(connection_info)
         try:
@@ -591,7 +591,7 @@ def test_an_evidence_recheck_goes_before_the_daily_pass_due_before_it(
     # 2 hours behind pass rechecks due before it. The pass fills what evidence
     # leaves, however many of its rechecks came due first, then goes in the
     # order they came due.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         player_id = _quiet_days(connection_info, archive_server, [DAY_B, DAY_C])
         database = Database(connection_info)
         try:
@@ -647,7 +647,7 @@ def test_evidence_merged_into_a_due_daily_recheck_goes_before_the_pass(
 ) -> None:
     # Evidence for a day whose pass recheck is already due, behind 80 others
     # due before it, adds no job: that recheck runs as one for evidence.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         player_id = _quiet_days(connection_info, archive_server, [DAY_B, DAY_C])
         database = Database(connection_info)
         try:

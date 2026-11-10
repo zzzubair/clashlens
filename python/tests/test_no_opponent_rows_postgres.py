@@ -118,7 +118,7 @@ def _day(database):
 def test_no_opponent_row_leaves_days_and_resets_complete(
     database_url: str, archive_server, odd_row: dict, counts: bool
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = [
             *_pair(connection_info, archive_server, "start", DAY_START,
                    _profile(6000), _log(odd_row, with_battle=False)),
@@ -151,7 +151,7 @@ def test_no_opponent_rows_of_the_day_count_once_as_used_slots(
     attack = defense | {"attack": True, "battleTimestamp": "20260804T130000.000Z"}
     payload = json.loads(_log(defense, with_battle=True))
     payload["items"].append(attack)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = [
             # Yesterday's row, still in the log, is not today's slot.
             *_pair(connection_info, archive_server, "start", DAY_START,
@@ -212,7 +212,7 @@ def test_a_no_opponent_row_first_returned_after_the_reset_log_counts(
     late = NO_OPPONENT_ROW | {"battleTimestamp": "20260805T050200.000Z"}
     payload = json.loads(_log(NO_OPPONENT_ROW, with_battle=True))
     payload["items"].append(late)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = [
             *_pair(connection_info, archive_server, "start", DAY_START,
                    _profile(6000), _log(NO_OPPONENT_ROW, with_battle=False)),
@@ -243,7 +243,7 @@ def test_republication_recovers_resets_failed_by_no_opponent_rows(
 ) -> None:
     rejected = json.loads(_profile(6000))
     rejected["currentLeagueSeasonId"] = 0
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = [
             *_pair(connection_info, archive_server, "opening",
                    DAY_START - timedelta(days=22), _profile(5000),
@@ -329,7 +329,7 @@ def _log_results(database, observation_id: int) -> tuple[str, bool, int]:
 def test_republication_clears_no_opponent_gaps_of_the_delayed_reset_log(
     database_url: str, archive_server, monkeypatch
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         delayed_log, delayed_job = store_observation(
             connection_info,
             archive_server,

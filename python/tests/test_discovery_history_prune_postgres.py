@@ -6,9 +6,8 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation
+from domain_test_support import _processor, domain_database, store_observation
 from psycopg.pq import TransactionStatus
-from test_domain_processing_postgres import _processor
 
 from clashlens.domain import SEASON_ANCHOR_RULE_VERSION
 from clashlens.history import prune_completed_history
@@ -188,7 +187,7 @@ def _process(connection_info, archive_server, occurrence_key, *, tag="#2PP"):
 
 
 def test_discovery_prune_preview_apply_and_rerun(database_url: str, archive_server) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         battle_observation, battle_job = store_observation(
             connection_info,
             archive_server,
@@ -272,7 +271,7 @@ def test_discovery_prune_preview_apply_and_rerun(database_url: str, archive_serv
 def test_a_pruned_battle_opponent_sighting_keeps_the_player_a_battle_opponent(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _process(connection_info, archive_server, "opponent-kept")
         _age_work(connection_info)
         _confirm_anchor(connection_info, archive_server)
@@ -297,7 +296,7 @@ def test_a_pruned_battle_opponent_sighting_keeps_the_player_a_battle_opponent(
 def test_discovery_prune_unknown_boundary_live_season_and_recent(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         old_observation = _process(connection_info, archive_server, "boundary-old")
         _age_work(connection_info)
         with psycopg.connect(connection_info) as connection:
@@ -374,7 +373,7 @@ def test_discovery_prune_unknown_boundary_live_season_and_recent(
 def test_discovery_prune_preserves_unfinished_and_protected_work(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         clean = _process(connection_info, archive_server, "protect-clean", tag="#2PP")
         pending_observation, _pending_job = store_observation(
             connection_info,
@@ -541,7 +540,7 @@ def test_discovery_prune_preserves_unfinished_and_protected_work(
 def test_discovery_events_keep_sourceless_history(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         observation = _process(connection_info, archive_server, "events-ranked")
         with psycopg.connect(connection_info) as connection:
             player_id = connection.execute(
@@ -583,7 +582,7 @@ def test_discovery_events_keep_sourceless_history(
 def test_discovery_scheduling_and_replay_survive_cleanup(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         observation = _process(connection_info, archive_server, "survive-first")
         _confirm_anchor(connection_info, archive_server)
         _age_work(connection_info)
@@ -690,7 +689,7 @@ class _CollectionInterleaveConnection(_ReplayInterleaveConnection):
 def test_discovery_prune_replay_committed_before_recheck_preserves_rows(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         observation = _process(connection_info, archive_server, "replay-race")
         _confirm_anchor(connection_info, archive_server)
         _age_work(connection_info)
@@ -733,7 +732,7 @@ def test_discovery_prune_replay_committed_before_recheck_preserves_rows(
 def test_collection_prune_recheck_preserves_newly_protected_observation(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         target_observation = target_job = target_work = None
         database, processor = _processor(connection_info, archive_server)
         try:
@@ -799,7 +798,7 @@ def test_collection_prune_recheck_preserves_newly_protected_observation(
 def test_prune_preview_returns_idle_and_apply_visible_externally(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         observation = _process(connection_info, archive_server, "boundaries-idle")
         _confirm_anchor(connection_info, archive_server)
         _age_work(connection_info)
@@ -840,7 +839,7 @@ def test_prune_preview_returns_idle_and_apply_visible_externally(
 
 
 def test_prune_autocommit_connection(database_url: str, archive_server) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         observation = _process(connection_info, archive_server, "boundaries-autocommit")
         _confirm_anchor(connection_info, archive_server)
         _age_work(connection_info)
@@ -861,7 +860,7 @@ def test_prune_autocommit_connection(database_url: str, archive_server) -> None:
 def test_prune_caller_transaction_not_committed_and_rollback_restores(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         observation = _process(connection_info, archive_server, "boundaries-caller")
         _confirm_anchor(connection_info, archive_server)
         _age_work(connection_info)
@@ -896,7 +895,7 @@ def test_prune_caller_transaction_not_committed_and_rollback_restores(
 def test_prune_non_read_committed_rejects_before_changes(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         observation = _process(connection_info, archive_server, "boundaries-isolation")
         _confirm_anchor(connection_info, archive_server)
         _age_work(connection_info)

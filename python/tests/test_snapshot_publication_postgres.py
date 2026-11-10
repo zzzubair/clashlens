@@ -612,7 +612,7 @@ def test_snapshot_entry_statements_are_bounded_as_population_grows(
     archive_server,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         small_app, small_postgres = _publish_snapshot_population(
             connection_info, archive_server, 2, monkeypatch
         )

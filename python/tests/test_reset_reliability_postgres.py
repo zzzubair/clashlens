@@ -237,7 +237,7 @@ def _members(database: Database) -> tuple[int, dict[str, str]]:
 def test_board_publishes_at_0530_without_an_unfinished_player_and_adds_them_once_done(
     database_url: str, archive_server, monkeypatch
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _swept(connection_info, archive_server, processor)
@@ -306,7 +306,7 @@ def test_at_0600_the_board_publishes_without_every_unfinished_player(
     monkeypatch.setattr(
         past_reset_pacing, "PAST_RESET_QUIET_END", past_reset_pacing.PAST_RESET_QUIET_START
     )
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         (tmp_path / "url").write_text(_as_worker(connection_info))
         monkeypatch.setenv("CLASHLENS_DATABASE_URL_FILE", str(tmp_path / "url"))
@@ -349,7 +349,7 @@ def test_the_board_publishes_before_its_army_inputs_freeze(
     # Before, the army's inputs froze in the board's own transaction, for
     # 2 min 58 s on 14 Oct 2026, and its build job stayed unseen until then.
     monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _swept(connection_info, archive_server, processor)
@@ -382,7 +382,7 @@ def test_the_board_is_served_once_built_before_its_statistics(
     # Before, it waited for the army share code statistics no Daily board
     # shows: 1 min 22 s on 14 Oct 2026.
     monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _swept(connection_info, archive_server, processor)
@@ -421,7 +421,7 @@ def test_a_board_build_that_fails_once_runs_again_and_publishes(
         return run(database, claim)
 
     monkeypatch.setattr(module, name, faulty)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _swept(connection_info, archive_server, processor)
@@ -450,7 +450,7 @@ def test_army_results_publish_while_the_boards_statistics_keep_failing(
         raise ValueError("a statistics fault")
 
     monkeypatch.setattr(boundary_publication, "complete_analytics", failing)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _swept(connection_info, archive_server, processor)
@@ -483,7 +483,7 @@ def test_a_failed_army_build_runs_again_and_a_left_out_players_day_still_joins_t
         return run(database, claim)
 
     monkeypatch.setattr(army_ingestion, "complete_army_analytics", faulty)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         outcomes = []
 
@@ -541,7 +541,7 @@ def test_an_army_rerun_waits_a_minute_however_often_the_statistics_failed(
 
     monkeypatch.setattr(boundary_publication, "complete_analytics", statistics)
     monkeypatch.setattr(army_ingestion, "complete_army_analytics", army_once)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _swept(connection_info, archive_server, processor)
@@ -575,7 +575,7 @@ def test_an_army_rerun_waits_a_minute_however_often_the_statistics_failed(
 def test_an_army_build_that_gave_up_on_pending_members_runs_at_once_they_settle(
     database_url: str, archive_server, monkeypatch
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             jobs, army_job, _input = _freeze_army_inputs(
@@ -606,7 +606,7 @@ def test_a_battle_log_job_leaves_the_army_freeze_to_the_background_check(
     # Before, a battle log saving an army for the ended day froze the army's
     # inputs in its own job: 3 to 9 minutes of a response slot.
     monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _swept(connection_info, archive_server, processor)
@@ -652,7 +652,7 @@ def test_a_failed_build_runs_again_only_once_a_repair_lets_it(
         return run(database, claim)
 
     monkeypatch.setattr(snapshots, "complete_snapshot", faulty)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _swept(connection_info, archive_server, processor)
@@ -685,7 +685,7 @@ def test_a_past_resets_statistics_wait_out_the_quiet_window(
 ) -> None:
     # Before, only its board and army builds waited; its statistics ran.
     monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _swept(connection_info, archive_server, processor)
@@ -729,7 +729,7 @@ def test_an_army_freeze_past_the_query_limit_waits_before_trying_again(
         return army_rows(connection, members, generation)
 
     monkeypatch.setattr(boundary_manifest, "_army_rows", slow_once)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _swept(connection_info, archive_server, processor)
@@ -782,7 +782,7 @@ def test_a_paused_repair_holds_no_first_board_past_0600(
 ) -> None:
     # Before, it held the board until someone resumed or ended the repair.
     monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _repair_lists(connection_info, "paused")
@@ -807,7 +807,7 @@ def test_a_repair_holds_a_correction_started_before_it_past_0600(
     # past 06:00 the repair let the correction build.
     monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
     monkeypatch.setattr(past_reset_pacing, "NEWEST_RESET_CORRECTION_INTERVAL", timedelta.min)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _swept(connection_info, archive_server, processor)
@@ -852,7 +852,7 @@ def test_a_day_that_fails_for_good_leaves_the_board_to_publish_without_it(
         return calculate(data)
 
     monkeypatch.setattr(reconciliation_db, "reconcile_ranked_day", faulty)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _swept(connection_info, archive_server, processor)
@@ -884,7 +884,7 @@ def test_a_day_meeting_a_busy_reset_hands_its_lease_back_and_backs_off(
 ) -> None:
     # Before, it kept its lease and its try, and came back when the lease
     # ran out at the head of the queue, as the oldest waiting work.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _swept(connection_info, archive_server, processor)
@@ -945,7 +945,7 @@ def test_the_last_day_waits_out_a_brief_hold_on_the_reset(
     # Before, it gave up after 250 ms and came back 30 to 60 s later: on
     # 14 Oct 2026 the last day saved 2 min 35 s late.
     monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _swept(connection_info, archive_server, processor)
@@ -968,7 +968,7 @@ def test_the_0530_check_waits_out_a_brief_hold_on_the_reset(
     # Before, it waited 50 ms and skipped the Reset: on 14 Oct 2026 it left
     # no one out.
     monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _swept(connection_info, archive_server, processor)
@@ -992,7 +992,7 @@ def test_the_day_recheck_pass_waits_for_room_and_never_runs_into_the_reset(
 ) -> None:
     # On 11 Oct 2026 the 23:00 pass queued about 17,500 rechecks into a lane
     # finishing 5,800 to 8,250 an hour, and the work due rose into the Reset.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _swept(connection_info, archive_server, processor)
@@ -1149,7 +1149,7 @@ def test_deep_profile_history_cannot_hold_the_board_freeze_past_its_budget(
         return frozen
 
     monkeypatch.setattr(boundary_manifest, "_freeze", budgeted)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _swept(connection_info, archive_server, processor)

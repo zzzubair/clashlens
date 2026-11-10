@@ -75,7 +75,7 @@ def _handoff(
 def test_due_players_are_claimed_without_collector_work_rows(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
 
@@ -109,7 +109,7 @@ def test_due_players_are_claimed_while_a_worker_row_references_them(
     # A worker transaction saving rows that point at players (a Reset
     # manifest lists every member) holds a key-share lock on each player
     # until it commits. On Oct 3 one held 13,264 for 8 minutes.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         referenced = _player(connection_info, "#REFERENCED")
         changing = _player(connection_info, "#CHANGING")
         database = CollectorDatabase(connection_info)
@@ -131,7 +131,7 @@ def test_due_players_are_claimed_while_a_worker_row_references_them(
 def test_due_claim_reuses_only_a_current_profile_before_the_first_successful_battle(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = CollectorDatabase(connection_info)
         cases = {
             "#FRESH": (NOW - timedelta(seconds=1), None),
@@ -187,7 +187,7 @@ def test_due_claim_reuses_only_a_current_profile_before_the_first_successful_bat
 def test_due_claim_prioritizes_unsuccessful_first_battles_before_repeats(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = CollectorDatabase(connection_info)
         repeat_player = _player(connection_info, "#REPEAT")
         failed_player = _player(connection_info, "#FAILED")
@@ -293,7 +293,7 @@ def test_due_claim_prioritizes_unsuccessful_first_battles_before_repeats(
 def test_first_battle_priority_rolls_back_with_response_state(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         with psycopg.connect(connection_info) as connection:
@@ -342,7 +342,7 @@ def test_first_battle_priority_rolls_back_with_response_state(
 def test_first_battle_priority_migration_backfills_successful_state(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         database.record_response(
@@ -384,7 +384,7 @@ def test_first_battle_priority_migration_backfills_successful_state(
 def test_response_state_compacts_unchanged_and_enqueues_changed_response(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         first_hash = _hash("a")
@@ -450,7 +450,7 @@ def test_response_state_compacts_unchanged_and_enqueues_changed_response(
 def test_response_state_keeps_latest_profile_not_found_and_success_times(
     database_url: str, endpoint: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         player_id = _player(connection_info)
         options = conninfo_to_dict(connection_info)["options"]
         database = CollectorDatabase(make_conninfo(
@@ -509,7 +509,7 @@ def test_response_state_keeps_latest_profile_not_found_and_success_times(
 def test_changed_response_upsert_is_idempotent_by_occurrence_key(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         handoff = _handoff(
@@ -543,7 +543,7 @@ def test_changed_response_upsert_is_idempotent_by_occurrence_key(
 def test_older_response_does_not_regress_compact_state(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         latest_hash = _hash("latest")
@@ -580,7 +580,7 @@ def test_older_response_does_not_regress_compact_state(
 def test_serialized_compact_recovery_tracks_applied_occurrence_separately(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         fingerprint = _hash("used-fields")
@@ -636,7 +636,7 @@ def test_serialized_compact_recovery_tracks_applied_occurrence_separately(
 def test_changed_recovery_after_successor_does_not_reapply_state(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         first = _handoff(
@@ -695,7 +695,7 @@ def test_changed_recovery_after_successor_does_not_reapply_state(
 def test_legacy_compact_recovery_fails_closed_when_commit_is_ambiguous(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         fingerprint = _hash("used-fields")
@@ -741,7 +741,7 @@ def test_legacy_compact_recovery_fails_closed_when_commit_is_ambiguous(
 def test_transport_failure_is_durable_without_collector_work(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         failure_id = database.record_transport_failure(
@@ -770,7 +770,7 @@ def test_transport_failure_is_durable_without_collector_work(
 def test_reset_reprocesses_same_hash_as_a_new_boundary_occurrence(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         response_hash = _hash("same-at-reset")
@@ -814,7 +814,7 @@ def test_reset_reprocesses_same_hash_as_a_new_boundary_occurrence(
 def test_unchanged_fields_compact_even_when_bytes_differ(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         fingerprint = _hash("same-fields")
@@ -869,7 +869,7 @@ def test_unchanged_fields_compact_even_when_bytes_differ(
 def test_reset_baseline_stores_unchanged_fields_as_boundary_evidence(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         fingerprint = _hash("boundary-fields")
@@ -912,7 +912,7 @@ def test_refresh_saves_an_unchanged_profile_for_the_worker_to_judge_again(
 ) -> None:
     """A Refresh re-decides an untracked player's league (league_week), so it
     saves the profile even when the fields match the last one."""
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         fingerprint = _hash("legend-ii-fields")
@@ -941,7 +941,7 @@ def test_refresh_saves_an_unchanged_profile_for_the_worker_to_judge_again(
 def test_season_boundary_reset_requires_league_history(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         # 28-day season grid anchored at 1783918800 (a Monday 05:00 UTC).
@@ -995,7 +995,7 @@ def test_season_boundary_reset_requires_league_history(
 def test_discovery_profile_fetches_league_history_once(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         with psycopg.connect(connection_info) as connection:
@@ -1034,7 +1034,7 @@ def test_discovery_profile_fetches_league_history_once(
 def test_archive_instance_validation_and_interactive_permit_budget(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         fingerprint = _hash("interactive-key")
         with psycopg.connect(connection_info) as connection:
             connection.execute(
@@ -1073,7 +1073,7 @@ def test_archive_instance_validation_and_interactive_permit_budget(
 
 
 def test_health_metrics_report_due_work(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _player(connection_info)
         with psycopg.connect(connection_info) as connection:
             connection.execute(
@@ -1093,7 +1093,7 @@ def test_health_metrics_report_due_work(database_url: str) -> None:
 def test_reset_membership_freezes_on_first_insert_and_boundary_is_exact(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         first_player = _player(connection_info)
         database = CollectorDatabase(connection_info)
         boundary = NOW + timedelta(days=1, hours=1)
@@ -1110,7 +1110,7 @@ def test_reset_membership_freezes_on_first_insert_and_boundary_is_exact(
 
 
 def test_unfinished_older_reset_blocks_the_next_boundary(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _player(connection_info)
         database = CollectorDatabase(connection_info)
         first_boundary = NOW + timedelta(days=1, hours=1)
@@ -1135,7 +1135,7 @@ def test_unfinished_older_reset_blocks_the_next_boundary(database_url: str) -> N
 def test_complete_intent_requires_active_work_and_exact_observed_endpoints(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _player(connection_info)
         database = CollectorDatabase(connection_info)
         boundary = NOW + timedelta(days=1, hours=1)
@@ -1174,7 +1174,7 @@ def test_complete_intent_requires_active_work_and_exact_observed_endpoints(
 
 
 def test_rankings_cycle_does_not_duplicate_completed_job(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = CollectorDatabase(connection_info)
         assert database.schedule_rankings_cycle(NOW) is True
         with psycopg.connect(connection_info) as connection:
@@ -1194,7 +1194,7 @@ def test_rankings_cycle_does_not_duplicate_completed_job(database_url: str) -> N
 def test_health_reset_progress_ignores_terminal_historical_sweep(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _player(connection_info)
         database = CollectorDatabase(connection_info)
         boundary = NOW + timedelta(days=1, hours=1)
@@ -1212,7 +1212,7 @@ def test_health_reset_progress_ignores_terminal_historical_sweep(
 def test_refresh_work_coalesces_cools_down_and_reports_status(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             first = connection.execute(
                 "SELECT * FROM clashlens_enqueue_interactive('live_refresh', '#2PP', 30, false)"
@@ -1239,7 +1239,7 @@ def test_refresh_work_coalesces_cools_down_and_reports_status(
 
 
 def test_refresh_default_cooldown_is_thirty_seconds(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             first = connection.execute(
                 "SELECT * FROM clashlens_enqueue_interactive('live_refresh', '#2PP')"
@@ -1257,7 +1257,7 @@ def test_refresh_default_cooldown_is_thirty_seconds(database_url: str) -> None:
 
 
 def test_refresh_enqueue_is_not_publicly_executable(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             privileges = connection.execute(
                 """
@@ -1286,7 +1286,7 @@ def test_refresh_enqueue_is_not_publicly_executable(database_url: str) -> None:
 def test_reset_compact_work_freezes_membership_and_pairs_endpoints(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         first_player = _player(connection_info)
         database = CollectorDatabase(connection_info)
         boundary = NOW + timedelta(days=1, hours=1)
@@ -1336,7 +1336,7 @@ def test_reset_compact_work_freezes_membership_and_pairs_endpoints(
 def test_rankings_and_discovery_use_unleased_compact_work(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         assert database.schedule_rankings_cycle(NOW) is True
@@ -1401,7 +1401,7 @@ def test_rankings_and_discovery_use_unleased_compact_work(
 def test_response_cannot_mark_another_players_work_observed(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         first_player = _player(connection_info)
         second_player = _player(connection_info, "#3PP")
         database = CollectorDatabase(connection_info)
@@ -1428,7 +1428,7 @@ def test_response_cannot_mark_another_players_work_observed(
 def test_deferred_player_is_not_due_before_the_given_time(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         finished = _player(connection_info)
         inactive = _player(connection_info, "#8PP")
         with psycopg.connect(connection_info) as connection:

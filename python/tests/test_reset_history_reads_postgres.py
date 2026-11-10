@@ -74,7 +74,7 @@ def test_reset_board_reads_no_members_whole_profile_history(
 ) -> None:
     sunday, monday = day(7), day(8)
     tags = [f"#P{_tag(n)[1:]}" for n in range(1, SWEPT + 1)]
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, *tags)
         for tag in tags:
             story.players[tag].battles = _even(sunday) + attacks(
@@ -139,7 +139,7 @@ def test_board_build_reads_one_ranked_day_however_many_newer_days_exist(
     members, newer = 100, 6_000
     sunday, monday = day(7), day(8)
     tags = [f"#P{_tag(n)[1:]}" for n in range(1, members + 1)]
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, *tags)
         for tag in tags:
             story.players[tag].battles = _even(sunday) + attacks(

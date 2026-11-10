@@ -7,11 +7,13 @@ from datetime import UTC, datetime, timedelta
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation, text
-from test_domain_processing_postgres import (
+from domain_test_support import (
     _live_battle_row,
     _processor,
     _seed_battle_anchor,
+    domain_database,
+    store_observation,
+    text,
 )
 
 from clashlens.collector_db import (
@@ -33,7 +35,7 @@ from clashlens.operator_recovery import replay_failed_jobs, retry_failed_item
 def test_health_metrics_survive_restart_and_separate_failed_uploads(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             player_id = connection.execute(
                 """INSERT INTO players (normalized_tag, active, next_due_at)
@@ -179,7 +181,7 @@ def test_health_metrics_survive_restart_and_separate_failed_uploads(
 def test_metrics_include_jobs_without_observations_or_successful_fetches(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = CollectorDatabase(connection_info)
         try:
             metrics = database.health_metrics()
@@ -281,7 +283,7 @@ def test_metrics_include_jobs_without_observations_or_successful_fetches(
 def test_upload_clocks_ignore_repeat_sightings_and_restart_for_fresh_uploads(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             player_id = connection.execute(
                 "INSERT INTO players (normalized_tag) VALUES ('#2PP') RETURNING id"
@@ -387,7 +389,7 @@ def test_upload_clocks_ignore_repeat_sightings_and_restart_for_fresh_uploads(
 def test_health_metrics_count_saved_responses(database_url: str) -> None:
     # The alert check turns this into responses saved a minute in the Reset
     # hour; on 7 Oct 2026 a stalled collector saved 17-44 a minute.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             player_id = connection.execute(
                 """INSERT INTO players (normalized_tag, active, next_due_at)
@@ -437,7 +439,7 @@ def test_metrics_show_finished_work_reset_work_left_and_old_failures(
 ) -> None:
     # The early warning needs to see work that waits while nothing of its kind
     # finishes, how much Reset work is left, and failures nobody has fixed.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = CollectorDatabase(connection_info)
         try:
             with psycopg.connect(connection_info) as connection:
@@ -528,7 +530,7 @@ def test_a_failed_job_whose_response_a_replay_processed_stays_repaired(
     database_url: str,
 ) -> None:
     # The failed job keeps its state; only the outstanding count drops.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = CollectorDatabase(connection_info)
         try:
             with psycopg.connect(connection_info, autocommit=True) as connection:
@@ -587,7 +589,7 @@ def test_a_failed_daily_result_repaired_by_its_replacement_stops_counting(
 ) -> None:
     # The current-Season republish queues a replacement for a failed daily
     # result; the original stays failed as a record.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = CollectorDatabase(connection_info)
         try:
             with psycopg.connect(connection_info, autocommit=True) as connection:
@@ -659,7 +661,7 @@ def test_a_failed_battle_log_job_replays_under_its_own_parser(
     # Seven battle logs saved under battle parser v3 failed on 3 Oct 2026. The
     # replay must use v3's trophy rules, and the failed job stops counting once
     # the replay processes the same saved response.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
         _seed_battle_anchor(connection_info, ranked_day_for(now).start)
@@ -765,7 +767,7 @@ def test_upload_wait_matches_the_old_count_without_reading_every_upload(
 ) -> None:
     # Production on 8 October 2026 held 2.93 million upload rows, nearly all
     # archived; the old count read every one of them each minute to find none.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info, autocommit=True) as connection:
             connection.execute(
                 """

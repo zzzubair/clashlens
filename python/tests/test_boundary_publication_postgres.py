@@ -100,7 +100,7 @@ def _board_published(database: Database, connection, generation: int = 1) -> Non
 def test_complete_ranked_day_without_profile_is_not_snapshot_complete(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -108,7 +108,7 @@ def test_complete_ranked_day_without_profile_is_not_snapshot_complete(
                     connection, "#NOPROFILE", 1, "a" * 64
                 )
                 _sweep_with_members(connection, [player_id])
-                assert boundary._record_boundary_generation(database, 
+                assert boundary._record_boundary_generation(database,
                     connection,
                     boundary_at=BOUNDARY,
                     player_id=player_id,
@@ -151,7 +151,7 @@ def test_complete_ranked_day_without_profile_is_not_snapshot_complete(
 def test_baseline_recomputes_army_status_until_decodes_exist(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -206,14 +206,14 @@ def test_baseline_recomputes_army_status_until_decodes_exist(
                         BOUNDARY,
                     ),
                 )
-                boundary._record_boundary_generation(database, 
+                boundary._record_boundary_generation(database,
                     connection,
                     boundary_at=BOUNDARY,
                     player_id=player_id,
                     ranked_day_version_id=ranked_id,
                     ranked_day_input_hash="a" * 64,
                 )
-                reset_baselines._record_boundary_baseline(database, 
+                reset_baselines._record_boundary_baseline(database,
                     connection,
                     boundary_at=BOUNDARY,
                     reset_sweep_id=_sweep_id(connection),
@@ -244,7 +244,7 @@ def _sweep_id(connection) -> int:
 def test_snapshot_publication_uses_only_frozen_manifest_profile(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -297,7 +297,7 @@ def test_snapshot_publication_uses_only_frozen_manifest_profile(
                 old_observation, BOUNDARY - timedelta(hours=2), 6123, "eligible"
             )
             with database.pool.connection() as connection:
-                boundary._record_boundary_generation(database, 
+                boundary._record_boundary_generation(database,
                     connection,
                     boundary_at=BOUNDARY,
                     player_id=player_id,
@@ -344,7 +344,7 @@ def test_snapshot_publication_uses_only_frozen_manifest_profile(
 def test_boundary_generation_coalesces_population_and_corrections(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -360,7 +360,7 @@ def test_boundary_generation_coalesces_population_and_corrections(
                     (players[-1][1],),
                 )
                 for player_id, version_id in players:
-                    assert boundary._record_boundary_generation(database, 
+                    assert boundary._record_boundary_generation(database,
                         connection,
                         boundary_at=BOUNDARY,
                         player_id=player_id,
@@ -396,7 +396,7 @@ def test_boundary_generation_coalesces_population_and_corrections(
 
                 # Pending reset classifications block both artifacts; the
                 # coordinator never publishes from incomplete membership.
-                boundary._try_enqueue_boundary_artifacts(database, 
+                boundary._try_enqueue_boundary_artifacts(database,
                     connection, boundary_at=BOUNDARY, generation_id=int(generation[0])
                 )
                 assert (
@@ -415,7 +415,7 @@ def test_boundary_generation_coalesces_population_and_corrections(
                     "UPDATE ranked_day_versions SET state = 'Complete' WHERE id = %s",
                     (players[-1][1],),
                 )
-                boundary._record_boundary_generation(database, 
+                boundary._record_boundary_generation(database,
                     connection,
                     boundary_at=BOUNDARY,
                     player_id=players[-1][0],
@@ -546,7 +546,7 @@ def test_boundary_generation_coalesces_population_and_corrections(
                         ),
                     ).fetchone()[0]
                 )
-                assert boundary._record_boundary_generation(database, 
+                assert boundary._record_boundary_generation(database,
                     connection,
                     boundary_at=BOUNDARY,
                     player_id=player_id,
@@ -600,7 +600,7 @@ def test_boundary_generation_coalesces_population_and_corrections(
 def test_decode_only_correction_inherits_snapshot_publication_identity(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -674,7 +674,7 @@ def test_decode_only_correction_inherits_snapshot_publication_identity(
                     ),
                 )
                 connection.execute("SAVEPOINT army_ready_correction")
-                boundary_publication._queue_boundary_army_correction(database, 
+                boundary_publication._queue_boundary_army_correction(database,
                     connection, boundary_at=BOUNDARY, generation_id=int(generation[0])
                 )
                 assert (
@@ -695,7 +695,7 @@ def test_decode_only_correction_inherits_snapshot_publication_identity(
                     (generation[0],),
                 )
                 connection.execute("SAVEPOINT army_building_correction")
-                boundary_publication._queue_boundary_army_correction(database, 
+                boundary_publication._queue_boundary_army_correction(database,
                     connection, boundary_at=BOUNDARY, generation_id=int(generation[0])
                 )
                 assert (
@@ -709,7 +709,7 @@ def test_decode_only_correction_inherits_snapshot_publication_identity(
                     "UPDATE boundary_publication_generations SET snapshot_state = 'published', army_state = 'published' WHERE id = %s",
                     (generation[0],),
                 )
-                boundary_publication._queue_boundary_army_correction(database, 
+                boundary_publication._queue_boundary_army_correction(database,
                     connection, boundary_at=BOUNDARY, generation_id=int(generation[0])
                 )
                 inherited = connection.execute(
@@ -747,7 +747,7 @@ def test_decode_only_correction_inherits_snapshot_publication_identity(
 def test_enqueue_army_routes_frozen_drift_for_each_state_despite_unrelated_reconcile(
     database_url: str, army_state: str, monkeypatch
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -775,7 +775,7 @@ def test_enqueue_army_routes_frozen_drift_for_each_state_despite_unrelated_recon
                         BOUNDARY,
                     ),
                 )
-                boundary._record_boundary_generation(database, 
+                boundary._record_boundary_generation(database,
                     connection,
                     boundary_at=BOUNDARY,
                     player_id=player_id,
@@ -876,7 +876,7 @@ def test_enqueue_army_routes_frozen_drift_for_each_state_despite_unrelated_recon
 def test_enqueue_army_decode_only_inherits_snapshot_after_restart(
     database_url: str, monkeypatch
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -884,7 +884,7 @@ def test_enqueue_army_decode_only_inherits_snapshot_after_restart(
                     connection, "#DECODE-RESTART", 1, "a" * 64
                 )
                 _sweep_with_members(connection, [player_id])
-                boundary._record_boundary_generation(database, 
+                boundary._record_boundary_generation(database,
                     connection,
                     boundary_at=BOUNDARY,
                     player_id=player_id,
@@ -1038,7 +1038,7 @@ def test_enqueue_army_decode_only_inherits_snapshot_after_restart(
 def test_boundary_correction_recovery_activates_pending_inputs(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -1046,7 +1046,7 @@ def test_boundary_correction_recovery_activates_pending_inputs(
                     connection, "#RECOVER1", 1, "a" * 64
                 )
                 _sweep_with_members(connection, [player_id])
-                boundary._record_boundary_generation(database, 
+                boundary._record_boundary_generation(database,
                     connection,
                     boundary_at=BOUNDARY,
                     player_id=player_id,
@@ -1162,14 +1162,14 @@ def test_boundary_correction_recovery_activates_pending_inputs(
 def test_source_correction_marks_both_artifacts_when_one_manifest_is_frozen(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
                 first = _player_and_version(connection, "#QUEUE1", 1, "a" * 64)
                 second = _player_and_version(connection, "#QUEUE2", 1, "b" * 64)
                 _sweep_with_members(connection, [first[0], second[0]])
-                boundary._record_boundary_generation(database, 
+                boundary._record_boundary_generation(database,
                     connection,
                     boundary_at=BOUNDARY,
                     player_id=first[0],
@@ -1205,7 +1205,7 @@ def test_source_correction_marks_both_artifacts_when_one_manifest_is_frozen(
                         (first[0], DAY_START, BOUNDARY, "c" * 64, "c" * 64),
                     ).fetchone()[0]
                 )
-                boundary._record_boundary_generation(database, 
+                boundary._record_boundary_generation(database,
                     connection,
                     boundary_at=BOUNDARY,
                     player_id=first[0],
@@ -1237,14 +1237,14 @@ def test_source_correction_marks_both_artifacts_when_one_manifest_is_frozen(
 def test_boundary_correction_coalesces_before_any_manifest_freezes(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
                 first = _player_and_version(connection, "#COALESCE1", 1, "a" * 64)
                 second = _player_and_version(connection, "#COALESCE2", 1, "b" * 64)
                 _sweep_with_members(connection, [first[0], second[0]])
-                boundary._record_boundary_generation(database, 
+                boundary._record_boundary_generation(database,
                     connection,
                     boundary_at=BOUNDARY,
                     player_id=first[0],
@@ -1266,7 +1266,7 @@ def test_boundary_correction_coalesces_before_any_manifest_freezes(
                         (first[0], DAY_START, BOUNDARY, "c" * 64, "c" * 64),
                     ).fetchone()[0]
                 )
-                boundary._record_boundary_generation(database, 
+                boundary._record_boundary_generation(database,
                     connection,
                     boundary_at=BOUNDARY,
                     player_id=first[0],
@@ -1300,7 +1300,7 @@ def test_boundary_correction_coalesces_before_any_manifest_freezes(
 def test_mixed_boundary_last_unavailable_still_enqueues_army(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -1311,21 +1311,21 @@ def test_mixed_boundary_last_unavailable_still_enqueues_army(
                     connection, [first[0], second[0], third[0]]
                 )
                 for player_id, version_id in (first, second):
-                    reset_baselines._record_boundary_baseline(database, 
+                    reset_baselines._record_boundary_baseline(database,
                         connection,
                         boundary_at=BOUNDARY,
                         reset_sweep_id=sweep_id,
                         player_id=player_id,
                         state="complete",
                     )
-                    boundary._record_boundary_generation(database, 
+                    boundary._record_boundary_generation(database,
                         connection,
                         boundary_at=BOUNDARY,
                         player_id=player_id,
                         ranked_day_version_id=version_id,
                         ranked_day_input_hash="a" * 64,
                     )
-                reset_baselines._record_boundary_baseline(database, 
+                reset_baselines._record_boundary_baseline(database,
                     connection,
                     boundary_at=BOUNDARY,
                     reset_sweep_id=sweep_id,
@@ -1359,7 +1359,7 @@ def test_mixed_boundary_last_unavailable_still_enqueues_army(
 def test_all_unavailable_boundary_publishes_empty_army_with_anchor_metadata(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -1374,7 +1374,7 @@ def test_all_unavailable_boundary_publishes_empty_army_with_anchor_metadata(
                 ]
                 sweep_id = _sweep_with_members(connection, players)
                 for player_id in players:
-                    reset_baselines._record_boundary_baseline(database, 
+                    reset_baselines._record_boundary_baseline(database,
                         connection,
                         boundary_at=BOUNDARY,
                         reset_sweep_id=sweep_id,
@@ -1448,14 +1448,14 @@ def test_all_unavailable_boundary_publishes_empty_army_with_anchor_metadata(
 def test_boundary_progress_updates_only_the_changed_member(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
                 first = _player_and_version(connection, "#P1", 1, "a" * 64)
                 second = _player_and_version(connection, "#P2", 1, "b" * 64)
                 _sweep_with_members(connection, [first[0], second[0]])
-                boundary._record_boundary_generation(database, 
+                boundary._record_boundary_generation(database,
                     connection,
                     boundary_at=BOUNDARY,
                     player_id=first[0],
@@ -1471,7 +1471,7 @@ def test_boundary_progress_updates_only_the_changed_member(
                     (first[0],),
                 ).fetchone()[0]
                 connection.execute("SELECT pg_sleep(0.02)")
-                boundary._record_boundary_generation(database, 
+                boundary._record_boundary_generation(database,
                     connection,
                     boundary_at=BOUNDARY,
                     player_id=second[0],

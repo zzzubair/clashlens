@@ -748,7 +748,7 @@ def _canonical(value: Any) -> str:
 def test_whole_population_freeze_matches_the_per_player_freeze(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         generation_id = seed_population(connection_info, PLAYERS)
         database = Database(connection_info)
         try:
@@ -935,7 +935,7 @@ def test_board_leaves_out_players_whose_profile_went_missing_before_the_reset(
         ("#SERVERERROR", 503, _october(6, 10)),
         ("#OLDREADING", 500, _october(6, 12)),
     ]
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         generation_id = _seed_board(connection_info, readings)
         for tag, status, at in responses:
             store_observation(
@@ -977,7 +977,7 @@ def test_board_leaves_out_players_whose_profile_went_missing_before_the_reset(
 def test_board_rebuild_queues_one_correction_per_board_still_ranking_a_missing_player(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         generation_id = _seed_board(
             connection_info,
             [
@@ -1234,7 +1234,7 @@ def test_board_adds_the_battles_after_each_reading(database_url: str) -> None:
         4: (False, [("offense", 40, _october(7, 4, 50), True)]),
         5: (True, [("offense", 40, _october(7, 4, 50), True)]),
     }
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         generation_id = _seed_board(connection_info, readings)
         _seed_days(connection_info, generation_id, days)
         database = Database(connection_info)
@@ -1294,7 +1294,7 @@ def test_board_keeps_a_reading_its_later_battles_cannot_prove(
         2: (True, [("offense", 40, _october(7, 4, 57), True)]),
         3: (True, [("offense", 40, _october(7, 4, 57), True)]),
     }
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         generation_id = _seed_board(connection_info, readings)
         _seed_days(connection_info, generation_id, days)
         with psycopg.connect(connection_info) as connection:
@@ -1361,7 +1361,7 @@ def test_board_keeps_a_reading_its_timing_or_day_cannot_prove(
         6: (True, [("defense", 30, _october(7, 4, 50), True)]),
         7: (False, [("offense", 40, _october(7, 4, 50), True)]),
     }
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         generation_id = _seed_board(connection_info, readings)
         _seed_days(connection_info, generation_id, days)
         with psycopg.connect(connection_info) as connection:
@@ -1445,7 +1445,7 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
         8: {**complete, "final": 5145, "end": 5145, "confidence": "inferred"},
         9: {"failure_reasons": ["end_reading_unverified"], "start": 5280, "end": 5000},
     }
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         generation_id = _seed_board(connection_info, readings)
         _seed_days(connection_info, generation_id, days, results)
         database = Database(connection_info)

@@ -47,7 +47,7 @@ def test_season_repair_jobs_for_two_players_finish_side_by_side(
     season = PREVIOUS_SEASON
     saturday, sunday, monday, tuesday = (day(number, season) for number in (20, 21, 22, 23))
     players = (LATE_RAISE, LOSS_TOO)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, *players)
         monkeypatch.setattr(scenarios, "READ_AFTER", timedelta(minutes=13))
         judge, settled_start = reading_rule.judge, reconciliation._settled_start

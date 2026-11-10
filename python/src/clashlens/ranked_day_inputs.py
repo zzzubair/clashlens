@@ -24,41 +24,30 @@ from .reconciliation import (
 )
 
 
-def _source_rows(database: Database) -> tuple[str, str, str]:
-    """Where a battle log's rows live, their ID column, and how rows join their report."""
-    if getattr(database, "_supports_content_dedup", False):
-        return "battle_log_observation_source_rows", "source_row_id", "be.id = sr.evidence_id"
-    return "battle_source_rows", "id", "be.source_row_id = sr.id"
-
-
-def only_no_opponent_gaps_sql(database: Database, log: str) -> str:
+def only_no_opponent_gaps_sql(log: str) -> str:
     """SQL: every row battle log ``log`` rejected, at least one, is a "no
     opponent, no battle" row, so its gap flag and gap outcome hide no battle.
 
     Logs saved before those rows stopped counting as gaps keep their saved
     flag and outcome; their saved rows decide instead.
     """
-    relation, _, _ = _source_rows(database)
     no_opponent = battle.no_opponent_row_sql("gap_row", f"{log}.parser_version")
     # An aggregate subquery stays a per-log index lookup; an EXISTS can be
     # planned as a scan of every saved row.
     return f"""COALESCE((
-        SELECT bool_and({no_opponent}) FROM {relation} AS gap_row
+        SELECT bool_and({no_opponent}) FROM battle_log_observation_source_rows AS gap_row
         WHERE gap_row.battle_log_observation_id = {log}.id
           AND gap_row.outcome = 'malformed_legend_row'
     ), false)"""
 
 
-def _coverage_sql(database: Database, *, shared_read: bool) -> str:
+def _coverage_sql() -> str:
     """SQL: the player's battle logs between two Reset logs, with each log's
     coverage and quality read from its saved rows.
 
-    ``shared_read`` reads each log's rows once for both. That is exact only
-    when a row matches at most one battle report, as compact storage's report
-    link guarantees; older joins can match several reports per row, which
-    would multiply the quality counts, so they read the rows a second time.
+    Each log's rows are read once for both: the compact storage view links
+    each row to at most one battle report, keeping quality counts exact.
     """
-    source_rows_relation, source_row_id_column, evidence_join = _source_rows(database)
     no_opponent = battle.no_opponent_row_sql("sr", "blo.parser_version")
     quality = f"""
                 count(*) FILTER (
@@ -74,16 +63,7 @@ def _coverage_sql(database: Database, *, shared_read: bool) -> str:
                 COALESCE(bool_and({no_opponent}) FILTER (
                     WHERE sr.outcome = 'malformed_legend_row'
                 ), false) AS only_no_opponent"""
-    if shared_read:
-        evidence_quality, row_flags_read, flags = f",{quality}", "", "evidence"
-    else:
-        evidence_quality, flags = "", "row_flags"
-        row_flags_read = f"""
-        LEFT JOIN LATERAL (
-            SELECT{quality}
-            FROM {source_rows_relation} AS sr
-            WHERE sr.battle_log_observation_id = blo.id
-        ) AS row_flags ON true"""
+
     return f"""
         SELECT
             blo.observation_id,
@@ -92,15 +72,15 @@ def _coverage_sql(database: Database, *, shared_read: bool) -> str:
             -- A log saved before "no opponent, no battle" rows stopped
             -- counting as gaps keeps its saved flag and outcome; its rows
             -- decide instead.
-            blo.has_row_gap AND NOT {flags}.only_no_opponent,
+            blo.has_row_gap AND NOT evidence.only_no_opponent,
             COALESCE(evidence.battle_identities, ARRAY[]::text[]),
             COALESCE(evidence.source_row_ids, ARRAY[]::bigint[]),
-            COALESCE({flags}.malformed_count, 0),
-            COALESCE({flags}.unclassified_count, 0),
+            COALESCE(evidence.malformed_count, 0),
+            COALESCE(evidence.unclassified_count, 0),
             COALESCE(
                 processing.outcome = 'processed'
                 OR (processing.outcome = 'processed_with_gaps'
-                    AND {flags}.only_no_opponent),
+                    AND evidence.only_no_opponent),
                 false
             ),
             observed.response_hash,
@@ -117,14 +97,14 @@ def _coverage_sql(database: Database, *, shared_read: bool) -> str:
                 array_agg(be.battle_id::text ORDER BY be.id)
                     FILTER (WHERE be.battle_id IS NOT NULL)
                     AS battle_identities,
-                array_agg(sr.{source_row_id_column} ORDER BY sr.{source_row_id_column})
-                    FILTER (WHERE sr.{source_row_id_column} IS NOT NULL)
-                    AS source_row_ids{evidence_quality}
-            FROM {source_rows_relation} AS sr
+                array_agg(sr.source_row_id ORDER BY sr.source_row_id)
+                    FILTER (WHERE sr.source_row_id IS NOT NULL)
+                    AS source_row_ids,{quality}
+            FROM battle_log_observation_source_rows AS sr
             LEFT JOIN battle_evidence AS be
-              ON {evidence_join}
+              ON be.id = sr.evidence_id
             WHERE sr.battle_log_observation_id = blo.id
-        ) AS evidence ON true{row_flags_read}
+        ) AS evidence ON true
         WHERE blo.player_id = %s
           AND blo.observed_at >= COALESCE(
               (SELECT start_blo.observed_at
@@ -152,10 +132,7 @@ def load_coverage(
 ) -> tuple[CoverageObservation, ...]:
     """The player's battle logs from the start to the end Reset log, in order."""
     coverage_rows = connection.execute(
-        _coverage_sql(
-            database,
-            shared_read=getattr(database, "_supports_content_dedup", False),
-        ),
+        _coverage_sql(),
         (
             player_id,
             start_battle_log_observation_id,
@@ -186,16 +163,15 @@ def load_coverage(
         )
         if end_index is not None:
             coverage_rows = coverage_rows[: end_index + 1]
-    if getattr(database, "_supports_content_dedup", False):
-        # Keep both ends of identical runs. Interior duplicate polls
-        # add no overlap/quality evidence, and their later expiry
-        # must not manufacture a new ranked-day publication.
-        coverage_rows = [
-            row for index, row in enumerate(coverage_rows)
-            if index in (0, len(coverage_rows) - 1)
-            or row[2:] != coverage_rows[index - 1][2:]
-            or row[2:] != coverage_rows[index + 1][2:]
-        ]
+    # Keep both ends of identical runs. Interior duplicate polls
+    # add no overlap/quality evidence, and their later expiry
+    # must not manufacture a new ranked-day publication.
+    coverage_rows = [
+        row for index, row in enumerate(coverage_rows)
+        if index in (0, len(coverage_rows) - 1)
+        or row[2:] != coverage_rows[index - 1][2:]
+        or row[2:] != coverage_rows[index + 1][2:]
+    ]
     return tuple(
         CoverageObservation(
             observation_id=int(row[0]),
@@ -492,15 +468,14 @@ def load_late_zero_result_slots(
     """``load_zero_result_slots`` of the player's battle logs saved after
     ``after``, the end Reset log, until 10 minutes past the day's battle
     window: a row can first be returned after that log."""
-    relation, _, _ = _source_rows(database)
     until = domain.battle_window(ranked_day.start)[1] + timedelta(minutes=10)
     parsers = dict(_log_ids(
         connection, "player_id = %s AND observed_at > %s AND observed_at <= %s",
         (player_id, after, until),
     ))
     rows = connection.execute(
-        f"""
-        SELECT sr.battle_log_observation_id, sr.source_json FROM {relation} AS sr
+        """
+        SELECT sr.battle_log_observation_id, sr.source_json FROM battle_log_observation_source_rows AS sr
         WHERE sr.battle_log_observation_id = ANY(%s)
           AND (sr.source_json -> 'battleTime')::text = '0'
         """,
@@ -549,14 +524,13 @@ def load_unreadable_report_times(
 ) -> list[datetime | None]:
     """When each unreadable row in the player's battle logs saved in
     ``(after, until]`` happened; ``None`` when even that is unreadable."""
-    relation, _, _ = _source_rows(database)
     parsers = dict(_log_ids(
         connection, "player_id = %s AND observed_at > %s AND observed_at <= %s",
         (player_id, after, until),
     ))
     rows = connection.execute(
-        f"""
-        SELECT sr.battle_log_observation_id, sr.source_json FROM {relation} AS sr
+        """
+        SELECT sr.battle_log_observation_id, sr.source_json FROM battle_log_observation_source_rows AS sr
         WHERE sr.battle_log_observation_id = ANY(%s)
           AND (sr.outcome = 'malformed_legend_row'
                OR sr.failure_category LIKE 'malformed%%'
@@ -589,20 +563,13 @@ _OUTCOME = """
 """
 
 
-def _profile_join(database: Database) -> str:
-    if getattr(database, "_supports_content_dedup", False):
-        return """
-        LEFT JOIN player_profile_effects AS effect
-          ON effect.observation_id = observed.id
-         AND effect.parser_version = outcome.parser_version
-        LEFT JOIN player_profile_versions AS profile
-          ON profile.id = effect.profile_version_id
-        """
-    return """
-        LEFT JOIN player_profile_versions AS profile
-          ON profile.observation_id = observed.id
-         AND profile.parser_version = outcome.parser_version
-        """
+_PROFILE_JOIN = """
+    LEFT JOIN player_profile_effects AS effect
+      ON effect.observation_id = observed.id
+     AND effect.parser_version = outcome.parser_version
+    LEFT JOIN player_profile_versions AS profile
+      ON profile.id = effect.profile_version_id
+    """
 
 
 def lock_ranked_day(connection: Any, player_id: int, ranked_day: RankedDay) -> None:
@@ -675,7 +642,7 @@ def load_readings(
                profile.source_contract_state = 'accepted'
         FROM collector_observations AS observed
         {_OUTCOME}
-        {_profile_join(database)}
+        {_PROFILE_JOIN}
         WHERE observed.player_id = %(player)s AND observed.endpoint = 'profile'
           AND observed.response_completed_at > %(after)s
           AND observed.response_completed_at < %(until)s
@@ -826,4 +793,3 @@ def later_end_proven(
         unknown_from=load_unshown_reports(connection, player_id, ranked_day)[1],
         floor=5000 if _text_value(boundary_kind) == "weekly" else None,
     )
-

@@ -138,7 +138,7 @@ def test_parse_manifest_accepts_trailing_newline_and_rejects_variants() -> None:
 def test_malformed_manifest_fails_before_any_write(
     database_url: str, tmp_path, capsys
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         cases = {
             "malformed": ["#2PP", "#NOPE!", "#8QV"],
             "blank": ["#2PP", "", "#8QV"],
@@ -169,7 +169,7 @@ def test_malformed_manifest_fails_before_any_write(
 def test_bootstrap_registers_inactive_and_enqueues_profile_only(
     database_url: str, tmp_path, capsys
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         tags = [_tag(21), _tag(22), _tag(23)]
         settings = _setup(tmp_path, connection_info, tags)
         assert main(_cli_arguments(settings)) == 0
@@ -222,7 +222,7 @@ def test_bootstrap_registers_inactive_and_enqueues_profile_only(
 def test_replay_same_run_id_is_idempotent(
     database_url: str, tmp_path
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         settings = _setup(tmp_path, connection_info, [_tag(31), _tag(32)])
         assert main(_cli_arguments(settings)) == 0
         before = _counts(connection_info)
@@ -237,7 +237,7 @@ def test_replay_same_run_id_is_idempotent(
 def test_concurrent_distinct_run_ids_serialize_fail_closed(
     database_url: str, tmp_path
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         tags = [_tag(91), _tag(92)]
         first = _setup(tmp_path / "race-a", connection_info, tags, run_id="race-a")
         second = _setup(tmp_path / "race-b", connection_info, tags, run_id="race-b")
@@ -271,7 +271,7 @@ def test_concurrent_distinct_run_ids_serialize_fail_closed(
 def test_partial_replay_reports_full_converged_aggregate(
     database_url: str, tmp_path
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         tags = [_tag(61), _tag(62), _tag(63)]
         settings = _setup(tmp_path, connection_info, tags)
         set_digest = hashlib.sha256("\n".join(sorted(tags)).encode()).hexdigest()
@@ -314,7 +314,7 @@ def test_partial_replay_reports_full_converged_aggregate(
 def test_partial_batch_resume_converges(
     database_url: str, tmp_path
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         tags = [_tag(41), _tag(42), _tag(43)]
         settings = _setup(tmp_path, connection_info, tags)
         set_digest = hashlib.sha256("\n".join(sorted(tags)).encode()).hexdigest()
@@ -362,7 +362,7 @@ def test_partial_batch_resume_converges(
 def test_bootstrap_run_collision_fails_closed(
     database_url: str, tmp_path
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         tags = [_tag(51), _tag(52)]
         settings = _setup(tmp_path, connection_info, tags)
         with psycopg.connect(connection_info, autocommit=True) as connection:
@@ -390,7 +390,7 @@ def test_bootstrap_run_collision_fails_closed(
 def test_fresh_precheck_rejects_nonempty_database(
     database_url: str, tmp_path
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         settings = _setup(tmp_path, connection_info, [_tag(61), _tag(62)])
         settings = {**settings, "result_file": str(tmp_path / "r.json")}
 
@@ -439,7 +439,7 @@ def test_fresh_precheck_rejects_nonempty_database(
 
 
 def test_secure_file_handling(database_url: str, tmp_path) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         settings = _setup(tmp_path, connection_info, [_tag(71), _tag(72)])
 
         link = tmp_path / "cohort-link.txt"
@@ -486,7 +486,7 @@ def test_secure_file_handling(database_url: str, tmp_path) -> None:
 def test_worker_role_can_execute_bootstrap_statements(
     database_url: str, tmp_path
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         tags = [_tag(81), _tag(82)]
         raw = _manifest_bytes(tags)
         digest = hashlib.sha256(raw).hexdigest()

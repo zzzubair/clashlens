@@ -131,7 +131,7 @@ def _job_state(database: Database, job_id: int) -> tuple[str, str]:
 def test_snapshot_analytics_build_does_not_deadlock_with_rebuilds(
     database_url: str, rebuild_kind: str
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -209,7 +209,7 @@ def test_snapshot_analytics_build_does_not_deadlock_with_rebuilds(
 def test_army_build_does_not_deadlock_with_day_result_rebuild(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -295,7 +295,7 @@ def test_publication_can_point_at_a_result_while_a_rebuild_replaces_it(
     """
     # The rebuild keeps waiting while the publication holds the Reset.
     monkeypatch.setattr(reconciliation_db, "RESET_LOCK_WAIT", "10s")
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = list(_store_baseline_pair(
             connection_info, archive_server, key="rebuild-start",
             boundary=DAY_START, trophies=6000, empty_battle_log=True,
@@ -391,7 +391,7 @@ def test_battle_logs_sharing_a_reset_when_its_sweep_is_saved_both_finish(
 ) -> None:
     # Two jobs sharing a Reset's lock when its sweep was saved each waited
     # for the other to take the full lock, and the database aborted one.
-    with domain_database(database_url, include_coordinator=True) as ci:
+    with domain_database(database_url) as ci:
         battles = _unswept_battles(
             ci, archive_server, {"#2PP": "u1x58", "#2PQ": "u2x58"}
         )

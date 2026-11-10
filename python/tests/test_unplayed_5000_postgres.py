@@ -217,7 +217,7 @@ def test_unplayed_players_rank_at_5000_until_their_first_battle(
             ORDINARY: (_new_season_profile(ordinary_end, ORDINARY), _log(*ordinary_battles)),
         },
     }
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         for boundary, readings in resets.items():
             jobs = _sweep(connection_info, archive_server, boundary, readings)
             if boundary == DAY_3:
@@ -297,7 +297,7 @@ def test_season_zero_after_a_higher_season_end_starts_at_5000(
 ) -> None:
     # Legend I at 6,400 on the previous Season's last day, then Season 0 at
     # 5,000 with no battle from the opening Reset on.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         for boundary, profile in (
             (DAY_0, _profile(6400, UNPLAYED)),
             (DAY_1, _season_zero(UNPLAYED)),
@@ -318,7 +318,7 @@ def test_the_season_repair_brings_days_and_boards_saved_before_the_rule(
     database_url: str, archive_server, monkeypatch
 ) -> None:
     season = ranked_day_for(DAY_1).official_season_id
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         # Saved before the rule: the readings were rejected and the boards
         # left the player out. The weekly league record's Season start
         # already starts their days at 5,000.
@@ -365,7 +365,7 @@ def test_a_newer_season_zero_profile_replaces_an_accepted_one_at_5000(
     renamed = json.loads(_season_zero(UNPLAYED))
     renamed["name"] = "Renamed"
     renamed = json.dumps(renamed).encode()
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         for boundary, profile in (
             (DAY_1, _new_season_profile(5000, UNPLAYED)),
             (DAY_2, renamed),
@@ -416,7 +416,7 @@ def test_weeks_before_a_player_first_seen_unplayed_have_no_legend_days(
     record_seasons_to(monkeypatch, DAY_1 + timedelta(days=28))
     signed, joins, never = "#2PP", "#8QQ", "#9YY"
     day_8, day_9, day_10 = (DAY_1 + timedelta(days=n) for n in (7, 8, 9))
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         for boundary, joined in ((day_8, _season_zero(joins)),
                                  (day_9, _season_zero(joins)),
                                  (day_10, _new_season_profile(5000, joins))):
@@ -449,7 +449,7 @@ def test_a_malformed_season_at_5000_stays_rejected(
     malformed = json.loads(_new_season_profile(5000, UNPLAYED))
     malformed["currentLeagueSeasonId"] = "00"
     malformed = json.dumps(malformed).encode()
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         for boundary in (DAY_2, DAY_3):
             _run(connection_info, archive_server, _sweep(
                 connection_info, archive_server, boundary, {

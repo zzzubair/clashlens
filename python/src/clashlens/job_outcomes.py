@@ -124,48 +124,27 @@ def _record_processing_outcome(
     observation_id, http_status, response_hash, observed_at, endpoint, _schema = (
         _observation_source(claim)
     )
-    if not getattr(database, "_supports_content_dedup", False):
-        row = connection.execute(
-            """
-            INSERT INTO observation_processing_outcomes (
-                observation_id, parser_version, processing_version, endpoint,
-                response_hash, source_http_status, source_observed_at,
-                outcome, failure_category
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (observation_id, parser_version, processing_version)
-            DO UPDATE SET
-                outcome = EXCLUDED.outcome,
-                failure_category = EXCLUDED.failure_category
-            RETURNING id
-            """,
-            (
-                observation_id, claim.parser_version, claim.processing_version,
-                endpoint, response_hash, http_status, observed_at, outcome,
-                failure_category,
-            ),
-        ).fetchone()
-    else:
-        row = connection.execute(
-            """
-            INSERT INTO observation_processing_outcomes (
-                observation_id, attempt_id, parser_version, processing_version, endpoint,
-                response_hash, source_http_status, source_observed_at,
-                outcome, failure_category, parsed_payload_id
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (observation_id, parser_version, processing_version)
-            DO UPDATE SET
-                outcome = EXCLUDED.outcome,
-                failure_category = EXCLUDED.failure_category,
-                attempt_id = EXCLUDED.attempt_id,
-                parsed_payload_id = EXCLUDED.parsed_payload_id
-            RETURNING id
-            """,
-            (
-                observation_id, claim.attempt_id, claim.parser_version,
-                claim.processing_version, endpoint, response_hash, http_status,
-                observed_at, outcome, failure_category, parsed_payload_id,
-            ),
-        ).fetchone()
+    row = connection.execute(
+        """
+        INSERT INTO observation_processing_outcomes (
+            observation_id, attempt_id, parser_version, processing_version, endpoint,
+            response_hash, source_http_status, source_observed_at,
+            outcome, failure_category, parsed_payload_id
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (observation_id, parser_version, processing_version)
+        DO UPDATE SET
+            outcome = EXCLUDED.outcome,
+            failure_category = EXCLUDED.failure_category,
+            attempt_id = EXCLUDED.attempt_id,
+            parsed_payload_id = EXCLUDED.parsed_payload_id
+        RETURNING id
+        """,
+        (
+            observation_id, claim.attempt_id, claim.parser_version,
+            claim.processing_version, endpoint, response_hash, http_status,
+            observed_at, outcome, failure_category, parsed_payload_id,
+        ),
+    ).fetchone()
     assert row is not None
     return int(row[0])
 
@@ -235,10 +214,8 @@ def fail_claim(
     with database.pool.connection() as connection:
         with connection.transaction():
             database._lock_live_claim(connection, claim)
-            database._ensure_dependency_support_probed()
             dependency = (
-                database._supports_dependency_deferral
-                and retryable
+                retryable
                 and category
                 in {
                     "archive_unavailable",
@@ -286,18 +263,13 @@ def fail_claim(
                 """
                     due_at = CASE WHEN %s THEN clock_timestamp() + (LEAST(300, (2 ^ LEAST(dependency_deferral_count, 8))) * interval '1 second') ELSE due_at END,
                     dependency_deferral_count = dependency_deferral_count + CASE WHEN %s THEN 1 ELSE 0 END,"""
-                if database._supports_dependency_deferral
-                else """
-                    due_at = CASE WHEN %s THEN clock_timestamp() + interval '1 second' ELSE due_at END,"""
             )
             dependency_params = (
                 (should_retry, dependency)
-                if database._supports_dependency_deferral
-                else (should_retry,)
             )
             completed = connection.execute(
                 f"""
-                UPDATE {database._jobs_relation}
+                UPDATE python_processing_jobs_worker
                 SET state = %s,
                     {dependency_set}
                     outcome = %s, failure_category = %s, failure_detail = %s,
@@ -325,13 +297,13 @@ def fail_claim(
             if claim.observation_id is not None:
                 failure_outcome = _failure_outcome(category)
                 if not should_retry:
-                    _record_processing_outcome(database, 
+                    _record_processing_outcome(database,
                         connection,
                         claim,
                         outcome=failure_outcome,
                         failure_category=category,
                     )
-                reset_baselines._refresh_reset_baseline_evidence(database, 
+                reset_baselines._refresh_reset_baseline_evidence(database,
                     connection,
                     claim,
                     failure_category=category,
@@ -358,8 +330,8 @@ def release_conflicted(database: Database, claim: Claim, reason: str) -> None:
     """
     if reason in DEFERRED_CONFLICTS:
         try:
-            if _defer_conflicted(database, claim, reason):
-                return
+            _defer_conflicted(database, claim, reason)
+            return
         except psycopg.Error:
             pass  # Restore the retry slot instead.
     while True:
@@ -376,22 +348,16 @@ def release_conflicted(database: Database, claim: Claim, reason: str) -> None:
             return
 
 
-def _defer_conflicted(database: Database, claim: Claim, reason: str) -> bool:
-    """Release the job to run again after its conflict wait; False where the
-    schema has no dependency deferral."""
-    if not isinstance(database, Database):
-        return False
-    database._ensure_dependency_support_probed()
-    if not database._supports_dependency_deferral:
-        return False
+def _defer_conflicted(database: Database, claim: Claim, reason: str) -> None:
+    """Release the job to run again after its conflict wait."""
     with database._timed_connection() as connection, connection.transaction():
         # Never queue behind a long holder of the job row.
         connection.execute("SET LOCAL lock_timeout = '1s'")
         # The owner and token fence it even after the lease expired, as the
         # refund does: only a job nobody else has taken is deferred.
         deferred = connection.execute(
-            f"""
-            UPDATE {database._jobs_relation}
+            """
+            UPDATE python_processing_jobs_worker
             SET state = 'waiting_dependency',
                 due_at = clock_timestamp() + (LEAST(
                     CASE WHEN priority = %(reset)s THEN %(reset_max)s ELSE %(max)s END,
@@ -421,7 +387,6 @@ def _defer_conflicted(database: Database, claim: Claim, reason: str) -> bool:
             """,
             (reason, claim.attempt_id, claim.job_id, claim.lease_token),
         )
-    return True
 
 
 def complete_terminal(database: Database, claim: Claim, *, outcome: str) -> None:
@@ -478,7 +443,7 @@ def complete_classified(database: Database, claim: Claim, *, outcome: str) -> No
     with database.pool.connection() as connection:
         with connection.transaction():
             job = database._lock_live_claim(connection, claim)
-            _record_processing_outcome(database, 
+            _record_processing_outcome(database,
                 connection,
                 claim,
                 outcome="non_success"
@@ -493,4 +458,3 @@ def complete_classified(database: Database, claim: Claim, *, outcome: str) -> No
             database._finish_claim(
                 connection, claim, job, state="complete", outcome=outcome
             )
-

@@ -8,8 +8,13 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from domain_test_support import decide_leagues, domain_database, store_observation, text
-from test_domain_processing_postgres import _processor
+from domain_test_support import (
+    _processor,
+    decide_leagues,
+    domain_database,
+    store_observation,
+    text,
+)
 
 BATTLE = Path(__file__).parents[1] / "testdata" / "legend_i_battle_log_v1.json"
 RANKINGS = Path(__file__).parents[1] / "testdata" / "global_top_200_v1.json"
@@ -21,7 +26,7 @@ DUE = "SELECT count(*) FROM players WHERE eligibility_due_at IS NOT NULL"
 def test_live_discovery_sources_enqueue_once_and_replay_does_not(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         store_observation(
             connection_info,
             archive_server,
@@ -178,7 +183,7 @@ def test_contract_changed_rankings_keep_all_501_discoveries_and_check_up_to_500_
 def test_enqueue_weekly_reuse_terminal_rediscovery_inputs_and_privileges(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             ids = connection.execute(
                 """
@@ -289,7 +294,7 @@ def test_ineligible_profile_cancels_only_ordinary_discovery_and_keeps_evidence(
 ) -> None:
     payload = json.loads(PROFILE.read_bytes())
     payload["leagueTier"] = {"id": 105000035, "name": "Legend II"}
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         observation_id, job_id = store_observation(
             connection_info,
             archive_server,

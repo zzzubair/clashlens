@@ -35,7 +35,6 @@ from . import (
 )
 from .accounts import normalize_display_name, normalize_group_name, normalize_username
 from .api_db import (
-    API_CONTRACT_VERSION,
     AccountContext,
     ApiDatabase,
     OperationResult,
@@ -48,6 +47,7 @@ from .army_analytics import (
     CurrentSeasonEmpty,
 )
 from .clashking import ClashKingClient, get_past_seasons
+from .db import CONTRACT_VERSION
 from .domain import ranked_day_for
 from .hmac_proof import InvalidProof, VerifiedProof, verify_proof
 from .operating import ApiMetrics, elapsed
@@ -359,7 +359,7 @@ def create_app(
     @app.get("/readyz")
     def ready() -> JSONResponse:
         try:
-            is_ready = database.is_ready(expected_contract_version=API_CONTRACT_VERSION)
+            is_ready = database.is_ready(expected_contract_version=CONTRACT_VERSION)
         except Exception:  # noqa: BLE001 - readiness fails closed without disclosure.
             is_ready = False
         return JSONResponse(

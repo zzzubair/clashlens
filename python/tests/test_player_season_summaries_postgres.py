@@ -187,7 +187,7 @@ def _movement(connection, player_id):
 
 
 def test_eod_change_uses_previous_day_and_day_one_5000(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -238,7 +238,7 @@ def test_eod_change_uses_previous_day_and_day_one_5000(database_url: str) -> Non
 def test_saved_summary_hides_eod_and_net_for_days_missing_battles(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -329,7 +329,7 @@ def test_saved_summary_hides_eod_and_net_for_days_missing_battles(
 def test_missing_previous_eod_and_late_start_stay_unknown(database_url: str) -> None:
     """Partial history: tracking began on day 25, day 26 is missing and
     day 27's EOD is unknown, while the final trophies are known."""
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -351,7 +351,7 @@ def test_missing_previous_eod_and_late_start_stay_unknown(database_url: str) -> 
 
 
 def test_day28_and_boundary_adjustment_keep_battle_net_separate(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -370,7 +370,7 @@ def test_day28_and_boundary_adjustment_keep_battle_net_separate(database_url: st
 
 
 def test_migration_is_reentrant(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info, autocommit=True) as connection:
             migration = (
                 Path(__file__).parents[2]
@@ -386,7 +386,7 @@ def test_migration_is_reentrant(database_url: str) -> None:
 
 
 def test_complete_season_totals_boundaries_and_stars(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -436,7 +436,7 @@ def test_complete_season_totals_boundaries_and_stars(database_url: str) -> None:
 
 
 def test_partial_season_marks_missing_and_null_boundaries(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -471,7 +471,7 @@ def test_complete_requires_clean_days_flags_and_boundaries(database_url: str) ->
         ("reason", "late_correction_pending"),
     ]
     for poison, expected_flag in cases:
-        with domain_database(database_url, include_coordinator=True) as connection_info:
+        with domain_database(database_url) as connection_info:
             database = ApiDatabase(connection_info)
             try:
                 with database.pool.connection() as connection:
@@ -542,7 +542,7 @@ def test_complete_requires_clean_days_flags_and_boundaries(database_url: str) ->
 def test_repeated_and_opposite_events_count_once_per_lens_identity(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -581,7 +581,7 @@ def test_repeated_and_opposite_events_count_once_per_lens_identity(
 
 
 def test_single_long_reason_sets_overflow_marker(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -614,7 +614,7 @@ def test_single_long_reason_sets_overflow_marker(database_url: str) -> None:
 def test_giant_partial_reasons_are_bounded_with_overflow_marker(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -671,7 +671,7 @@ def test_giant_partial_reasons_are_bounded_with_overflow_marker(
 def test_retry_is_noop_correction_replaces_and_failure_preserves(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -770,7 +770,7 @@ def _frozen_board(
 
 def _final_rank_case(database_url, archive_server, build_boards):
     """Materialize one full Season after build_boards and return its final rank."""
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         observation_id, _job = store_observation(
             connection_info, archive_server, occurrence_key="final-board",
             endpoint="profile", body=b"{}", observed_at=SEASON_END,
@@ -837,7 +837,7 @@ def test_final_rank_follows_the_board_through_corrections(
 def test_summary_written_before_final_board_shows_rank_once_published(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         observation_id, _job = store_observation(
             connection_info, archive_server, occurrence_key="final-board",
             endpoint="profile", body=b"{}", observed_at=SEASON_END,
@@ -887,7 +887,7 @@ def test_summary_written_before_final_board_shows_rank_once_published(
 
 
 def test_season_days_show_rank_on_each_reset_board(database_url: str, archive_server) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         observation_id, _job = store_observation(
             connection_info, archive_server, occurrence_key="day-boards",
             endpoint="profile", body=b"{}", observed_at=SEASON_END,
@@ -916,7 +916,7 @@ def test_season_days_show_rank_on_each_reset_board(database_url: str, archive_se
 
 
 def test_historical_read_is_detail_independent(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -951,7 +951,7 @@ def test_historical_read_is_detail_independent(database_url: str) -> None:
 
 
 def test_backfill_materializes_completed_seasons_only(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -1001,7 +1001,7 @@ def test_backfill_materializes_completed_seasons_only(database_url: str) -> None
 
 
 def test_backfill_cursor_pages_beyond_first_max_players(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -1103,7 +1103,7 @@ def _anchor(connection_info, archive_server, *, current, previous, current_start
 def test_backfill_refuses_active_canonical_season_with_only_past_days(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         season_start = AFTER_SEASON - timedelta(days=3)
         _anchor(
             connection_info,
@@ -1151,7 +1151,7 @@ def test_backfill_refuses_active_canonical_season_with_only_past_days(
 def test_backfill_allows_canonical_previous_season_missing_day_28(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         season_start = DAY0
         _anchor(
             connection_info,
@@ -1223,7 +1223,7 @@ def _publish(
 
 
 def test_day28_publication_establishes_summary(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -1246,7 +1246,7 @@ def test_day28_publication_establishes_summary(database_url: str) -> None:
 def test_late_correction_publication_updates_existing_summary(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -1301,7 +1301,7 @@ def test_late_correction_publication_updates_existing_summary(
 def test_live_and_active_day_publications_do_not_summarize(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -1343,7 +1343,7 @@ def test_live_and_active_day_publications_do_not_summarize(
 
 
 def test_summary_row_size_is_small_and_labeled(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:

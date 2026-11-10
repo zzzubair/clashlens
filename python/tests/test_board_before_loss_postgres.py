@@ -33,7 +33,7 @@ def test_a_clean_reading_before_the_loss_proves_the_board_entry(database_url: st
         1: {**complete, "final": 5870, "start": 5900, "end": 5940},
         2: {**complete, "final": 5860, "start": 5890, "end": 5930},
     }
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         generation_id = _seed_board(connection_info, readings)
         _seed_days(connection_info, generation_id, days, results)
         with psycopg.connect(connection_info) as connection:

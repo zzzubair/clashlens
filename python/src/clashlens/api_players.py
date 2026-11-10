@@ -164,7 +164,7 @@ def get_player_page(
     """A player's page. Without ``battles``, each day keeps its totals but
     lists none of its battles, and no army is named."""
     with database.pool.connection() as connection:
-        metadata_join, metadata_columns = database._current_profile_metadata(connection)
+        metadata_join, metadata_columns = database._current_profile_metadata()
         # A player who has not played yet this Season shows the newest
         # profile that ranks them at 5,000, as the Live Leaderboard does.
         unplayed = connection.execute(

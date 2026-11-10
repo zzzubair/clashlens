@@ -38,7 +38,7 @@ def test_live_board_copy_follows_the_reset_and_refreshes_in_the_background(
     5,340 and SECOND at 5,100. On Day 4 SECOND attacks at 05:30 and FIRST at
     07:30."""
     day_3, day_4 = day(3), day(4)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, FIRST, SECOND, THIRD)
         # 8 defenses each, so no automatic loss changes the totals at Reset.
         story.players[FIRST].battles = attacks(day_3, 40, 40, 40) + defenses(day_3, *[10] * 8)

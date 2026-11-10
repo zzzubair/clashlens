@@ -52,7 +52,7 @@ def test_sign_up_day_starts_at_5000_by_the_season_rule(
 ) -> None:
     # As #YPG2LRYQ on 6 October 2026: the Reset reading names Season 0 at
     # 5,000, the player signs up at 05:19 and battles the same day.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(connection_info, archive_server, DAY_2,
                            profile=_not_signed_up(), log=_log())
         jobs.append(store_observation(
@@ -74,7 +74,7 @@ def test_a_season_profile_read_before_the_reset_but_saved_last_rules_out_sign_up
 ) -> None:
     # The same profile read at 04:50 and 05:20: the later reading is saved
     # first, so the saved profile is first dated 05:20.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         late, early = (
             store_observation(
                 connection_info, archive_server, occurrence_key=key,
@@ -99,7 +99,7 @@ def test_earlier_legend_battles_in_the_season_rule_out_sign_up(
     database_url: str, archive_server
 ) -> None:
     # First found at the Day 2 Reset, whose battle log shows Day 1 battles.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(connection_info, archive_server, DAY_2,
                            profile=_not_signed_up(),
                            log=_log((DAY_1 + timedelta(hours=1), True)))
@@ -119,7 +119,7 @@ def test_a_battle_before_a_delayed_reset_reading_rules_out_sign_up(
     # then a profile naming the Season at 05:20.
     battle = (DAY_2 + timedelta(minutes=6), True)
     read_at = DAY_2 + timedelta(minutes=10)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(connection_info, archive_server, DAY_2,
                            profile=_not_signed_up(), log=_log(battle),
                            profile_at=read_at, log_at=read_at)
@@ -142,7 +142,7 @@ def test_a_battle_from_the_previous_season_does_not_rule_out_sign_up(
 ) -> None:
     # Reported at 05:02 on the Season's first Reset, so it belongs to the
     # previous Season's last day.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(connection_info, archive_server, DAY_2,
                            profile=_not_signed_up(),
                            log=_log((DAY_1 + timedelta(minutes=2), True)))

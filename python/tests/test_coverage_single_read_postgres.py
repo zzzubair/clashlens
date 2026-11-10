@@ -34,9 +34,8 @@ def _store(connection_info, archive_server, key, rows, minutes):
     )
 
 
-def _process(connection_info, archive_server, job, *, dedup=True):
+def _process(connection_info, archive_server, job):
     database, processor = _processor(connection_info, archive_server)
-    database._supports_content_dedup = dedup
     try:
         assert processor.process_job(job, owner="test").outcome in {
             "processed", "processed_with_gaps"
@@ -45,9 +44,9 @@ def _process(connection_info, archive_server, job, *, dedup=True):
         database.close()
 
 
-def _raw(database, connection, player_id, *, shared_read):
+def _raw(database, connection, player_id):
     return connection.execute(
-        ranked_day_inputs._coverage_sql(database, shared_read=shared_read),
+        ranked_day_inputs._coverage_sql(),
         (player_id, None, DAY_START, None, DAY_END),
     ).fetchall()
 
@@ -65,24 +64,20 @@ def _quality(database, connection, player_id):
     }
 
 
-def test_one_read_of_each_log_keeps_coverage_in_every_storage_layout(
+def test_one_read_of_each_log_keeps_coverage_for_current_and_saved_row_formats(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         direct, direct_job = _store(
             connection_info, archive_server, "direct", [REAL, BROKEN], 60
         )
-        # The oldest path, before saved content was shared, relies on the
-        # one-report-per-row rule 0012 dropped.
-        with psycopg.connect(connection_info) as connection:
-            connection.execute("ALTER TABLE battle_evidence ADD UNIQUE (source_row_id)")
-        _process(connection_info, archive_server, direct_job, dedup=False)
-        with psycopg.connect(connection_info) as connection:
-            connection.execute(
-                "ALTER TABLE battle_evidence DROP CONSTRAINT battle_evidence_source_row_id_key"
-            )
+        _process(connection_info, archive_server, direct_job)
         members, members_job = _store(
-            connection_info, archive_server, "members", [REAL, BROKEN, REAL], 180
+            connection_info,
+            archive_server,
+            "members",
+            [REAL, BROKEN | {"destructionPercentage": 13}, REAL],
+            180,
         )
         _process(connection_info, archive_server, members_job)
         listed, listed_job = _store(
@@ -120,6 +115,34 @@ def test_one_read_of_each_log_keeps_coverage_in_every_storage_layout(
                     """,
                     (members,),
                 )
+                # The oldest saved logs, from before saved content was
+                # shared, own their rows directly and have no payload.
+                connection.execute(
+                    """
+                    WITH log AS (
+                        SELECT id, parsed_payload_id, player_id
+                        FROM battle_log_observations WHERE observation_id = %s
+                    ), moved AS (
+                        DELETE FROM battle_payload_row_lists AS list
+                        USING log
+                        WHERE list.parsed_payload_id = log.parsed_payload_id
+                          AND list.reporting_player_id = log.player_id
+                        RETURNING list.source_row_ids
+                    ), owned AS (
+                        UPDATE battle_source_rows AS source
+                        SET battle_log_observation_id = (SELECT id FROM log),
+                            source_row_index = (member.position - 1)::integer
+                        FROM moved CROSS JOIN LATERAL unnest(moved.source_row_ids)
+                            WITH ORDINALITY AS member (source_row_id, position)
+                        WHERE source.id = member.source_row_id
+                        RETURNING source.id
+                    )
+                    UPDATE battle_log_observations SET parsed_payload_id = NULL
+                    WHERE id = (SELECT id FROM log)
+                      AND (SELECT count(*) FROM owned) > 0
+                    """,
+                    (direct,),
+                )
                 # Older parsers saved rows they could not classify.
                 connection.execute(
                     """
@@ -142,10 +165,9 @@ def test_one_read_of_each_log_keeps_coverage_in_every_storage_layout(
                         (SELECT count(*) FROM battle_payload_row_lists)
                     """
                 ).fetchone()
-                assert all(layouts), layouts
+                assert layouts == (2, 3, 1), layouts
 
-                before = _raw(database, connection, player_id, shared_read=False)
-                assert _raw(database, connection, player_id, shared_read=True) == before
+                before = _raw(database, connection, player_id)
                 assert len(before) == 4
                 # Each repeated row stays listed once per position.
                 assert [len(row[5]) for row in before] == [2, 3, 3, 0]
@@ -188,9 +210,6 @@ def test_one_read_of_each_log_keeps_coverage_in_every_storage_layout(
                     (members,),
                 )
                 assert _quality(database, connection, player_id) == expected
-                assert _raw(database, connection, player_id, shared_read=True) == _raw(
-                    database, connection, player_id, shared_read=False
-                )
         finally:
             database.close()
 
@@ -209,7 +228,7 @@ def test_day_coverage_never_reads_the_unused_occurrence_table(
     database_url: str, archive_server, monkeypatch
 ) -> None:
     tag = "#2PP"
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, tag)
         story.players[tag].battles = (
             attacks(day(2), 40, 40) + defenses(day(2), 30, 30)
@@ -253,7 +272,7 @@ def test_day_coverage_never_reads_the_unused_occurrence_table(
                 )
                 plan = connection.execute(
                     "EXPLAIN (FORMAT JSON) "
-                    + ranked_day_inputs._coverage_sql(database, shared_read=True),
+                    + ranked_day_inputs._coverage_sql(),
                     (player_id, start, day(3), end, day(4)),
                 ).fetchone()[0][0]["Plan"]
         finally:

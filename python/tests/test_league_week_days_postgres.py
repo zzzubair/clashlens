@@ -141,7 +141,7 @@ def test_a_mid_season_monday_moves_players_between_leagues(
     steady = {STEADY_1: 5300, STEADY_2: 5400, STEADY_3: 5500}
     legend_i = [DROPPED, STALE, STALE_LATE, *failed, *steady]
     lower = [PROMOTED, IDLE_PROMOTED, IDLE_BELOW]
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = Story(connection_info, archive_server, monkeypatch, {
             tag: Climber(tag) for tag in (*legend_i, *lower, FIRST_SEEN)})
         players = story.players
@@ -456,7 +456,7 @@ def test_a_false_lower_answer_saved_again_after_the_display_window_keeps_trackin
     Tuesday's board."""
     saturday, sunday, monday, tuesday = day(6), day(7), day(8), day(9)
     again_at = monday + timedelta(hours=1, minutes=2)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = Story(connection_info, archive_server, monkeypatch, {KEPT: Climber(KEPT)})
         kept = story.players[KEPT]
         # Sunday from 5,140 and Monday from 13:30: 8 attacks of 40 and 8
@@ -507,7 +507,7 @@ def test_a_legend_i_player_found_on_thursday_gets_no_monday_from_5000(
     (FIRST_SEEN above)."""
     found_late = "#VPP"
     monday, thursday = day(8), day(11)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = Story(connection_info, archive_server, monkeypatch, {found_late: Player(found_late)})
         story.players[found_late].battles = [
             battle for start in (monday, day(9), day(10))
@@ -559,7 +559,7 @@ def test_players_the_game_no_longer_finds_are_left_off_as_not_found(
     as league not confirmed, which counts as a day not proven; only
     UNANSWERED's league is not confirmed."""
     saturday, sunday, monday, tuesday = day(6), day(7), day(8), day(9)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = Story(connection_info, archive_server, monkeypatch, {
             tag: Player(tag) for tag in (GONE, NEVER_FOUND, UNANSWERED, STAYING)})
         # Sunday from 5,140 for both; STAYING's Monday from 13:00 ends 80 up.
@@ -640,7 +640,7 @@ def test_players_back_in_legend_i_at_a_monday_reset_start_at_5000_and_rank(
     it at 5,000 too."""
     saturday, sunday, monday, tuesday = day(6), day(7), day(8), day(9)
     back, back_tuesday = day(15), day(16)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = Story(connection_info, archive_server, monkeypatch, {
             tag: Climber(tag) for tag in (BOUNCED, IDLE_UP, RETURNED)})
         bounced, idle_up = story.players[BOUNCED], story.players[IDLE_UP]
@@ -782,7 +782,7 @@ def test_a_promoted_player_idle_across_the_next_monday_stays_proven(
     Counted from the promotion, as Daily boards count it, each reading
     starts its day at 5,000 and every board shows the player's day
     Complete."""
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = Story(connection_info, archive_server, monkeypatch,
                       {tag: Climber(tag) for tag in (IDLE_ACROSS, ANCHOR)})
         _idle_across(story, range(9, 17))
@@ -809,7 +809,7 @@ def test_days_saved_unfinished_before_the_fix_finish_at_the_next_reset(
     no end, back to Sunday, and each past board they change is rebuilt, so
     no Season repair is needed."""
     unplayed = reset_baselines._unplayed
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = Story(connection_info, archive_server, monkeypatch,
                       {tag: Climber(tag) for tag in (IDLE_ACROSS, ANCHOR)})
         monkeypatch.setattr(reset_baselines, "_unplayed", lambda *reading: False)
@@ -863,7 +863,7 @@ def test_a_past_board_rebuild_takes_a_day_that_comes_out_the_same(
     different, SAME's the same. The rebuilt board must rank both, and not GONE."""
     saturday, sunday = day(6), day(7)
     tags = (STAYS, SAME, CHANGED, GONE)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, *tags)
         for tag in tags:
             story.players[tag].battles = _saturday(saturday)
@@ -932,4 +932,3 @@ def _decide_below(connection_info: str, tags: tuple[str, ...], now: datetime) ->
 def _player_id(connection: psycopg.Connection, tag: str) -> int:
     return connection.execute(
         "SELECT id FROM players WHERE normalized_tag = %s", (tag,)).fetchone()[0]
-

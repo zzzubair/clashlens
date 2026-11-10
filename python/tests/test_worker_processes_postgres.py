@@ -14,8 +14,7 @@ from threading import Event
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, text
-from test_domain_processing_postgres import _processor
+from domain_test_support import _processor, domain_database, text
 from test_worker_reserved_capacity_postgres import (
     _queue_builds,
     _queue_profiles,
@@ -63,7 +62,7 @@ def _attempts(connection_info: str, job_ids: list[int]) -> list[tuple]:
 def test_one_claim_leases_a_batch_each_fenced_on_its_own(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         job_ids = _queue_profiles(connection_info, archive_server, TAGS[:5])
         database = Database(connection_info)
         try:
@@ -94,7 +93,7 @@ def test_one_claim_leases_a_batch_each_fenced_on_its_own(
 def test_claims_given_back_unstarted_keep_their_attempts_and_run_at_once(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         job_ids = _queue_profiles(connection_info, archive_server, TAGS[:4])
         database = Database(connection_info)
         try:
@@ -136,7 +135,7 @@ def test_claims_given_back_unstarted_keep_their_attempts_and_run_at_once(
 def test_only_one_build_runs_across_worker_processes(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _queue_builds(connection_info, 3)
         first, second = Database(connection_info), Database(connection_info)
         try:
@@ -170,7 +169,7 @@ def test_a_claim_overlapping_a_build_claim_sees_its_committed_lease(
     # made to wait after it starts reading, on an index another session is
     # rebuilding, until the first has committed. It must still see the build
     # the first leased once it can take the permit.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _queue_builds(connection_info, 3)
         with psycopg.connect(connection_info, autocommit=True) as setup:
             setup.execute(
@@ -302,7 +301,7 @@ def test_two_processes_finish_every_response_once_and_give_back_the_rest(
         raise ValueError("dependency_not_ready: test build waits")
 
     monkeypatch.setattr(army_ingestion, "complete_army_analytics", counted_build)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _queue_builds(connection_info, 4)
         job_ids = _queue_profiles(connection_info, archive_server, TAGS)
         processes = []
@@ -368,7 +367,7 @@ def test_two_processes_finish_every_response_once_and_give_back_the_rest(
 def test_queue_health_reports_each_kind_of_work_apart(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _queue_builds(connection_info, 2)
         _queue_profiles(connection_info, archive_server, TAGS[:3])
         database = Database(connection_info)
@@ -387,7 +386,7 @@ def test_queue_health_reports_each_kind_of_work_apart(
 def test_each_process_plans_its_own_share_of_the_newest_jobs(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         job_ids = _queue_profiles(connection_info, archive_server, TAGS[:6])
         database = Database(connection_info)
         try:
@@ -406,7 +405,7 @@ def test_each_process_plans_its_own_share_of_the_newest_jobs(
 def test_a_batched_claim_that_waited_half_its_lease_is_renewed_before_it_starts(
     database_url: str, archive_server, monkeypatch
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _queue_profiles(connection_info, archive_server, TAGS[:3])
         database = Database(connection_info)
         try:

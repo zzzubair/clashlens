@@ -122,7 +122,7 @@ def test_reset_day_results_go_first_and_rechecks_wait_for_the_board(
     before any of the new day's, and no recheck until the board publishes;
     once it has, the thread runs the rechecks."""
     clock = [RESET + timedelta(minutes=10)]
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, *TAGS)
         _at_the_reset(story, monkeypatch, clock)
         database, processor = _processor(connection_info, archive_server)
@@ -161,7 +161,7 @@ def test_a_stuck_board_holds_live_results_and_rechecks_only_until_0545(
     live results again, and rechecks run, although the board has not
     published."""
     clock = [RESET + timedelta(minutes=10)]
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, *TAGS)
         _at_the_reset(story, monkeypatch, clock)
         database, processor = _processor(connection_info, archive_server)

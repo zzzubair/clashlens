@@ -659,7 +659,7 @@ def test_season_repair_recalculates_days_then_rebuilds_boards_with_a_receipt(
         _seed_days,
     )
 
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         generation_id = _seed_board(
             connection_info, [("#2QCYU8C2G", 4703, _october(7, 4, 37))]
         )
@@ -800,7 +800,7 @@ def test_season_repair_stores_again_a_summary_a_board_correction_changed(
     )
     # As once every board of the Season has been rebuilt.
     monkeypatch.setattr(boundary, "queue_board_rebuilds", lambda *_, **__: {"boards": []})
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         observation_id, _job = store_observation(
             connection_info, archive_server, occurrence_key="final-board",
             endpoint="profile", body=b"{}", observed_at=season.season_end,
@@ -892,7 +892,7 @@ def test_season_repair_recalculates_days_saved_before_their_season_was_known(
         reconciliation_db, "recalculate_ranked_day",
         lambda *_, day_start, **__: calculated.append(day_start) or False,
     )
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             player = _player(connection)
             for number, start in enumerate(days, start=1):

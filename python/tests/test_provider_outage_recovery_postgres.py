@@ -147,7 +147,7 @@ def test_reset_outage_stays_retryable_and_collects_once_the_api_returns(
     if now - boundary > timedelta(hours=23, minutes=50):
         pytest.skip("this Legend day ends before the retry could be checked")
     with (
-        domain_database(database_url, include_coordinator=True) as connection_info,
+        domain_database(database_url) as connection_info,
         _provider() as origin,
     ):
         database, sweep_id = _reset_work(connection_info, boundary)
@@ -174,7 +174,7 @@ def test_reset_given_up_without_any_response_still_settles_its_publication(
     # long the worker was stopped, its (re)start still settles the work.
     boundary = _latest_reset(datetime.now(UTC)) - timedelta(days=days_ago)
     with (
-        domain_database(database_url, include_coordinator=True) as connection_info,
+        domain_database(database_url) as connection_info,
         _provider() as origin,
     ):
         database, _sweep_id = _reset_work(connection_info, boundary)
@@ -223,7 +223,7 @@ def test_reset_recovery_reaches_later_work_past_rows_waiting_on_processing(
     if now - boundary > timedelta(hours=23, minutes=50):
         pytest.skip("this Legend day ends before its responses could be collected")
     with (
-        domain_database(database_url, include_coordinator=True) as connection_info,
+        domain_database(database_url) as connection_info,
         _provider() as origin,
     ):
         with psycopg.connect(connection_info) as connection:
@@ -276,7 +276,7 @@ def test_reset_retry_keeps_the_profile_that_already_answered(
     if now - boundary > timedelta(hours=23, minutes=50):
         pytest.skip("this Legend day ends before the retry could be checked")
     with (
-        domain_database(database_url, include_coordinator=True) as connection_info,
+        domain_database(database_url) as connection_info,
         _provider() as origin,
     ):
         database, _sweep_id = _reset_work(connection_info, boundary)
@@ -307,7 +307,7 @@ def test_retried_reset_profile_brings_a_battle_log_collected_after_it(
     if now - boundary > timedelta(hours=23, minutes=50):
         pytest.skip("this Legend day ends before the retry could be checked")
     with (
-        domain_database(database_url, include_coordinator=True) as connection_info,
+        domain_database(database_url) as connection_info,
         _provider() as origin,
     ):
         database, _sweep_id = _reset_work(connection_info, boundary)
@@ -344,7 +344,7 @@ def test_interrupted_reset_retry_fetches_the_battle_log_again_after_restart(
     if now - boundary > timedelta(hours=23, minutes=50):
         pytest.skip("this Legend day ends before the retry could be checked")
     with (
-        domain_database(database_url, include_coordinator=True) as connection_info,
+        domain_database(database_url) as connection_info,
         _provider() as origin,
     ):
         database, _sweep_id = _reset_work(connection_info, boundary)
@@ -385,7 +385,7 @@ def test_reset_server_error_is_not_final_while_the_collector_retries(
     if now - boundary > timedelta(hours=23, minutes=50):
         pytest.skip("this Legend day ends before the retry could be checked")
     with (
-        domain_database(database_url, include_coordinator=True) as connection_info,
+        domain_database(database_url) as connection_info,
         _provider() as origin,
     ):
         database, _sweep_id = _reset_work(connection_info, boundary)
@@ -426,7 +426,7 @@ def test_collection_resumes_after_an_outage_with_the_newest_response_first(
     database_url: str, tmp_path
 ) -> None:
     with (
-        domain_database(database_url, include_coordinator=True) as connection_info,
+        domain_database(database_url) as connection_info,
         _provider() as origin,
     ):
         with psycopg.connect(connection_info) as connection:
@@ -487,7 +487,7 @@ def test_reset_failing_while_the_api_answers_settles_after_three_retries(
     if now - boundary > timedelta(hours=23, minutes=50):
         pytest.skip("this Legend day ends before the retry could be checked")
     with (
-        domain_database(database_url, include_coordinator=True) as connection_info,
+        domain_database(database_url) as connection_info,
         _provider() as origin,
     ):
         database, _sweep_id = _reset_work(connection_info, boundary)

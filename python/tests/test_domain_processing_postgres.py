@@ -3,205 +3,34 @@ from __future__ import annotations
 import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from threading import Barrier
 from typing import Any
 from unittest.mock import patch
 
 import psycopg
 import pytest
-from domain_test_support import decide_leagues, domain_database, store_observation, text
-from psycopg import sql
+from domain_test_support import (
+    BATTLE_FIXTURE,
+    LIVE_BATTLE_PARSER_VERSION,
+    PROFILE_FIXTURE,
+    RANKING_FIXTURE,
+    _live_battle_row,
+    _prepare_reset_baseline_pair,
+    _processor,
+    _role_connection,
+    _seed_battle_anchor,
+    _WorkerRoleDatabase,
+    decide_leagues,
+    domain_database,
+    store_observation,
+    text,
+)
 from psycopg.conninfo import make_conninfo
-from psycopg_pool import ConnectionPool
 
 from clashlens import battle_ingestion, season_anchors
 from clashlens.api_db import _screen_events
-from clashlens.archive import S3ArchiveReader
-from clashlens.db import DEFAULT_POOL_SIZE, Database
 from clashlens.domain import ranked_day_for
 from clashlens.profile import PROFILE_PARSER_VERSION
-from clashlens.worker import ObservationProcessor
-
-PROFILE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
-BATTLE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_battle_log_v1.json"
-RANKING_FIXTURE = Path(__file__).parents[1] / "testdata" / "global_top_200_v1.json"
-LIVE_BATTLE_PARSER_VERSION = "supercell-source-parser-v2"
-
-
-def _live_battle_row(
-    *,
-    attack: bool,
-    battle_timestamp: datetime,
-    opponent_tag: str,
-    opponent_name: str,
-    opponent_town_hall_level: int = 17,
-    battle_type: str = "legend",
-    stars: int = 3,
-    destruction_percentage: int = 100,
-    army_share_code: str = "u1x0-2x1",
-) -> dict[str, Any]:
-    """Build the flat fields returned by the live Legend I endpoint."""
-
-    return {
-        "attack": attack,
-        "battleTime": battle_timestamp.strftime("%Y%m%dT%H%M%S.000Z"),
-        "stars": stars,
-        "destructionPercentage": destruction_percentage,
-        "armyShareCode": army_share_code,
-        "opponentPlayerTag": opponent_tag,
-        "opponentName": opponent_name,
-        "opponentTownHallLevel": opponent_town_hall_level,
-        "battleType": battle_type,
-    }
-
-
-def _role_configure(role: str):
-    """psycopg_pool per-connection hook: assume a NOLOGIN runtime role.
-
-    The runtime roles are NOLOGIN and carry no password, so pooled
-    connections connect as the migration owner and then SET ROLE, the
-    same pattern the Go role-boundary tests use. The connection must be
-    left idle for psycopg_pool, hence the commit.
-    """
-
-    def configure(connection: psycopg.Connection) -> None:
-        connection.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(role)))
-        connection.commit()
-
-    return configure
-
-
-class _WorkerRoleDatabase(Database):
-    """Test database whose complete pool runs as the production worker role."""
-
-    def __init__(self, database_url: str, *, max_size: int = DEFAULT_POOL_SIZE) -> None:
-        self.pool = ConnectionPool(
-            conninfo=database_url,
-            min_size=1,
-            max_size=max_size,
-            open=True,
-            configure=_role_configure("clashlens_python_worker"),
-        )
-        self._jobs_relation = "python_processing_jobs"
-        with self.pool.connection() as connection:
-            worker_view = connection.execute(
-                "SELECT to_regclass('python_processing_jobs_worker')"
-            ).fetchone()
-            if worker_view is not None and worker_view[0] is not None:
-                self._jobs_relation = "python_processing_jobs_worker"
-
-
-def _role_connection(connection_info: str, role: str) -> psycopg.Connection:
-    connection = psycopg.connect(connection_info)
-    connection.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(role)))
-    connection.commit()
-    return connection
-
-
-def _processor(
-    connection_info: str,
-    archive_server,
-    *,
-    database_factory=Database,
-) -> tuple[Database, ObservationProcessor]:
-    database = database_factory(connection_info)
-    processor = ObservationProcessor(
-        database,
-        S3ArchiveReader(
-            endpoint=archive_server[0],
-            bucket="evidence",
-            access_key="test",
-            secret_key="test",
-            secure=False,
-            allow_insecure_test_origin=True,
-        ),
-    )
-    return database, processor
-
-
-def _seed_battle_anchor(connection_info: str, current_start: datetime) -> None:
-    with psycopg.connect(connection_info) as connection:
-        connection.execute("SET LOCAL session_replication_role = replica")
-        connection.execute(
-            """
-            INSERT INTO legend_season_anchors (
-                current_league_season_id, previous_league_season_id,
-                current_start, previous_start, anchor_rule_version,
-                source_profile_version_id, state
-            ) VALUES ('test-current-season', 'test-previous-season', %s, %s,
-                      'legend-season-anchor-v1', 1, 'confirmed')
-            """,
-            (current_start, current_start - timedelta(days=28)),
-        )
-        connection.commit()
-
-
-def _prepare_reset_baseline_pair(
-    connection_info: str,
-    archive_server,
-    *,
-    boundary: datetime,
-    battle_body: bytes | None = None,
-) -> tuple[int, int, int, int]:
-    profile_observation_id, profile_job_id = store_observation(
-        connection_info,
-        archive_server,
-        occurrence_key="reset-pair-profile",
-        endpoint="profile",
-        body=PROFILE_FIXTURE.read_bytes(),
-        observed_at=boundary,
-        normalized_tag="#2PP",
-    )
-    battle_observation_id, battle_job_id = store_observation(
-        connection_info,
-        archive_server,
-        occurrence_key="reset-pair-battle",
-        endpoint="battle_log",
-        body=battle_body
-        if battle_body is not None
-        else json.dumps({"items": []}).encode(),
-        observed_at=boundary,
-        normalized_tag="#2PP",
-    )
-    with psycopg.connect(connection_info) as connection:
-        player_id = connection.execute(
-            "SELECT id FROM players WHERE normalized_tag = '#2PP'"
-        ).fetchone()[0]
-        sweep_id = connection.execute(
-            """
-            INSERT INTO collector_reset_sweeps (
-                boundary_at, member_ids, membership_captured_at
-            ) VALUES (%s, %s, %s)
-            RETURNING id
-            """,
-            (boundary, [player_id], boundary),
-        ).fetchone()[0]
-        connection.execute(
-            """
-            INSERT INTO collector_work (
-                kind, lane, scope, player_id, normalized_tag, sweep_id,
-                due_at, coalescing_key, status, profile_status,
-                battle_log_status, profile_observation_id,
-                battle_log_observation_id, completed_at
-            ) VALUES (
-                'reset_baseline', 'reset', 'player', %s, '#2PP', %s,
-                %s, 'reset-baseline-test', 'complete', 'observed',
-                'observed', %s, %s, %s
-            )
-            RETURNING id
-            """,
-            (
-                player_id,
-                sweep_id,
-                boundary,
-                profile_observation_id,
-                battle_observation_id,
-                boundary,
-            ),
-        ).fetchone()
-        connection.commit()
-    return profile_observation_id, battle_observation_id, profile_job_id, battle_job_id
 
 
 def test_reset_baseline_evidence_is_created_from_one_compact_work_and_is_versioned(
@@ -209,7 +38,7 @@ def test_reset_baseline_evidence_is_created_from_one_compact_work_and_is_version
     archive_server,
 ) -> None:
     boundary = datetime(2026, 8, 4, 5, tzinfo=UTC)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         profile_observation_id, battle_observation_id, profile_job_id, battle_job_id = (
             _prepare_reset_baseline_pair(
                 connection_info,
@@ -305,7 +134,7 @@ def test_malformed_reset_evidence_is_failed_and_finishes_only_the_ended_day(
     archive_server,
 ) -> None:
     boundary = datetime(2026, 8, 4, 5, tzinfo=UTC)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _profile_observation, _battle_observation, profile_job, battle_job = (
             _prepare_reset_baseline_pair(
                 connection_info,
@@ -346,7 +175,7 @@ def test_profile_and_battle_observations_process_independently_into_canonical_ev
     archive_server,
 ) -> None:
     observed_at = datetime(2026, 8, 4, 12, 5, tzinfo=UTC)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         profile_observation_id, profile_job_id = store_observation(
             connection_info,
             archive_server,
@@ -505,7 +334,7 @@ def test_concurrent_battle_batches_lock_shared_rows_in_one_order(
     forward = json.dumps({"items": [first, second]}).encode()
     reverse = json.dumps({"items": [second, first]}).encode()
 
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _seed_battle_anchor(connection_info, datetime(2026, 8, 1, 5, tzinfo=UTC))
         _first_observation, first_job = store_observation(
             connection_info,
@@ -571,7 +400,7 @@ def test_battle_logs_enqueue_live_reconciliation_when_projection_changes(
     database_url: str,
     archive_server,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
         ranked_day = ranked_day_for(now)
@@ -771,7 +600,7 @@ def test_live_shaped_battle_rows_publish_one_player_battle_without_duplicate_con
 ) -> None:
     """Flat live rows share one battle identity through reconciliation and the API read model."""
 
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
         ranked_day = ranked_day_for(now)
@@ -970,7 +799,7 @@ def test_concurrent_initial_season_anchors_use_the_single_confirmed_seam(
     new_payload["currentLeagueSeasonId"] = 1786338000
     new_payload["previousLeagueSeasonId"] = 1783918800
 
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _old_observation, old_job = store_observation(
             connection_info,
             archive_server,
@@ -1034,7 +863,7 @@ def test_conflicting_or_older_profiles_never_replace_last_accepted_current_profi
     archive_server,
 ) -> None:
     accepted_at = datetime(2026, 8, 4, 12, 5, tzinfo=UTC)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _accepted_observation_id, accepted_job_id = store_observation(
             connection_info,
             archive_server,
@@ -1255,7 +1084,7 @@ def test_recognized_legend_tier_classifies_player_despite_season_anchor_conflict
     archive_server,
 ) -> None:
     observed_at = datetime(2026, 8, 9, 12, 5, tzinfo=UTC)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _anchor_observation_id, anchor_job_id = store_observation(
             connection_info,
             archive_server,
@@ -1318,7 +1147,7 @@ def test_profile_v3_promotes_current_anchor_and_preserves_raw_previous_id(
     archive_server,
 ) -> None:
     observed_at = datetime(2026, 9, 9, 12, 5, tzinfo=UTC)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         payload = json.loads(PROFILE_FIXTURE.read_bytes())
         payload["tag"] = "#8PP"
         payload["currentLeagueSeasonId"] = "1788757200"
@@ -1401,7 +1230,7 @@ def test_canonical_battle_keeps_detail_disagreement_for_both_perspectives(
     archive_server,
 ) -> None:
     observed_at = datetime(2026, 8, 4, 12, 5, tzinfo=UTC)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _seed_battle_anchor(connection_info, datetime(2026, 8, 1, 5, tzinfo=UTC))
         attacker_body = BATTLE_FIXTURE.read_bytes()
         _attacker_observation_id, attacker_job_id = store_observation(
@@ -1469,7 +1298,7 @@ def test_official_top_200_publishes_only_complete_atomic_versions(
     archive_server,
 ) -> None:
     observed_at = datetime(2026, 8, 4, 12, 5, tzinfo=UTC)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         complete_observation_id, _complete_job = store_observation(
             connection_info,
             archive_server,
@@ -1549,7 +1378,7 @@ def test_reset_baseline_evidence_worker_role_contract(
 ) -> None:
     """The worker processes paired compact Reset work but cannot mutate it."""
     boundary = datetime(2026, 8, 6, 5, tzinfo=UTC)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         profile_observation_id, battle_observation_id, profile_job_id, battle_job_id = (
             _prepare_reset_baseline_pair(
                 connection_info,

@@ -160,14 +160,12 @@ def claim_background(
     connection: Any, jobs_relation: str, rows: list[Any], limit: int,
     claim: Callable[..., list[Any]], *, held: bool, planned: bool,
     work_types: Collection[str] | None, reset_first: bool | None,
-    contract: tuple[bool, bool, bool],
 ) -> list[Any]:
     """``rows``, the claim's live work, with the background work its mode allows.
 
     A claim of planned jobs, or one live work filled with no floor to
     apply, asks for none. ``held`` and ``reset_first`` are
-    ``reset_first_claim``'s; ``contract`` is the claim's denormalized,
-    coordinator and dependency support.
+    ``reset_first_claim``'s.
     """
     from .db import SUPPORTED_WORK_TYPES
 
@@ -176,7 +174,7 @@ def claim_background(
     if planned or (len(rows) >= limit and not floor):
         return rows
     allowance = (Allowance(BackgroundMode.RESET_FIRST) if held else background_allowance(
-        connection, jobs_relation, *contract, wait=not rows))
+        connection, jobs_relation, wait=not rows))
     if allowance.mode is BackgroundMode.PAUSED:
         return background_floor(connection, jobs_relation, rows, limit, claim) if floor else rows
     for priority, room in allowance.lanes:
@@ -266,8 +264,7 @@ def background_floor(
 
 
 def background_allowance(
-    connection: Any, jobs_relation: str, denormalized_contract: bool,
-    supports_coordinator: bool, supports_dependency: bool, *, wait: bool = False,
+    connection: Any, jobs_relation: str, *, wait: bool = False,
 ) -> Allowance:
     """This claim's mode and, unless ``PAUSED``, each background priority
     with room, the one using less of its limit first, ties at random in
@@ -290,8 +287,7 @@ def background_allowance(
     )
 
     supported_filter, params = _supported_claim_filter(
-        "job", "source_observation", denormalized_contract=denormalized_contract,
-        supports_coordinator=supports_coordinator,
+        "job",
     )
     tries = "job.attempt_count < job.max_attempts"
 
@@ -306,7 +302,7 @@ def background_allowance(
               AND {supported_filter}
             LIMIT %(live_cap)s) AS capped)""" for state in (
             f"job.state IN ('pending', 'waiting_retry') AND {tries}",
-            "job.state = 'waiting_dependency'" + ("" if supports_dependency else f" AND {tries}"),
+            "job.state = 'waiting_dependency'",
             "job.state = 'leased'",
         ))
     if not _take_permit(connection, wait):
@@ -364,6 +360,7 @@ def background_allowance(
 def _take_permit(connection: Any, wait: bool) -> bool:
     """Take the permit for this transaction; with ``wait``, wait up to
     ``PERMIT_WAIT`` for the claim that holds it to commit."""
+
     from .db import lock_wait
 
     take = "SELECT pg_{}advisory_xact_lock(hashtextextended(%s, 0))"

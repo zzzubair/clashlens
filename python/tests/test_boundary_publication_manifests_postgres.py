@@ -86,7 +86,7 @@ def _sweep_with_members(connection, player_ids: list[int], boundary: datetime) -
 
 
 def test_published_snapshot_coverage_columns_are_immutable(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             snapshot_id = connection.execute(
                 """
@@ -119,7 +119,7 @@ def test_published_snapshot_coverage_columns_are_immutable(database_url: str) ->
 def test_manifest_is_sorted_frozen_and_reused_after_member_change(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -127,7 +127,7 @@ def test_manifest_is_sorted_frozen_and_reused_after_member_change(
                 second = _seed_player(connection, "#M2", 1)
                 _sweep_with_members(connection, [first[0], second[0]], BOUNDARY)
                 for player, ranked in (first, second):
-                    boundary._record_boundary_generation(database, 
+                    boundary._record_boundary_generation(database,
                         connection,
                         boundary_at=BOUNDARY,
                         player_id=player,
@@ -256,7 +256,7 @@ def test_manifest_is_sorted_frozen_and_reused_after_member_change(
                 connection.execute(
                     "ROLLBACK TO SAVEPOINT source_identity_null_to_value_guard"
                 )
-                boundary._try_enqueue_boundary_artifacts(database, 
+                boundary._try_enqueue_boundary_artifacts(database,
                     connection, boundary_at=BOUNDARY, generation_id=int(generation)
                 )
                 assert (
@@ -369,7 +369,7 @@ def test_army_rows_keep_the_day_evidence_out_of_the_frozen_row(
 ) -> None:
     # Army rows used to copy the day's whole evidence (~46 KB a row) that no
     # reader used; input_hash already pins it in ranked_day_versions.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _jobs, army_job, army_input = _freeze_army_inputs(
@@ -483,7 +483,7 @@ def test_freezing_a_seasons_army_inputs_holds_no_copy_of_them(
 
     monkeypatch.setattr(boundary_manifest, "_season_inputs", long_season)
     monkeypatch.setattr(boundary_manifest, "_freeze", measured)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _jobs, army_job, army_input = _freeze_army_inputs(
@@ -512,7 +512,7 @@ def test_army_correction_during_publication_keeps_each_frozen_battle(
     monkeypatch.setattr(past_reset_pacing, "NEWEST_RESET_CORRECTION_INTERVAL", timedelta(0))
     # A changed army code for an already-known battle arrives after the
     # army inputs are frozen and before the army build finishes.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             jobs, army_job, army_input = _freeze_army_inputs(
@@ -596,7 +596,7 @@ def test_army_build_leaves_the_generation_unlocked_until_it_publishes(
     # The snapshot and analytics builds lock the generation row. A day's army
     # build used to hold that lock for its whole run, so a Reset publication's
     # two builds ran one after the other.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _jobs, army_job, _input = _freeze_army_inputs(
@@ -674,7 +674,7 @@ def test_changed_armies_check_only_their_players_frozen_army_inputs(
     # that Reset's lock, whether its army build needs a correction. Reading
     # the whole frozen list (13,000 players, 110 MB on production) per job
     # ran the worker out of memory and made all its lanes take turns.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _jobs, _army_job, army_input = _freeze_army_inputs(
@@ -772,7 +772,7 @@ def test_a_resaved_unchanged_army_queues_no_army_correction(
     # A re-saved, byte-identical battle report gives an unchanged army a new
     # reading id. Comparing ids queued an army correction for each of 4,161
     # such readings in one night, the next one seconds after the last froze.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             jobs, army_job, _army_input = _freeze_army_inputs(
@@ -902,7 +902,7 @@ def test_army_correction_compares_every_frozen_side_by_contents(
         )
 
     monkeypatch.setattr(boundary, "_freeze_boundary_manifest", opponent_then_freeze)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _jobs, _army_job, army_input = _freeze_army_inputs(
@@ -946,7 +946,7 @@ def test_army_correction_follows_a_battle_moved_after_the_freeze(
 ) -> None:
     # A side moved after freezing is compared where it is now: the same army
     # there asks for nothing, a different one asks for a correction.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _jobs, _army_job, army_input = _freeze_army_inputs(
@@ -1030,7 +1030,7 @@ def test_frozen_army_build_follows_a_battle_merged_after_the_freeze(
     # Migration 0057 moved a frozen report into the day before's battle row
     # and deleted the old row; the Reset's army build then failed with
     # "frozen army evidence missing" on every retry.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _jobs, army_job, army_input = _freeze_army_inputs(
@@ -1161,7 +1161,7 @@ def test_army_frozen_after_a_merge_reads_the_moved_report(
         )
 
     monkeypatch.setattr(boundary, "_freeze_boundary_manifest", merge_then_freeze)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _jobs, army_job, army_input = _freeze_army_inputs(
@@ -1225,7 +1225,7 @@ def test_frozen_army_build_keeps_a_report_still_on_its_battle(
 ) -> None:
     # 0057 moved another report of this side to the day before, but the
     # frozen report is still saved on the frozen battle: it is read there.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _jobs, army_job, army_input = _freeze_army_inputs(
@@ -1288,7 +1288,7 @@ def test_army_readiness_counts_a_battle_merged_after_its_day(
     # 0057 merged battles a saved day listed into the day before's rows and
     # deleted them; counting decodes by the old ids kept those players' army
     # readiness pending, so the Reset's next army build never started.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _jobs, _army_job, army_input = _freeze_army_inputs(
@@ -1334,7 +1334,7 @@ def test_reevaluation_recovers_armies_saved_pending_after_a_merge(
     monkeypatch.setattr(
         boundary, "_boundary_army_status", lambda *_args, **_kwargs: "pending"
     )
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             jobs = _reconcile_day(connection_info, archive_server, processor)
@@ -1378,7 +1378,7 @@ def test_army_build_that_gave_up_on_pending_members_runs_once_they_settle(
     # A member left army-pending on a board whose army was ready, though its
     # day's log was complete and decoded, was never checked again: the
     # board's army build failed on it and the board stayed unbuilt.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             jobs, army_job, army_input = _freeze_army_inputs(
@@ -1424,7 +1424,7 @@ def test_reevaluation_settles_members_left_pending_on_an_older_reset(
     monkeypatch.setattr(
         boundary, "_boundary_army_status", lambda *_args, **_kwargs: "pending"
     )
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             jobs = _reconcile_day(connection_info, archive_server, processor)

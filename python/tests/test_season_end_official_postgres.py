@@ -94,7 +94,7 @@ def test_day_28_board_shows_the_saved_official_final(
 ) -> None:
     day_27, day_28, day_1 = day(27, PREVIOUS_SEASON), day(28, PREVIOUS_SEASON), day(1)
     old, new = PREVIOUS_SEASON, SEASON
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch,
                        COMPLETE, INCONSISTENT, PARTIAL)
         # COMPLETE: 5,600, then 5,440 after Day 27 and 5,320 after Day 28's 3
@@ -193,7 +193,7 @@ def test_day_28_board_and_player_pages_show_the_official_final_ranks(
     finals = {**readings, ABOVE: 5380}
     placements = {PRODIGI: 1, ABOVE: 2, TIED[2]: 3, TIED[1]: 4, TIED[0]: 5}
     season_id = str(int(old.timestamp()))
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, *readings)
         for reset in (day_27, day_28):
             story.reset(reset, {tag: (trophies, old) for tag, trophies in readings.items()})

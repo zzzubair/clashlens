@@ -97,7 +97,7 @@ def test_unreachable_database_fails_readiness() -> None:
 
 
 def test_readiness_reaches_a_real_database(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         spool = _Spool()
         database = CollectorDatabase(connection_info)
         try:

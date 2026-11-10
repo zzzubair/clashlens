@@ -314,7 +314,7 @@ def _finalize_and_commit(connection, season=SEASON):
 
 
 def test_finalize_preview_then_full_retirement_cycle(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -396,7 +396,7 @@ def test_finalize_preview_then_full_retirement_cycle(database_url: str) -> None:
 
 
 def test_deep_decode_chain_progresses_without_fk_rollback(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -464,7 +464,7 @@ def test_deep_decode_chain_progresses_without_fk_rollback(database_url: str) -> 
 def test_observationless_work_scope_includes_the_closing_reset(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -562,7 +562,7 @@ def test_observationless_work_scope_includes_the_closing_reset(
 
 
 def test_partial_coverage_season_retires(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -589,7 +589,7 @@ def test_partial_coverage_season_retires(database_url: str) -> None:
 
 
 def test_finalize_blocks_unfinished_and_stale_work(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             # Live season cannot finalize.
@@ -638,7 +638,7 @@ def test_finalize_blocks_unfinished_and_stale_work(database_url: str) -> None:
 def test_finalize_blocks_stale_summaries_and_pending_work(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -707,7 +707,7 @@ def test_finalize_blocks_stale_summaries_and_pending_work(
 
 
 def test_live_shared_and_protected_records_survive(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -793,7 +793,7 @@ def test_live_shared_and_protected_records_survive(database_url: str) -> None:
 
 
 def test_post_finalization_writes_are_fenced(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         api = ApiDatabase(connection_info)
         try:
@@ -871,8 +871,7 @@ def test_post_finalization_writes_are_fenced(database_url: str) -> None:
 def test_rolling_log_processes_live_content_after_finalization(
     database_url: str, archive_server
 ) -> None:
-    from domain_test_support import store_observation
-    from test_domain_processing_postgres import _processor
+    from domain_test_support import _processor, store_observation
 
 
     battle_body = (
@@ -880,7 +879,7 @@ def test_rolling_log_processes_live_content_after_finalization(
         / "testdata"
         / "legend_i_battle_log_v1.json"
     ).read_bytes()
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         # The static battle fixture is in the August season; seed its canonical
         # anchor so the fail-closed guard can distinguish it from an unknown day.
         with psycopg.connect(connection_info) as connection:
@@ -962,10 +961,9 @@ def test_rolling_log_processes_live_content_after_finalization(
 def test_retired_only_replay_is_terminal_and_does_not_recreate_detail(
     database_url: str, archive_server
 ) -> None:
-    from domain_test_support import store_observation
-    from test_domain_processing_postgres import _processor
+    from domain_test_support import _processor, store_observation
 
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -1018,7 +1016,7 @@ def test_retired_only_replay_is_terminal_and_does_not_recreate_detail(
 
 
 def test_failure_injection_preserves_summaries_and_fence(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -1059,7 +1057,7 @@ def test_failure_injection_preserves_summaries_and_fence(database_url: str) -> N
 def test_two_connections_see_fence_and_serialize_finalize(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -1111,7 +1109,7 @@ def test_rolling_log_waits_for_finalization_when_ranked_day_is_missing(
     """An unresolved writer cannot cross the committed finalization fence."""
     from clashlens.season_retirement import acquire_retirement_reader
 
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             player_id = _player(connection, "#RACE")
             _full_season(connection, player_id)
@@ -1206,7 +1204,7 @@ def test_season_writers_share_the_lock_and_stay_fenced(
     """
     from clashlens.season_summaries import materialize_player_season
 
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             player_a = _player(connection, "#WTRA")
             player_b = _player(connection, "#WTRB")
@@ -1299,7 +1297,7 @@ def test_season_writers_share_the_lock_and_stay_fenced(
 def test_rolling_log_keeps_noncanonical_day_until_anchor_resolution(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         item = SimpleNamespace(
             battle=SimpleNamespace(ranked_day_start=DAY0 - timedelta(days=1)),
         )
@@ -1310,13 +1308,12 @@ def test_rolling_log_keeps_noncanonical_day_until_anchor_resolution(
 def test_pre_anchor_battle_ingestion_works(
     database_url: str, archive_server
 ) -> None:
-    from domain_test_support import store_observation
-    from test_domain_processing_postgres import _processor
+    from domain_test_support import _processor, store_observation
 
     body = (
         Path(__file__).parents[1] / "testdata" / "legend_i_battle_log_v1.json"
     ).read_bytes()
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _, compact_job = store_observation(
@@ -1335,7 +1332,7 @@ def test_pre_anchor_battle_ingestion_works(
 
 
 def test_measurement_snapshot_and_projection_labels(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:

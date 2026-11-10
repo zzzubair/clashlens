@@ -11,14 +11,15 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import psycopg
-from domain_test_support import domain_database, store_observation
-from psycopg.types.json import Jsonb
-from test_domain_processing_postgres import (
+from domain_test_support import (
     LIVE_BATTLE_PARSER_VERSION,
     _live_battle_row,
     _processor,
     _seed_battle_anchor,
+    domain_database,
+    store_observation,
 )
+from psycopg.types.json import Jsonb
 
 from clashlens import battle, battle_day_repair, domain, reconciliation_db
 from clashlens.db import (
@@ -206,7 +207,7 @@ def _apply_migration(connection_info: str) -> None:
 def test_saved_boundary_battles_move_to_the_day_before_and_days_republish(
     database_url: str, archive_server, monkeypatch
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _seed_battle_anchor(connection_info, ANCHOR)
@@ -389,7 +390,7 @@ def test_saved_boundary_battles_move_to_the_day_before_and_days_republish(
 def test_new_reports_count_on_the_day_before_without_a_repair(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _seed_battle_anchor(connection_info, ANCHOR)
@@ -423,7 +424,7 @@ def test_new_reports_count_on_the_day_before_without_a_repair(
 def test_a_battle_with_reports_from_two_days_stays_where_it_is(
     database_url: str, archive_server, monkeypatch
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _seed_battle_anchor(connection_info, ANCHOR)
@@ -485,7 +486,7 @@ def test_a_battle_with_reports_from_two_days_stays_where_it_is(
 def test_a_day_of_eight_attacks_and_defenses_publishes_its_net(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _seed_battle_anchor(connection_info, ANCHOR)

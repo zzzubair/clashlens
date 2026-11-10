@@ -8,9 +8,8 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation
+from domain_test_support import _processor, domain_database, store_observation
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
-from test_domain_processing_postgres import _processor
 
 from clashlens.collector_db import CollectorDatabase, ResponseHandoff, ResponseResult
 from clashlens.history import prune_completed_history
@@ -164,7 +163,7 @@ def test_collector_restart_accepts_a_saved_response_whose_job_was_removed(
 ):
     body = PROFILE_FIXTURE.read_bytes()
     digest = hashlib.sha256(body).hexdigest()
-    with domain_database(database_url, include_coordinator=True) as info:
+    with domain_database(database_url) as info:
         observation, job = store_observation(
             info, archive_server, occurrence_key="restart", endpoint="profile", body=body,
             observed_at=OBSERVED, normalized_tag="#2PP", parser_version=PROFILE_PARSER_VERSION,

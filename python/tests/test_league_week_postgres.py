@@ -222,7 +222,7 @@ def test_the_12_october_2026_monday_in_the_weekly_league_record(
     game's display catching up, so its week is below. Deciding again with
     nothing new changes nothing."""
     sunday, monday, tuesday = day(7), day(8), day(9)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch,
                        STAYED, DROPPED, FIRST_SEEN, FAILED, GLITCH, IDLE, PROMOTED, STALE)
         story.decides = False
@@ -417,7 +417,7 @@ def test_players_whose_lock_is_busy_hold_up_no_one_else(
     monkeypatch.setattr(league_week, "BUSY_SECONDS", 1.0)
     # The twice-daily re-check follows the real clock; it is not under test.
     monkeypatch.setattr(queue_refresh, "due_recheck_slot", lambda _connection, _now: None)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, *BUSY, LOOKED_UP)
         for tag in BUSY:
             story.players[tag].battles = attacks(sunday, 40) + defenses(sunday, 40)

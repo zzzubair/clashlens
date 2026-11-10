@@ -7,8 +7,13 @@ from datetime import UTC, datetime, timedelta
 from threading import Event
 
 import psycopg
-from domain_test_support import domain_database, store_observation, text
-from test_domain_processing_postgres import PROFILE_FIXTURE, _processor
+from domain_test_support import (
+    PROFILE_FIXTURE,
+    _processor,
+    domain_database,
+    store_observation,
+    text,
+)
 
 from clashlens import army_ingestion
 from clashlens.db import (
@@ -100,7 +105,7 @@ def test_real_responses_finish_while_builds_hold_derived_lanes(
         assert release_builds.wait(30), "test release gate was not opened"
 
     monkeypatch.setattr(army_ingestion, "complete_army_analytics", held_build)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _queue_builds(connection_info, 20)
         database, processor = _processor(
             connection_info,
@@ -157,7 +162,7 @@ def test_a_lane_that_waits_out_the_pool_recovers_while_a_build_keeps_running(
             assert release_build.wait(30), "test release gate was not opened"
 
     monkeypatch.setattr(army_ingestion, "complete_army_analytics", held_build)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _queue_builds(connection_info, 1)
         database, processor = _processor(
             connection_info,

@@ -487,7 +487,7 @@ def test_monday_reset_of_12_october_2026(
     player's. The Armies view shows each army's average trophies an attack
     for the board's players."""
     sunday, monday = day(7), day(8)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch,
                        P41426, P39803153, STEADY)
         # 6 attacks and 6 defenses: the day owes nothing and ends at 5,001.
@@ -591,7 +591,7 @@ def test_monday_reset_of_a_sunday_below_5000_only_after_its_loss(
     05:15 reading fits nothing, so the day is Inconsistent. It must still
     save, its next start 5,000, and the Monday board must publish with it."""
     saturday, sunday, monday = day(6), day(7), day(8)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, AFTER_LOSS)
         # From 5,100 Saturday ends at 4,940. Sunday's 2 defenses lose 50, so
         # its 6 missing cost floor(290 / 10) = 29 each.
@@ -642,7 +642,7 @@ def test_monday_reset_with_sundays_ending_around_5000(
     real clock, so this is the previous Season's Monday, 28 September 2026."""
     season = PREVIOUS_SEASON
     saturday, sunday, monday = day(20, season), day(21, season), day(22, season)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch,
                        RAISED, EXACT, UNRAISED, UNSETTLED, IN_FLIGHT, ZERO, DROPPED_WEEKLY)
         # From 5,300 each Saturday ends at 5,140; EXACT's at 5,160.
@@ -749,7 +749,7 @@ def test_season_end_reset_and_its_first_day(
     day_27, day_28 = day(27, PREVIOUS_SEASON), day(28, PREVIOUS_SEASON)
     day_1, day_2 = day(1), day(2)
     old, new = PREVIOUS_SEASON, SEASON
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, OFFICIAL,
                        LATE_RESET, NO_DEFENSE, DAY_1_LOSS, SHIELDED, END_LOSS,
                        DISAGREES, DROPPED)
@@ -908,7 +908,7 @@ def test_wednesday_reset_with_days_that_once_could_not_save(
         day(n, season) for n in (20, 21, 22, 23, 24))
     tracked = [SHIELD_RUN, GAP_BEFORE, FULL_WITH_GAP, NINTH, CHAIN_BROKEN, CONTRADICTED,
                LAGGED, CROWDED, UNSETTLED_LOSS, ZERO_CHARGED, NO_OPPONENT]
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, *tracked, NO_START)
         # From 5,500 Day 20 ends at 5,340, and Days 21 and 22 end where they
         # began; SHIELD_RUN plays nothing after Day 20.
@@ -1134,7 +1134,7 @@ def test_reset_at_full_size(database_url: str, archive_server, monkeypatch) -> N
     battles table for a player, and each player's work keeps to a time
     bound. Half the players never played and sit at 5,000."""
     sunday, monday = day(7), day(8)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _seed_population(connection_info)
         # Tags apart from the battle logs' opponents.
         tags = [f"#P{_tag(n)[1:]}" for n in range(1, SWEPT + 1)]

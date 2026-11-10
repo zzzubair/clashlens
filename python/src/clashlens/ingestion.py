@@ -70,8 +70,6 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
     # so it alone never makes a new profile version.
     clan = profile.profile_json.get("clan")
     clan_tag = clan.get("tag") if isinstance(clan, dict) else None
-    if not getattr(database, "_supports_content_dedup", False):
-        return _complete_profile_legacy(database, claim, profile)
     (
         observation_id,
         http_status,
@@ -185,7 +183,7 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                         else AnchorOutcome.NOT_APPLICABLE
                     )
                 )
-            processing_id = job_outcomes._record_processing_outcome(database, 
+            processing_id = job_outcomes._record_processing_outcome(database,
                 connection,
                 claim,
                 outcome="processed",
@@ -273,166 +271,11 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
             )
 
 
-def _complete_profile_legacy(database: Database, claim: Claim, profile: ParsedProfile) -> None:
-    (
-        observation_id,
-        http_status,
-        response_hash,
-        _observed_at,
-        endpoint,
-        schema_version,
-    ) = job_outcomes._observation_source(claim)
-    with database._timed_connection() as connection:
-        with connection.transaction():
-            job = database._lock_live_claim(connection, claim)
-            player = connection.execute(
-                """
-                INSERT INTO players (normalized_tag, active, eligibility_state)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (normalized_tag) DO UPDATE
-                    SET updated_at = clock_timestamp()
-                RETURNING id
-                """,
-                (
-                    profile.normalized_tag,
-                    profile.eligibility_state == "eligible",
-                    profile.eligibility_state,
-                ),
-            ).fetchone()
-            assert player is not None
-            profile_version = connection.execute(
-                """
-                INSERT INTO player_profile_versions (
-                    player_id, observation_id, normalized_tag, endpoint_version,
-                    schema_version, parser_version, observed_at, source_http_status,
-                    name, trophies, league_tier_id, league_tier_name,
-                    eligibility_state, current_league_season_id,
-                    previous_league_season_id, eligibility_reason,
-                    source_contract_state, season_anchor_state, profile_json
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                )
-                ON CONFLICT (observation_id, parser_version) DO UPDATE SET
-                    name = EXCLUDED.name,
-                    trophies = EXCLUDED.trophies,
-                    league_tier_id = EXCLUDED.league_tier_id,
-                    league_tier_name = EXCLUDED.league_tier_name,
-                    eligibility_state = EXCLUDED.eligibility_state,
-                    current_league_season_id = EXCLUDED.current_league_season_id,
-                    previous_league_season_id = EXCLUDED.previous_league_season_id,
-                    eligibility_reason = EXCLUDED.eligibility_reason,
-                    source_contract_state = EXCLUDED.source_contract_state,
-                    season_anchor_state = EXCLUDED.season_anchor_state,
-                    profile_json = EXCLUDED.profile_json
-                RETURNING id
-                """,
-                (
-                    player[0],
-                    observation_id,
-                    profile.normalized_tag,
-                    profile.endpoint_version,
-                    profile.schema_version,
-                    profile.parser_version,
-                    profile.observed_at,
-                    http_status,
-                    profile.name,
-                    profile.trophies,
-                    profile.league_tier_id,
-                    profile.league_tier_name,
-                    profile.eligibility_state,
-                    profile.current_league_season_id,
-                    profile.previous_league_season_id,
-                    profile.eligibility_reason,
-                    profile.source_contract_state,
-                    profile.season_anchor_state,
-                    Jsonb(profile.profile_json),
-                ),
-            ).fetchone()
-            assert profile_version is not None
-            profile_version_id = int(profile_version[0])
-            connection.execute(
-                """
-                INSERT INTO player_profile_effects (profile_version_id, observation_id, effect_kind)
-                VALUES (%s, %s, 'current_profile')
-                ON CONFLICT (observation_id, effect_kind) DO NOTHING
-                """,
-                (profile_version_id, observation_id),
-            )
-            anchor_outcome = season_anchors.record(
-                connection, profile_version_id, profile
-            )
-            queue_refresh.queue_for_reading(
-                connection, player[0], f"reading:{observation_id}", profile.observed_at
-            )
-            connection.execute(
-                """
-                WITH candidate AS (
-                    SELECT v.id AS profile_version_id, v.observed_at,
-                           v.source_contract_state = 'accepted'
-                           AND (
-                               p.current_observed_at IS NULL
-                               OR p.current_observed_at < v.observed_at
-                               OR (
-                                   p.current_observed_at = v.observed_at
-                                   AND (
-                                       p.current_profile_version_id IS NULL
-                                       OR p.current_profile_version_id < v.id
-                                   )
-                               )
-                           ) AS update_profile
-                    FROM player_profile_versions AS v
-                    JOIN players AS p ON p.id = v.player_id
-                    WHERE p.id = %s AND v.id = %s
-                )
-                UPDATE players AS p
-                SET current_profile_version_id = CASE
-                        WHEN candidate.update_profile
-                            THEN candidate.profile_version_id
-                        ELSE p.current_profile_version_id
-                    END,
-                    current_observed_at = CASE
-                        WHEN candidate.update_profile THEN candidate.observed_at
-                        ELSE p.current_observed_at
-                    END,
-                    updated_at = clock_timestamp()
-                FROM candidate
-                WHERE p.id = %s AND candidate.update_profile
-                """,
-                (player[0], profile_version_id, player[0]),
-            )
-            job_outcomes._record_parsed_payload(
-                connection,
-                endpoint=endpoint,
-                response_hash=response_hash,
-                parser_version=profile.parser_version,
-                schema_version=schema_version,
-                parse_outcome="valid",
-                parsed_json=profile.profile_json,
-            )
-            job_outcomes._record_processing_outcome(database, 
-                connection,
-                claim,
-                outcome="processed",
-                failure_category=(
-                    "season_anchor_conflict"
-                    if anchor_outcome is AnchorOutcome.CONFLICT
-                    else None
-                ),
-            )
-            reset_baselines._refresh_reset_baseline_evidence(database, connection, claim)
-            database._finish_claim(
-                connection, claim, job, state="complete", outcome="processed"
-            )
-
-
 def complete_rankings(
     database: Database,
     claim: Claim,
     rankings: ParsedOfficialRankings,
 ) -> None:
-    if not getattr(database, "_supports_content_dedup", False):
-        return _complete_rankings_legacy(database, claim, rankings)
     (
         observation_id,
         _http_status,
@@ -660,7 +503,7 @@ def complete_rankings(
                         parsed_payload_id,
                     ),
                 )
-            job_outcomes._record_processing_outcome(database, 
+            job_outcomes._record_processing_outcome(database,
                 connection,
                 claim,
                 outcome="processed",
@@ -670,165 +513,6 @@ def complete_rankings(
                     else rankings.outcome
                 ),
                 parsed_payload_id=parsed_payload_id,
-            )
-            enqueue_discovered_players(
-                connection, database, claim, player_ids.values()
-            )
-            database._finish_claim(
-                connection,
-                claim,
-                job,
-                state="complete",
-                outcome=rankings.outcome,
-            )
-
-
-def _complete_rankings_legacy(
-    database: Database,
-    claim: Claim,
-    rankings: ParsedOfficialRankings,
-) -> None:
-    (
-        observation_id,
-        _http_status,
-        response_hash,
-        observed_at,
-        endpoint,
-        schema_version,
-    ) = job_outcomes._observation_source(claim)
-    with database.pool.connection() as connection:
-        with connection.transaction():
-            job = database._lock_live_claim(connection, claim)
-            attempt = connection.execute(
-                """
-                INSERT INTO official_top200_attempts (
-                    observation_id, parser_version, outcome, failure_reasons,
-                    observed_at, season_provenance, official_season_id
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (observation_id, parser_version) DO UPDATE SET
-                    outcome = EXCLUDED.outcome,
-                    failure_reasons = EXCLUDED.failure_reasons
-                RETURNING id
-                """,
-                (
-                    observation_id,
-                    rankings.parser_version,
-                    rankings.outcome,
-                    Jsonb(list(rankings.failure_reasons)),
-                    observed_at,
-                    rankings.season_provenance,
-                    rankings.official_season_id,
-                ),
-            ).fetchone()
-            assert attempt is not None
-            player_ids: dict[str, int] = {}
-            if rankings.entries:
-                rows = connection.execute(
-                    """
-                    WITH input AS (
-                        SELECT normalized_tag, min(source_row_index) AS source_row_index
-                        FROM unnest(%s::text[], %s::integer[])
-                            AS item(normalized_tag, source_row_index)
-                        GROUP BY normalized_tag
-                    ), players_upserted AS (
-                        INSERT INTO players (normalized_tag, active, eligibility_state)
-                        SELECT normalized_tag, false, 'unknown' FROM input
-                        ON CONFLICT (normalized_tag) DO UPDATE
-                            SET updated_at = clock_timestamp()
-                        RETURNING id, normalized_tag
-                    ), discoveries AS (
-                        INSERT INTO known_player_discoveries (
-                            player_id, observation_id, source_row_index,
-                            source_kind, discovered_at
-                        )
-                        SELECT player.id, %s, input.source_row_index,
-                               'official_ranking', %s
-                        FROM players_upserted AS player
-                        JOIN input USING (normalized_tag)
-                        ON CONFLICT DO NOTHING
-                    )
-                    SELECT normalized_tag, id FROM players_upserted
-                    """,
-                    (
-                        [entry.normalized_tag for entry in rankings.entries],
-                        [entry.source_row_index for entry in rankings.entries],
-                        observation_id,
-                        observed_at,
-                    ),
-                ).fetchall()
-                player_ids = {
-                    _text_value(tag): int(player_id) for tag, player_id in rows
-                }
-            if rankings.outcome == "official_observed":
-                version = connection.execute(
-                    """
-                    INSERT INTO official_top200_versions (
-                        attempt_id, observation_id, observed_at, parser_version
-                    ) VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (attempt_id) DO UPDATE
-                        SET attempt_id = EXCLUDED.attempt_id
-                    RETURNING id
-                    """,
-                    (
-                        attempt[0],
-                        observation_id,
-                        observed_at,
-                        rankings.parser_version,
-                    ),
-                ).fetchone()
-                assert version is not None
-                connection.execute(
-                    """
-                    INSERT INTO official_top200_entries (
-                        version_id, rank, player_id, normalized_tag, source_json
-                    )
-                    SELECT %s, entry.rank, entry.player_id,
-                           entry.normalized_tag, entry.source_json
-                    FROM jsonb_to_recordset(%s::jsonb) AS entry(
-                        rank integer, player_id bigint,
-                        normalized_tag text, source_json jsonb
-                    )
-                    ON CONFLICT (version_id, rank) DO UPDATE SET
-                        player_id = EXCLUDED.player_id,
-                        normalized_tag = EXCLUDED.normalized_tag,
-                        source_json = EXCLUDED.source_json
-                    """,
-                    (
-                        version[0],
-                        Jsonb(
-                            [
-                                {
-                                    "rank": entry.rank,
-                                    "player_id": player_ids[entry.normalized_tag],
-                                    "normalized_tag": entry.normalized_tag,
-                                    "source_json": entry.source_json,
-                                }
-                                for entry in rankings.entries
-                            ]
-                        ),
-                    ),
-                )
-            job_outcomes._record_parsed_payload(
-                connection,
-                endpoint=endpoint,
-                response_hash=response_hash,
-                parser_version=rankings.parser_version,
-                schema_version=schema_version,
-                parse_outcome="valid",
-                parsed_json={
-                    "items": [entry.source_json for entry in rankings.entries],
-                    "paging": {"cursors": {}},
-                },
-            )
-            job_outcomes._record_processing_outcome(database, 
-                connection,
-                claim,
-                outcome="processed",
-                failure_category=(
-                    None
-                    if rankings.outcome == "official_observed"
-                    else rankings.outcome
-                ),
             )
             enqueue_discovered_players(
                 connection, database, claim, player_ids.values()

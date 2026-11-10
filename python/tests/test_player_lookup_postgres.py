@@ -7,7 +7,7 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from domain_test_support import decide_leagues, store_observation
+from domain_test_support import _processor, decide_leagues, store_observation
 from psycopg.conninfo import make_conninfo
 from test_api_db_public_ops import (
     NOW,
@@ -17,7 +17,6 @@ from test_api_db_public_ops import (
 )
 from test_api_migration import migrated_production_database
 from test_collector_db_postgres import _handoff, _hash
-from test_domain_processing_postgres import _processor
 
 from clashlens import api_leaderboard, api_player_lookup, api_players
 from clashlens.api_db import ApiDatabase

@@ -292,7 +292,6 @@ def test_consistent_top_follows_saved_positions_on_every_day(
 
 def _processor(connection_info: str, archive_server, monkeypatch):
     database = Database(connection_info)
-    database._supports_army_season_summaries = False
     enable_direct_army_fixture(database, monkeypatch)
     processor = ObservationProcessor(
         database,
@@ -551,10 +550,26 @@ def _build_fact_population(
             before_pg = _fact_insert_calls(connection_info)
             before_app = calls[0]
             database._suppress_fixture_enqueue = True
-            with database.pool.connection() as connection:
-                army_ingestion._build_army_facts(database, connection, DAY_START.isoformat())
-                connection.commit()
-            after_app = calls[0]
+            summary_calls = [0]
+            refresh_summary = army_ingestion._refresh_army_season_summaries
+
+            def measured_summary(*args, **kwargs):
+                before = calls[0]
+                try:
+                    return refresh_summary(*args, **kwargs)
+                finally:
+                    summary_calls[0] += calls[0] - before
+
+            # Bound fact storage separately, while still running the real
+            # Season refresh, whose locks and existence read are constant work.
+            with monkeypatch.context() as summary_measurement:
+                summary_measurement.setattr(
+                    army_ingestion, "_refresh_army_season_summaries", measured_summary
+                )
+                with database.pool.connection() as connection:
+                    army_ingestion._build_army_facts(database, connection, DAY_START.isoformat())
+                    connection.commit()
+            after_app = calls[0] - summary_calls[0]
             after_pg = _fact_insert_calls(connection_info)
 
             with psycopg.connect(connection_info) as connection:
@@ -575,7 +590,7 @@ def _build_fact_population(
                     "UPDATE battle_army_decodes SET is_active = false WHERE id = %s",
                     (failed[0],),
                 )
-                army_ingestion._build_army_facts(database, 
+                army_ingestion._build_army_facts(database,
                     connection,
                     DAY_START.isoformat(),
                     battle_ids=[int(failed[1])],

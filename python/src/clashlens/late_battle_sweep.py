@@ -327,7 +327,7 @@ class LateBattleSweep:
         self.complete_boundary: datetime | None = None
 
     def run_when_due(self, now: datetime | None = None) -> None:
-        if not isinstance(self.database, Database) or monotonic() < self.next_check_at:
+        if monotonic() < self.next_check_at:
             return
         self.next_check_at = monotonic() + CHECK_INTERVAL_SECONDS
         now = now or datetime.now(UTC)

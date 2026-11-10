@@ -172,7 +172,7 @@ def test_reset_start_needs_a_profile_naming_the_resets_season(
     start: int | None,
 ) -> None:
     boundary = BOUNDARIES[kind]
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(connection_info, archive_server,
                            boundary - timedelta(days=1), profile=_profile(6400),
                            log=_battle_log(empty=True))
@@ -239,7 +239,7 @@ def test_rejected_reset_profile_gives_no_start(
     database_url: str, archive_server, kind: str, conflict: str
 ) -> None:
     boundary = BOUNDARIES[kind]
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(connection_info, archive_server,
                            boundary - timedelta(days=1), profile=_profile(6400),
                            log=_battle_log(empty=True))
@@ -309,7 +309,7 @@ def test_reset_profile_read_after_the_first_battle_gives_no_start(
              "%Y%m%dT%H%M%S.000Z")}
         for index, tag in enumerate("89QGRJCU" * 2)
     ]
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(connection_info, archive_server,
                            boundary - timedelta(days=1), profile=_profile(6000),
                            log=_battle_log(empty=True))
@@ -363,7 +363,7 @@ def test_legend_ii_reset_profile_is_current_but_gives_no_start(
     # A demoted player's Legend II profile, under a valid Season.
     payload = json.loads(_profile(4900))
     payload["leagueTier"] = {"id": 105000035, "name": "Legend II"}
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(connection_info, archive_server,
                            DAY_END - timedelta(days=1), profile=_profile(6000),
                            log=_battle_log(empty=True))
@@ -421,7 +421,7 @@ def test_season_opening_reading_of_the_old_season_starts_day_1_at_5000(
             "name": later_tier,
         }
         later = json.dumps(payload).encode()
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(connection_info, archive_server,
                            boundary - timedelta(days=1), profile=_profile(6400),
                            log=_battle_log(empty=True))
@@ -518,7 +518,7 @@ def test_season_rule_starts_day_1_at_5000_once_a_new_season_profile_exists(
     log_ok: bool,
 ) -> None:
     boundary = BOUNDARIES["season"]
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(connection_info, archive_server,
                            boundary - timedelta(days=1), profile=_profile(6400),
                            log=_battle_log(empty=True))
@@ -595,7 +595,7 @@ def test_last_season_day_ends_at_the_official_total(
         (last_day + timedelta(hours=hour), False) for hour in range(2, 10)
     ]
     final = 6000 + WIN - 8 * LOSS
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = []
         if login == "seen_before_season":
             jobs.append(_store_dropped_login(
@@ -688,7 +688,7 @@ def test_official_total_saved_while_the_last_day_is_calculated_is_not_missed(
         (last_day + timedelta(hours=hour), False) for hour in range(2, 10)
     ]
     final = 6000 + WIN - 8 * LOSS
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(connection_info, archive_server, last_day,
                            profile=_profile(6000), log=_battle_log(empty=True))
         jobs += _reset_work(connection_info, archive_server, boundary,
@@ -777,7 +777,7 @@ def test_official_total_saved_days_after_a_finished_repair_ends_the_last_day(
         (last_day + timedelta(hours=hour), False) for hour in range(2, 10)
     ]
     start = 5020 - WIN + 8 * LOSS
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(connection_info, archive_server, last_day,
                            profile=_profile(start), log=_battle_log(empty=True))
         jobs += _reset_work(connection_info, archive_server, boundary,
@@ -846,7 +846,7 @@ def test_official_total_ends_a_last_day_whose_season_end_reset_was_never_read(
         (last_day + timedelta(hours=hour), False) for hour in range(2, 10)
     ]
     final = 6000 + WIN - 8 * LOSS
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(connection_info, archive_server, last_day,
                            profile=_profile(6000), log=_battle_log(empty=True))
         jobs.append(store_observation(
@@ -911,7 +911,7 @@ def test_official_total_recalculates_a_last_day_saved_under_older_rules(
         (last_day + timedelta(hours=hour), False) for hour in range(2, 10)
     ]
     final = 6000 + WIN - 8 * LOSS
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(connection_info, archive_server, last_day,
                            profile=_profile(6000), log=_battle_log(empty=True))
         jobs += _reset_work(connection_info, archive_server, boundary,
@@ -975,7 +975,7 @@ def test_a_late_attack_never_explains_a_survivors_official_total(
     battles = [(last_day + timedelta(hours=hour), False) for hour in range(1, 9)]
     battles.append((boundary - timedelta(minutes=3), True))
     final = 6000 + WIN - 8 * LOSS
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = []
         for reset in (last_day - timedelta(days=1), last_day):
             jobs += _reset_work(connection_info, archive_server, reset,
@@ -1027,7 +1027,7 @@ def test_official_total_leaves_an_older_seasons_last_day_as_saved(
         f"SELECT id, state, next_start_trophies FROM ranked_day_versions WHERE {OWN_DAYS}"
         f" AND ranked_day_start = '{last_day.isoformat()}' ORDER BY id"
     )
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(connection_info, archive_server, last_day,
                            profile=_profile(6000), log=_battle_log(empty=True))
         jobs += _reset_work(connection_info, archive_server, boundary,
@@ -1088,7 +1088,7 @@ def test_day_1_is_judged_with_the_official_total_of_the_season_before(
     from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
 
     boundary = BOUNDARIES["season"]
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = _reset_work(connection_info, archive_server, boundary - timedelta(days=1),
                            profile=_profile(6000), log=_battle_log(empty=True))
         jobs += _reset_work(connection_info, archive_server, boundary,

@@ -76,7 +76,7 @@ def test_one_summary_a_day_from_the_published_board_for_each_player_turned_on(
     LATE's summary goes off before the try again: that DM is not sent."""
     monkeypatch.setattr("bot.summaries.RETRY_SECONDS", 0.0)
     day_1, day_2, day_3, day_4, day_5 = day(1), day(2), day(3), day(4), day(5)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = Story(connection_info, archive_server, monkeypatch,
                       {tag: Player(tag) for tag in (FULL, LATE)})
         # FULL, Day 2: 3 attacks gain 100 and 8 defenses lose 110, 5,070 to
@@ -258,7 +258,7 @@ def test_a_monday_summary_from_one_board_while_it_is_corrected(
                          **versions)
 
     monkeypatch.setattr(reconciliation_db, "recalculate_ranked_day", faulty)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = Story(connection_info, archive_server, monkeypatch,
                       {tag: Player(tag) for tag in (WAITING, RAISED, KNOWN_START)})
         # From 5,300 each Saturday ends at 5,140. RAISED's Sunday: an attack

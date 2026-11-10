@@ -1085,7 +1085,7 @@ def _saved_responses(
     endpoint = f"127.0.0.1:{server.server_port}"
     root = tmp_path / "spool"
     try:
-        with domain_database(database_url, include_coordinator=True) as connection_info:
+        with domain_database(database_url) as connection_info:
             with psycopg.connect(connection_info) as connection:
                 connection.execute(
                     "INSERT INTO archive_instances (instance_id, endpoint, region,"

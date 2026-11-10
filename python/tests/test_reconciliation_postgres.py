@@ -197,7 +197,7 @@ def _store_baseline_pair(
 def test_production_admission_fixture_requires_existing_reset_work(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         try:
             _store_baseline_pair(
                 connection_info,
@@ -222,7 +222,7 @@ def test_production_admission_fixture_requires_existing_reset_work(
 def test_reset_evidence_rejects_a_different_work_identity(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         profile_id, battle_id, _profile_job, _battle_job = _store_baseline_pair(
             connection_info,
             archive_server,
@@ -267,7 +267,7 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
 ) -> None:
     # Each correction rebuilds at once; the hourly wait isn't tested here.
     monkeypatch.setattr(past_reset_pacing, "NEWEST_RESET_CORRECTION_INTERVAL", timedelta(0))
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _start_profile, _start_battle, start_profile_job, start_battle_job = (
             _store_baseline_pair(
                 connection_info,
@@ -850,7 +850,7 @@ def test_postgres_persists_complete_inferred_shield_evidence(
     database_url: str,
     archive_server,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _start_profile, _start_battle, start_profile_job, start_battle_job = (
             _store_baseline_pair(
                 connection_info,
@@ -953,7 +953,7 @@ def test_republication_rebuilds_a_day_wrongly_inferred_shielded(
     archive_server,
 ) -> None:
     # Audit example #2QP9LCLU: no battles, yet trophies went 5,029 -> 5,004.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = []
         for key, boundary, trophies in (
             ("false-shield-start", DAY_START, 5029),
@@ -1035,7 +1035,7 @@ def test_reconciliation_publishes_frozen_canonical_battle_projection(
 ) -> None:
     """Selected source identity is normalized and published without losing evidence."""
 
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _start_profile, _start_battle, start_profile_job, start_battle_job = (
             _store_baseline_pair(
                 connection_info,
@@ -1256,7 +1256,7 @@ def test_completion_binds_coverage_chain_to_sweep_battle_log_observation_ids(
     database_url: str,
     archive_server,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         _start_profile, start_battle, start_profile_job, start_battle_job = (
             _store_baseline_pair(
                 connection_info,
@@ -1406,7 +1406,7 @@ def test_season_end_days_use_the_28_day_phase_while_the_anchor_is_old(
     # the August 10 Reset ends it.
     season_end = datetime(2026, 8, 10, 5, tzinfo=UTC)
     last_day = season_end - timedelta(days=1)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         jobs = []
         for key, boundary, trophies in (
             ("season-last-day", last_day, start_trophies),

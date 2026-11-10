@@ -56,7 +56,7 @@ def _counts(connection) -> tuple[int, ...]:
 
 
 def test_finalize_preview_and_apply_wait_seven_days(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -112,7 +112,7 @@ def _legacy_finalized_record(connection, ready) -> None:
 
 
 def test_early_finalized_record_cannot_retire_or_hide_the_wait(database_url: str, monkeypatch) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -245,7 +245,7 @@ def _closes(connection) -> dict:
 
 
 def test_failed_cancelled_and_waiting_work_blocks_close(database_url: str, archive_server) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -301,7 +301,7 @@ def test_failed_cancelled_and_waiting_work_blocks_close(database_url: str, archi
 
 
 def test_late_fetched_old_day_and_late_replay_block_close(database_url: str, archive_server) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -347,7 +347,7 @@ def test_late_fetched_old_day_and_late_replay_block_close(database_url: str, arc
 
 
 def test_closing_boundary_snapshot_analytics_army_and_correction_block_close(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -423,7 +423,7 @@ def test_closing_boundary_snapshot_analytics_army_and_correction_block_close(dat
 
 
 def test_cleanup_does_not_turn_missing_processing_proof_into_success(database_url: str, archive_server) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -471,7 +471,7 @@ def test_cleanup_does_not_turn_missing_processing_proof_into_success(database_ur
 
 
 def test_legacy_history_formats_keep_finalization_and_retirement_blocked(database_url: str, monkeypatch) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -504,7 +504,7 @@ def test_legacy_history_formats_keep_finalization_and_retirement_blocked(databas
 
 
 def test_missing_relation_and_timed_out_check_block_close(database_url: str, monkeypatch) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -531,7 +531,7 @@ def test_missing_relation_and_timed_out_check_block_close(database_url: str, mon
 
 @pytest.mark.parametrize("apply", [False, True])
 def test_retirement_rechecks_work_after_finalization(database_url: str, archive_server, monkeypatch, apply) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -553,7 +553,7 @@ def test_retirement_rechecks_work_after_finalization(database_url: str, archive_
 def test_a_season_closes_open_then_finalized_then_retiring_then_retired(
     database_url: str, monkeypatch
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -588,7 +588,7 @@ def test_settlement_check_holds_its_two_days_until_finished_and_processed(
 ) -> None:
     # A Reset's 05:20 check reads the two days before it.
     reset = DAY0 + timedelta(days=3)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         log_id, job_id = _observation(
             connection_info, archive_server, "guard-check", reset + timedelta(minutes=25))
         with psycopg.connect(connection_info) as connection:

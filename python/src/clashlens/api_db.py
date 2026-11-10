@@ -14,6 +14,7 @@ from psycopg_pool import ConnectionPool
 
 from .army_analytics import with_unnamed_ids
 from .catalog import unit_label
+from .db import CONTRACT_VERSION
 from .domain import MAX_BATTLE_TROPHIES, SEASON_START_TROPHIES
 from .operating import database_pool_health
 from .profile import normalize_player_tag
@@ -25,7 +26,6 @@ from .reconciliation import (
     day_totals_supported,
 )
 
-API_CONTRACT_VERSION = 2
 VERIFICATION_RESERVATION_SECONDS = 45
 PLAYER_SCREEN_READY_VERSION = "api-player-daily-log-v4"
 ARMY_ANALYTICS_CACHE_CAPACITY = 128
@@ -126,28 +126,8 @@ class ApiDatabase:
             open=True,
             configure=configure,
         )
-        self._supports_content_dedup: bool | None = None
 
-    def _current_profile_metadata(self, connection: Any) -> tuple[str, str]:
-        if self._supports_content_dedup is None:
-            self._supports_content_dedup = bool(
-                connection.execute(
-                    """
-                    SELECT EXISTS (
-                        SELECT 1
-                        FROM information_schema.columns
-                        WHERE table_schema = current_schema()
-                          AND table_name = 'player_profile_effects'
-                          AND column_name = 'endpoint_version'
-                    )
-                    """
-                ).fetchone()[0]
-            )
-        if not self._supports_content_dedup:
-            return "", (
-                "profile.source_http_status, profile.endpoint_version, "
-                "profile.schema_version, profile.parser_version"
-            )
+    def _current_profile_metadata(self) -> tuple[str, str]:
         return (
             """
                 LEFT JOIN LATERAL (
@@ -194,7 +174,7 @@ class ApiDatabase:
                 self._army_cache.popitem(last=False)
 
     def is_ready(
-        self, *, expected_contract_version: int = API_CONTRACT_VERSION
+        self, *, expected_contract_version: int = CONTRACT_VERSION
     ) -> bool:
         with self.pool.connection() as connection:
             row = connection.execute(
@@ -209,7 +189,7 @@ class ApiDatabase:
             ).fetchone()
             return bool(
                 row is not None
-                and int(row[0]) >= expected_contract_version
+                and int(row[0]) == expected_contract_version
                 and row[1]
                 and row[2]
                 and row[3]

@@ -54,7 +54,7 @@ def test_players_promoted_into_legend_i_at_a_monday_reset(
     from Sunday's end, not 5,000."""
     season = day(1)
     sunday, monday, tuesday = day(7), day(8), day(9)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch,
                        PROMOTED, FIRST_SEEN, STEADY, MISSED)
         story.players[PROMOTED].battles = multiplayer(sunday + timedelta(hours=1), 2) + attacks(
@@ -108,7 +108,7 @@ def test_player_promoted_back_into_legend_i_after_a_demotion_this_season(
     UNPROVEN's Monday gets no start of 5,000."""
     season = PREVIOUS_SEASON
     first_week, demoted, monday, tuesday = (day(number, season) for number in (2, 8, 15, 16))
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, RETURNED, UNPROVEN)
         for player in story.players.values():
             player.battles = attacks(first_week, 40) + attacks(
@@ -189,7 +189,7 @@ def test_players_read_only_after_the_next_reset_rank_by_their_complete_day(
     by it, above BELOW, and leaves LATE_UNFINISHED, whose Monday is not
     Complete, off (``_read_late``)."""
     monday, tuesday = day(8), day(9)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _read_late(connection_info, archive_server, monkeypatch)
         mondays = {tag: story.saved_day(tag, monday) for tag in story.players}
         members = story.board_members(tuesday)
@@ -220,7 +220,7 @@ def test_a_board_frozen_before_the_rule_rebuilds_with_the_players_read_late(
     rebuild ranks them."""
     tuesday = day(9)
     first_readings = boundary_members.first_readings
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         monkeypatch.setattr(boundary_members, "first_readings", lambda *_: {})
         story = _read_late(connection_info, archive_server, monkeypatch)
         before = _ranked(story.served_board(tuesday))
@@ -259,7 +259,7 @@ def test_a_proven_promotion_whose_monday_left_the_battle_log_stays_partial_from_
     (``test_a_legend_i_player_found_on_thursday_gets_no_monday_from_5000``).
     CUT_STEADY, swept at each Reset, ranks as before."""
     saturday, sunday, monday, tuesday = day(6), day(7), day(8), day(9)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch,
                        CUT_PROMOTED, CUT_ESTABLISHED, CUT_STEADY)
         cut_monday = attacks(monday, 40, 40) + defenses(monday, 30, 30) + multiplayer(

@@ -14,12 +14,14 @@ from time import monotonic
 
 import psycopg
 import pytest
-from domain_test_support import as_api_role, domain_database, store_observation
-from test_bookkeeping_storage_postgres import _visible
-from test_domain_processing_postgres import (
+from domain_test_support import (
     LIVE_BATTLE_PARSER_VERSION,
     _role_connection,
+    as_api_role,
+    domain_database,
+    store_observation,
 )
+from test_bookkeeping_storage_postgres import _visible
 from test_late_battle_sweep_postgres import (
     ANCHOR,
     DAY,
@@ -136,7 +138,7 @@ def _ended_day_with_copies(
 def test_extra_copies_go_once_the_reset_is_done_and_what_players_see_stays(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         api = ApiDatabase(as_api_role(connection_info))
         worker = _role_connection(connection_info, "clashlens_python_worker")
@@ -219,7 +221,7 @@ def test_extra_copies_go_once_the_reset_is_done_and_what_players_see_stays(
 def test_a_running_recalculation_holds_off_the_cleanup_of_its_player_day(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _ended_day_with_copies(connection_info, archive_server, database, processor)
@@ -276,7 +278,7 @@ def test_late_corrections_after_cleanup_save_the_same_results(
     # The scenario of the late-battle sweep's agreement test, with the cleanup
     # run after each correction: the first result's copy is deleted before
     # the inputs return to it, and it must still become current again.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _sweep_processor(connection_info, archive_server)
         try:
             agreeing = _published_agreeing_days(
@@ -344,7 +346,7 @@ def test_a_result_made_current_again_before_cleanup_stays_unchanged_after_it(
     # last copy is saved as A made current again over B. After the day and
     # the day after it are cleaned, recalculating with the same inputs must
     # find that result unchanged.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _sweep_processor(connection_info, archive_server)
         try:
             agreeing = _published_agreeing_days(
@@ -403,7 +405,7 @@ def test_a_slow_cleanup_batch_gives_its_player_days_back_and_later_finishes(
 ) -> None:
     # On 2026-10-03 one batch held 400 player-day locks for 407 seconds.
     monkeypatch.setattr(ranked_day_compaction, "BATCH_TIMEOUT", "1s")
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _ended_day_with_copies(connection_info, archive_server, database, processor)
@@ -480,7 +482,7 @@ def test_late_corrections_to_an_older_day_do_not_keep_later_days_waiting(
 ) -> None:
     # On 2026-10-04 late corrections kept restarting the cleanup of September
     # 30 and October 1, and October 2 and 3 were never reached.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _ended_day_with_copies(connection_info, archive_server, database, processor)
@@ -519,7 +521,7 @@ def test_a_cleanup_run_finishes_every_batch_of_production_sized_days(
     # run timed out on one batch of 25 players with about 7 copies of each
     # day, checked against 70,236 inputs: a plan made for that batch also
     # read every input again for each copy.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _ended_day_with_copies(connection_info, archive_server, database, processor)
@@ -713,7 +715,7 @@ def test_a_days_cleanup_waits_then_passes_its_players_then_reopens_for_a_newer_c
 ) -> None:
     """A day with extra copies waits; a pass holds its place batch by batch
     until every player is checked; a copy saved since makes it wait again."""
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _ended_day_with_copies(connection_info, archive_server, database, processor)

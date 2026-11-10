@@ -13,13 +13,14 @@ from datetime import UTC, datetime, timedelta
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation
-from test_domain_processing_postgres import (
+from domain_test_support import (
     LIVE_BATTLE_PARSER_VERSION,
     _live_battle_row,
     _processor,
     _seed_battle_anchor,
     _WorkerRoleDatabase,
+    domain_database,
+    store_observation,
 )
 from test_league_history import _entry, _payload
 
@@ -221,14 +222,9 @@ def _saved_disagreement(connection_info: str, tag: str) -> list[bool]:
 def test_late_battle_corrects_its_day_then_later_days_in_order(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         worker_database = _WorkerRoleDatabase(connection_info)
-        # The role database skips Database.__init__, so give it the schema
-        # features the production worker detects at startup.
-        for name, value in vars(database).items():
-            if name.startswith(("_supports_", "_contract_version")):
-                setattr(worker_database, name, value)
         try:
             _published_with_late_battle(
                 connection_info, archive_server, processor, database
@@ -269,7 +265,7 @@ def test_battle_saved_after_the_reset_but_already_published_needs_nothing(
 ) -> None:
     # The usual case: the day's Reset recalculation ran after the battle was
     # saved, so the saved result already lists it.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _seed_battle_anchor(connection_info, ANCHOR)
@@ -297,7 +293,7 @@ def test_battle_saved_after_the_reset_but_already_published_needs_nothing(
 def test_later_saved_days_are_refreshed_and_missing_days_stay_missing(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _seed_battle_anchor(connection_info, ANCHOR)
@@ -345,7 +341,7 @@ def test_later_saved_days_are_refreshed_and_missing_days_stay_missing(
 def test_sweep_waits_for_the_reset_and_every_response_fetched_before_it_finished(
     database_url: str, archive_server, waiting: str
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _published_with_late_battle(
@@ -457,7 +453,7 @@ def test_sweep_waits_for_the_reset_and_every_response_fetched_before_it_finished
 def test_worker_loop_checks_every_ten_minutes_and_corrects_once_per_reset(
     database_url: str, archive_server, monkeypatch, capsys
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _published_with_late_battle(
@@ -530,7 +526,7 @@ def test_a_sweep_result_names_its_state() -> None:
 def test_failed_player_is_rolled_back_logged_and_retried_next_run(
     database_url: str, archive_server, monkeypatch, capsys
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _published_with_late_battle(
@@ -583,7 +579,7 @@ def test_restarted_worker_finishes_a_retrying_sweep_and_skips_a_finished_one(
 ) -> None:
     # 24 Oct 2026: a deploy at 21:05 ran the sweep that finished at 05:55
     # again, correcting 2,192 players over 6 minutes.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _published_with_late_battle(
@@ -651,7 +647,7 @@ def test_restarted_worker_finishes_a_retrying_sweep_and_skips_a_finished_one(
 def test_later_day_is_retried_after_an_existing_job_fixes_only_the_first_day(
     database_url: str, archive_server, monkeypatch, next_day_is_today: bool
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _published_with_late_battle(
@@ -707,7 +703,7 @@ def test_correction_finishes_in_one_pass_before_the_window_slides(
     # The late battle's day is the oldest day in the window: it and every
     # later saved day are corrected in the same pass, so nothing is left for
     # the next Reset, when that day has left the window.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _published_with_late_battle(
@@ -741,7 +737,7 @@ def test_late_battle_older_than_the_window_is_not_corrected(
     database_url: str, archive_server
 ) -> None:
     # The worker was stopped for over a week after the late battle was saved.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _published_with_late_battle(
@@ -767,7 +763,7 @@ def test_other_players_day_is_corrected_when_a_late_report_changes_agreement(
     # The attacker's report was published before the Reset; the defender's
     # report arrives late. A different army code makes the reports disagree.
     # The same army code, after an earlier disagreeing report, makes them agree.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _seed_battle_anchor(connection_info, ANCHOR)
@@ -849,7 +845,7 @@ def test_agreement_restored_by_a_later_report_makes_the_first_result_current_aga
     # The attacker's day is published while both reports agree. A late defender
     # report disagrees, then a later one agrees again, so the attacker's day
     # returns to its first result and the next day must read it again.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _seed_battle_anchor(connection_info, ANCHOR)
@@ -985,7 +981,7 @@ def test_indexed_selection_picks_the_same_player_days_as_before(
     # Two players' late and on-time reports, a late report that changes their
     # agreement, and a later day built from an outdated previous day, checked
     # at every Reset from the late battle's day until it has left the window.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _seed_battle_anchor(connection_info, ANCHOR)
@@ -1135,7 +1131,7 @@ def test_busy_lock_releases_earlier_resets_and_retries_next_run(
 ) -> None:
     # On 2026-10-04 one calculation held the October 1-3 Resets for minutes
     # while it waited for October 4, and other daily work queued behind it.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _published_with_late_battle(
@@ -1169,7 +1165,7 @@ def test_busy_lock_releases_earlier_resets_and_retries_next_run(
 def test_daily_job_on_a_busy_lock_retries_without_using_an_attempt(
     database_url: str, archive_server, busy: str
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _published_with_late_battle(
@@ -1214,7 +1210,7 @@ def test_daily_job_on_a_busy_lock_retries_without_using_an_attempt(
 def test_daily_calculation_keeps_the_callers_own_lock_wait(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _published_with_late_battle(

@@ -184,7 +184,7 @@ def test_past_reset_corrections_within_six_hours_start_one_generation_later(
     database_url: str, monkeypatch
 ) -> None:
     clock = Clock(monkeypatch, NOON)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -218,7 +218,7 @@ def test_past_reset_correction_waits_out_the_quiet_window(
     database_url: str, monkeypatch
 ) -> None:
     clock = Clock(monkeypatch, NOON)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -265,7 +265,7 @@ def test_season_repair_correction_skips_the_six_hours_and_only_it(
     leaves its correction waiting; the Season repair's boards step, finding
     it, starts it at once. A correction after that rebuild waits 6 hours."""
     clock = Clock(monkeypatch, NOON + timedelta(hours=1))
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -303,7 +303,7 @@ def test_season_repair_correction_still_keeps_the_quiet_window(
     09:00; the newest board, rebuilt at 05:20, waits its hour as any
     correction does in the window, to 06:20."""
     clock = Clock(monkeypatch, datetime(2026, 8, 11, 5, 30, tzinfo=UTC))
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -361,7 +361,7 @@ def test_past_reset_correction_joins_the_one_already_waiting(
     database_url: str, monkeypatch
 ) -> None:
     clock = Clock(monkeypatch, NOON)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -399,7 +399,7 @@ def test_past_reset_build_ready_in_the_quiet_window_starts_after_it(
     database_url: str, monkeypatch
 ) -> None:
     clock = Clock(monkeypatch, datetime(2026, 8, 11, 4, 29, tzinfo=UTC))
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -438,7 +438,7 @@ def test_past_reset_build_queued_before_the_quiet_window_starts_after_it(
     database_url: str, monkeypatch
 ) -> None:
     clock = Clock(monkeypatch, datetime(2026, 8, 11, 4, 29, tzinfo=UTC))
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -513,7 +513,7 @@ def test_a_past_resets_failed_build_runs_again_after_the_quiet_window(
     # Before, it ran again in the window, like no other past Reset's build.
     # It crashed: the worker died holding it on each of its tries.
     clock = Clock(monkeypatch, datetime(2026, 8, 11, 4, 29, tzinfo=UTC))
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -544,7 +544,7 @@ def test_newest_reset_corrections_within_an_hour_start_together_after_it(
 ) -> None:
     # Owner decision, 12 Oct 2026: the newest board rebuilds at most hourly.
     clock = Clock(monkeypatch, datetime(2026, 8, 5, 5, 30, tzinfo=UTC))
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
@@ -568,7 +568,7 @@ def test_maintenance_releases_each_reset_before_taking_the_next(
     database_url: str, monkeypatch
 ) -> None:
     Clock(monkeypatch, NOON)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:

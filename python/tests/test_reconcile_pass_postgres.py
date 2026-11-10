@@ -304,7 +304,7 @@ def test_planted_errors_are_found_and_the_fixable_ones_reach_the_board(
     find exactly these, queue the recalculation of LATE's Day 2, JOINED's
     Day 2 and STUCK's Day 1 within its budget, once each, and the rebuilt
     board must then show LATE at 5,000."""
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch,
                        LATE, LEDGER, CHAIN, COPIES, BOARD, STUCK, CLEAN, JOINED)
         for player in story.players.values():
@@ -442,7 +442,7 @@ def test_a_pass_whose_last_step_queues_a_recalculation_finishes(
     started again, so every lookup stayed "checking". The pass must finish,
     its line counting the 1 recalculation, which gives the page its Day 2
     back."""
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, CLEAN, LATE)
         for player in story.players.values():
             player.battles = _even(day(1)) + _even(day(2))

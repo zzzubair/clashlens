@@ -649,17 +649,9 @@ def get_live_leaderboard(
     }
 
 
-def _frozen_publications(connection: Any) -> tuple[str, bool, bool]:
+def _frozen_publications() -> str:
     """Every published Daily board, legacy and v2, as SQL giving (source, id,
-    boundary_at, version, generation, official_season_id, season_day_number);
-    whether boundary publication generations and v2 snapshots exist."""
-    coordinator_exists, snapshots_exist = connection.execute(
-        """
-        SELECT to_regclass('boundary_publication_generations') IS NOT NULL
-                   AND to_regclass('boundary_publication_manifest_rows') IS NOT NULL,
-               to_regclass('leaderboard_snapshots') IS NOT NULL
-        """
-    ).fetchone()
+    boundary_at, version, generation, official_season_id, season_day_number)."""
     legacy_publications = """
         SELECT 'legacy'::text AS source, leaderboard.id,
                leaderboard.boundary_at, leaderboard.version, 0 AS generation,
@@ -672,52 +664,35 @@ def _frozen_publications(connection: Any) -> tuple[str, bool, bool]:
             ORDER BY day.id DESC LIMIT 1
         ) AS selector ON true
     """
-    if coordinator_exists:
-        v2_publications = """
-            SELECT 'v2'::text AS source, snapshot.id, snapshot.boundary_at,
-                   snapshot.version, COALESCE(generation.generation, 0) AS generation,
-                   COALESCE(generation_day.official_season_id, source_day.official_season_id) AS official_season_id,
-                   COALESCE(generation_day.season_day_number, source_day.season_day_number) AS season_day_number
-            FROM leaderboard_snapshots AS snapshot
-            LEFT JOIN ranked_day_versions AS source_day
-              ON source_day.id = snapshot.source_ranked_day_version_id
-            LEFT JOIN boundary_publication_generations AS generation
-              ON generation.snapshot_id = snapshot.id
-            LEFT JOIN LATERAL (
-                -- A proof frozen since 0081 records its newest ranked day;
-                -- an older one stores all its rows, so they give it.
-                SELECT ranked.official_season_id, ranked.season_day_number
-                FROM boundary_publication_manifests AS manifest
-                JOIN ranked_day_versions AS ranked
-                  ON ranked.id = COALESCE(
-                      manifest.newest_ranked_day_version_id,
-                      (SELECT member.ranked_day_version_id
-                       FROM boundary_publication_manifest_rows AS member
-                       WHERE member.manifest_id = manifest.id
-                         AND member.ranked_day_version_id IS NOT NULL
-                       ORDER BY member.ranked_day_version_id DESC LIMIT 1))
-                WHERE manifest.id = generation.snapshot_manifest_id
-            ) AS generation_day ON true
-            WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
-              AND (generation.id IS NULL OR generation.snapshot_state <> 'superseded')
-        """
-    elif snapshots_exist:
-        v2_publications = """
-            SELECT 'v2'::text AS source, snapshot.id, snapshot.boundary_at,
-                   snapshot.version, 0 AS generation, source_day.official_season_id,
-                   source_day.season_day_number
-            FROM leaderboard_snapshots AS snapshot
-            LEFT JOIN ranked_day_versions AS source_day
-              ON source_day.id = snapshot.source_ranked_day_version_id
-            WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
-        """
-    else:
-        return legacy_publications, False, False
-    return (
-        v2_publications + " UNION ALL " + legacy_publications,
-        coordinator_exists,
-        True,
-    )
+    v2_publications = """
+        SELECT 'v2'::text AS source, snapshot.id, snapshot.boundary_at,
+               snapshot.version, COALESCE(generation.generation, 0) AS generation,
+               COALESCE(generation_day.official_season_id, source_day.official_season_id) AS official_season_id,
+               COALESCE(generation_day.season_day_number, source_day.season_day_number) AS season_day_number
+        FROM leaderboard_snapshots AS snapshot
+        LEFT JOIN ranked_day_versions AS source_day
+          ON source_day.id = snapshot.source_ranked_day_version_id
+        LEFT JOIN boundary_publication_generations AS generation
+          ON generation.snapshot_id = snapshot.id
+        LEFT JOIN LATERAL (
+            -- A proof frozen since 0081 records its newest ranked day;
+            -- an older one stores all its rows, so they give it.
+            SELECT ranked.official_season_id, ranked.season_day_number
+            FROM boundary_publication_manifests AS manifest
+            JOIN ranked_day_versions AS ranked
+              ON ranked.id = COALESCE(
+                  manifest.newest_ranked_day_version_id,
+                  (SELECT member.ranked_day_version_id
+                   FROM boundary_publication_manifest_rows AS member
+                   WHERE member.manifest_id = manifest.id
+                     AND member.ranked_day_version_id IS NOT NULL
+                   ORDER BY member.ranked_day_version_id DESC LIMIT 1))
+            WHERE manifest.id = generation.snapshot_manifest_id
+        ) AS generation_day ON true
+        WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
+          AND (generation.id IS NULL OR generation.snapshot_state <> 'superseded')
+    """
+    return v2_publications + " UNION ALL " + legacy_publications
 
 
 def _reset_place_sql(connection: Any) -> tuple[str, str]:
@@ -726,7 +701,7 @@ def _reset_place_sql(connection: Any) -> tuple[str, str]:
     ``player`` row its ``place.position`` there, or none off it. A Season's
     first Legend day has no such board: the one at its Reset is the Season
     before's."""
-    publications, _, snapshots_exist = _frozen_publications(connection)
+    publications = _frozen_publications()
     v2_entry = (
         """
         SELECT position FROM leaderboard_snapshot_entries
@@ -734,8 +709,6 @@ def _reset_place_sql(connection: Any) -> tuple[str, str]:
           AND player_id = player.id
         UNION ALL
         """
-        if snapshots_exist
-        else ""
     )
     return (
         f"""
@@ -942,7 +915,7 @@ def get_frozen_leaderboard(
         raise ValueError("season and day must be supplied together")
     now = datetime.now(UTC) if now is None else now
     with database.pool.connection() as connection:
-        publications, coordinator_exists, _ = _frozen_publications(connection)
+        publications = _frozen_publications()
         locator = connection.execute(
             f"""
             WITH publications AS ({publications}), selected AS (
@@ -973,70 +946,47 @@ def get_frozen_leaderboard(
             return None
         snapshot = None
         if _text(locator[0]) == "v2":
-            if coordinator_exists:
-                snapshot_query = """
-                    SELECT snapshot.id, snapshot.boundary_at, snapshot.version,
-                           snapshot.ordering_rule_version,
-                           snapshot.freshness_rule_version,
-                           snapshot.measured_coverage,
-                           snapshot.eligible_population_count,
-                           snapshot.included_entry_count, snapshot.stale_entry_count,
-                           snapshot.fresh_entry_count, snapshot.excluded_missing_count,
-                           snapshot.excluded_invalid_count,
-                           snapshot.excluded_malformed_count,
-                           snapshot.excluded_conflicting_count,
-                           COALESCE(generation_day.official_season_id, source_day.official_season_id) AS official_season_id,
-                           COALESCE(generation_day.season_day_number, source_day.season_day_number) AS season_day_number,
-                           (SELECT max(entry.profile_observed_at)
-                            FROM leaderboard_snapshot_entries AS entry
-                            WHERE entry.snapshot_id = snapshot.id)
-                    FROM leaderboard_snapshots AS snapshot
-                    LEFT JOIN ranked_day_versions AS source_day
-                      ON source_day.id = snapshot.source_ranked_day_version_id
-                    LEFT JOIN boundary_publication_generations AS generation
-                      ON generation.snapshot_id = snapshot.id
-                    LEFT JOIN LATERAL (
-                        -- A proof frozen since 0081 records its newest ranked day;
-                        -- an older one stores all its rows, so they give it.
-                        SELECT ranked.official_season_id, ranked.season_day_number
-                        FROM boundary_publication_manifests AS manifest
-                        JOIN ranked_day_versions AS ranked
-                          ON ranked.id = COALESCE(
-                              manifest.newest_ranked_day_version_id,
-                              (SELECT member.ranked_day_version_id
-                               FROM boundary_publication_manifest_rows AS member
-                               WHERE member.manifest_id = manifest.id
-                                 AND member.ranked_day_version_id IS NOT NULL
-                               ORDER BY member.ranked_day_version_id DESC LIMIT 1))
-                        WHERE manifest.id = generation.snapshot_manifest_id
-                    ) AS generation_day ON true
-                    WHERE snapshot.id = %s
-                      AND (generation.id IS NULL OR generation.snapshot_state <> 'superseded')
-                    ORDER BY generation.generation DESC NULLS LAST
-                    LIMIT 1
-                """
-            else:
-                snapshot_query = """
-                    SELECT snapshot.id, snapshot.boundary_at, snapshot.version,
-                           snapshot.ordering_rule_version,
-                           snapshot.freshness_rule_version,
-                           snapshot.measured_coverage,
-                           snapshot.eligible_population_count,
-                           snapshot.included_entry_count, snapshot.stale_entry_count,
-                           snapshot.fresh_entry_count, snapshot.excluded_missing_count,
-                           snapshot.excluded_invalid_count,
-                           snapshot.excluded_malformed_count,
-                           snapshot.excluded_conflicting_count,
-                           source_day.official_season_id,
-                           source_day.season_day_number,
-                           (SELECT max(entry.profile_observed_at)
-                            FROM leaderboard_snapshot_entries AS entry
-                            WHERE entry.snapshot_id = snapshot.id)
-                    FROM leaderboard_snapshots AS snapshot
-                    LEFT JOIN ranked_day_versions AS source_day
-                      ON source_day.id = snapshot.source_ranked_day_version_id
-                    WHERE snapshot.id = %s
-                """
+            snapshot_query = """
+                SELECT snapshot.id, snapshot.boundary_at, snapshot.version,
+                       snapshot.ordering_rule_version,
+                       snapshot.freshness_rule_version,
+                       snapshot.measured_coverage,
+                       snapshot.eligible_population_count,
+                       snapshot.included_entry_count, snapshot.stale_entry_count,
+                       snapshot.fresh_entry_count, snapshot.excluded_missing_count,
+                       snapshot.excluded_invalid_count,
+                       snapshot.excluded_malformed_count,
+                       snapshot.excluded_conflicting_count,
+                       COALESCE(generation_day.official_season_id, source_day.official_season_id) AS official_season_id,
+                       COALESCE(generation_day.season_day_number, source_day.season_day_number) AS season_day_number,
+                       (SELECT max(entry.profile_observed_at)
+                        FROM leaderboard_snapshot_entries AS entry
+                        WHERE entry.snapshot_id = snapshot.id)
+                FROM leaderboard_snapshots AS snapshot
+                LEFT JOIN ranked_day_versions AS source_day
+                  ON source_day.id = snapshot.source_ranked_day_version_id
+                LEFT JOIN boundary_publication_generations AS generation
+                  ON generation.snapshot_id = snapshot.id
+                LEFT JOIN LATERAL (
+                    -- A proof frozen since 0081 records its newest ranked day;
+                    -- an older one stores all its rows, so they give it.
+                    SELECT ranked.official_season_id, ranked.season_day_number
+                    FROM boundary_publication_manifests AS manifest
+                    JOIN ranked_day_versions AS ranked
+                      ON ranked.id = COALESCE(
+                          manifest.newest_ranked_day_version_id,
+                          (SELECT member.ranked_day_version_id
+                           FROM boundary_publication_manifest_rows AS member
+                           WHERE member.manifest_id = manifest.id
+                             AND member.ranked_day_version_id IS NOT NULL
+                           ORDER BY member.ranked_day_version_id DESC LIMIT 1))
+                    WHERE manifest.id = generation.snapshot_manifest_id
+                ) AS generation_day ON true
+                WHERE snapshot.id = %s
+                  AND (generation.id IS NULL OR generation.snapshot_state <> 'superseded')
+                ORDER BY generation.generation DESC NULLS LAST
+                LIMIT 1
+            """
             snapshot = connection.execute(snapshot_query, (locator[1],)).fetchone()
             assert snapshot is not None
             snapshot = (*snapshot, locator[2], locator[3])
@@ -1176,8 +1126,6 @@ def get_frozen_leaderboard(
                OR (entry.profile_version_id IS NULL
                    AND version.observation_id = entry.profile_observation_id)
             """
-            if coordinator_exists
-            else "version.observation_id = entry.profile_observation_id"
         )
         rows = connection.execute(
             f"""

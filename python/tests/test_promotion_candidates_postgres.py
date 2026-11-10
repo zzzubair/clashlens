@@ -11,9 +11,13 @@ from time import sleep
 
 import psycopg
 import pytest
-from domain_test_support import apply_migration, domain_database, store_observation
+from domain_test_support import (
+    _processor,
+    apply_migration,
+    domain_database,
+    store_observation,
+)
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
-from test_domain_processing_postgres import _processor
 
 from clashlens import population, promotion_candidates
 
