@@ -1,3 +1,4 @@
+import { loginConfig } from "../fixtures/login-config";
 vi.mock("../../app/services/python-transport.server", () => ({
   requestJson: mocks.requestJson,
 }));
@@ -30,7 +31,6 @@ vi.mock("../../app/server/actions.server", async (importOriginal) => {
 import { ArmiesOnDefenseCard, ArmiesOnOffenseCard } from "../../app/components/ArmyCards";
 import type { PlayerArmies } from "../../app/lib/dashboard-armies";
 import { loader } from "../../app/routes/player-armies";
-import { loadWebsiteConfig } from "../../app/server/config.server";
 import { getPlayerArmies } from "../../app/services/dashboard.server";
 
 const ORIGIN = "https://clashlens.example";
@@ -381,18 +381,7 @@ describe("army card switches", () => {
 
   beforeEach(() => {
     vi.stubEnv("CLASHLENS_DASHBOARD_ENABLED", "true");
-    mocks.getWebsiteConfig.mockReturnValue(
-      loadWebsiteConfig({
-        NODE_ENV: "test",
-        CLASHLENS_LOGIN_ENABLED: "true",
-        CLASHLENS_PUBLIC_ORIGIN: ORIGIN,
-        CLASHLENS_GOOGLE_CLIENT_ID: "test-client.apps.googleusercontent.com",
-        CLASHLENS_GOOGLE_CLIENT_SECRET: "test-client-secret",
-        CLASHLENS_DISCORD_CLIENT_ID: "1234567890123456789",
-        CLASHLENS_DISCORD_CLIENT_SECRET: "discord-test-secret",
-        CLASHLENS_LOGIN_SECRET_B64: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
-      }),
-    );
+    mocks.getWebsiteConfig.mockReturnValue(loginConfig(ORIGIN));
     mocks.readLoginIdentity.mockResolvedValue({
       provider: "google",
       providerSubject: "11223344556677889900",

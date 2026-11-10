@@ -1,3 +1,5 @@
+import { renderStaticRoute, unwrap } from "../fixtures/static-route";
+import { loginConfig } from "../fixtures/login-config";
 vi.mock("../../app/services/python-transport.server", () => ({
   requestJson: mocks.requestJson,
 }));
@@ -10,14 +12,7 @@ vi.mock("../../app/services/public-user.server", async (importOriginal) => {
       mocks.createPythonClient().getPublicUser(...args),
   };
 });
-import { createElement } from "react";
-import { renderToString } from "react-dom/server";
-import {
-  createStaticHandler,
-  createStaticRouter,
-  RouterContextProvider,
-  StaticRouterProvider,
-} from "react-router";
+import { createStaticHandler, RouterContextProvider } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -86,7 +81,6 @@ import { loader as loginLoader } from "../../app/routes/login";
 import { loader as signupLoader } from "../../app/routes/signup";
 import { clearPublicRefreshLimits } from "../../app/server/abuse.server";
 import { clientAddressContext } from "../../app/server/client-address.server";
-import { loadWebsiteConfig } from "../../app/server/config.server";
 import { PythonApiError } from "../../app/services/python-response.server";
 
 const ORIGIN = "https://clashlens.example";
@@ -120,11 +114,6 @@ const get = (path: string, params: Record<string, string> = {}): Args => ({
   params,
   context: { get: () => undefined },
 });
-
-function unwrap<T>(result: unknown): { data: T; status: number } {
-  const wrapped = result as { data: T; init: { status?: number } | null };
-  return { data: wrapped.data, status: wrapped.init?.status ?? 200 };
-}
 
 const thrown = (run: () => Promise<unknown>) =>
   run().then(
@@ -223,30 +212,12 @@ async function render(
   const context = await handler.query(request, {
     requestContext,
   });
-  if (context instanceof Response) throw new Error("unexpected response");
-  return renderToString(
-    createElement(StaticRouterProvider, {
-      router: createStaticRouter(handler.dataRoutes, context),
-      context,
-      hydrate: false,
-    }),
-  ).replaceAll("<!-- -->", "");
+  return renderStaticRoute(handler, context);
 }
 
 beforeEach(() => {
   vi.stubEnv("CLASHLENS_CREWS_ENABLED", "true");
-  mocks.getWebsiteConfig.mockReturnValue(
-    loadWebsiteConfig({
-      NODE_ENV: "test",
-      CLASHLENS_LOGIN_ENABLED: "true",
-      CLASHLENS_PUBLIC_ORIGIN: ORIGIN,
-      CLASHLENS_GOOGLE_CLIENT_ID: "test-client.apps.googleusercontent.com",
-      CLASHLENS_GOOGLE_CLIENT_SECRET: "test-client-secret",
-      CLASHLENS_DISCORD_CLIENT_ID: "1234567890123456789",
-      CLASHLENS_DISCORD_CLIENT_SECRET: "discord-test-secret",
-      CLASHLENS_LOGIN_SECRET_B64: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
-    }),
-  );
+  mocks.getWebsiteConfig.mockReturnValue(loginConfig(ORIGIN));
   mocks.requireLogin.mockResolvedValue(IDENTITY);
   mocks.readLoginIdentity.mockResolvedValue(IDENTITY);
   mocks.requestJson.mockReset();

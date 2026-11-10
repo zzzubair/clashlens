@@ -1,3 +1,4 @@
+import { loginConfig } from "../fixtures/login-config";
 vi.mock("../../app/services/python-transport.server", () => ({
   requestJson: mocks.requestJson,
 }));
@@ -52,7 +53,6 @@ import {
   createLoginSessionBinding,
   LOGIN_COOKIE_NAME,
 } from "../../app/server/auth-cookies.server";
-import { loadWebsiteConfig } from "../../app/server/config.server";
 import * as alertsService from "../../app/services/discord-alerts.server";
 
 const ORIGIN = "https://clashlens.example";
@@ -102,18 +102,7 @@ describe("Discord attack alerts settings", () => {
   let providers: string[];
 
   beforeEach(() => {
-    mocks.getWebsiteConfig.mockReturnValue(
-      loadWebsiteConfig({
-        NODE_ENV: "test",
-        CLASHLENS_LOGIN_ENABLED: "true",
-        CLASHLENS_PUBLIC_ORIGIN: ORIGIN,
-        CLASHLENS_GOOGLE_CLIENT_ID: "test-client.apps.googleusercontent.com",
-        CLASHLENS_GOOGLE_CLIENT_SECRET: "test-client-secret",
-        CLASHLENS_DISCORD_CLIENT_ID: "1234567890123456789",
-        CLASHLENS_DISCORD_CLIENT_SECRET: "discord-test-secret",
-        CLASHLENS_LOGIN_SECRET_B64: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
-      }),
-    );
+    mocks.getWebsiteConfig.mockReturnValue(loginConfig(ORIGIN));
     mocks.requireLogin.mockResolvedValue(IDENTITY);
     providers = ["discord"];
     mocks.createPythonClient.mockReturnValue({

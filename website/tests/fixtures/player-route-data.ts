@@ -224,27 +224,46 @@ export const SEASONS: SummarizedSeasonRef[] = [
   },
 ];
 
-export const PLAYER = {
-  kind: "player-page",
-  ...EMPTY_PLAYER_FACTS,
-  tag: TAG,
-  trackingState: "tracking",
-  profile: {
-    tag: TAG,
-    name: "Nova",
-    clan: "Example",
-    trophies: 6000,
-    freshness: { state: "fresh", observedAt: "2026-09-07T12:00:00Z", ageSeconds: 0 },
-    confidence: "high",
-    coverage: "complete",
-    eligibility: "legend-i",
-  },
-  season: null,
-  currentDay: null,
-  recentDays: [],
-  seasonDays: [],
-  dataQuality: [],
-} satisfies PlayerPage;
+export function playerPage({
+  tag = TAG,
+  name = "Nova",
+  clan = "Example",
+  clanTag,
+  trophies = 6000,
+  observedAt = "2026-09-07T12:00:00Z",
+}: {
+  tag?: string;
+  name?: string;
+  clan?: string;
+  clanTag?: string | null;
+  trophies?: number;
+  observedAt?: string;
+} = {}) {
+  return {
+    kind: "player-page",
+    ...EMPTY_PLAYER_FACTS,
+    tag,
+    trackingState: "tracking",
+    profile: {
+      tag,
+      name,
+      clan,
+      ...(clanTag === undefined ? {} : { clanTag }),
+      trophies,
+      freshness: { state: "fresh", observedAt, ageSeconds: 0 },
+      confidence: "high",
+      coverage: "complete",
+      eligibility: "legend-i",
+    },
+    season: null,
+    currentDay: null,
+    recentDays: [],
+    seasonDays: [],
+    dataQuality: [],
+  } satisfies PlayerPage;
+}
+
+export const PLAYER = playerPage();
 
 export const NEWER_PROFILE = {
   ...PLAYER.profile,

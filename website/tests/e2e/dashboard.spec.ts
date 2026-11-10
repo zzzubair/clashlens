@@ -323,7 +323,9 @@ test("a switch shows the chosen player at once, never the last one's numbers, an
     Object.assign(window, { shown });
   });
   const shownNames = () =>
-    page.evaluate(() => (window as unknown as { shown: [string, string][] }).shown);
+    page.evaluate(
+      () => (window as unknown as { shown: [string | null, string][] }).shown,
+    );
 
   // A slow answer: the new tab and empty cards show before it arrives.
   const slow = /\/_\.data/;
@@ -343,9 +345,17 @@ test("a switch shows the chosen player at once, never the last one's numbers, an
   await expect(legendDay).toContainText(await name(first));
   await expect(legendDay).not.toContainText("Loading…");
   await page.unroute(slow);
-  // The card never showed one player's name under another's tab.
-  for (const [selected, card] of await shownNames())
-    if (card.includes("Synthetic Clasher")) expect(card).toContain(selected);
+  // Both players were seen loaded, and a card showing a player's name only
+  // ever showed it under that player's tab. Loading cards have no name.
+  const players = [await name(first), await name(second)];
+  const loaded = (await shownNames()).filter(([, card]) =>
+    players.some((player) => card.includes(player)),
+  );
+  expect(loaded.map(([selected]) => selected)).toEqual(expect.arrayContaining(players));
+  for (const [selected, card] of loaded) {
+    expect(selected).not.toBeNull();
+    expect(card).toContain(selected!);
+  }
 
   // Saves answer with the settings as saved: no reload of the page's data.
   const reads: string[] = [];

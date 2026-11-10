@@ -1,3 +1,5 @@
+import type { FrontPageData } from "../../app/components/FrontPage";
+import { decodePageData, encodePageData } from "./helpers/player-page";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 // Retries until the page's scripts are running and the header search input has focus.
@@ -114,13 +116,16 @@ test("leaderboard updates stay visible and expandable on a 375 px phone", async 
   // The board shows one update time; a row shows its own only when it fell
   // over 10 minutes behind the board's newest. Move that newest 20 minutes on.
   const saved = await page.request.get("/leaderboards/tracked.data?view=live&page=1");
-  const original = await saved.text();
-  const body = original.replace(
-    /("newestObservedAt",)"([^"]+)"/,
-    (_, key: string, at: string) =>
-      `${key}"${new Date(Date.parse(at) + 20 * 60_000).toISOString()}"`,
+  const data = decodePageData<Record<string, { data?: FrontPageData }>>(
+    await saved.text(),
   );
-  expect(body).not.toBe(original);
+  const observations = Object.values(data).find((route) => route.data?.leaderboard)?.data
+    ?.leaderboard?.sourceObservations;
+  expect(observations?.newestObservedAt, "saved board has a newest reading").toBeTruthy();
+  observations!.newestObservedAt = new Date(
+    Date.parse(observations!.newestObservedAt!) + 20 * 60_000,
+  ).toISOString();
+  const body = encodePageData(data);
   await page.route("**/leaderboards/tracked.data*", (route) =>
     route.fulfill({ contentType: saved.headers()["content-type"], body }),
   );

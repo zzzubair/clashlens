@@ -1,4 +1,4 @@
-import { EMPTY_PLAYER_FACTS } from "../fixtures/player-route-data";
+import { playerPage } from "../fixtures/player-route-data";
 vi.mock("../../app/services/leaderboard.server", () => ({
   getTrackedLeaderboard: async () => {
     throw new Error("board unavailable");
@@ -56,7 +56,6 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
   };
 });
 
-import type { PlayerPage } from "../../app/lib/contracts";
 import PlayerRoute, { loader as playerLoader } from "../../app/routes/player";
 import "../../app/services/crews.server";
 import { PythonApiError } from "../../app/services/python-response.server";
@@ -68,27 +67,7 @@ const OTHER_ID = "0b6c1f2e-3d4a-4b5c-8d6e-7f8091a2b3c4";
 const crest = (letter: string) =>
   `<svg class="crest" viewBox="0 0 40 44" aria-hidden="true" focusable="false">.*?>${letter}</text></svg>`;
 
-const PLAYER = {
-  kind: "player-page",
-  ...EMPTY_PLAYER_FACTS,
-  tag: TAG,
-  trackingState: "tracking",
-  profile: {
-    tag: TAG,
-    name: "Nova",
-    clan: "Example",
-    trophies: 6000,
-    freshness: { state: "fresh", observedAt: "2026-10-04T12:00:00Z", ageSeconds: 0 },
-    confidence: "high",
-    coverage: "complete",
-    eligibility: "legend-i",
-  },
-  season: null,
-  currentDay: null,
-  recentDays: [],
-  seasonDays: [],
-  dataQuality: [],
-} satisfies PlayerPage;
+const PLAYER = playerPage({ observedAt: "2026-10-04T12:00:00Z" });
 
 // Only the first HTML sent, which is all a browser without JavaScript shows.
 async function renderPlayer(): Promise<string> {

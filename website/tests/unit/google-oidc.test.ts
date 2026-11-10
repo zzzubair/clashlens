@@ -1,11 +1,8 @@
-import { createHash } from "node:crypto";
-
 import { describe, expect, it, vi } from "vitest";
 
 import type { LoginIdentity, OAuthTransaction } from "../../app/server/auth.server";
 import {
   MAX_PROVIDER_SUBJECT_LENGTH,
-  OAUTH_TRANSACTION_LIFETIME_SECONDS,
   OAuthCallbackError,
   constantTimeEqual,
   createOAuthTransaction,
@@ -127,21 +124,19 @@ async function expectCallbackError(
 describe("OAuth transaction creation", () => {
   it("derives bounded state, nonce, and PKCE S256 challenge from injected randomness", () => {
     const oauthTransaction = transaction(1_750_000);
-    expect(oauthTransaction.state).toBe(Buffer.alloc(24, 0x2a).toString("base64url"));
-    expect(oauthTransaction.state).toBe(oauthTransaction.nonce);
+    // Fixed 0x2a bytes encoded once with OpenSSL base64; the verifier's SHA-256
+    // was computed with openssl dgst -sha256 -binary, then base64url encoded.
+    expect(oauthTransaction.state).toBe("KioqKioqKioqKioqKioqKioqKioqKioq");
+    expect(oauthTransaction.nonce).toBe("KioqKioqKioqKioqKioqKioqKioqKioq");
     expect(oauthTransaction.codeVerifier).toBe(
-      Buffer.alloc(32, 0x2a).toString("base64url"),
+      "KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio",
     );
-    const expectedChallenge = createHash("sha256")
-      .update(oauthTransaction.codeVerifier, "utf8")
-      .digest()
-      .toString("base64url");
-    expect(oauthTransaction.codeChallenge).toBe(expectedChallenge);
+    expect(oauthTransaction.codeChallenge).toBe(
+      "LW0W7LMoUlED_P2Y4DKuJRIzey5cIIpgM4C6uGQ_3Sk",
+    );
     expect(oauthTransaction.returnPath).toBe("/account");
     expect(oauthTransaction.issuedAt).toBe(1_750_000);
-    expect(oauthTransaction.expiresAt).toBe(
-      1_750_000 + OAUTH_TRANSACTION_LIFETIME_SECONDS,
-    );
+    expect(oauthTransaction.expiresAt).toBe(1_750_600);
     expect(isPlausibleTransaction(oauthTransaction)).toBe(true);
   });
 

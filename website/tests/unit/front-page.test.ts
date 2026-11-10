@@ -1,3 +1,4 @@
+import { renderStaticRoute } from "../fixtures/static-route";
 vi.mock("../../app/services/players.server", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../app/services/players.server")>();
@@ -69,14 +70,7 @@ async function renderHome(data: object, search: string) {
   ]);
   const path = search.startsWith("?q=") ? `/search${search}` : `/${search}`;
   const context = await handler.query(new Request(`https://clashlens.example${path}`));
-  if (context instanceof Response) throw new Error("unexpected response");
-  return renderToString(
-    createElement(StaticRouterProvider, {
-      router: createStaticRouter(handler.dataRoutes, context),
-      context,
-      hydrate: false,
-    }),
-  ).replaceAll("<!-- -->", "");
+  return renderStaticRoute(handler, context);
 }
 
 it("keeps the exact player tag link when another player's name matches the tag", async () => {
@@ -576,17 +570,17 @@ describe("search loading", () => {
 });
 
 it("submitting a normalized exact tag opens its automatic lookup page", async () => {
-  await expect(
-    searchLoader({
-      request: new Request("https://clashlens.example/search?q=%20%23lqqp%20"),
-    } as never),
-  ).rejects.toMatchObject({ status: 302 });
-  try {
-    await searchLoader({
-      request: new Request("https://clashlens.example/search?q=%23lqqp"),
-    } as never);
-  } catch (response) {
-    expect((response as Response).headers.get("Location")).toBe("/players/%23LQQP");
+  for (const query of ["%20%23lqqp%20", "%23lqqp"]) {
+    await expect(
+      searchLoader({
+        request: new Request(`https://clashlens.example/search?q=${query}`),
+      } as never),
+    ).rejects.toSatisfy((response: unknown) => {
+      expect(response).toBeInstanceOf(Response);
+      expect((response as Response).status).toBe(302);
+      expect((response as Response).headers.get("Location")).toBe("/players/%23LQQP");
+      return true;
+    });
   }
 });
 

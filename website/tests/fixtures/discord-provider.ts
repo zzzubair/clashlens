@@ -12,7 +12,14 @@
  * expire quickly. No secret or token is ever logged.
  */
 
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  envOr,
+  safeEqual,
+  jsonResponse,
+  authorizationRedirect,
+  readBoundedBody,
+} from "./provider-http.ts";
+import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
@@ -22,7 +29,6 @@ const INSTALL_SCOPE = "identify applications.commands";
 const AUTH_CODE_TTL_SECONDS = 60;
 const MAX_CODE_ENTRIES = 5_000;
 const MAX_QUERY_BYTES = 8_192;
-const MAX_BODY_BYTES = 65_536;
 
 const CLIENT_ID = envOr("CLASHLENS_FIXTURE_DISCORD_CLIENT_ID", "1234567890123456789");
 const CLIENT_SECRET = envOr(
@@ -44,58 +50,6 @@ interface AuthorizationCode {
 
 const codes = new Map<string, AuthorizationCode>();
 const accessTokens = new Set<string>();
-
-function envOr(name: string, fallback: string): string {
-  const value = process.env[name];
-  return value === undefined || value === "" ? fallback : value;
-}
-
-function safeEqual(left: string, right: string): boolean {
-  const leftBytes = Buffer.from(left, "utf8");
-  const rightBytes = Buffer.from(right, "utf8");
-  if (leftBytes.length !== rightBytes.length) return false;
-  return timingSafeEqual(leftBytes, rightBytes);
-}
-
-function jsonResponse(response: ServerResponse, status: number, payload: unknown): void {
-  const body = JSON.stringify(payload);
-  response.writeHead(status, {
-    "Content-Type": "application/json",
-    "Content-Length": String(Buffer.byteLength(body)),
-    "Cache-Control": "no-store",
-  });
-  response.end(body);
-}
-
-function authorizationRedirect(
-  response: ServerResponse,
-  location: URL,
-  parameters: Record<string, string>,
-): void {
-  for (const [key, value] of Object.entries(parameters)) {
-    location.searchParams.set(key, value);
-  }
-  response.writeHead(302, { Location: location.toString(), "Cache-Control": "no-store" });
-  response.end();
-}
-
-function readBoundedBody(request: IncomingMessage): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    request.on("data", (chunk: Buffer) => {
-      total += chunk.length;
-      if (total > MAX_BODY_BYTES) {
-        reject(new Error("body too large"));
-        request.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    request.on("end", () => resolve(Buffer.concat(chunks)));
-    request.on("error", reject);
-  });
-}
 
 function prune(nowMs: number): void {
   for (const [code, entry] of codes) {

@@ -560,13 +560,16 @@ describe("server-only Python account client", () => {
       client.verifyPlayerToken("#2PP", "has space", IDEMPOTENCY_KEY),
     ).rejects.toMatchObject({ status: 422, payload: { error: "invalid_request" } });
 
-    try {
-      await client.verifyPlayerToken("#2PP", secretToken, IDEMPOTENCY_KEY);
-      throw new Error("expected verification to fail");
-    } catch (error) {
+    const { PythonApiError } = await import("../../app/services/python-response.server");
+    await expect(
+      client.verifyPlayerToken("#2PP", secretToken, IDEMPOTENCY_KEY),
+    ).rejects.toSatisfy((error: unknown) => {
+      expect(error).toBeInstanceOf(PythonApiError);
+      expect(error).toMatchObject({ status: 422, payload: { error: "invalid_request" } });
       expect(JSON.stringify(error)).not.toContain(secretToken);
       expect(JSON.stringify(error)).not.toContain("x".repeat(50));
-    }
+      return true;
+    });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
