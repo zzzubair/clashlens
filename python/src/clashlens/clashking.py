@@ -25,9 +25,9 @@ from urllib.parse import quote
 
 import certifi
 
-from .api_players import _official_history_rows
 from .domain import SEASON_DURATION, DomainRuleError, validate_legend_season_start
-from .verification import _NoRedirectHandler
+from .http_transport import NoRedirectHandler
+from .season_history import official_history_rows
 
 CLASHKING_ORIGIN = "https://api.clashk.ing"
 REFRESH_AFTER = timedelta(days=1)
@@ -187,7 +187,7 @@ def _urllib_transport(url: str, timeout: float) -> tuple[int, dict[str, str], by
     context = ssl.create_default_context(cafile=certifi.where())
     # A redirect comes back as a failed fetch instead of leaving api.clashk.ing.
     opener = urllib.request.build_opener(
-        urllib.request.HTTPSHandler(context=context), _NoRedirectHandler()
+        urllib.request.HTTPSHandler(context=context), NoRedirectHandler()
     )
     request = urllib.request.Request(
         url, headers={"Accept": "application/json", "User-Agent": "ClashLens"}
@@ -409,7 +409,7 @@ def _saved(
             """,
             (player_id,),
         ).fetchall()
-        official = _official_history_rows(connection, normalized_tag)
+        official = official_history_rows(connection, normalized_tag)
     # Re-map retained source labels on every read so old cached IDs are also
     # correct immediately. The normal 24-hour refresh rewrites stored IDs.
     finishes = _season_finishes(

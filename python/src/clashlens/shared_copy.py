@@ -67,7 +67,7 @@ class SharedCopy[Copy]:
         longest: float,
         name: str,
         clock: Callable[[], float] = time.monotonic,
-        start: Callable[[Callable[[], None]], None] = _start_thread,
+        start: Callable[[Callable[[], None]], None] | None = None,
     ) -> None:
         if not 0 < seconds <= longest:
             raise ValueError("a shared copy must refresh before it expires")
@@ -77,7 +77,7 @@ class SharedCopy[Copy]:
         self._longest = longest
         self._name = name
         self._clock = clock
-        self._start = start
+        self._start = _start_thread if start is None else start
         self._lock = Lock()
         # Held for every read, so one runs at a time.
         self._reading = Lock()

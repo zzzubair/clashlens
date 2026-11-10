@@ -119,7 +119,7 @@ def get_army_season_summary(
             _text(state): int(count) for state, count in dict(row[4] or {}).items()
         }
         # Summaries saved before unnamed ids counted kept old partial armies
-        # apart; they count as read (army_analytics.with_unnamed_ids).
+        # apart; they count as read (army_decoder.with_unnamed_ids).
         army_states["fully_decoded"] = army_states.get(
             "fully_decoded", 0
         ) + army_states.pop("partial", 0)
@@ -1064,7 +1064,7 @@ def _query_troops_aggregates(
                        ELSE false END
             UNION
             -- Old partial armies kept unnamed home troop ids apart; they
-            -- count like any other (army_analytics.with_unnamed_ids).
+            -- count like any other (army_decoder.with_unnamed_ids).
             SELECT 'troop:' || (value ->> 'numeric_id')
             FROM jsonb_array_elements(
                 CASE WHEN jsonb_typeof(selected.unresolved_components) = 'array'

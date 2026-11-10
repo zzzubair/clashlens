@@ -16,17 +16,17 @@ from pydantic import Field
 
 from . import api_crew_boards, api_crews
 from .accounts import normalize_crew_name, normalize_username
-from .api import (
+from .api_db import ApiDatabase
+from .api_http import (
     ApiError,
     StrictBody,
-    _authorize,
-    _binding,
-    _json_safe,
-    _operation_response,
-    _safe_tag,
-    _safe_uuid,
+    authorize,
+    json_safe,
+    operation_response,
+    request_binding,
+    safe_tag,
+    safe_uuid,
 )
-from .api_db import ApiDatabase
 
 _INVITE_CODE = re.compile(r"[A-Za-z0-9_-]{22}")
 
@@ -72,16 +72,16 @@ def register_crew_routes(
     router = APIRouter(dependencies=[Depends(switch)])
 
     def account_id(request: Request) -> int:
-        context = _authorize(request, "crews.read", database)
+        context = authorize(request, "crews.read", database)
         assert context.account is not None
         return context.account.internal_id
 
     def viewer(request: Request) -> int | None:
-        context = _authorize(request, "crews.view", database)
+        context = authorize(request, "crews.view", database)
         return None if context.account is None else context.account.internal_id
 
     def writer(request: Request) -> Any:
-        return _authorize(request, "crews.write", database)
+        return authorize(request, "crews.write", database)
 
     def write(
         context: Any,
@@ -91,8 +91,8 @@ def register_crew_routes(
         run: Callable[..., Any],
         **values: Any,
     ) -> JSONResponse:
-        binding = _binding(request, context, f"crews.{operation}", identity)
-        return _operation_response(run(database, binding, **values))
+        binding = request_binding(request, context, f"crews.{operation}", identity)
+        return operation_response(run(database, binding, **values))
 
     @router.get("/v1/account/crews")
     def crews(request: Request) -> JSONResponse:
@@ -118,20 +118,20 @@ def register_crew_routes(
     @router.get("/v1/account/crews/{crew_id}")
     def crew(crew_id: str, request: Request) -> JSONResponse:
         result = api_crews.get_crew(
-            database, account_id(request), _safe_uuid(crew_id), now=current_time()
+            database, account_id(request), safe_uuid(crew_id), now=current_time()
         )
         if result is None:
             raise ApiError(404, "crew_not_found")
-        return JSONResponse(content=_json_safe(result))
+        return JSONResponse(content=json_safe(result))
 
     @router.get("/v1/crews/{crew_id}")
     def view_crew(crew_id: str, request: Request) -> JSONResponse:
         result = api_crews.view_crew(
-            database, viewer(request), _safe_uuid(crew_id), now=current_time()
+            database, viewer(request), safe_uuid(crew_id), now=current_time()
         )
         if result is None:
             raise ApiError(404, "crew_not_found")
-        return JSONResponse(content=_json_safe(result))
+        return JSONResponse(content=json_safe(result))
 
     @router.get("/v1/crews/{crew_id}/boards")
     def crew_boards(crew_id: str, request: Request, period: str = "season") -> JSONResponse:
@@ -139,21 +139,21 @@ def register_crew_routes(
         if period not in api_crew_boards.PERIODS:
             raise ApiError(422, "invalid_request")
         result = api_crew_boards.get_crew_boards(
-            database, caller, _safe_uuid(crew_id), period=period, now=current_time()
+            database, caller, safe_uuid(crew_id), period=period, now=current_time()
         )
         if result is None:
             raise ApiError(404, "crew_not_found")
-        return JSONResponse(content=_json_safe(result))
+        return JSONResponse(content=json_safe(result))
 
     @router.get("/v1/players/{tag}/crews")
     def player_crews(tag: str, request: Request) -> JSONResponse:
         viewer(request)
-        return JSONResponse(content=api_crews.player_crews(database, _safe_tag(tag)))
+        return JSONResponse(content=api_crews.player_crews(database, safe_tag(tag)))
 
     @router.patch("/v1/account/crews/{crew_id}")
     def update_crew(crew_id: str, body: CrewUpdateBody, request: Request) -> JSONResponse:
         context = writer(request)
-        crew_id = _safe_uuid(crew_id)
+        crew_id = safe_uuid(crew_id)
         if (body.name is None) == (body.size is None):
             raise ApiError(422, "invalid_request")
         name = None if body.name is None else _crew_name(body.name)
@@ -172,7 +172,7 @@ def register_crew_routes(
     @router.delete("/v1/account/crews/{crew_id}")
     def delete_crew(crew_id: str, request: Request) -> JSONResponse:
         context = writer(request)
-        crew_id = _safe_uuid(crew_id)
+        crew_id = safe_uuid(crew_id)
         return write(
             context, request, "delete", {"crew_id": crew_id}, api_crews.delete_crew,
             crew_id=crew_id,
@@ -181,7 +181,7 @@ def register_crew_routes(
     @router.post("/v1/account/crews/{crew_id}/players")
     def add_players(crew_id: str, body: CrewTagsBody, request: Request) -> JSONResponse:
         context = writer(request)
-        crew_id = _safe_uuid(crew_id)
+        crew_id = safe_uuid(crew_id)
         tags = _tags(body.tags)
         return write(
             context,
@@ -196,8 +196,8 @@ def register_crew_routes(
     @router.delete("/v1/account/crews/{crew_id}/players/{tag}")
     def remove_player(crew_id: str, tag: str, request: Request) -> JSONResponse:
         context = writer(request)
-        crew_id = _safe_uuid(crew_id)
-        tag = _safe_tag(tag)
+        crew_id = safe_uuid(crew_id)
+        tag = safe_tag(tag)
         return write(
             context,
             request,
@@ -213,7 +213,7 @@ def register_crew_routes(
         crew_id: str, username: str, body: CrewRoleBody, request: Request
     ) -> JSONResponse:
         context = writer(request)
-        crew_id = _safe_uuid(crew_id)
+        crew_id = safe_uuid(crew_id)
         username = _username(username)
         return write(
             context,
@@ -229,7 +229,7 @@ def register_crew_routes(
     @router.post("/v1/account/crews/{crew_id}/owner")
     def hand_over(crew_id: str, body: CrewOwnerBody, request: Request) -> JSONResponse:
         context = writer(request)
-        crew_id = _safe_uuid(crew_id)
+        crew_id = safe_uuid(crew_id)
         username = _username(body.username)
         return write(
             context,
@@ -244,7 +244,7 @@ def register_crew_routes(
     @router.delete("/v1/account/crews/{crew_id}/members/me")
     def leave_crew(crew_id: str, request: Request) -> JSONResponse:
         context = writer(request)
-        crew_id = _safe_uuid(crew_id)
+        crew_id = safe_uuid(crew_id)
         return write(
             context, request, "leave", {"crew_id": crew_id}, api_crews.leave_crew,
             crew_id=crew_id,
@@ -253,7 +253,7 @@ def register_crew_routes(
     @router.post("/v1/account/crews/{crew_id}/invites")
     def make_invite(crew_id: str, body: CrewInviteBody, request: Request) -> JSONResponse:
         context = writer(request)
-        crew_id = _safe_uuid(crew_id)
+        crew_id = safe_uuid(crew_id)
         return write(
             context,
             request,
@@ -268,8 +268,8 @@ def register_crew_routes(
     @router.delete("/v1/account/crews/{crew_id}/invites/{invite_id}")
     def revoke_invite(crew_id: str, invite_id: str, request: Request) -> JSONResponse:
         context = writer(request)
-        crew_id = _safe_uuid(crew_id)
-        invite_id = _safe_uuid(invite_id)
+        crew_id = safe_uuid(crew_id)
+        invite_id = safe_uuid(invite_id)
         return write(
             context,
             request,
@@ -287,14 +287,14 @@ def register_crew_routes(
         result = api_crews.get_invite(
             database, caller, _invite_code(code), now=current_time()
         )
-        return JSONResponse(content=_json_safe(result))
+        return JSONResponse(content=json_safe(result))
 
     @router.get("/v1/crew-invites/{code}")
     def public_invite(code: str, request: Request) -> JSONResponse:
         result = api_crews.get_invite(
             database, viewer(request), _invite_code(code), now=current_time()
         )
-        return JSONResponse(content=_json_safe(result))
+        return JSONResponse(content=json_safe(result))
 
     @router.post("/v1/account/crew-invites/{code}/accept")
     def accept_invite(code: str, body: CrewTagsBody, request: Request) -> JSONResponse:
@@ -329,7 +329,7 @@ def _crew_size(value: int) -> int:
 
 
 def _tags(values: list[str]) -> list[str]:
-    return sorted({_safe_tag(value) for value in values})
+    return sorted({safe_tag(value) for value in values})
 
 
 def _username(value: str) -> str:

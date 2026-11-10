@@ -12,7 +12,7 @@ from typing import Any
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
-from .army_analytics import with_unnamed_ids
+from .army_decoder import with_unnamed_ids
 from .catalog import unit_label
 from .db import CONTRACT_VERSION
 from .operating import database_pool_health

@@ -27,9 +27,9 @@ from fastapi.responses import JSONResponse
 from pydantic import Field
 
 from . import api_db, api_discord_alerts, api_players
-from .api import StrictBody, _authorize, _binding, _operation_response
 from .api_db import ApiDatabase, OperationResult, RequestBinding, _text
 from .api_discord_alerts import Switch, SwitchState
+from .api_http import StrictBody, authorize, operation_response, request_binding
 from .profile import normalize_player_tag
 
 # What any account but the owner gets from a pin or follow, whatever it sent.
@@ -197,7 +197,7 @@ def register_view_as_routes(
 ) -> None:
     @app.get("/v1/account/view-as")
     def read(request: Request, tag: str | None = None) -> JSONResponse:
-        context = _authorize(request, "account.read", database)
+        context = authorize(request, "account.read", database)
         assert database is not None and context.account is not None
         return JSONResponse(content=view_as(
             database, context.account.internal_id, tag, now=current_time()
@@ -205,20 +205,20 @@ def register_view_as_routes(
 
     @app.post("/v1/account/view-as/pin")
     def pin(body: PinBody, request: Request) -> JSONResponse:
-        context = _authorize(request, "account.update", database)
+        context = authorize(request, "account.update", database)
         assert database is not None and context.account is not None
-        return _operation_response(set_pin(
-            database, _binding(request, context, "account.update", {"owner_pin": body.tag}),
+        return operation_response(set_pin(
+            database, request_binding(request, context, "account.update", {"owner_pin": body.tag}),
             tag=body.tag,
         ))
 
     @app.post("/v1/account/view-as/follow")
     def follow(body: FollowBody, request: Request) -> JSONResponse:
-        context = _authorize(request, "account.update", database)
+        context = authorize(request, "account.update", database)
         assert database is not None and context.account is not None
-        return _operation_response(set_follow(
+        return operation_response(set_follow(
             database,
-            _binding(request, context, "account.update",
+            request_binding(request, context, "account.update",
                      {"owner_follow": body.tag, "alert": body.alert, "on": body.on}),
             tag=body.tag, alert=body.alert, on=body.on,
         ))

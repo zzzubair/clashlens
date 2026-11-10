@@ -46,7 +46,7 @@ def test_each_event_from_each_role(event, role, after) -> None:
     if isinstance(after, tuple):
         with pytest.raises(Refused) as refused:
             move(role, event)
-        assert (refused.value.result.status_code, refused.value.result.payload) == (
+        assert (refused.value.status_code, refused.value.payload) == (
             after[0], {"error": after[1]},
         )
     else:
@@ -87,7 +87,7 @@ def _may(role: CrewRole, action: CrewAction) -> bool:
     try:
         require(role, action)
     except Refused as refused:
-        assert refused.result.payload == {"error": "crew_forbidden"}
+        assert refused.payload == {"error": "crew_forbidden"}
         return False
     return True
 
