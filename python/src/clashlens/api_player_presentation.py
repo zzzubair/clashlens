@@ -6,8 +6,6 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Any
 
-from .army_decoder import with_unnamed_ids
-from .catalog import unit_label
 from .db_rows import text_value
 from .domain import (
     BATTLE_DAY_GRACE,
@@ -50,6 +48,14 @@ _LIVE_WAIT_CODES = frozenset({
 def heatmap_kind(attacks: int | None, defenses: int | None, net: int | None) -> str:
     """The existing website heat-map cell, independent of worker shield evidence."""
     return "shield" if attacks == 0 and defenses == 0 and net == 0 else "missing" if net is None else "played"
+
+
+def day_net(day: Mapping[str, Any]) -> int | None:
+    """The saved net, or with every battle known, gain less loss."""
+    gain, loss = day["attack_gain"], day["defense_loss"]
+    if day["net_trophy_change"] is not None:
+        return day["net_trophy_change"]
+    return gain - loss if day["battles_complete"] and gain is not None and loss is not None else None
 
 
 def day_presentation(day: Mapping[str, Any], *, is_current: bool) -> dict[str, Any]:
@@ -175,9 +181,7 @@ def display_end(
     reset = next((item for item in day["adjustments"] if item["type"] in ("weekly_reset", "season_reset")), None)
     amount = 0 if reset is None else reset["amount"]
     after = None if before is None else before + amount
-    dashboard_net = net
-    if dashboard_net is None and day["battles_complete"] and day["attack_gain"] is not None and day["defense_loss"] is not None:
-        dashboard_net = day["attack_gain"] - day["defense_loss"]
+    dashboard_net = day_net(day)
     dashboard = None if start is None or dashboard_net is None else start + dashboard_net + amount
     end = screen_event_timestamp(day["ranked_day_end"])
     following = next((item["display_start"]["trophies"] for item in saved
@@ -212,59 +216,6 @@ def public_snapshot_confidence(value: str) -> str:
     if value in {"inferred", "partial"}:
         return "partial"
     return "uncertain"
-
-
-def public_army(row: Any) -> dict[str, Any]:
-    army = with_unnamed_ids(
-        {
-            "status": text_value(row[2]),
-            **dict(zip(("home_troops", "spells", "siege", "cc_troops"), row[4:8])),
-            "heroes": row[8] if isinstance(row[8], list) else [],
-            "unresolved_components": row[9] if isinstance(row[9], list) else [],
-        }
-    )
-
-    def facts(value: Any) -> list[dict[str, Any]]:
-        if not isinstance(value, list):
-            return []
-        result = []
-        for fact in value:
-            if not isinstance(fact, (list, tuple)) or len(fact) < 3:
-                continue
-            typed_id, quantity, origin = str(fact[0]), int(fact[1]), str(fact[2])
-            result.append(
-                {
-                    "typed_id": typed_id,
-                    "name": unit_label(typed_id),
-                    "quantity": quantity,
-                    "origin": origin,
-                }
-            )
-        return result
-
-    components = []
-    for field in ("home_troops", "spells", "siege", "cc_troops"):
-        components.extend(facts(army[field]))
-    for hero in army["heroes"]:
-        if not isinstance(hero, Mapping):
-            continue
-        for typed_id in [hero.get("hero"), hero.get("pet"), *(hero.get("equipment") or [])]:
-            if isinstance(typed_id, str):
-                components.append(
-                    {
-                        "typed_id": typed_id,
-                        "name": unit_label(typed_id),
-                        "quantity": 1,
-                        "origin": "hero",
-                    }
-                )
-    return {
-        "state": army["status"],
-        "failure_reason": text_value(row[3]) if row[3] is not None else None,
-        "components": components,
-        "decoder_version": text_value(row[10]),
-        "catalog_version": text_value(row[11]),
-    }
 
 
 def screen_daily_log(day: dict[str, Any], profile_confidence: str) -> dict[str, Any]:

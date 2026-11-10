@@ -12,13 +12,14 @@ from psycopg.errors import DeadlockDetected, QueryCanceled, SerializationFailure
 from psycopg_pool import PoolTimeout
 
 from clashlens import claimed_jobs, cli, reconciliation_db, worker_claims
-from clashlens.db import (
+from clashlens.db import LeaseLost
+from clashlens.job_contracts import (
     ANALYTICS_RULE_VERSION,
     DOMAIN_RULE_VERSION,
+    POPULATION_BUILD_WORK_TYPES,
     PROCESSING_VERSION,
-    LeaseLost,
+    RESPONSE_WORK_TYPES,
 )
-from clashlens.job_contracts import POPULATION_BUILD_WORK_TYPES, RESPONSE_WORK_TYPES
 from clashlens.worker import (
     DERIVED_WITHOUT_BUILDS,
     MAX_CONCURRENCY,

@@ -22,11 +22,7 @@ from . import (
     reset_baselines,
 )
 from .db import (
-    ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
-    DOMAIN_RULE_VERSION,
-    PROCESSING_VERSION,
-    PYTHON_BACKFILL_PRIORITY,
     PYTHON_LIVE_PRIORITY,
     RESET_LOCK_WAIT,
     Claim,
@@ -39,6 +35,12 @@ from .domain import (
     DomainRuleError,
     RankedDay,
     ranked_day_for,
+)
+from .job_contracts import (
+    ANALYTICS_RULE_VERSION,
+    DOMAIN_RULE_VERSION,
+    PROCESSING_VERSION,
+    PYTHON_BACKFILL_PRIORITY,
 )
 from .profile import LEGEND_I_TIER_ID, normalize_player_tag
 from .reconciliation import (

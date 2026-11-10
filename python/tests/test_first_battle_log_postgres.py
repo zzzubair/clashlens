@@ -44,7 +44,8 @@ from clashlens import (
     loss_rule,
     reconciliation_db,
 )
-from clashlens.db import PYTHON_BACKFILL_PRIORITY, Database
+from clashlens.db import Database
+from clashlens.job_contracts import PYTHON_BACKFILL_PRIORITY
 from clashlens.reconciliation import RECONCILIATION_RULE_VERSION
 
 

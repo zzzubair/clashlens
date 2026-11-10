@@ -13,7 +13,7 @@ from domain_test_support import (
     text,
 )
 
-from clashlens.db import (
+from clashlens.job_contracts import (
     ARMY_ANALYTICS_RULE_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,

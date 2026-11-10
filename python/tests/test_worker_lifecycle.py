@@ -17,13 +17,13 @@ from worker_lifecycle_support import (
 )
 
 from clashlens import claimed_jobs, cli, ingestion, reconciliation_db, worker
-from clashlens.db import (
+from clashlens.domain import DomainRuleError
+from clashlens.job_contracts import (
     ANALYTICS_RULE_VERSION,
     DOMAIN_RULE_VERSION,
+    POPULATION_BUILD_WORK_TYPES,
     PROCESSING_VERSION,
 )
-from clashlens.domain import DomainRuleError
-from clashlens.job_contracts import POPULATION_BUILD_WORK_TYPES
 from clashlens.league_history import (
     LEAGUE_HISTORY_ENDPOINT_VERSION,
     LEAGUE_HISTORY_PARSER_VERSION,

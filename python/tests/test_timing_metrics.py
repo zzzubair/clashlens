@@ -11,7 +11,7 @@ from psycopg.errors import DeadlockDetected
 from clashlens import stage_metrics, worker
 from clashlens.archive import ArchiveReadResult
 from clashlens.collector_db import CollectorWork
-from clashlens.db import (
+from clashlens.job_contracts import (
     ANALYTICS_RULE_VERSION,
     ARMY_ANALYTICS_RULE_VERSION,
     DOMAIN_RULE_VERSION,

@@ -22,12 +22,7 @@ from .boundary_manifest import (
     unplayed_profiles,
 )
 from .db import (
-    ANALYTICS_RULE_VERSION,
-    ARMY_ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
-    DOMAIN_RULE_VERSION,
-    PROCESSING_VERSION,
-    PYTHON_BACKFILL_PRIORITY,
     PYTHON_LIVE_PRIORITY,
     RESET_LOCK_WAIT,
     Database,
@@ -36,6 +31,13 @@ from .db import (
 )
 from .db_rows import text_value
 from .domain import RANKED_DAY_DURATION, SEASON_DURATION, is_season_boundary
+from .job_contracts import (
+    ANALYTICS_RULE_VERSION,
+    ARMY_ANALYTICS_RULE_VERSION,
+    DOMAIN_RULE_VERSION,
+    PROCESSING_VERSION,
+    PYTHON_BACKFILL_PRIORITY,
+)
 from .past_reset_pacing import (
     ARRIVAL,
     OPERATOR_CORRECTION,

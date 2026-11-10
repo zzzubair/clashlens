@@ -72,6 +72,7 @@ from . import (
     db,
     domain,
     domain_repair,
+    job_contracts,
     league_days,
 )
 
@@ -458,7 +459,7 @@ def record(connection: Any, day: datetime, judgment: Judgment, *, read_at: datet
                 day_recalculation.request(
                     connection, finding.player_id, day, None, key=f"{FIX_KEY}{finding_id}",
                     trigger="reconcile_pass", later_days=False,
-                    priority=db.PYTHON_BACKFILL_PRIORITY)
+                    priority=job_contracts.PYTHON_BACKFILL_PRIORITY)
                 connection.execute(
                     "UPDATE reconcile_findings SET fix_queued_at = clock_timestamp()"
                     " WHERE id = %s", (finding_id,))
@@ -568,8 +569,8 @@ def _queue_step(connection: Any, step: PassStep) -> bool:
         (WORK_TYPE, f"{WORK_TYPE}:{slot}:{day_text}:{after}",
          Jsonb({"slot": slot, "ranked_day_start": day_text, "after_player_id": after,
                 "queued": queued}),
-         db.DEFAULT_PARSER_VERSION, db.PROCESSING_VERSION, db.DOMAIN_RULE_VERSION,
-         db.ANALYTICS_RULE_VERSION, db.PYTHON_BACKFILL_PRIORITY),
+         db.DEFAULT_PARSER_VERSION, job_contracts.PROCESSING_VERSION, job_contracts.DOMAIN_RULE_VERSION,
+         job_contracts.ANALYTICS_RULE_VERSION, job_contracts.PYTHON_BACKFILL_PRIORITY),
     ).fetchone() is not None
 
 

@@ -10,6 +10,12 @@ from .source_observation_contract import (
     validate_source_observation_contract,
 )
 
+PROCESSING_VERSION = "clashlens-domain-processing-v1"
+DOMAIN_RULE_VERSION = "clashlens-domain-rules-v1"
+ANALYTICS_RULE_VERSION = "legend-analytics-v1"
+ARMY_ANALYTICS_RULE_VERSION = "army-analytics-v2"
+PYTHON_BACKFILL_PRIORITY = 25
+
 
 @dataclass(frozen=True, slots=True)
 class JobContract:
@@ -23,21 +29,21 @@ class JobContract:
 JOB_CONTRACTS = {
     "process_observation": JobContract("source", source=True),
     "replay_observation": JobContract("source", source=True),
-    "reconcile_ranked_day": JobContract("reconcile", "ANALYTICS_RULE_VERSION"),
+    "reconcile_ranked_day": JobContract("reconcile", ANALYTICS_RULE_VERSION),
     "build_snapshot": JobContract(
-        "snapshot", "ANALYTICS_RULE_VERSION", "coordinator", population_build=True
+        "snapshot", ANALYTICS_RULE_VERSION, "coordinator", population_build=True
     ),
     "build_analytics": JobContract(
-        "analytics", "ANALYTICS_RULE_VERSION", "analytics", population_build=True
+        "analytics", ANALYTICS_RULE_VERSION, "analytics", population_build=True
     ),
     "build_army_analytics": JobContract(
         "army_analytics",
-        "ARMY_ANALYTICS_RULE_VERSION",
+        ARMY_ANALYTICS_RULE_VERSION,
         "coordinator",
         population_build=True,
     ),
-    "redecode_army": JobContract("army_redecode", "ARMY_ANALYTICS_RULE_VERSION"),
-    "reconcile_pass": JobContract("reconcile_pass", "ANALYTICS_RULE_VERSION"),
+    "redecode_army": JobContract("army_redecode", ARMY_ANALYTICS_RULE_VERSION),
+    "reconcile_pass": JobContract("reconcile_pass", ANALYTICS_RULE_VERSION),
 }
 SUPPORTED_WORK_TYPES = tuple(JOB_CONTRACTS)
 RESPONSE_WORK_TYPES = tuple(kind for kind, spec in JOB_CONTRACTS.items() if spec.source)
@@ -48,8 +54,6 @@ DATABASE_CONFLICT_RETRIES = 3
 
 
 def claim_contract_error(claim: Any) -> str | None:
-    from . import db
-
     spec = JOB_CONTRACTS.get(claim.work_type)
     if spec is None:
         return "unsupported_work_type"
@@ -63,11 +67,11 @@ def claim_contract_error(claim: Any) -> str | None:
         if error is not None:
             return error
     checks = [
-        ("processing_version", db.PROCESSING_VERSION),
-        ("domain_rule_version", db.DOMAIN_RULE_VERSION),
+        ("processing_version", PROCESSING_VERSION),
+        ("domain_rule_version", DOMAIN_RULE_VERSION),
     ]
     if spec.analytics_version:
-        checks.append(("analytics_rule_version", getattr(db, spec.analytics_version)))
+        checks.append(("analytics_rule_version", spec.analytics_version))
     for field, expected in checks:
         if getattr(claim, field) != expected:
             return f"unsupported_{field}"
@@ -87,8 +91,6 @@ def supported_job_filter(
     of response history. Cleanup uses the same contracts without scheduling
     holds, so temporarily paused supported jobs still exhaust their budget.
     """
-    from . import db
-
     source_clauses: list[str] = []
     params: dict[str, Any] = {}
     coordinator_input_shape = f"""(
@@ -157,17 +159,17 @@ def supported_job_filter(
         params[key] = kinds
         if spec.analytics_version:
             checks.append(
-                f"{alias}.analytics_rule_version = %({spec.analytics_version})s"
+                f"{alias}.analytics_rule_version = %({key}_analytics_version)s"
             )
-            params[spec.analytics_version] = getattr(db, spec.analytics_version)
+            params[f"{key}_analytics_version"] = spec.analytics_version
         if spec.source:
             checks.append(f"({source_contract})")
         if spec.input_shape:
             checks.append(shapes[spec.input_shape])
         clauses.append("(" + " AND ".join(checks) + ")")
     params.update(
-        processing_version=db.PROCESSING_VERSION,
-        domain_rule_version=db.DOMAIN_RULE_VERSION,
+        processing_version=PROCESSING_VERSION,
+        domain_rule_version=DOMAIN_RULE_VERSION,
     )
     predicate = "(" + " OR ".join(clauses) + ")"
     if claim:
@@ -181,7 +183,7 @@ def supported_job_filter(
                 AND {alias}.input_json->>'boundary_at' < %(past_reset_build_hold)s::text, false)
             AND NOT (%(operator_build_hold)s
                 AND {alias}.work_type IN ({builds})
-                AND {alias}.priority = {db.PYTHON_BACKFILL_PRIORITY})
+                AND {alias}.priority = {PYTHON_BACKFILL_PRIORITY})
         """
         params.update(
             past_reset_build_hold=past_reset_build_hold,

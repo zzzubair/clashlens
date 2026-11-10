@@ -39,9 +39,9 @@ from late_battle_sweep_postgres_support import (
 from league_history_support import _entry, _payload
 
 from clashlens import boundary, claimed_jobs, late_battle_sweep, reconciliation_db
-from clashlens.db import (
+from clashlens.db import DEFAULT_PARSER_VERSION
+from clashlens.job_contracts import (
     ANALYTICS_RULE_VERSION,
-    DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
 )
