@@ -5,7 +5,7 @@ import type { BackHandle } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
 import type { VerificationStatus } from "../lib/account-contracts";
 import {
-  MAX_VERIFICATION_TOKEN_LENGTH,
+  isVerificationToken,
   normalizeSubmittedPlayerTag,
 } from "../lib/account-validation";
 import type { WebsiteErrorResponse } from "../lib/contracts";
@@ -127,7 +127,7 @@ export async function action({ request, context }: Route.ActionArgs) {
   const fieldErrors: { tag?: string; token?: string } = {};
   const tag = normalizeSubmittedPlayerTag(rawTag);
   if (tag === null) fieldErrors.tag = "Enter a valid player tag.";
-  if (!isBoundedToken(token)) {
+  if (!isVerificationToken(token)) {
     fieldErrors.token = "Enter the API token from Clash of Clans.";
   }
   if (fieldErrors.tag || fieldErrors.token) {
@@ -210,18 +210,6 @@ export async function action({ request, context }: Route.ActionArgs) {
       },
     );
   }
-}
-
-/** Exact Python token rule: 1–512 printable ASCII characters, no whitespace. */
-function isBoundedToken(value: string): boolean {
-  return (
-    value.length >= 1 &&
-    value.length <= MAX_VERIFICATION_TOKEN_LENGTH &&
-    [...value].every((character) => {
-      const code = character.charCodeAt(0);
-      return code >= 0x21 && code <= 0x7e;
-    })
-  );
 }
 
 async function errorResponse(status: number, generalError: WebsiteErrorResponse) {
