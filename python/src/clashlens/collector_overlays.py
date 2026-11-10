@@ -65,7 +65,7 @@ PRESENCE_SQL = f"""(CASE
 
 def players_in_use(database: CollectorDatabase) -> list[tuple[int, str]]:
     """Each active player an open overlay shows: (player id, tag)."""
-    with database._connection() as connection:
+    with database.connection() as connection:
         rows = connection.execute(
             f"""
             SELECT DISTINCT player.id, player.normalized_tag

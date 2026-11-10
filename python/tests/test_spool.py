@@ -899,8 +899,6 @@ def test_reserve_enforces_free_space_floor(tmp_path: Path) -> None:
 def test_capacity_lock_interoperates_with_external_flock_holder(tmp_path: Path) -> None:
     """The single capacity lock excludes an external spool operation."""
     root = tmp_path / "spool"
-    body = b"interop"
-    digest = hashlib.sha256(body).hexdigest()
     spool = Spool(root, max_body_bytes=64)
     capacity = root / ".control" / "capacity.lock"
     holder = subprocess.Popen(
@@ -925,7 +923,7 @@ def test_capacity_lock_interoperates_with_external_flock_holder(tmp_path: Path) 
     try:
         assert holder.stdout is not None and holder.stdout.readline().strip() == "held"
         start = time.monotonic()
-        with spool.lock(digest):  # lock must wait for the external writer
+        with spool.storage_lock():  # lock must wait for the external writer
             held_for = time.monotonic() - start
         assert held_for > 0.5, "capacity lock did not exclude the external writer"
     finally:

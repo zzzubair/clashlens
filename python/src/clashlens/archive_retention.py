@@ -136,7 +136,7 @@ def retire_archive_objects(
     for digest, reference, size in released:
         digest, reference = location(digest, reference)
         try:
-            with spool.lock(digest, exclusive=True):
+            with spool.storage_lock():
                 # Recheck: the location must still be this instance's held
                 # tombstone. Collection never reuses a retiring location.
                 current = connection.execute(
@@ -169,7 +169,7 @@ def retire_archive_objects(
     for digest, reference, size in due:
         digest, reference = location(digest, reference)
         try:
-            with spool.lock(digest, exclusive=True), connection.transaction():
+            with spool.storage_lock(), connection.transaction():
                 connection.execute("SET LOCAL lock_timeout = '1s'")
                 connection.execute("SET LOCAL statement_timeout = '30s'")
                 # Fence new replay references and changes to existing jobs before

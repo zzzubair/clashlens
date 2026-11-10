@@ -16,8 +16,8 @@ from domain_test_support import (
     text,
 )
 
+from clashlens.battle import LIVE_SOURCE_PARSER_VERSION
 from clashlens.collector_db import (
-    BATTLE_PARSER_VERSION,
     CollectorDatabase,
     ResponseHandoff,
 )
@@ -679,7 +679,7 @@ def test_a_failed_battle_log_job_replays_under_its_own_parser(
             body=json.dumps({"items": [row]}).encode(),
             observed_at=now,
             normalized_tag="#8PP",
-            parser_version=BATTLE_PARSER_VERSION,
+            parser_version=LIVE_SOURCE_PARSER_VERSION,
         )
         profile_observation, _profile_job = store_observation(
             connection_info,
@@ -716,7 +716,7 @@ def test_a_failed_battle_log_job_replays_under_its_own_parser(
                 """
                 # Battle parser v3 reads battle logs only.
                 with pytest.raises(psycopg.errors.InvalidParameterValue):
-                    connection.execute(request, (profile_observation, BATTLE_PARSER_VERSION))
+                    connection.execute(request, (profile_observation, LIVE_SOURCE_PARSER_VERSION))
             # Queued the way `./ops failed-items --replay-job-id` does, as the admin login.
             with psycopg.connect(connection_info) as connection:
                 replay = replay_failed_jobs(
@@ -742,7 +742,7 @@ def test_a_failed_battle_log_job_replays_under_its_own_parser(
                     "SELECT status FROM python_processing_jobs WHERE id = %s",
                     (failed_job,),
                 ).fetchone()
-            assert [text(value) for (value,) in parsers] == [BATTLE_PARSER_VERSION]
+            assert [text(value) for (value,) in parsers] == [LIVE_SOURCE_PARSER_VERSION]
             assert text(status[0]) == "failed"
             assert database.health_metrics()["failed_processing"] == 0
         finally:

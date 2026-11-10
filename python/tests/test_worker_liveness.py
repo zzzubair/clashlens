@@ -127,7 +127,7 @@ def test_starting_worker_proves_its_dependencies_without_the_spool_lock(
         return Archive()
 
     monkeypatch.setattr(cli, "Database", _ReadyDatabase)
-    monkeypatch.setattr(cli, "_archive", open_archive)
+    monkeypatch.setattr(cli, "open_archive", open_archive)
     holding, release = threading.Event(), threading.Event()
 
     def hold_lock() -> None:

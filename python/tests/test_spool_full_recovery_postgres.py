@@ -129,7 +129,7 @@ def test_full_spool_drains_once_the_archive_returns(
             validate_database=False,
             **{key: value for key, value in limits.items() if key != "max_body_bytes"},
         )
-        monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: reader)
+        monkeypatch.setattr(cli, "open_archive", lambda _arguments, **_kwargs: reader)
         assert (
             cli._run_worker(
                 _worker_namespace(database_url=connection_info, max_jobs=10)
@@ -173,7 +173,7 @@ def test_failed_spool_read_waits_instead_of_failing_the_job(
             raise OSError(5, "Input/output error")
 
         monkeypatch.setattr(reader.spool, "verify", unreadable)
-        monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: reader)
+        monkeypatch.setattr(cli, "open_archive", lambda _arguments, **_kwargs: reader)
         assert (
             cli._run_worker(_worker_namespace(database_url=connection_info, max_jobs=1))
             == 0
@@ -286,7 +286,7 @@ def test_cleanup_lookup_reads_kept_uploads_from_the_index_in_order(
                 )
                 yield query
 
-        database._connection = explained  # type: ignore[method-assign]
+        database.connection = explained  # type: ignore[method-assign]
         try:
             found = database.deletable_hashes(limit=_CLEANUP_LOOKUP_SIZE)
         finally:
@@ -455,7 +455,7 @@ def test_a_lost_saved_copy_is_read_back_from_the_archive(
         reader = _lost_copy_reader(root, endpoint)
         with psycopg.connect(connection_info) as connection:
             connection.execute("UPDATE python_processing_jobs_worker SET max_attempts = 1")
-        monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: reader)
+        monkeypatch.setattr(cli, "open_archive", lambda _arguments, **_kwargs: reader)
 
         assert (
             cli._run_worker(_worker_namespace(database_url=connection_info, max_jobs=1))
@@ -518,7 +518,7 @@ def test_missing_proof_needs_the_archive_marker_to_match(
             marker_hash=hashlib.sha256(payload).hexdigest(),
             marker_payload_version="1",
         )
-        monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: reader)
+        monkeypatch.setattr(cli, "open_archive", lambda _arguments, **_kwargs: reader)
 
         assert (
             cli._run_worker(_worker_namespace(database_url=connection_info, max_jobs=1))
@@ -687,7 +687,7 @@ def test_a_copy_that_appears_after_a_missing_read_is_found_by_the_next_attempt(
             return read(reference, expected_hash, **kwargs)
 
         monkeypatch.setattr(reader.archive, "read_verified", recorded_read)
-        monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: reader)
+        monkeypatch.setattr(cli, "open_archive", lambda _arguments, **_kwargs: reader)
 
         def run_and_read() -> tuple[str, str | None]:
             assert (

@@ -16,6 +16,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from clashlens import collector_commits
 from clashlens.collector import Collector
 from clashlens.collector_db import (
     CollectorIntent,
@@ -775,7 +776,7 @@ def test_intent_lane_refills_around_active_rows_without_overadmitting(
         finally:
             active_count -= 1
 
-    collector.collect_intent = collect_intent  # type: ignore[method-assign]
+    collector.intents.collect = collect_intent  # type: ignore[method-assign]
     monkeypatch.setattr(collector_module, "_ORDINARY_INTENT_PARALLELISM", 2)
 
     async def run() -> None:
@@ -859,7 +860,7 @@ def test_reset_and_settlement_checks_use_the_regular_slots_while_other_work_keep
         await release.wait()
         return "complete"
 
-    collector.collect_intent = collect_intent  # type: ignore[method-assign]
+    collector.intents.collect = collect_intent  # type: ignore[method-assign]
 
     async def run() -> None:
         stop = asyncio.Event()
@@ -912,7 +913,7 @@ def test_work_claimed_while_the_collector_stops_is_not_started() -> None:
         started.append(intent)
         return "complete"
 
-    collector.collect_intent = collect_intent  # type: ignore[method-assign]
+    collector.intents.collect = collect_intent  # type: ignore[method-assign]
 
     async def run() -> None:
         stop = asyncio.Event()
@@ -937,7 +938,7 @@ def test_cancelled_thread_waits_for_immutable_operation_to_finish() -> None:
         finished.set()
 
     async def cancel_write() -> None:
-        task = asyncio.create_task(collector_module._drain_to_thread(blocking_write))
+        task = asyncio.create_task(collector_module.drain_to_thread(blocking_write))
         await asyncio.to_thread(started.wait, 1)
         task.cancel()
         await asyncio.sleep(0)
@@ -1012,7 +1013,7 @@ def test_background_sweep_revisits_recent_crash_temporary_files(
         "time",
         lambda: next(cleanup_times),
     )
-    monkeypatch.setattr(collector_module, "_wait_or_stop", no_wait)
+    monkeypatch.setattr(collector_module, "wait_or_stop", no_wait)
     collector = _collector(spool, _Store(spool), _Client(spool))  # type: ignore[arg-type]
 
     try:
@@ -1047,10 +1048,10 @@ def test_startup_finishes_a_spool_handoff_before_acknowledging_it() -> None:
         key_label="regular-1",
         evidence_headers={},
     )
-    name, body = collector.serialize_handoff(handoff)
+    name, body = collector_commits.serialize_handoff(handoff)
     spool.handoffs[name] = body
 
-    recovered = collector.recover_handoffs()
+    recovered = asyncio.run(collector.commits.recover())
 
     assert recovered == 1
     assert [item.occurrence_key for item in store.handoffs] == [handoff.occurrence_key]
@@ -1071,7 +1072,7 @@ def test_startup_removes_final_file_with_no_sidecar_or_database_reference(
     store.referenced = {retained_hash}
     collector = _collector(spool, store, _Client(spool))  # type: ignore[arg-type]
 
-    assert collector.recover_handoffs() == 0
+    assert asyncio.run(collector.commits.recover()) == 0
 
     assert spool.verify(orphan_hash) is None
     assert spool.verify(retained_hash) == retained
@@ -1090,7 +1091,7 @@ def test_interactive_intent_keeps_one_compact_work_identity() -> None:
         work_id=9,
     )
 
-    outcome = asyncio.run(collector.collect_intent(intent))
+    outcome = asyncio.run(collector.intents.collect(intent))
 
     assert outcome == "complete"
     assert [item.collector_work_id for item in store.handoffs] == [9, 9]
@@ -1122,7 +1123,7 @@ def test_interactive_429_persists_cooldown_before_spool_publication(
     client = RateLimitedClient(spool)
     collector = _collector(spool, store, client)
     collector.interactive_fingerprint = "f" * 64
-    monkeypatch.setattr(collector_module, "_retry_delay", lambda _attempt: 0.0)
+    monkeypatch.setattr(collector_module, "retry_delay", lambda _attempt: 0.0)
 
     outcome = asyncio.run(
         collector._collect_endpoint(
@@ -1160,7 +1161,7 @@ def test_important_intent_terminal_status_fails_after_bounded_retries(
         work_id=9,
     )
 
-    outcome = asyncio.run(collector.collect_intent(intent))
+    outcome = asyncio.run(collector.intents.collect(intent))
 
     assert outcome == "failed"
     assert client.fetch_count == 6

@@ -57,7 +57,7 @@ def test_weekly_check_uses_regular_keys_and_only_the_needed_endpoints():
         "discovery_profile", datetime.now(UTC), 1, "#2PP", work_id=9,
         eligibility_recheck=True,
     )
-    assert asyncio.run(collector.collect_intent(intent)) == "complete"
+    assert asyncio.run(collector.intents.collect(intent)) == "complete"
     assert [item.endpoint for item in store.handoffs] == ["profile"]
     assert client.seen_pools == [collector.regular_keys]
 
@@ -71,7 +71,7 @@ def test_resuming_a_durable_weekly_profile_does_not_fetch_it_again():
         "discovery_profile", datetime.now(UTC), 1, "#2PP", work_id=9,
         eligibility_recheck=True, profile_required=False,
     )
-    assert asyncio.run(collector.collect_intent(intent)) == "complete"
+    assert asyncio.run(collector.intents.collect(intent)) == "complete"
     assert client.fetch_count == 0
 
 
@@ -100,8 +100,8 @@ def test_slow_weekly_collection_has_no_catchup_burst(monkeypatch):
     monkeypatch.setattr(weekly_eligibility, "time", SimpleNamespace(monotonic=lambda: clock[0]))
     monkeypatch.setattr(weekly_eligibility.asyncio, "wait_for", wait)
     collector = SimpleNamespace(
-        database=None, _database_call=database_call, collect_intent=collect,
-        held_work=list,
+        database=None, database_call=database_call, intents=SimpleNamespace(collect=collect),
+        commits=SimpleNamespace(held_work=list),
     )
     asyncio.run(weekly_eligibility.run(collector, stop))
     assert starts == [0.0, 10.0, 12.0]

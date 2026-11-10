@@ -505,3 +505,4 @@ def test_a_response_is_new_needs_its_own_proof_or_confirms_the_saved_one(
             assert database.record_unchanged_response(poll("not-skipped", "e", 5, fields="e")) is False
         finally:
             database.close()
+

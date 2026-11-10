@@ -83,7 +83,7 @@ def test_known_pool_weekly_request_load(database_url, tmp_path):
                             rows = connection.execute("SELECT id, player_id, normalized_tag, due_at, league_history_status FROM collector_work WHERE status = 'pending' ORDER BY id").fetchall()
                         assert count <= 30
                         outcomes = await asyncio.gather(*[
-                            collector.collect_intent(CollectorIntent(
+                            collector.intents.collect(CollectorIntent(
                                 "discovery_profile", row[3], row[1], row[2], work_id=row[0],
                                 league_history_required=row[4] == "pending", eligibility_recheck=True,
                             )) for row in rows

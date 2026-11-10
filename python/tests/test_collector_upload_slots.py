@@ -159,7 +159,7 @@ def test_work_waits_for_its_held_save_instead_of_fetching_again(
     )
 
     async def scenario() -> None:
-        refresh = asyncio.create_task(collector.collect_intent(intent))
+        refresh = asyncio.create_task(collector.intents.collect(intent))
         await asyncio.sleep(0.2)
         assert not refresh.done()
         assert completions == []
@@ -218,19 +218,17 @@ def test_restart_recovery_leaves_held_saves_to_commit_later_and_holds_their_work
         first, occurrence_key="second", response_completed_at=now + timedelta(seconds=1)
     )
     for handoff in (second, first):
-        name, payload = collector.serialize_handoff(handoff)
+        name, payload = collector_commits.serialize_handoff(handoff)
         spool.handoffs[name] = payload
 
-    assert collector.recover_handoffs() == 0
-
     async def scenario() -> None:
-        collector_commits.commit_unrecovered(collector, collector._unrecovered)
+        assert await collector.commits.recover() == 0
         stop = asyncio.Event()
         intents = asyncio.create_task(collector._intent_loop(stop, False, 0.01))
         try:
             await asyncio.sleep(0.2)
             # The Refresh's saved responses are pending, so it is not fetched again.
-            assert collector.held_work() == [7, 7]
+            assert collector.commits.held_work() == [7, 7]
             assert store.handoffs == []
             assert client.fetch_count == 0
             held.clear()
@@ -314,10 +312,11 @@ def test_stopping_ends_lock_retries_and_keeps_the_saved_response(held: str) -> N
     )
 
     async def scenario() -> str:
-        refresh = asyncio.create_task(collector.collect_intent(intent))
+        refresh = asyncio.create_task(collector.intents.collect(intent))
         await asyncio.sleep(0.3)
         assert not refresh.done()
-        collector._stopping.set()
+        collector.stopping.set()
+        await collector.commits.stop()
         return await asyncio.wait_for(refresh, 5)
 
     outcome = asyncio.run(scenario())
@@ -405,9 +404,11 @@ def test_a_held_player_never_delays_another_players_reset_or_regular_checks(
     client = Client(spool)
     collector = _collector(spool, store, client)
     now = datetime.now(UTC)
-    assert collector._handoff_lock(
+    # Both players share one disk-write lock, so the first one's held save
+    # is what the second one must not wait behind.
+    assert collector.commits._handoff_lock(
         _handoff_for(collector, "#2P0P", now)
-    ) is collector._handoff_lock(_handoff_for(collector, "#2P2G", now))
+    ) is collector.commits._handoff_lock(_handoff_for(collector, "#2P2G", now))
 
     async def scenario() -> None:
         stop = asyncio.Event()
@@ -416,7 +417,7 @@ def test_a_held_player_never_delays_another_players_reset_or_regular_checks(
             asyncio.create_task(collector._intent_loop(stop, False, 0.01)),
         ]
         try:
-            while not collector.commits._later or collector.regular_inflight:
+            while not spool.handoffs or collector.regular_inflight:
                 await asyncio.sleep(0.01)
             assert store.sweeps == []
             Clock.current = reset_at + timedelta(seconds=1)
@@ -424,14 +425,13 @@ def test_a_held_player_never_delays_another_players_reset_or_regular_checks(
                 await asyncio.sleep(0.01)
                 assert time.monotonic() - started < 5
             # #2P0P's answer is still waiting for the worker.
-            assert collector.commits._later
+            assert spool.handoffs
             assert "#2P0P" not in {h.identity_key for h in store.handoffs}
         finally:
-            waiting = list(collector.commits._later)
             stop.set()
-            collector._stopping.set()
+            collector.stopping.set()
+            await collector.commits.stop()
             await asyncio.gather(*loops)
-            await asyncio.gather(*waiting, return_exceptions=True)
 
     started = time.monotonic()
     asyncio.run(scenario())
@@ -461,8 +461,8 @@ def test_a_save_left_at_stop_keeps_later_saves_from_committing_first() -> None:
     async def scenario() -> None:
         first = collector.collect_player(work, lane="ordinary", endpoints=("profile",))
         assert await first == ["recorded"]
-        collector._stopping.set()
-        await asyncio.wait(set(collector.commits._later))
+        collector.stopping.set()
+        await collector.commits.stop()
         # The worker lets go during shutdown, and another answer arrives.
         held.clear()
         second = collector.collect_player(work, lane="ordinary", endpoints=("profile",))
@@ -473,3 +473,43 @@ def test_a_save_left_at_stop_keeps_later_saves_from_committing_first() -> None:
     assert collector.spool_health.recovery_required
     assert store.handoffs == []
     assert len(spool.handoffs) == 1
+
+
+
+def test_collector_run_stops_with_a_response_waiting_for_a_database_lock() -> None:
+    spool = _Spool()
+    store = _Store(spool)
+    collector = _collector(spool, store, _Client(spool))
+    blocked = threading.Event()
+    results = []
+
+    def record_response(_handoff):
+        blocked.set()
+        raise psycopg.errors.LockNotAvailable("worker holds this response")
+
+    store.record_response = record_response
+
+    async def collect(stop, _idle):
+        work = CollectorWork(1, "#2PP", datetime.now(UTC), collector_work_id=7)
+        results.extend(await collector.collect_player(work, lane="interactive", endpoints=("profile",)))
+        await stop.wait()
+
+    async def idle(stop, _rankings, _delay):
+        await stop.wait()
+
+    async def request_stop(stop, _idle):
+        assert await asyncio.to_thread(blocked.wait, 2)
+        stop.set()
+
+    collector._regular_loop = collect
+    collector._intent_loop = idle
+    collector._upload_loop = request_stop
+
+    async def scenario():
+        await asyncio.wait_for(collector.run(asyncio.Event(), health_host="127.0.0.1", health_port=0), 3)
+
+    asyncio.run(scenario())
+    assert results == ["capacity_paused"]
+    assert len(spool.handoffs) == 1
+    assert store.handoffs == []
+    assert collector.spool_health.recovery_required

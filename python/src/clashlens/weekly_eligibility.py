@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 import psycopg
 from psycopg_pool import PoolTimeout
 
+from . import collector_handover
 from .collector_db import CollectorDatabase, CollectorIntent
 
 if TYPE_CHECKING:
@@ -88,9 +89,9 @@ def eligibility(connection: Any, player_id: int, now: datetime) -> Eligibility:
     return Eligibility.DUE if due_at <= now else Eligibility.BACKING_OFF
 
 
-def has_time_to_spare(database: CollectorDatabase, connection: Any, now: datetime) -> bool:
+def has_time_to_spare(connection: Any, now: datetime) -> bool:
     """Reset collection has finished and no tracked player is over two minutes late."""
-    return database._regular_admission_open(connection, now) and not connection.execute(
+    return collector_handover.admission_phase(connection, now) is collector_handover.AdmissionPhase.OPEN and not connection.execute(
         "SELECT 1 FROM players WHERE active AND next_due_at < %s LIMIT 1",
         (now - LIVE_DELAY_LIMIT,),
     ).fetchone()
@@ -104,9 +105,9 @@ def next_check(
     held: list[int] | None = None,
 ) -> CollectorIntent | None:
     """Admit at most one check while regular collection has time to spare."""
-    with database._connection() as connection:
+    with database.connection() as connection:
         with connection.transaction():
-            if not has_time_to_spare(database, connection, now):
+            if not has_time_to_spare(connection, now):
                 return None
             if schedule:
                 connection.execute(
@@ -151,12 +152,12 @@ async def run(collector: Collector, stop_requested: asyncio.Event) -> None:
         started = time.monotonic()
         schedule = started >= next_schedule
         try:
-            intent = await collector._database_call(
+            intent = await collector.database_call(
                 next_check,
                 collector.database,
                 datetime.now(UTC),
                 schedule=schedule,
-                held=collector.held_work(),
+                held=collector.commits.held_work(),
             )
         except (psycopg.Error, PoolTimeout) as error:
             # Its discovery admission ran 30 to 60 s after the 9 Nov 2026
@@ -172,7 +173,7 @@ async def run(collector: Collector, stop_requested: asyncio.Event) -> None:
             if schedule:
                 next_schedule = started + SCHEDULE_INTERVAL_SECONDS
         if intent is not None:
-            await collector.collect_intent(intent)
+            await collector.intents.collect(intent)
         delay = max(0.0, CHECK_INTERVAL_SECONDS - (time.monotonic() - started))
         try:
             await asyncio.wait_for(stop_requested.wait(), timeout=delay)

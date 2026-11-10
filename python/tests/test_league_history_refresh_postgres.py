@@ -69,7 +69,7 @@ def test_season_opening_reset_fetches_league_history_again_after_20_minutes(
         assert refresh_intents(due - timedelta(minutes=1)) == []
         intent = refresh_intents(due)[0]
         result = asyncio.run(
-            _collector(origin, database, tmp_path).collect_intent(intent)
+            _collector(origin, database, tmp_path).intents.collect(intent)
         )
 
         assert result == "complete"

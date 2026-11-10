@@ -22,16 +22,18 @@ from . import (
     queue_refresh,
     response_novelty,
 )
-from .db import PYTHON_LIVE_PRIORITY, PYTHON_RESET_PRIORITY
+from .collection_rules import COLLECTION_WINDOW
+from .collector_http import endpoint_target
+from .db import (
+    ANALYTICS_RULE_VERSION,
+    DOMAIN_RULE_VERSION,
+    PROCESSING_VERSION,
+    PYTHON_LIVE_PRIORITY,
+    PYTHON_RESET_PRIORITY,
+)
 from .raw_body import DELETABLE_SQL, RECORDED_SQL, STILL_PROCESSING_SQL
+from .source_observation_contract import get_source_observation_contract
 
-PROCESSING_VERSION = "clashlens-domain-processing-v1"
-DOMAIN_RULE_VERSION = "clashlens-domain-rules-v1"
-ANALYTICS_RULE_VERSION = "legend-analytics-v1"
-PROFILE_PARSER_VERSION = "supercell-profile-parser-v3"
-SOURCE_PARSER_VERSION = "supercell-source-parser-v2"
-BATTLE_PARSER_VERSION = "supercell-battle-parser-v3"
-LEAGUE_HISTORY_PARSER_VERSION = "supercell-league-history-parser-v1"
 REVISIT_INTERVAL = timedelta(seconds=90)
 PROFILE_CACHE_WINDOW = timedelta(seconds=5)
 _ENDPOINTS = {
@@ -153,7 +155,7 @@ class CollectorDatabase:
     def close(self) -> None:
         self.pool.close()
 
-    def _connection(self) -> Any:
+    def connection(self) -> Any:
         return self.pool.connection()
 
     def validate_archive_instance(self, config: Any) -> bool:
@@ -174,7 +176,7 @@ class CollectorDatabase:
         )
         if not all(isinstance(value, str) and value for value in values):
             return False
-        with self._connection() as connection:
+        with self.connection() as connection:
             row = connection.execute(
                 "SELECT endpoint, region, bucket, marker_key, marker_hash, marker_payload_version FROM archive_instances WHERE instance_id = %s",
                 (values[0],),
@@ -187,7 +189,7 @@ class CollectorDatabase:
         self._validate_hash(fingerprint)
         if not 1 <= starts_per_second <= 29:
             raise ValueError("request start rate must be between 1 and 29")
-        with self._connection() as connection:
+        with self.connection() as connection:
             connection.execute(
                 """
                 INSERT INTO shared_api_credentials
@@ -205,7 +207,7 @@ class CollectorDatabase:
         self._validate_hash(fingerprint)
         if not 1 <= cooldown_seconds <= 300:
             raise ValueError("interactive cooldown must be between 1 and 300 seconds")
-        with self._connection() as connection:
+        with self.connection() as connection:
             with connection.transaction():
                 row = connection.execute(
                     """
@@ -248,7 +250,7 @@ class CollectorDatabase:
         self._validate_hash(fingerprint)
         if not reason or len(reason) > 256 or "\n" in reason or "\r" in reason:
             raise ValueError("interactive quarantine reason is invalid")
-        with self._connection() as connection:
+        with self.connection() as connection:
             with connection.transaction():
                 row = connection.execute(
                     """
@@ -277,7 +279,7 @@ class CollectorDatabase:
         self._validate_hash(fingerprint)
         if timeout_seconds < 0:
             raise ValueError("permit wait timeout cannot be negative")
-        with self._connection() as connection:
+        with self.connection() as connection:
             if (
                 connection.execute(
                     "SELECT 1 FROM shared_api_credentials WHERE credential_fingerprint = %s",
@@ -288,7 +290,7 @@ class CollectorDatabase:
                 return CollectorPermit(False, "credential_unknown")
         deadline = monotonic() + timeout_seconds
         while True:
-            with self._connection() as connection:
+            with self.connection() as connection:
                 with connection.transaction():
                     row = connection.execute(
                         "SELECT granted, next_eligible_at, credential_state FROM clashlens_acquire_shared_api_permit(%s, 'collector')",
@@ -336,15 +338,10 @@ class CollectorDatabase:
 
     @staticmethod
     def _parser_for(endpoint: str) -> str:
-        if endpoint == "profile":
-            return PROFILE_PARSER_VERSION
-        if endpoint == "battle_log":
-            return BATTLE_PARSER_VERSION
-        if endpoint == "global_player_rankings":
-            return SOURCE_PARSER_VERSION
-        if endpoint == "league_history":
-            return LEAGUE_HISTORY_PARSER_VERSION
-        raise ValueError(f"unsupported endpoint: {endpoint}")
+        contract = get_source_observation_contract(endpoint)
+        if contract is None:
+            raise ValueError(f"unsupported endpoint: {endpoint}")
+        return contract.default_parser_version
 
     @staticmethod
     def _validate_hash(response_hash: str) -> None:
@@ -390,20 +387,8 @@ class CollectorDatabase:
 
     @staticmethod
     def _path_for(handoff: ResponseHandoff) -> tuple[str, str, str, str]:
-        if handoff.endpoint == "global_player_rankings":
-            return (
-                "GET",
-                "/v1/locations/global/rankings/players",
-                "limit=200",
-                "malformed",
-            )
-        assert handoff.normalized_tag is not None
-        path = "/v1/players/%23" + handoff.normalized_tag[1:]
-        if handoff.endpoint == "battle_log":
-            path += "/battlelog"
-        elif handoff.endpoint == "league_history":
-            path += "/leaguehistory"
-        return "GET", path, "", "not_applicable"
+        path, query = endpoint_target(handoff.endpoint, handoff.normalized_tag)
+        return "GET", path, query, "malformed" if query else "not_applicable"
 
     @staticmethod
     def _validate_work_identity(
@@ -455,7 +440,7 @@ class CollectorDatabase:
         priority_filter = "".join(f"AND {sql} " for sql, _ in filters)
         priority_params = tuple(value for _, value in filters)
         priority_order = "first_battle_pending DESC, next_due_at, id" if first_battle_pending is None else "next_due_at, id"
-        with self._connection() as connection:
+        with self.connection() as connection:
             with connection.transaction():
                 if not self._regular_admission_open(connection, claim_time):
                     return []
@@ -525,7 +510,7 @@ class CollectorDatabase:
 
     def defer_regular_check(self, player_id: int, until: datetime) -> None:
         """Make an active player's next regular check due no earlier than `until`."""
-        with self._connection() as connection:
+        with self.connection() as connection:
             connection.execute("SET LOCAL statement_timeout = '3s'")
             try:
                 connection.execute(
@@ -536,7 +521,7 @@ class CollectorDatabase:
                 raise psycopg.errors.LockNotAvailable(str(error)) from error
 
     def regular_admission_open(self, now: datetime) -> bool:
-        with self._connection() as connection:
+        with self.connection() as connection:
             return self._regular_admission_open(connection, now)
 
     @staticmethod
@@ -556,7 +541,7 @@ class CollectorDatabase:
         if limit < 1:
             raise ValueError("intent limit must be positive")
         intent_time = now or datetime.now(UTC)
-        with self._connection() as connection:
+        with self.connection() as connection:
             with connection.transaction():
                 # Reset profiles go before Reset battle logs; due discovery and ranking checks before
                 # about 13,000 settlement or Season-end history checks. Reset pairs and settlement checks
@@ -565,7 +550,7 @@ class CollectorDatabase:
                 # batch and none of 14,040 settlement checks started.
                 rows = connection.execute(
                     """WITH due AS NOT MATERIALIZED (SELECT work.id, work.kind, work.due_at, work.player_id, work.normalized_tag, work.sweep_id, work.status, work.league_history_status, profile.http_status AS profile_http, battle_log.http_status AS battle_log_http, league_history.http_status AS league_history_http, battle_log.response_completed_at < profile.response_completed_at AS log_before_profile, battle_log.request_started_at < profile.response_completed_at AS log_started_before_profile, sweep.boundary_at, CASE WHEN work.lane = 'reset' THEN 0 WHEN work.lane = 'interactive' THEN 1 WHEN work.kind IN ('reset_settlement', 'league_history_refresh') THEN 3 ELSE 2 END AS priority, COALESCE(work.kind = 'reset_baseline' AND (profile.http_status BETWEEN 200 AND 299 OR profile.http_status = 404), false) AS profile_done, work.kind IN ('reset_baseline', 'reset_settlement') AS reset_pair FROM collector_work AS work LEFT JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id LEFT JOIN collector_observations AS profile ON profile.id = work.profile_observation_id LEFT JOIN collector_observations AS battle_log ON battle_log.id = work.battle_log_observation_id LEFT JOIN collector_observations AS league_history ON league_history.id = work.league_history_observation_id WHERE work.kind IN ('initial_collection', 'live_refresh', 'reset_baseline', 'reset_settlement', 'discovery_profile', 'global_player_rankings', 'league_history_refresh') AND NOT work.eligibility_recheck AND work.status IN ('pending', 'waiting_retry') AND work.due_at <= %s AND NOT (work.id = ANY(%s::bigint[])) AND (work.kind <> 'reset_settlement' OR %s < sweep.boundary_at + %s) AND NOT COALESCE(work.kind = 'reset_baseline' AND %s < sweep.boundary_at + %s AND (profile.http_status BETWEEN 200 AND 299 OR profile.http_status = 404), false) AND (%s::boolean IS NULL OR (%s = true AND work.kind IN ('initial_collection', 'live_refresh')) OR (%s = false AND work.kind NOT IN ('initial_collection', 'live_refresh')))) SELECT id, kind, due_at, player_id, normalized_tag, sweep_id, status, league_history_status, profile_http, battle_log_http, league_history_http, log_before_profile, log_started_before_profile, boundary_at FROM ((SELECT * FROM due WHERE reset_pair ORDER BY priority, profile_done, due_at, id LIMIT %s) UNION ALL (SELECT * FROM due WHERE NOT reset_pair ORDER BY priority, profile_done, due_at, id LIMIT %s)) AS chosen ORDER BY priority, profile_done, due_at, id LIMIT %s""",
-                    (intent_time, held or [], intent_time, collector_reset.COLLECTION_WINDOW, intent_time, collector_reset.BATTLE_LOG_PASS_FROM, interactive, interactive, interactive, reset_limit, limit, limit + (reset_limit or 0)),
+                    (intent_time, held or [], intent_time, COLLECTION_WINDOW, intent_time, collector_reset.BATTLE_LOG_PASS_FROM, interactive, interactive, interactive, reset_limit, limit, limit + (reset_limit or 0)),
                 ).fetchall()
 
         intents = []
@@ -580,18 +565,18 @@ class CollectorDatabase:
                 status=str(row[6]), sweep_id=None if row[5] is None else int(row[5]),
                 league_history_required=league_history, profile_required=profile,
                 battle_log_required=battle_log,
-                collect_before=row[13] + collector_reset.COLLECTION_WINDOW if row[1] == "reset_settlement" else None,
+                collect_before=row[13] + COLLECTION_WINDOW if row[1] == "reset_settlement" else None,
             ))
         return intents
 
     def admit_discovery_profiles(self, now: datetime) -> None:
         """Clear, wait for or add discovery checks for due players (weekly_eligibility.Eligibility)."""
-        with self._connection() as connection:
+        with self.connection() as connection:
             with connection.transaction():
                 connection.execute("SELECT clashlens_admit_discovery_profiles(%s)", (now,))
 
     def health_metrics(self) -> dict[str, int | float]:
-        with self._connection() as connection:
+        with self.connection() as connection:
             return collector_metrics.health_metrics(connection)
 
     def schedule_rankings_cycle(self, now: datetime | None = None) -> bool:
@@ -604,7 +589,7 @@ class CollectorDatabase:
         coalescing_key = "global-player-rankings:" + cycle_at.isoformat().replace(
             "+00:00", "Z"
         )
-        with self._connection() as connection:
+        with self.connection() as connection:
             with connection.transaction():
                 if (
                     connection.execute(
@@ -633,7 +618,7 @@ class CollectorDatabase:
     def complete_intent(self, job_id: int) -> bool:
         if job_id < 1:
             raise ValueError("intent job ID must be positive")
-        with self._connection() as connection:
+        with self.connection() as connection:
             with connection.transaction():
                 connection.execute(_WORKER_LOCK_WAIT)
                 work = connection.execute(
@@ -679,12 +664,12 @@ class CollectorDatabase:
         if job_id < 1:
             raise ValueError("intent job ID must be positive")
         # Retry until 23h55m after the Reset, or after creation for other work; unfinished Reset work blocks the next Reset.
-        with self._connection() as connection:
+        with self.connection() as connection:
             with connection.transaction():
                 connection.execute(_WORKER_LOCK_WAIT)
                 row = connection.execute(
-                    "UPDATE collector_work AS work SET status = CASE WHEN decision.retry THEN 'waiting_retry' ELSE 'failed' END, due_at = CASE WHEN decision.retry THEN clock_timestamp() + interval '5 seconds' ELSE work.due_at END, failure_category = left(%s, 128), failure_detail = left(%s, 1024), updated_at = clock_timestamp() FROM (SELECT %s AND clock_timestamp() < COALESCE((SELECT sweep.boundary_at FROM collector_reset_sweeps AS sweep WHERE sweep.id = current.sweep_id), current.created_at) + interval '23 hours 55 minutes' AS retry FROM collector_work AS current WHERE current.id = %s) AS decision WHERE work.id = %s AND work.status NOT IN ('complete', 'failed', 'cancelled') RETURNING work.status",
-                    (category, detail or "", retryable, job_id, job_id),
+                    "UPDATE collector_work AS work SET status = CASE WHEN decision.retry THEN 'waiting_retry' ELSE 'failed' END, due_at = CASE WHEN decision.retry THEN clock_timestamp() + interval '5 seconds' ELSE work.due_at END, failure_category = left(%s, 128), failure_detail = left(%s, 1024), updated_at = clock_timestamp() FROM (SELECT %s AND clock_timestamp() < COALESCE((SELECT sweep.boundary_at FROM collector_reset_sweeps AS sweep WHERE sweep.id = current.sweep_id), current.created_at) + %s AS retry FROM collector_work AS current WHERE current.id = %s) AS decision WHERE work.id = %s AND work.status NOT IN ('complete', 'failed', 'cancelled') RETURNING work.status",
+                    (category, detail or "", retryable, COLLECTION_WINDOW, job_id, job_id),
                 ).fetchone()
         return None if row is None else str(row[0])
 
@@ -698,18 +683,18 @@ class CollectorDatabase:
             raise RuntimeError(
                 "regular work must drain before Reset membership freezes"
             )
-        with self._connection() as connection:
+        with self.connection() as connection:
             try:
                 return collector_reset.begin_reset(connection, boundary_at)
             except psycopg.errors.LockNotAvailable:
                 return None
 
     def expire_settlement_checks(self, now: datetime) -> int:
-        with self._connection() as connection:
+        with self.connection() as connection:
             return collector_reset.expire_settlement_checks(connection, now)
 
     def reset_ready(self, sweep_id: int) -> bool:
-        with self._connection() as connection:
+        with self.connection() as connection:
             return collector_reset.reset_ready(connection, sweep_id)
 
     @staticmethod
@@ -1112,7 +1097,7 @@ class CollectorDatabase:
     ) -> ResponseResult:
         self._validate_handoff(handoff)
         parser_version = self._parser_for(handoff.endpoint)
-        with self._connection() as connection:
+        with self.connection() as connection:
             with connection.transaction():
                 connection.execute(_WORKER_LOCK_WAIT)
                 if recovering:
@@ -1283,7 +1268,7 @@ class CollectorDatabase:
             or failure.normalized_tag is not None
         ):
             raise ValueError("global transport failure identity is invalid")
-        with self._connection() as connection:
+        with self.connection() as connection:
             row = connection.execute(
                 """
                 INSERT INTO collector_transport_failures (
@@ -1315,7 +1300,7 @@ class CollectorDatabase:
         return int(row[0])
 
     def applied_occurrence_keys(self, keys: list[str]) -> set[str]:
-        with self._connection() as connection:
+        with self.connection() as connection:
             rows = connection.execute(
                 """SELECT last_applied_occurrence_key FROM collector_response_state
                 WHERE last_applied_occurrence_key = ANY(%s)""",
@@ -1326,7 +1311,7 @@ class CollectorDatabase:
     def referenced_spool_hashes(self) -> set[str]:
         # Spool cleanup pauses new raw responses while this runs; give up
         # (QueryCanceled) rather than hold them, and the next sweep retries.
-        with self._connection() as connection:
+        with self.connection() as connection:
             with connection.transaction():
                 connection.execute("SET LOCAL statement_timeout = '10s'")
                 rows = connection.execute(RECORDED_SQL).fetchall()
@@ -1338,7 +1323,7 @@ class CollectorDatabase:
         Reset's unprocessed ones took 7.6 s, and again 30 s later."""
         if limit < 1:
             raise ValueError("cleanup limit must be positive")
-        with self._connection() as connection:
+        with self.connection() as connection:
             rows = connection.execute(
                 f"""
                 SELECT upload.*, NOT {STILL_PROCESSING_SQL}
@@ -1366,7 +1351,7 @@ class CollectorDatabase:
         hashes = sorted(set(response_hashes))
         for response_hash in hashes:
             self._validate_hash(response_hash)
-        with self._connection() as connection:
+        with self.connection() as connection:
             with connection.transaction():
                 connection.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended(hash, 0))"

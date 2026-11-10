@@ -53,7 +53,7 @@ def test_slow_spool_cleanup_read_does_not_block_either_readiness(tmp_path) -> No
     worker_spool = Spool(tmp_path / "spool", max_body_bytes=1024)
     collector = _collector(spool, SlowReferenceStore(fake), _Client(fake))
     with ThreadPoolExecutor(max_workers=3) as executor:
-        sweep = executor.submit(collector._sweep_unreferenced)
+        sweep = executor.submit(collector.commits.sweep_unreferenced)
         try:
             assert reading.wait(timeout=2)
             ready = executor.submit(asyncio.run, collector.health_response("/readyz"))
@@ -76,7 +76,7 @@ def test_spool_cleanup_read_over_its_time_limit_skips_one_sweep(tmp_path) -> Non
     spool.publish(b"orphan", digest)
     collector = _collector(spool, TimedOutStore(fake), _Client(fake))
 
-    collector._sweep_unreferenced()
+    collector.commits.sweep_unreferenced()
 
     assert collector.outcomes["spool_sweep_timeout"] == 1
     assert spool.verify(digest) == b"orphan"

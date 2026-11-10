@@ -352,7 +352,7 @@ def test_cleanup_lookup_checks_a_slice_of_a_resets_unprocessed_uploads(
 
                 yield SimpleNamespace(execute=execute)
 
-        database._connection = explained  # type: ignore[method-assign]
+        database.connection = explained  # type: ignore[method-assign]
         try:
             found = [database.deletable_hashes(limit=50) for _ in range(7)]
         finally:

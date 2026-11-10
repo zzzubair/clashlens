@@ -29,7 +29,7 @@ class SpoolState(StrEnum):
       rechecks the spool.
     - ``RECOVERY_REQUIRED``: a response saved to the spool could not be
       committed to the database in its turn. Collection stays closed until a
-      restart replays every saved response in order (``recover_handoffs``).
+      restart replays every saved response in order (``collector_commits.SavedResponses.recover``).
 
     Events: a capacity error (``ENOSPC``, ``EDQUOT`` or a ``degraded_capacity``
     refusal), any other spool error, a failed handoff, and a probe. The two

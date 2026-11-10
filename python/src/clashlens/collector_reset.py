@@ -23,12 +23,12 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from .collection_rules import COLLECTION_WINDOW
 from .collector_liveness import BULK_STATEMENT_TIMEOUT
 from .domain import is_season_boundary
 from .league_history_refresh import REFRESH_DELAY, schedule_refresh
 
 SETTLEMENT_DELAY = timedelta(minutes=20)
-COLLECTION_WINDOW = timedelta(hours=23, minutes=55)
 PROFILE_PASS_FROM = timedelta(minutes=3, seconds=40)
 BATTLE_LOG_PASS_FROM = timedelta(minutes=7, seconds=20)
 

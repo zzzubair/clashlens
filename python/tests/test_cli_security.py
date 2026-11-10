@@ -12,8 +12,6 @@ from types import SimpleNamespace
 import pytest
 
 from clashlens.cli import (
-    _archive,
-    _file_value,
     _load_hmac_keys,
     _parse_api_keys,
     _run_collector,
@@ -22,6 +20,7 @@ from clashlens.cli import (
     main,
 )
 from clashlens.collector_http import ApiKey
+from clashlens.runtime import file_value, open_archive
 
 
 def _secret_text(value: bytes) -> str:
@@ -71,7 +70,7 @@ def test_collector_loads_four_to_nine_regular_keys(monkeypatch, count: int) -> N
     def stop_after_key_checks(_database_url: str) -> None:
         raise KeysAccepted
 
-    monkeypatch.setattr("clashlens.cli._database_url", lambda _arguments: "")
+    monkeypatch.setattr("clashlens.cli.database_url", lambda _arguments: "")
     monkeypatch.setattr("clashlens.cli.CollectorDatabase", stop_after_key_checks)
 
     assert arguments.starts_per_second_per_key == 25
@@ -106,10 +105,10 @@ def test_collector_sizes_checks_in_flight_from_its_keys(
         raise Sized(kwargs["regular_parallelism"])
 
     database = SimpleNamespace(register_interactive_key=lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("clashlens.cli._database_url", lambda _arguments: "")
+    monkeypatch.setattr("clashlens.cli.database_url", lambda _arguments: "")
     monkeypatch.setattr("clashlens.cli.CollectorDatabase", lambda _url: database)
     monkeypatch.setattr(
-        "clashlens.cli._archive",
+        "clashlens.cli.open_archive",
         lambda *_args, **_kwargs: SimpleNamespace(spool=None, archive=None),
     )
     monkeypatch.setattr("clashlens.cli.SpoolFirstReader", SimpleNamespace)
@@ -172,10 +171,10 @@ def test_collector_threads_stay_under_the_container_limit(
     database = SimpleNamespace(
         register_interactive_key=lambda *_args, **_kwargs: None, close=lambda: None
     )
-    monkeypatch.setattr("clashlens.cli._database_url", lambda _arguments: "")
+    monkeypatch.setattr("clashlens.cli.database_url", lambda _arguments: "")
     monkeypatch.setattr("clashlens.cli.CollectorDatabase", lambda _url: database)
     monkeypatch.setattr(
-        "clashlens.cli._archive",
+        "clashlens.cli.open_archive",
         lambda *_args, **_kwargs: SimpleNamespace(spool=closed, archive=None),
     )
     monkeypatch.setattr("clashlens.cli.SpoolFirstReader", SimpleNamespace)
@@ -420,7 +419,7 @@ def test_file_backed_database_value_accepts_one_final_lf(tmp_path: Path) -> None
     value_file.write_text("postgresql://prototype@postgres/db\n", encoding="utf-8")
 
     assert (
-        _file_value(str(value_file), "", "database URL")
+        file_value(str(value_file), "", "database URL")
         == "postgresql://prototype@postgres/db"
     )
 
@@ -553,7 +552,7 @@ def test_archive_requires_file_backed_credentials() -> None:
     )
 
     with pytest.raises(ValueError, match="archive access and secret key are required"):
-        _archive(arguments)
+        open_archive(arguments)
 
 
 def _worker_arguments(*extra: str) -> argparse.Namespace:
@@ -837,7 +836,7 @@ def test_cli_ready_fails_on_terminal_marker_mismatch_only(
 ) -> None:
     monkeypatch.setattr("clashlens.cli.Database", _ReadyDatabaseStub)
     monkeypatch.setattr(
-        "clashlens.cli._archive",
+        "clashlens.cli.open_archive",
         lambda _arguments, **_kwargs: _ReadyArchiveStub(remote_health),
     )
 

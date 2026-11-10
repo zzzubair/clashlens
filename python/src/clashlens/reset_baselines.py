@@ -10,6 +10,7 @@ from psycopg.types.json import Jsonb
 
 from . import boundary, boundary_members, ranked_day_inputs
 from .analytics import unplayed_profile_sql, unplayed_since_sql
+from .collection_rules import COLLECTION_WINDOW
 from .db import (
     ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
@@ -30,9 +31,6 @@ from .domain import (
     ranked_day_for,
     season_is_current,
 )
-
-# Reset work stops collecting at 04:55 UTC the next day, as in the collector.
-RESET_COLLECTION_WINDOW = timedelta(hours=23, minutes=55)
 
 
 def _refresh_reset_baseline_evidence(
@@ -949,7 +947,7 @@ def _load_reset_endpoint_evidence(
         if row[4] is None or row[4] < boundary_at:
             reasons.append(f"{endpoint}_stale")
             hard_failure = True
-        elif row[4] >= boundary_at + RESET_COLLECTION_WINDOW:
+        elif row[4] >= boundary_at + COLLECTION_WINDOW:
             reasons.append(f"{endpoint}_late")
             hard_failure = True
         if processing_outcome is None:

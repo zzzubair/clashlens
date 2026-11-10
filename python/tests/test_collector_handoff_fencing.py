@@ -13,8 +13,8 @@ from typing import Any
 import psycopg
 import pytest
 from test_collector import _Client, _collector, _Reservation, _Spool, _Store
-from test_collector_upload_slots import _handoff_for
 
+from clashlens import collector_commits
 from clashlens.collector import _CLEANUP_BATCH_SIZE, _CLEANUP_LOOKUP_SIZE
 from clashlens.collector_db import CollectorDatabase, CollectorWork
 from clashlens.collector_http import FetchedResponse, KeyPool
@@ -55,12 +55,12 @@ def test_recovery_replays_applied_then_received_order(
         handoff = replace(
             collector._make_handoff(work, response, digest), occurrence_key=key
         )
-        name, payload = collector.serialize_handoff(handoff)
+        name, payload = collector_commits.serialize_handoff(handoff)
         with spool.reserve(1024) as reservation:
             spool.publish_handoff(body, digest, name, payload, reservation)
 
     try:
-        assert collector.recover_handoffs() == 2
+        assert asyncio.run(collector.commits.recover()) == 2
         assert store.replayed == replayed
         assert spool.iter_handoffs() == []
     finally:
@@ -144,7 +144,7 @@ def test_full_cleanup_lookup_while_spool_is_full_clears_an_earlier_rest(
             stop_requested.set()
         await asyncio.sleep(0)
 
-    monkeypatch.setattr("clashlens.collector._wait_or_stop", no_wait)
+    monkeypatch.setattr("clashlens.collector.wait_or_stop", no_wait)
     collector.cleanup_uploaded = cleanup  # type: ignore[method-assign]
     collector._spool_available = spool_available  # type: ignore[method-assign]
 
@@ -187,7 +187,7 @@ def test_cleanup_keeps_looking_every_second_while_a_burst_keeps_arriving(
 
     store.deletable_hashes = deletable_hashes  # type: ignore[method-assign]
     store.delete_spool_if_deletable = delete_spool_if_deletable  # type: ignore[method-assign]
-    monkeypatch.setattr("clashlens.collector._wait_or_stop", one_second)
+    monkeypatch.setattr("clashlens.collector.wait_or_stop", one_second)
 
     asyncio.run(asyncio.wait_for(collector._upload_loop(stop, 0.01), timeout=2))
 
@@ -404,32 +404,45 @@ def test_unrelated_players_skip_the_spool_while_a_save_lock_is_held() -> None:
     collector = _collector(spool, store, _Client(spool))
     now = datetime.now(UTC)
     held, other = (CollectorWork(1, tag, now) for tag in ("#200C", "#2022"))
-    # These two players shared one lock when there were only 256.
-    lock = collector._handoff_lock(_handoff_for(collector, "#200C", now))
+    publishing, release = threading.Event(), threading.Event()
+    publish = spool.publish_handoff
+
+    def blocked_publish(body, digest, name, payload, reservation):
+        publishing.set()
+        assert release.wait(timeout=5)
+        return publish(body, digest, name, payload, reservation)
 
     async def scenario() -> None:
         for work in (held, other):
             await collector.collect_player(work, lane="ordinary", endpoints=("profile",))
-        async with lock:
-            # The unrelated player's unchanged answer skips the spool...
+        spool.publish_handoff = blocked_publish
+        saver = asyncio.create_task(collector.collect_player(
+            replace(held, collector_work_id=7), lane="ordinary", endpoints=("profile",)
+        ))
+        same = None
+        try:
+            assert await asyncio.to_thread(publishing.wait, 2)
             assert await asyncio.wait_for(
                 collector.collect_player(other, lane="ordinary", endpoints=("profile",)),
                 1,
             ) == ["recorded"]
             assert store.checks == 1
-            # ...but the same player's answer still waits for its lock.
             same = asyncio.create_task(
                 collector.collect_player(held, lane="ordinary", endpoints=("profile",))
             )
             await asyncio.sleep(0.1)
             assert not same.done()
-        assert await same == ["recorded"]
+        finally:
+            release.set()
+            assert await saver == ["recorded"]
+            if same is not None:
+                assert await same == ["recorded"]
 
     asyncio.run(scenario())
 
     assert store.checks == 1
     assert [handoff.identity_key for handoff in store.handoffs] == [
-        "#200C", "#2022", "#200C",
+        "#200C", "#2022", "#200C", "#200C",
     ]
 
 

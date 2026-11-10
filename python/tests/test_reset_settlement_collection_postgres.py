@@ -278,7 +278,7 @@ def test_settlement_always_fetches_profile_then_covering_log(
         _Provider.status["battlelog"] = 503
 
         (intent,) = _settlement_intents(database, boundary + timedelta(minutes=21))
-        assert asyncio.run(collector.collect_intent(intent)) == "retrying"
+        assert asyncio.run(collector.intents.collect(intent)) == "retrying"
         status, profile_id, failed_log, profile_status, *_rest = _work(connection_info)
         assert (status, profile_status) == ("waiting_retry", 200) and failed_log
         assert [endpoint for endpoint, _at in _Provider.requests][:2] == [
@@ -289,7 +289,7 @@ def test_settlement_always_fetches_profile_then_covering_log(
         _Provider.status["battlelog"] = 200
         (retry,) = _settlement_intents(database, datetime.now(UTC) + timedelta(minutes=1))
         assert (retry.profile_required, retry.battle_log_required) == (False, True)
-        assert asyncio.run(collector.collect_intent(retry)) == "complete"
+        assert asyncio.run(collector.intents.collect(retry)) == "complete"
         status, kept, log_id, _status, profile_done, log_started, _ = _work(connection_info)
         assert status == "complete" and kept == profile_id
         assert log_id not in (None, failed_log) and log_started >= profile_done
@@ -560,8 +560,8 @@ def test_no_request_starts_after_the_cutoff_once_a_check_is_running(
         )
         _Provider.profile_delay = 0.6
         collector = _collector(origin, database, tmp_path)
-        assert asyncio.run(collector.collect_intent(intent)) == "window_closed"
-        assert asyncio.run(collector.collect_intent(intent)) == "window_closed"
+        assert asyncio.run(collector.intents.collect(intent)) == "window_closed"
+        assert asyncio.run(collector.intents.collect(intent)) == "window_closed"
         assert [endpoint for endpoint, _at in _Provider.requests] == ["profile"]
         # The saved profile stays referenced; the row waits for expiry.
         status, profile_id, log_id, profile_status, *_ = _work(connection_info)
@@ -659,7 +659,7 @@ def test_transport_retry_keeps_pinned_profile_and_stays_bounded(
                 database,
                 max(datetime.now(UTC) + timedelta(minutes=1), boundary + timedelta(minutes=21)),
             )
-            return await collector.collect_intent(intent)
+            return await collector.intents.collect(intent)
 
         async def run() -> list[str]:
             # During a provider-outage pause, retries are not counted.
@@ -690,7 +690,7 @@ def test_missing_player_profile_still_brings_its_battle_log(
         _Provider.status["profile"] = 404
         (intent,) = _settlement_intents(database, WEDNESDAY_RESET + timedelta(minutes=20))
         _clock_from(monkeypatch, intent.due_at)
-        assert asyncio.run(_collector(origin, database, tmp_path).collect_intent(intent)) == "complete"
+        assert asyncio.run(_collector(origin, database, tmp_path).intents.collect(intent)) == "complete"
         assert [endpoint for endpoint, _at in _Provider.requests] == ["profile", "battlelog"]
         assert _work(connection_info)[3] == 404
 
@@ -709,7 +709,7 @@ def test_monday_and_season_checks_have_two_endpoints_and_no_acceptance(
         (intent,) = _settlement_intents(database, boundary + timedelta(minutes=20))
         assert not intent.league_history_required
         _clock_from(monkeypatch, intent.due_at)
-        assert asyncio.run(_collector(origin, database, tmp_path).collect_intent(intent)) == "complete"
+        assert asyncio.run(_collector(origin, database, tmp_path).intents.collect(intent)) == "complete"
         assert [endpoint for endpoint, _at in _Provider.requests] == ["profile", "battlelog"]
         with psycopg.connect(connection_info) as connection:
             early_history = connection.execute(
@@ -990,7 +990,7 @@ def test_reset_pair_reads_every_profile_before_the_new_day_then_its_battle_log(
         assert [needs(intent) for intent in profiles] == [
             (first, True, False, False), (second, True, False, False)
         ]
-        assert asyncio.run(collector.collect_intent(profiles[0])) == "profile_saved"
+        assert asyncio.run(collector.intents.collect(profiles[0])) == "profile_saved"
         assert [endpoint for endpoint, _at in _Provider.requests] == ["profile"]
         assert [intent.player_id for intent in due(SEASON_RESET + timedelta(minutes=7, seconds=19))] == [second]
 
@@ -1002,7 +1002,7 @@ def test_reset_pair_reads_every_profile_before_the_new_day_then_its_battle_log(
         ]
         _Provider.requests.clear()
         for intent in (owed, saved):
-            assert asyncio.run(collector.collect_intent(intent)) == "complete"
+            assert asyncio.run(collector.intents.collect(intent)) == "complete"
         assert [endpoint for endpoint, _at in _Provider.requests] == [
             "profile", "battlelog", "leaguehistory", "battlelog", "leaguehistory"
         ]

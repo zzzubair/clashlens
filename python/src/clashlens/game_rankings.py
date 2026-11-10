@@ -24,8 +24,9 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from .collector_http import FetchedResponse, ProviderFailure
 from .domain import ranked_day_for
@@ -301,7 +302,7 @@ def load_pulls(
 
     Only pulls whose purpose is in ``bodies`` carry their raw bytes.
     """
-    with database._connection() as connection:
+    with database.connection() as connection:
         rows = connection.execute(
             """
             SELECT purpose, location_id, requested_at, failure,
@@ -359,7 +360,7 @@ def save_pull(
     """
     body = None if response is None else response.body
     added = 0
-    with database._connection() as connection, connection.transaction():
+    with database.connection() as connection, connection.transaction():
         tags = sorted({row.tag for row in discover if row.legend_i})
         tracked = {
             str(tag) for (tag,) in connection.execute(
@@ -400,22 +401,32 @@ def save_pull(
 
 
 def _prune(database: CollectorDatabase, now: datetime) -> int:
-    with database._connection() as connection, connection.transaction():
+    with database.connection() as connection, connection.transaction():
         return connection.execute(
             "DELETE FROM game_ranking_pulls WHERE boundary_at < %s",
             (reset_at(now) - KEEP_PULLS,),
         ).rowcount
 
 
+class BoardRow(NamedTuple):
+    snapshot_id: int
+    snapshot_version: int
+    normalized_tag: str | None
+    board_position: int | None
+    trophies: int | None
+    confidence: str | None
+    measured_coverage: Decimal
+
+
 def score_day(database: CollectorDatabase, boundary: datetime) -> dict[str, Any] | None:
     """Score R's published board once per board version; None when there is nothing new."""
-    with database._connection() as connection:
-        board_rows = connection.execute(
+    with database.connection() as connection:
+        board_rows = [BoardRow(*row) for row in connection.execute(
             "SELECT * FROM clashlens_game_ranking_board(%s)", (boundary,)
-        ).fetchall()
+        ).fetchall()]
         if not board_rows or connection.execute(
             "SELECT 1 FROM game_ranking_scores WHERE boundary_at = %s AND snapshot_id = %s",
-            (boundary, board_rows[0][0]),
+            (boundary, board_rows[0].snapshot_id),
         ).fetchone():
             return None
     pulls = load_pulls(
@@ -440,8 +451,8 @@ def score_day(database: CollectorDatabase, boundary: datetime) -> dict[str, Any]
             pulled_at[location_id] = pull.requested_at
     if len(countries) < len(expected):
         reasons.append(f"countries_missing:{len(expected) - len(countries)}")
-    board = {str(row[2]): (int(row[3]), int(row[4]), str(row[5]))
-             for row in board_rows if row[2] is not None}
+    board = {str(row.normalized_tag): (int(row.board_position), int(row.trophies), str(row.confidence))
+             for row in board_rows if row.normalized_tag is not None}
     # A stuck 5,000 row: the list shows 5,000 trophies and 0 attack wins for a
     # player with a stored Legend battle, attack or defense, earlier this Season.
     at_5000 = sorted({row.tag for rows in countries.values() for row in rows
@@ -449,7 +460,7 @@ def score_day(database: CollectorDatabase, boundary: datetime) -> dict[str, Any]
     # Our newest saved trophies when each board player's country list was requested.
     live = [(row.tag, pulled_at[location]) for location, rows in countries.items()
             for row in rows if row.legend_i and row.tag in board]
-    with database._connection() as connection:
+    with database.connection() as connection:
         stuck = {str(tag) for (tag,) in connection.execute(
             "SELECT * FROM clashlens_game_ranking_season_battlers(%s, %s, %s)",
             (at_5000, ranked_day_for(boundary).season_start, boundary),
@@ -465,7 +476,7 @@ def score_day(database: CollectorDatabase, boundary: datetime) -> dict[str, Any]
     country_times = [pull.requested_at for pull in pulls if pull.purpose == "country"]
     result = {
         "unknown_reasons": reasons,
-        "board_measured_coverage": float(board_rows[0][6]),
+        "board_measured_coverage": float(board_rows[0].measured_coverage),
         "global_early_at": None if early is None else _utc(early.requested_at),
         "global_reset_at": None if reset is None else _utc(reset.requested_at),
         "countries_expected": len(expected),
@@ -482,23 +493,23 @@ def score_day(database: CollectorDatabase, boundary: datetime) -> dict[str, Any]
             received,
         ),
     }
-    with database._connection() as connection, connection.transaction():
+    with database.connection() as connection, connection.transaction():
         connection.execute(
             """
             INSERT INTO game_ranking_scores (boundary_at, snapshot_id, snapshot_version, status, score)
             VALUES (%s, %s, %s, %s, %s::jsonb)
             ON CONFLICT (boundary_at, snapshot_id) DO NOTHING
             """,
-            (boundary, board_rows[0][0], board_rows[0][1],
+            (boundary, board_rows[0].snapshot_id, board_rows[0].snapshot_version,
              "unknown" if reasons else "scored", json.dumps(result, sort_keys=True)),
         )
-    return {"boundary_at": boundary.isoformat(), "snapshot_version": board_rows[0][1],
+    return {"boundary_at": boundary.isoformat(), "snapshot_version": board_rows[0].snapshot_version,
             "status": "unknown" if reasons else "scored", "unknown_reasons": reasons}
 
 
 def _days_to_score(database: CollectorDatabase, now: datetime) -> list[datetime]:
     """Resets past R+2 h whose pulls are still kept, since pulls began; scoring each is idempotent."""
-    with database._connection() as connection:
+    with database.connection() as connection:
         first = connection.execute("SELECT min(boundary_at) FROM game_ranking_pulls").fetchone()[0]
     if first is None:
         return []
@@ -543,7 +554,7 @@ async def pull_due(collector: Collector, puller: _Puller) -> Counter[str]:
     now = puller.clock()
     boundary = reset_at(now)
     database = collector.database
-    pulls = await collector._database_call(
+    pulls = await collector.database_call(
         load_pulls, database, boundary, ("global_early", "locations")
     )
     counts: Counter[str] = Counter()
@@ -558,7 +569,7 @@ async def pull_due(collector: Collector, puller: _Puller) -> Counter[str]:
         rows = None if failure or target is None else read_rows(response.body)
         if judge is not None and rows is not None and judge(rows):
             purpose = "global_reset"
-        added, failure = await collector._database_call(
+        added, failure = await collector.database_call(
             save_pull, database, boundary, purpose, location, requested_at, response, failure,
             discover=rows if purpose == "country" and rows else [],
         )
@@ -600,7 +611,7 @@ async def pull_due(collector: Collector, puller: _Puller) -> Counter[str]:
     if locations is None:
         return counts
     for location in read_countries(locations.body):
-        if collector._stopping.is_set():
+        if collector.stopping.is_set():
             break
         if due("country", location[0], RETRY_AFTER):
             await pull("country", location)
@@ -623,11 +634,11 @@ async def run(collector: Collector, stop_requested: asyncio.Event) -> None:
             if time.monotonic() >= next_score:
                 next_score = time.monotonic() + SCORE_SECONDS
                 now = puller.clock()
-                for day in await collector._database_call(_days_to_score, collector.database, now):
-                    scored = await collector._database_call(score_day, collector.database, day)
+                for day in await collector.database_call(_days_to_score, collector.database, now):
+                    scored = await collector.database_call(score_day, collector.database, day)
                     if scored:
                         print(json.dumps({**event, **scored}), flush=True)
-                pruned = await collector._database_call(_prune, collector.database, now)
+                pruned = await collector.database_call(_prune, collector.database, now)
                 if pruned:
                     print(json.dumps({**event, "status": "pruned", "pulls": pruned}), flush=True)
         except Exception as error:  # noqa: BLE001 - tried again next tick
