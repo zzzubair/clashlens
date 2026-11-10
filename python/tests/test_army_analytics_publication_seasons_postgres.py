@@ -23,9 +23,7 @@ from test_army_analytics_publication_postgres import (
 )
 
 from clashlens import api_analytics, army_rank_bands, boundary_publication
-from clashlens.api_db import (
-    ApiDatabase,
-)
+from clashlens.api_db import ApiDatabase
 from clashlens.army_analytics import (
     ArmyAnalyticsUnavailable,
     CurrentSeasonEmpty,
@@ -85,6 +83,7 @@ def test_current_season_clipped_below_start_day_is_unavailable(
         )
         database, processor = _processor(ci, archive_server, monkeypatch)
         api = ApiDatabase(ci)
+        api_reader = api_analytics.ArmyAnalyticsReader(api.pool)
         try:
             processor.process_job(job, owner="ingest")
             with database.pool.connection() as connection:
@@ -95,7 +94,7 @@ def test_current_season_clipped_below_start_day_is_unavailable(
             # completed source evidence; a request starting at 28 lies beyond
             # the ended days and must name the affected days.
             with pytest.raises(ArmyAnalyticsUnavailable) as unavailable:
-                api_analytics.get_army_analytics(api,
+                api_analytics.get_army_analytics(api_reader,
                     _selection(season="current", start_day=28, end_day=28),
                     now=DAY_START + timedelta(days=24, hours=12),
                 )
@@ -116,6 +115,7 @@ def test_current_season_without_completed_days_names_previous_season(
         )
         database, processor = _processor(ci, archive_server, monkeypatch)
         api = ApiDatabase(ci)
+        api_reader = api_analytics.ArmyAnalyticsReader(api.pool)
         try:
             processor.process_job(job, owner="ingest")
             with database.pool.connection() as connection:
@@ -130,7 +130,7 @@ def test_current_season_without_completed_days_names_previous_season(
             # No Legend-day interval of the confirmed current season has ended
             # yet at the season anchor itself.
             with pytest.raises(CurrentSeasonEmpty) as empty:
-                api_analytics.get_army_analytics(api,
+                api_analytics.get_army_analytics(api_reader,
                     _selection(season="current", start_day=23), now=DAY_START
                 )
             assert empty.value.previous_season_id == SEASON_ID
@@ -139,10 +139,10 @@ def test_current_season_without_completed_days_names_previous_season(
             with database.pool.connection() as connection:
                 connection.execute("DELETE FROM legend_season_anchors")
             with pytest.raises(CurrentSeasonEmpty) as empty:
-                api_analytics.get_army_analytics(api, _selection(season="current", start_day=23))
+                api_analytics.get_army_analytics(api_reader, _selection(season="current", start_day=23))
             assert empty.value.previous_season_id is None
             # The historical season stays reachable by explicit id.
-            assert api_analytics.get_army_analytics(api, _selection(start_day=23)) is not None
+            assert api_analytics.get_army_analytics(api_reader, _selection(start_day=23)) is not None
         finally:
             api.close()
             database.close()
@@ -159,6 +159,7 @@ def test_current_season_reads_latest_finished_days_it_has(
         )
         database, processor = _processor(ci, archive_server, monkeypatch)
         api = ApiDatabase(ci)
+        api_reader = api_analytics.ArmyAnalyticsReader(api.pool)
         try:
             processor.process_job(job, owner="ingest")
             with database.pool.connection() as connection:
@@ -170,21 +171,21 @@ def test_current_season_reads_latest_finished_days_it_has(
             # but no completed source publication exists for it: the default
             # range must name it unavailable, not fall back to an empty state.
             with pytest.raises(ArmyAnalyticsUnavailable) as unavailable:
-                api_analytics.get_army_analytics(api,
+                api_analytics.get_army_analytics(api_reader,
                     _selection(season="current", start_day=1, end_day=1),
                     now=DAY_START + timedelta(days=1, hours=1),
                 )
             assert unavailable.value.affected_days == [1]
             # The default range reads the finished days it has instead of
             # failing because earlier days were never finished.
-            covered = api_analytics.get_army_analytics(api,
+            covered = api_analytics.get_army_analytics(api_reader,
                 _selection(season="current", start_day=1, end_day=28),
                 now=DAY_START + timedelta(days=24, hours=12),
             )
             assert (covered["selection"]["start_day"], covered["selection"]["end_day"]) == (23, 23)
             assert (covered["collection_coverage"]["covered_days"], covered["total_attacks"]) == ([23], 1)
             # The completed day itself stays reachable through the chronology.
-            resolved = api_analytics.get_army_analytics(api,
+            resolved = api_analytics.get_army_analytics(api_reader,
                 _selection(season="current", start_day=23, end_day=28),
                 now=DAY_START + timedelta(days=23),
             )
@@ -297,7 +298,8 @@ def test_streak_evidence_reports_exclusions_and_shielded_member_days(
             observed_at=ts2 + timedelta(minutes=1), normalized_tag="#2PP",
         )
         database, processor = _processor(ci, archive_server, monkeypatch)
-        api = ApiDatabase(as_api_role(ci), army_cache_capacity=2)
+        api = ApiDatabase(as_api_role(ci))
+        api_reader = api_analytics.ArmyAnalyticsReader(api.pool, cache_capacity=2)
         try:
             for index, job in enumerate((j1, j2)):
                 assert processor.process_job(job, owner=f"ingest-{index}").outcome in (
@@ -360,7 +362,7 @@ def test_streak_evidence_reports_exclusions_and_shielded_member_days(
             _mark_shielded(database, "#2PP", DAY_START, 23)
             _mark_shielded(database, "#8PP", day2_start, 24)
 
-            streak = api_analytics.get_army_analytics(api,
+            streak = api_analytics.get_army_analytics(api_reader,
                 _selection(population="streak-top-5", start_day=23, end_day=24)
             )
             assert streak is not None
@@ -373,12 +375,12 @@ def test_streak_evidence_reports_exclusions_and_shielded_member_days(
             # The defender's weak S2 entry stays visible as a count.
             assert evidence["stale_or_uncertain_cohort_members"] == 1
             assert evidence["shielded_player_days"] == 2
-            cached_streak = api_analytics.get_army_analytics(api,
+            cached_streak = api_analytics.get_army_analytics(api_reader,
                 _selection(population="streak-top-5", start_day=23, end_day=24)
             )
             assert cached_streak == streak
             cached_streak["rows"].clear()
-            assert api_analytics.get_army_analytics(api,
+            assert api_analytics.get_army_analytics(api_reader,
                 _selection(population="streak-top-5", start_day=23, end_day=24)
             )["rows"]
             with database.pool.connection() as connection:
@@ -391,7 +393,7 @@ def test_streak_evidence_reports_exclusions_and_shielded_member_days(
                     """,
                     (attacker_id, DAY_START),
                 )
-            changed_in_place = api_analytics.get_army_analytics(api,
+            changed_in_place = api_analytics.get_army_analytics(api_reader,
                 _selection(population="streak-top-5", start_day=23, end_day=24)
             )
             assert changed_in_place is not None
@@ -407,7 +409,7 @@ def test_streak_evidence_reports_exclusions_and_shielded_member_days(
                 version=3,
                 shield_state="not_shielded",
             )
-            changed_streak = api_analytics.get_army_analytics(api,
+            changed_streak = api_analytics.get_army_analytics(api_reader,
                 _selection(population="streak-top-5", start_day=23, end_day=24)
             )
             assert changed_streak is not None
@@ -415,7 +417,7 @@ def test_streak_evidence_reports_exclusions_and_shielded_member_days(
 
             for _day in (23, 24):
                 army_rank_bands.refresh_rank_band_totals(database)
-            non_streak = api_analytics.get_army_analytics(api,
+            non_streak = api_analytics.get_army_analytics(api_reader,
                 _selection(population="top-5", start_day=23, end_day=24)
             )
             assert non_streak is not None
@@ -472,6 +474,7 @@ def test_missing_trophy_change_makes_subsequent_unknown_for_new_and_existing_row
             jobs.append(job)
         database, processor = _processor(ci, archive_server, monkeypatch)
         api = ApiDatabase(ci)
+        api_reader = api_analytics.ArmyAnalyticsReader(api.pool)
         try:
             for idx, job in enumerate(jobs):
                 out = processor.process_job(job, owner=f"ingest-{idx}")
@@ -511,7 +514,7 @@ def test_missing_trophy_change_makes_subsequent_unknown_for_new_and_existing_row
                     "SELECT battle_id, battle_time_trophies FROM army_analytics_battle_facts WHERE ranked_day_start=%s AND is_current ORDER BY battle_id", (day_a,)
                 ).fetchall()}
             assert trophies_a2 == trophies_a
-            trophy_a = api_analytics.get_army_analytics(api, _selection(population="trophies-5000-9000", start_day=23, end_day=23))
+            trophy_a = api_analytics.get_army_analytics(api_reader, _selection(population="trophies-5000-9000", start_day=23, end_day=23))
             assert trophy_a is not None
             assert trophy_a["missing_trophy_membership_evidence"] == 1
             assert trophy_a["total_attacks"] == 2  # a3 excluded from trophy range
@@ -530,7 +533,7 @@ def test_missing_trophy_change_makes_subsequent_unknown_for_new_and_existing_row
             assert trophies_b_valid[by_opp["#8P9"]] == 6000
             assert trophies_b_valid[by_opp["#8PY"]] == 6010
             assert trophies_b_valid[by_opp["#8PL"]] == 6030
-            trophy_b_valid = api_analytics.get_army_analytics(api, _selection(population="trophies-5000-9000", start_day=24, end_day=24))
+            trophy_b_valid = api_analytics.get_army_analytics(api_reader, _selection(population="trophies-5000-9000", start_day=24, end_day=24))
             assert trophy_b_valid is not None
             assert trophy_b_valid["missing_trophy_membership_evidence"] == 0
             assert trophy_b_valid["total_attacks"] == 3
@@ -561,7 +564,7 @@ def test_missing_trophy_change_makes_subsequent_unknown_for_new_and_existing_row
             assert trophies_b_corr[by_opp["#8P9"]] == 6000
             assert trophies_b_corr[by_opp["#8PY"]] == 6010
             assert trophies_b_corr[by_opp["#8PL"]] is None
-            trophy_b_corr = api_analytics.get_army_analytics(api, _selection(population="trophies-5000-9000", start_day=24, end_day=24))
+            trophy_b_corr = api_analytics.get_army_analytics(api_reader, _selection(population="trophies-5000-9000", start_day=24, end_day=24))
             assert trophy_b_corr is not None
             assert trophy_b_corr["missing_trophy_membership_evidence"] == 1
             assert trophy_b_corr["total_attacks"] == 2

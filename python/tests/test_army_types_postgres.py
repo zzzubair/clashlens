@@ -50,7 +50,7 @@ ATTACK_TROPHIES_MIGRATION = (
 
 def _result(api: ApiDatabase, population: str = "top-10", sort: str = "usage-rate") -> dict:
     result = api_analytics.get_army_analytics(
-        api, _selection(category="army-types", population=population, sort=sort)
+        api_analytics.ArmyAnalyticsReader(api.pool, cache_capacity=0), _selection(category="army-types", population=population, sort=sort)
     )
     assert result is not None
     return result
@@ -100,7 +100,7 @@ def test_army_types_from_saved_battles_to_the_armies_page(
             for key, tag, row, ts in reports
         ]
         database, processor = _processor(ci, archive_server, monkeypatch)
-        api = ApiDatabase(as_api_role(ci), army_cache_capacity=0)
+        api = ApiDatabase(as_api_role(ci))
         fact_reads: list[str] = []
 
         def trace(pool):
@@ -350,7 +350,7 @@ def test_a_past_seasons_army_types_from_saved_battles_to_its_page(
             for key, tag, row, ts in reports
         ]
         database, processor = _processor(ci, archive_server, monkeypatch)
-        api = ApiDatabase(as_api_role(ci), army_cache_capacity=0)
+        api = ApiDatabase(as_api_role(ci))
         app = create_app(
             database=api,
             keys={("typescript-website", "current"): TS_CURRENT},

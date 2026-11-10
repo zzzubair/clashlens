@@ -56,7 +56,8 @@ def test_variant_examples_from_saved_battles_to_the_armies_page(
             observed_at=times[-1] + timedelta(minutes=1), normalized_tag="#2PP",
         )[1]
         database, processor = _processor(ci, archive_server, monkeypatch)
-        api = ApiDatabase(as_api_role(ci), army_cache_capacity=0)
+        api = ApiDatabase(as_api_role(ci))
+        api_reader = api_analytics.ArmyAnalyticsReader(api.pool, cache_capacity=0)
         try:
             assert processor.process_job(job, owner="ingest").outcome in (
                 "processed", "processed_with_gaps",
@@ -106,7 +107,7 @@ def test_variant_examples_from_saved_battles_to_the_armies_page(
 
             def examples(population: str) -> dict:
                 result = api_analytics.get_army_analytics(
-                    api, _selection(category="army-types", population=population),
+                    api_reader, _selection(category="army-types", population=population),
                     examples=(army_types.THROWER, 3),
                 )
                 assert result is not None
@@ -114,7 +115,7 @@ def test_variant_examples_from_saved_battles_to_the_armies_page(
 
             def variant_attacks(population: str) -> int:
                 result = api_analytics.get_army_analytics(
-                    api, _selection(category="army-types", population=population)
+                    api_reader, _selection(category="army-types", population=population)
                 )
                 assert result is not None
                 (thrower,) = [row for row in result["rows"] if row["label"] == "Thrower"]
@@ -222,7 +223,7 @@ def test_variant_examples_from_saved_battles_to_the_armies_page(
             assert result["rule"] == "With Revenge Deck, without Fireball or Rocket Backpack."
             assert result["army_units"]["troop:51"] == {"name": "Wall Wrecker", "siege": True}
             other = api_analytics.get_army_analytics(
-                api, _selection(category="army-types", population="top-10"),
+                api_reader, _selection(category="army-types", population="top-10"),
                 examples=(army_types.HYDRA, army_types.OTHER_VARIANT),
             )
             assert other is not None and other["groups"] == []
@@ -256,7 +257,8 @@ def test_copy_army_code_comes_from_the_examples_newest_attacks(
                 observed_at=times[-1] + timedelta(minutes=1), normalized_tag=attacker,
             )[1]))
         database, processor = _processor(ci, archive_server, monkeypatch)
-        api = ApiDatabase(as_api_role(ci), army_cache_capacity=0)
+        api = ApiDatabase(as_api_role(ci))
+        api_reader = api_analytics.ArmyAnalyticsReader(api.pool, cache_capacity=0)
         try:
             for _attacker, _times, job in jobs:
                 assert processor.process_job(job, owner="ingest").outcome in (
@@ -298,7 +300,7 @@ def test_copy_army_code_comes_from_the_examples_newest_attacks(
 
             def example() -> dict:
                 result = api_analytics.get_army_analytics(
-                    api, _selection(category="army-types", population="top-10"),
+                    api_reader, _selection(category="army-types", population="top-10"),
                     examples=(army_types.THROWER, 3),
                 )
                 assert result is not None

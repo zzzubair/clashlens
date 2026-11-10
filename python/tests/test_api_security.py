@@ -3,9 +3,11 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,6 +22,7 @@ NOW = 1_800_000_000
 
 @dataclass
 class FakeDatabase:
+    pool: Any = field(default_factory=lambda: MagicMock(timeout=5.0, max_size=8))
     ready: bool = True
     closed: bool = False
 
@@ -294,10 +297,41 @@ def test_player_read_passes_a_totals_only_request_to_the_page(monkeypatch) -> No
         asked.append((tag, battles))
         return {"tag": tag}
 
-    monkeypatch.setattr("clashlens.api_players.get_player_page", page)
+    monkeypatch.setattr("clashlens.api_players.read_player_page", page)
     with TestClient(_app(FakeDatabase())) as client:
         for target in ("/v1/players/%232PP", "/v1/players/%232PP?battles=false"):
             response = client.get(target, headers=_signed_headers(target))
             assert response.status_code == 200, response.text
 
     assert asked == [("#2PP", True), ("#2PP", False)]
+
+
+def test_player_freshness_counts_from_arrival_not_from_a_free_connection(
+    monkeypatch,
+) -> None:
+    instant = [NOW]
+    asked = []
+    database = FakeDatabase()
+
+    @contextmanager
+    def busy_pool():
+        instant[0] += 2
+        yield object()
+
+    def page(connection, tag, *, now, freshness_seconds, battles):
+        asked.append(now)
+        return {"tag": tag}
+
+    database.pool.connection = busy_pool
+    monkeypatch.setattr("clashlens.api_players.read_player_page", page)
+    app = create_app(
+        database=database,
+        keys={("typescript-website", "current"): KEY},
+        clock=lambda: instant[0],
+    )
+    target = "/v1/players/%232PP"
+    with TestClient(app) as client:
+        response = client.get(target, headers=_signed_headers(target))
+
+    assert response.status_code == 200, response.text
+    assert asked == [datetime.fromtimestamp(NOW, tz=UTC)]

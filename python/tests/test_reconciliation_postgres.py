@@ -803,11 +803,12 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
 
             api_database = ApiDatabase(as_api_role(connection_info))
             try:
-                player_page = api_players.get_player_page(api_database,
-                    "#2PP",
-                    now=DAY_END + timedelta(minutes=10),
-                    freshness_seconds=900,
-                )
+                with api_database.pool.connection() as page_connection:
+                    player_page = api_players.read_player_page(page_connection,
+                        "#2PP",
+                        now=DAY_END + timedelta(minutes=10),
+                        freshness_seconds=900,
+                    )
             finally:
                 api_database.close()
             assert player_page is not None

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from functools import partial
+from threading import BoundedSemaphore, Lock
 from time import monotonic
 from typing import Any
 
@@ -14,15 +16,8 @@ import psycopg
 from psycopg_pool import ConnectionPool, PoolTimeout
 
 from . import army_types
-from .api_db import (
-    ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS,
-    ARMY_ANALYTICS_PARALLEL_POOL_TIMEOUT_SECONDS,
-    ARMY_ANALYTICS_PRIMARY_POOL_TIMEOUT_SECONDS,
-    ARMY_ANALYTICS_QUERY_WORK_MEM,
-    ApiDatabase,
-    _json_array,
-    _text,
-)
+from .api_db import ApiDatabase
+from .api_player_presentation import json_array
 from .api_players import army_units
 from .army_analytics import (
     ArmyAnalyticsSelection,
@@ -39,12 +34,62 @@ from .army_history import HISTORY_READ_CATEGORIES, HISTORY_SORTS, usage_rows
 from .army_rank_bands import counted_boards, read_rank_band_totals
 from .army_season_summaries import PROJECTION_VERSION as ARMY_HISTORY_VERSION
 from .catalog import CATALOG_VERSION
+from .db_rows import text_value
 from .domain import (
     RANKED_DAY_DURATION,
     SEASON_ANCHOR_RULE_VERSION,
     SEASON_DURATION,
     ranked_day_for,
 )
+
+ARMY_ANALYTICS_CACHE_CAPACITY = 128
+ARMY_ANALYTICS_QUERY_WORK_MEM = "256MB"
+ARMY_ANALYTICS_REQUEST_TIMEOUT_SECONDS = 5.0
+ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS = 0.1
+# Long enough for the pool to open a connection, or for the page's other
+# reads to finish, on a first open; the read keeps the rest of its budget.
+ARMY_ANALYTICS_PRIMARY_POOL_TIMEOUT_SECONDS = 2.0
+ARMY_ANALYTICS_PARALLEL_POOL_TIMEOUT_SECONDS = 0.3
+
+
+class ArmyAnalyticsReader:
+    """Army page cache and bounded request capacity for one API pool."""
+
+    def __init__(
+        self,
+        pool: ConnectionPool,
+        *,
+        cache_capacity: int = ARMY_ANALYTICS_CACHE_CAPACITY,
+    ) -> None:
+        if cache_capacity < 0:
+            raise ValueError("army analytics cache capacity is invalid")
+        self.pool = pool
+        self._cache_capacity = cache_capacity
+        self.request_timeout_seconds = min(
+            pool.timeout, ARMY_ANALYTICS_REQUEST_TIMEOUT_SECONDS
+        )
+        self._cache: OrderedDict[tuple[Any, ...], dict[str, Any]] = OrderedDict()
+        self._cache_lock = Lock()
+        self.troop_slots = BoundedSemaphore(max(1, pool.max_size // 2))
+
+    def cache_get(self, key: tuple[Any, ...]) -> dict[str, Any] | None:
+        if not self._cache_capacity:
+            return None
+        with self._cache_lock:
+            result = self._cache.pop(key, None)
+            if result is None:
+                return None
+            self._cache[key] = result
+            return deepcopy(result)
+
+    def cache_put(self, key: tuple[Any, ...], result: dict[str, Any]) -> None:
+        if not self._cache_capacity:
+            return
+        with self._cache_lock:
+            self._cache[key] = deepcopy(result)
+            self._cache.move_to_end(key)
+            while len(self._cache) > self._cache_capacity:
+                self._cache.popitem(last=False)
 
 
 def list_army_seasons(database: ApiDatabase) -> list[str]:
@@ -58,7 +103,7 @@ def list_army_seasons(database: ApiDatabase) -> list[str]:
             """,
             (ARMY_HISTORY_VERSION,),
         ).fetchall()
-    seasons = [_text(row[0]) for row in rows]
+    seasons = [text_value(row[0]) for row in rows]
     # Season ids are the season's start in Unix seconds.
     return sorted(seasons, key=lambda season: (len(season), season), reverse=True)
 
@@ -105,9 +150,9 @@ def get_army_season_summary(
         ).fetchone()
         if row is None:
             return None
-        if row[11] is None or _text(row[9]) != ARMY_HISTORY_VERSION:
+        if row[11] is None or text_value(row[9]) != ARMY_HISTORY_VERSION:
             return None
-        rows = usage_rows(_json_array(row[11]), category, int(row[3]))
+        rows = usage_rows(json_array(row[11]), category, int(row[3]))
         sort_field = "usage_rate" if sort == "usage-rate" else "usage_count"
         rows.sort(key=lambda item: (-float(item[sort_field]), item["key"]))
         numeric_rows = [{key: value for key, value in item.items() if key != "label"}
@@ -116,7 +161,7 @@ def get_army_season_summary(
             numeric_rows, sort_keys=True, separators=(",", ":")
         ).encode()).hexdigest()
         army_states = {
-            _text(state): int(count) for state, count in dict(row[4] or {}).items()
+            text_value(state): int(count) for state, count in dict(row[4] or {}).items()
         }
         # Summaries saved before unnamed ids counted kept old partial armies
         # apart; they count as read (army_decoder.with_unnamed_ids).
@@ -157,7 +202,7 @@ def get_army_season_summary(
                 "shielded_player_days": 0,
             },
             "collection_coverage": {
-                "state": "partial" if int(row[8]) else _text(row[1]),
+                "state": "partial" if int(row[8]) else text_value(row[1]),
                 "completed_days": int(row[0]),
             },
             "freshness": {"state": "frozen"},
@@ -169,10 +214,10 @@ def get_army_season_summary(
             "versions": {
                 "decoder": DECODER_VERSION,
                 "catalog": CATALOG_VERSION,
-                "analytics": _text(row[9]),
+                "analytics": text_value(row[9]),
             },
             "publication_identity": (
-                f"army-season-{publication_key[:24]}-{_text(row[10])[:16]}-{read_digest[:16]}"
+                f"army-season-{publication_key[:24]}-{text_value(row[10])[:16]}-{read_digest[:16]}"
             ),
             "rows": rows[offset:offset + 200],
         }
@@ -195,7 +240,7 @@ def _army_type_season_summary(
     if row is None:
         return None
     covered = [int(day) for day in row[0]]
-    result = army_types.type_view(_json_array(row[1]), sort, len(covered))
+    result = army_types.type_view(json_array(row[1]), sort, len(covered))
     selection = {
         "lens": "offense", "season": season_id, "start_day": covered[0],
         "end_day": covered[-1], "population": population,
@@ -223,27 +268,27 @@ def _army_type_season_summary(
             "legend_days": [covered[0], covered[-1]],
             "snapshot_versions": [],
         },
-        "versions": {**result["versions"], "analytics": _text(row[2])},
+        "versions": {**result["versions"], "analytics": text_value(row[2])},
         "publication_identity": (
-            f"army-season-{publication_key[:24]}-{_text(row[3])[:16]}"
+            f"army-season-{publication_key[:24]}-{text_value(row[3])[:16]}"
         ),
     }
 
 
 @contextmanager
-def _army_troop_admission(database: ApiDatabase, selection: ArmyAnalyticsSelection, deadline: float):
+def _army_troop_admission(database: ArmyAnalyticsReader, selection: ArmyAnalyticsSelection, deadline: float):
     # Top N and rank ranges read saved totals, never the paired connection.
     if selection.category != "troops" or selection.population.startswith(("top-", "band-")):
         yield
         return
-    if not database._army_troop_slots.acquire(
+    if not database.troop_slots.acquire(
         timeout=_army_timeout(deadline, ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS)
     ):
         raise PoolTimeout("troop analytics capacity is busy")
     try:
         yield
     finally:
-        database._army_troop_slots.release()
+        database.troop_slots.release()
 
 
 def consistent_top_members(
@@ -267,7 +312,7 @@ def consistent_top_members(
 
 
 def get_army_analytics(
-    database,
+    database: ArmyAnalyticsReader,
     selection: ArmyAnalyticsSelection,
     *,
     now: datetime | None = None,
@@ -276,7 +321,7 @@ def get_army_analytics(
     """The Armies page result for ``selection``, or with ``examples`` (a type
     and variant id, army types only) that variant's example armies for the
     same players and Legend days."""
-    deadline = monotonic() + database._army_request_timeout_seconds
+    deadline = monotonic() + database.request_timeout_seconds
     # A bounded pre-checkout gate leaves one paired pool slot per admitted
     # troop request. Other categories never need the second connection.
     with (
@@ -342,7 +387,7 @@ def get_army_analytics(
                         # name the previous season so callers can offer it
                         # explicitly instead of silently serving its
                         # publications for season=current.
-                        raise CurrentSeasonEmpty(_text(anchor[1]))
+                        raise CurrentSeasonEmpty(text_value(anchor[1]))
                     # Intervals have ended but the requested range starts
                     # beyond them; name the affected days instead of
                     # clipping.
@@ -352,7 +397,7 @@ def get_army_analytics(
                 resolved = ArmyAnalyticsSelection.parse(
                     **{
                         **selection.as_dict(),
-                        "season": _text(anchor[0]),
+                        "season": text_value(anchor[0]),
                         "end_day": clipped_end,
                     }
                 )
@@ -475,7 +520,7 @@ def get_army_analytics(
                     }
                 )
             completed_day_signature = tuple(
-                (int(row[0]), _text(row[1]))
+                (int(row[0]), text_value(row[1]))
                 for row in completed_day_rows
                 if int(row[0]) in covered_days
             )
@@ -568,7 +613,7 @@ def get_army_analytics(
                         ).fetchone()
                         assert version_row is not None
                         shielded_player_days = int(version_row[0])
-                        streak_version_digest = _text(version_row[1])
+                        streak_version_digest = text_value(version_row[1])
                     # Members whose saved trophy count was old or
                     # uncertain on at least one day stay in the group;
                     # this only says how many there are.
@@ -632,7 +677,7 @@ def get_army_analytics(
                 tuple(streak_gap_days),
                 examples,
             )
-            cached = database._army_cache_get(cache_key)
+            cached = database.cache_get(cache_key)
             if cached is not None:
                 return cached
             if resolved.category == "troops":
@@ -708,7 +753,7 @@ def get_army_analytics(
                     )
                     result["selection"] = resolved.as_dict()
                     result["covered_days"] = covered_days
-                    database._army_cache_put(cache_key, result)
+                    database.cache_put(cache_key, result)
                     return deepcopy(result)
                 result, source_hash = army_types.type_result(
                     connection,
@@ -749,7 +794,7 @@ def get_army_analytics(
                     separator = b""
                     for row in facts_rows:
                         fact_id = int(row[0])
-                        input_hash = _text(row[11])
+                        input_hash = text_value(row[11])
                         source_digest.update(separator)
                         source_digest.update(f'[{fact_id},"{input_hash}"]'.encode())
                         separator = b","
@@ -770,10 +815,10 @@ def get_army_analytics(
                             ),
                             "stars": int(row[4]),
                             "destruction_percentage": int(row[5]),
-                            "army_state": _text(row[6]),
+                            "army_state": text_value(row[6]),
                             "failure_reason": None
                             if row[7] is None
-                            else _text(row[7]),
+                            else text_value(row[7]),
                             **components,
                             "unresolved_components": row[9],
                             "perspective_disagreement": bool(row[10]),
@@ -844,7 +889,7 @@ def get_army_analytics(
             result["publication_identity"] = (
                 f"army-publication-{publication_key[:24]}-{result_hash[:16]}"
             )
-            database._army_cache_put(cache_key, result)
+            database.cache_put(cache_key, result)
             return deepcopy(result)
 
 
@@ -857,15 +902,11 @@ def _army_timeout(deadline: float | None, ceiling: float) -> float:
     return min(ceiling, remaining)
 
 
-
-
 def _army_transaction_timeout_milliseconds(deadline: float) -> int:
     remaining = int((deadline - monotonic()) * 1000)
     if remaining < 1:
         raise PoolTimeout("army analytics request budget is exhausted")
     return remaining
-
-
 
 
 def _build_troops_result_from_sql(
@@ -882,12 +923,12 @@ def _build_troops_result_from_sql(
         aggregate_rows,
     ) = summary
     army_states = public_army_states(
-        {_text(key): int(value) for key, value in (state_counts or {}).items()}
+        {text_value(key): int(value) for key, value in (state_counts or {}).items()}
     )
 
     rows = []
     for aggregate in aggregate_rows or []:
-        key = _text(aggregate["key"])
+        key = text_value(aggregate["key"])
         sample = int(aggregate["usage_count"])
         star_counts = [int(value) for value in aggregate["star_counts"]]
         star_rates = [count / sample if sample else 0 for count in star_counts]
@@ -940,8 +981,6 @@ def _build_troops_result_from_sql(
     }
 
 
-
-
 def _selected_source_hash(
     connection: Any,
     *,
@@ -969,7 +1008,7 @@ def _selected_source_hash(
     separator = b""
     for (chunk,) in chunks:
         digest.update(separator)
-        digest.update(_text(chunk).encode())
+        digest.update(text_value(chunk).encode())
         separator = b","
     digest.update(b'],"selection":')
     digest.update(json.dumps(requested, sort_keys=True, separators=(",", ":")).encode())
@@ -977,8 +1016,6 @@ def _selected_source_hash(
     digest.update(json.dumps(snapshot_ids, separators=(",", ":")).encode())
     digest.update(b"}")
     return digest.hexdigest()
-
-
 
 
 def _rank_band_source_hash(
@@ -1082,7 +1119,7 @@ def _query_troops_aggregates(
     if pool is not None and pool.max_size >= 2:
         snapshot_row = connection.execute("VALUES (pg_export_snapshot())").fetchone()
         assert snapshot_row is not None
-        shared_snapshot = _text(snapshot_row[0])
+        shared_snapshot = text_value(snapshot_row[0])
         # Acquire the paired connection before either expensive query starts.
         # Contention fails quickly instead of consuming the caller's five-second
         # budget and then repeating the source hash sequentially.
@@ -1119,7 +1156,7 @@ def _query_troops_aggregates(
             component_query, tuple(fact_params)
         ).fetchall()
         source_hash_value = source_hash(connection)
-    state_counts = {_text(row[0]): int(row[1]) for row in state_rows}
+    state_counts = {text_value(row[0]): int(row[1]) for row in state_rows}
     summary = (
         sum(state_counts.values()),
         sum(
@@ -1133,7 +1170,7 @@ def _query_troops_aggregates(
         state_counts,
         [
             {
-                "key": _text(row[0]),
+                "key": text_value(row[0]),
                 "usage_count": int(row[1]),
                 "star_counts": [int(value) for value in row[2:6]],
                 "stars": int(row[6]),

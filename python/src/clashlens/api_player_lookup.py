@@ -4,13 +4,15 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from . import api_db, api_leaderboard, live_board
-from .api_db import ApiDatabase, OperationResult, RequestBinding, _text
+from . import api_db, api_leaderboard, api_requests, live_board
+from .api_db import ApiDatabase
+from .api_requests import OperationResult, RequestBinding
+from .db_rows import text_value
 from .domain import ranked_day_for
 
 
 class LookupState(StrEnum):
-    """What Clash Lens can tell a caller about a tag (``_lookup``'s ``state``).
+    """What Clash Lens can tell a caller about a tag (``read_lookup``'s ``state``).
 
     - ``UNKNOWN``: no player row, no check yet, or a check the collector
       holds right now with nothing processed.
@@ -69,7 +71,7 @@ def _check_progress(
     return LookupState.UNKNOWN
 
 
-def _lookup(
+def read_lookup(
     connection: Any, tag: str, now: datetime | None = None
 ) -> dict[str, Any]:
     row = connection.execute(
@@ -101,7 +103,7 @@ def _lookup(
         elif confirmed:
             state = (
                 LookupState.NOT_IN_LEGEND
-                if _text(eligibility) == "ineligible"
+                if text_value(eligibility) == "ineligible"
                 else LookupState.UNCERTAIN
             )
             # Off the board, the newest saved profile still names the player,
@@ -110,13 +112,13 @@ def _lookup(
                 _newest_profile(connection, player_id)
             )
             profile = {
-                "name": _text(name),
-                "clan": _text(clan),
-                "clan_tag": _text(clan_tag),
+                "name": text_value(name),
+                "clan": text_value(clan),
+                "clan_tag": text_value(clan_tag),
                 "trophies": trophies,
             }
-            if _text(newest) == "ineligible" and league is not None:
-                profile["league"] = _text(league)
+            if text_value(newest) == "ineligible" and league is not None:
+                profile["league"] = text_value(league)
             return {"tag": tag, "state": state, "profile": profile}
         else:
             work_row = connection.execute(
@@ -149,8 +151,8 @@ def _lookup(
             if work_row is not None:
                 work, failure, processing, saved_since = work_row
                 if saved_since:
-                    return _lookup(connection, tag)
-                state = _check_progress(_text(work), _text(failure), _text(processing))
+                    return read_lookup(connection, tag)
+                state = _check_progress(text_value(work), text_value(failure), text_value(processing))
     return {"tag": tag, "state": state}
 
 
@@ -213,9 +215,9 @@ def _why_no_results(
         return {"reason": "pending"}
     season, reason, eligibility, contract, name, clan, trophies, battles, _, clan_tag = row
     if (
-        _text(season) == "0"
-        and _text(reason) == "confirmed_legend_i"
-        and _text(contract) == "conflict"
+        text_value(season) == "0"
+        and text_value(reason) == "confirmed_legend_i"
+        and text_value(contract) == "conflict"
     ):
         if not battles and connection.execute(
             api_leaderboard.UNPLAYED_PROFILE_SQL,
@@ -227,27 +229,27 @@ def _why_no_results(
             # this Season, so a recorded battle means something else is wrong.
             "reason": "season_unconfirmed" if battles else "no_legend_battles",
             "profile": {
-                "name": _text(name),
-                "clan": _text(clan),
-                "clan_tag": _text(clan_tag),
+                "name": text_value(name),
+                "clan": text_value(clan),
+                "clan_tag": text_value(clan_tag),
                 "trophies": trophies,
             },
         }
-    if _text(eligibility) == "uncertain":
+    if text_value(eligibility) == "uncertain":
         return {"reason": "unknown_tier"}
-    if _text(contract) == "conflict":
+    if text_value(contract) == "conflict":
         return {"reason": "profile_rejected"}
     return {"reason": "pending"}
 
 
 def get_lookup(database: ApiDatabase, tag: str) -> dict[str, Any]:
     with database.pool.connection() as connection:
-        return _lookup(connection, tag)
+        return read_lookup(connection, tag)
 
 
 def lock_tag(connection: Any, normalized_tag: str) -> None:
     """Take the per-tag lock the existing enqueue function also takes."""
-    api_db._execute_without_waiting(
+    api_db.execute_without_waiting(
         connection,
         normalized_tag,
         "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
@@ -260,7 +262,7 @@ def admit(connection: Any, normalized_tag: str) -> dict[str, Any]:
     # Serialize the evidence read with admission so simultaneous visits
     # reuse work.
     lock_tag(connection, normalized_tag)
-    lookup = _lookup(connection, normalized_tag)
+    lookup = read_lookup(connection, normalized_tag)
     if lookup["state"] in RECHECKABLE:
         # Failed and negative checks have the same minimum retry interval
         # as Refresh. Known real players are never rechecked by a visit.
@@ -275,13 +277,13 @@ def admit(connection: Any, normalized_tag: str) -> dict[str, Any]:
             (normalized_tag,),
         ).fetchone()
         if recent is None:
-            api_db._execute_without_waiting(
+            api_db.execute_without_waiting(
                 connection,
                 normalized_tag,
                 "SELECT 1 FROM clashlens_enqueue_interactive('initial_collection', %s, 30)",
                 (normalized_tag,),
             ).fetchone()
-            lookup = _lookup(connection, normalized_tag)
+            lookup = read_lookup(connection, normalized_tag)
     return lookup
 
 
@@ -290,10 +292,32 @@ def submit_lookup(
 ) -> OperationResult:
     with database.pool.connection() as connection:
         with connection.transaction():
-            existing = api_db._reserve_request(connection, binding)
+            existing = api_requests.reserve_request(connection, binding)
             if existing is not None:
                 return existing
             lookup = admit(connection, normalized_tag)
             result = OperationResult(200, lookup)
-            api_db._complete_request(connection, binding.request_id, result)
+            api_requests.complete_request(connection, binding.request_id, result)
             return result
+
+
+def ensure_player(connection: Any, normalized_tag: str) -> int:
+    # Read an existing player without locking it. An upsert that updates the
+    # row takes its strongest lock, which waits for every worker transaction
+    # that saved anything referencing this player.
+    query = "SELECT id FROM players WHERE normalized_tag = %s"
+    row = connection.execute(query, (normalized_tag,)).fetchone()
+    if row is None:
+        api_db.execute_without_waiting(
+            connection,
+            normalized_tag,
+            """
+            INSERT INTO players (normalized_tag, active)
+            VALUES (%s, false)
+            ON CONFLICT (normalized_tag) DO NOTHING
+            """,
+            (normalized_tag,),
+        )
+        row = connection.execute(query, (normalized_tag,)).fetchone()
+    assert row is not None
+    return int(row[0])

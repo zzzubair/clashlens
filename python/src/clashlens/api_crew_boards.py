@@ -13,7 +13,7 @@ Season, so it is shorter in the first week and empty on Day 1. Streaks count
 only attacks Clash Lens saw, and today's too except over the last seven days.
 Top players is the saved Reset board for today's Reset, in its order. Each
 Live row also says what the account has won or lost today so far, as the
-dashboard's Legend day card does (``api_db._net_so_far``).
+dashboard's Legend day card does (``api_player_presentation.net_so_far``).
 """
 
 from __future__ import annotations
@@ -22,16 +22,16 @@ from datetime import UTC, datetime
 from typing import Any
 
 from . import api_crews
-from .api_accounts import _MEMBER_JOINS
-from .api_db import (
-    ApiDatabase,
-    _battle_id_sort_key,
-    _json_array,
-    _net_so_far,
-    _screen_events,
-    _text,
-)
+from .api_db import ApiDatabase
 from .api_leaderboard import _LIVE_ORDER_SQL, _LIVE_PLAYERS_SQL
+from .api_player_presentation import (
+    battle_id_sort_key,
+    json_array,
+    net_so_far,
+    screen_events,
+)
+from .api_players import MEMBER_JOINS
+from .db_rows import text_value
 from .domain import RANKED_DAY_DURATION, ranked_day_for
 from .live_board import season_params
 
@@ -77,8 +77,8 @@ ORDER BY entry.position
 
 class _Day:
     def __init__(self, row: Any) -> None:
-        self.offense, self.defense = _screen_events(row[2])
-        self.net_so_far = _net_so_far(*row[3:7], _json_array(row[7]))
+        self.offense, self.defense = screen_events(row[2])
+        self.net_so_far = net_so_far(*row[3:7], json_array(row[7]))
 
 
 def _events(
@@ -120,7 +120,7 @@ def _streak(attacks: list[dict[str, Any]]) -> dict[str, Any]:
     best = run = 0
     for attack in sorted(
         attacks,
-        key=lambda event: (event["battle_timestamp"], _battle_id_sort_key(event["battle_id"])),
+        key=lambda event: (event["battle_timestamp"], battle_id_sort_key(event["battle_id"])),
     ):
         run = run + 1 if attack["stars"] == 3 else 0
         best = max(best, run)
@@ -153,7 +153,7 @@ def get_crew_boards(
         crew_row, _role = found
         places = api_crews._players(
             connection,
-            f"crew_players AS member {_MEMBER_JOINS} WHERE member.crew_id = %s",
+            f"crew_players AS member {MEMBER_JOINS} WHERE member.crew_id = %s",
             (crew_row,),
             now,
         )
@@ -171,7 +171,7 @@ def get_crew_boards(
         for row in connection.execute(
             _DAYS_SQL, {"crew": crew_row, "first": first, "today": today}
         ):
-            saved.setdefault(_text(row[0]), {})[row[1].astimezone(UTC)] = _Day(row)
+            saved.setdefault(text_value(row[0]), {})[row[1].astimezone(UTC)] = _Day(row)
         # A Season's first day has no Reset of its own yet.
         reset_board = (
             connection.execute(_RESET_BOARD_SQL, {"crew": crew_row, "reset": today}).fetchall()
@@ -209,14 +209,14 @@ def get_crew_boards(
 
     live_rows = [
         entry(
-            _text(tag),
+            text_value(tag),
             trophies=int(trophies),
             observed_at=observed_at.astimezone(UTC),
-            today_change=today_change(_text(tag)),
+            today_change=today_change(text_value(tag)),
         )
         for tag, trophies, observed_at in live
     ]
-    top_rows = [entry(_text(tag), trophies=int(trophies)) for tag, trophies in reset_board]
+    top_rows = [entry(text_value(tag), trophies=int(trophies)) for tag, trophies in reset_board]
 
     averages: dict[str, list[dict[str, Any]]] = {"offense": [], "defense": []}
     streak_rows = []

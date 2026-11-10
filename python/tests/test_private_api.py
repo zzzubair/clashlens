@@ -16,8 +16,9 @@ from test_api_migration import migrated_production_database
 
 from clashlens import api_accounts, api_analytics, api_verification
 from clashlens.api import GroupBody, create_app
-from clashlens.api_db import ApiDatabase, RequestBinding
+from clashlens.api_db import ApiDatabase
 from clashlens.api_groups import MAX_COMPARED_MEMBERS
+from clashlens.api_requests import RequestBinding
 from clashlens.army_analytics import ArmyAnalyticsUnavailable, CurrentSeasonEmpty
 from clashlens.hmac_proof import SigningInput, sign
 from clashlens.verification import OfficialVerificationResponse

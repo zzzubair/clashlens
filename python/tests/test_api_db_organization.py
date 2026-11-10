@@ -17,11 +17,13 @@ from test_api_migration import migrated_production_database
 
 from clashlens import (
     api_accounts,
+    api_groups,
     api_player_lookup,
     api_verification,
     source_storage,
 )
-from clashlens.api_db import ApiDatabase, RequestBinding
+from clashlens.api_db import ApiDatabase
+from clashlens.api_requests import RequestBinding
 from clashlens.profile import PROFILE_PARSER_VERSION
 from clashlens.verification import VerificationOutcome
 
@@ -81,7 +83,7 @@ def test_groups_public_user_and_multi_account_stay_separate(
         database = ApiDatabase(connection_info)
         try:
             account_id = create_owner(database)
-            group = api_accounts.create_group(database,
+            group = api_groups.create_group(database,
                 account_binding(
                     account_id,
                     "groups.create",
@@ -101,7 +103,7 @@ def test_groups_public_user_and_multi_account_stay_separate(
                     "SELECT created_at FROM account_groups WHERE public_id = %s",
                     (group_id,),
                 ).fetchone()[0]
-            assert api_accounts.list_groups(database, account_id, now=NOW) == [
+            assert api_groups.list_groups(database, account_id, now=NOW) == [
                 {
                     "group_id": group_id,
                     "name": "My Accounts",
@@ -177,7 +179,7 @@ def test_an_account_holds_at_most_ten_groups(database_url: str) -> None:
             owner_id = create_owner(database)
 
             def create(name: str):
-                return api_accounts.create_group(
+                return api_groups.create_group(
                     database,
                     account_binding(owner_id, "groups.create", "/v1/account/groups",
                                     {"name": name, "tags": []}),
@@ -189,7 +191,7 @@ def test_an_account_holds_at_most_ten_groups(database_url: str) -> None:
             assert (refused.status_code, refused.payload) == (
                 422, {"error": "group_limit_reached"}
             )
-            assert len(api_accounts.list_groups(database, owner_id, now=NOW)) == 10
+            assert len(api_groups.list_groups(database, owner_id, now=NOW)) == 10
         finally:
             database.close()
 
@@ -223,7 +225,7 @@ def test_group_update_and_delete_require_the_owning_account(
             assert other.status_code == 201
             other_account = api_accounts.resolve_account(database, "google", "other-owner-subject")
             assert other_account is not None
-            created = api_accounts.create_group(database,
+            created = api_groups.create_group(database,
                 account_binding(
                     owner_id,
                     "groups.create",
@@ -236,7 +238,7 @@ def test_group_update_and_delete_require_the_owning_account(
             )
             group_id = created.payload["group_id"]
 
-            denied = api_accounts.update_group(database,
+            denied = api_groups.update_group(database,
                 account_binding(
                     other_account.internal_id,
                     "groups.update",
@@ -250,7 +252,7 @@ def test_group_update_and_delete_require_the_owning_account(
                 normalized_name="changed",
                 normalized_tags=[],
             )
-            updated = api_accounts.update_group(database,
+            updated = api_groups.update_group(database,
                 account_binding(
                     owner_id,
                     "groups.update",
@@ -263,7 +265,7 @@ def test_group_update_and_delete_require_the_owning_account(
                 normalized_name="changed",
                 normalized_tags=["#8PY"],
             )
-            deleted = api_accounts.delete_group(database,
+            deleted = api_groups.delete_group(database,
                 account_binding(
                     owner_id,
                     "groups.delete",
@@ -282,7 +284,7 @@ def test_group_update_and_delete_require_the_owning_account(
                 "tags": ["#8PY"],
             }
             assert deleted.payload == {"deleted": True, "group_id": group_id}
-            assert api_accounts.list_groups(database, owner_id, now=NOW) == []
+            assert api_groups.list_groups(database, owner_id, now=NOW) == []
         finally:
             database.close()
 
@@ -300,7 +302,7 @@ def test_simultaneous_group_creates_naming_one_new_player_all_succeed(
             owner_id = create_owner(database)
 
             def create(name: str):
-                return api_accounts.create_group(database,
+                return api_groups.create_group(database,
                     account_binding(
                         owner_id,
                         "groups.create",
@@ -315,7 +317,7 @@ def test_simultaneous_group_creates_naming_one_new_player_all_succeed(
             with ThreadPoolExecutor(max_workers=6) as executor:
                 results = list(executor.map(create, [f"Group {n}" for n in range(6)]))
             assert [result.status_code for result in results] == [201] * 6
-            assert len(api_accounts.list_groups(database, owner_id, now=NOW)) == 6
+            assert len(api_groups.list_groups(database, owner_id, now=NOW)) == 6
         finally:
             database.close()
 
@@ -358,7 +360,7 @@ def test_group_creation_does_not_queue_behind_a_worker_transaction(
                     "/v1/account/groups",
                     {"name": name, "tags": tags},
                 )
-                return api_accounts.create_group(database,
+                return api_groups.create_group(database,
                     binding,
                     name=name,
                     normalized_name=name.lower(),
@@ -410,7 +412,7 @@ def test_group_creation_does_not_queue_behind_a_worker_transaction(
                     executor.submit(refresh, "#RJC"),
                 ]
                 started = time.monotonic()
-                groups = executor.submit(api_accounts.list_groups, database, owner_id)
+                groups = executor.submit(api_groups.list_groups, database, owner_id)
                 assert [group["name"] for group in groups.result(timeout=10)] == [
                     "Main"
                 ]
@@ -432,7 +434,7 @@ def test_group_creation_does_not_queue_behind_a_worker_transaction(
                 create("Alts", ["#2PP", "#9QQ"], binding)
             worker.commit()
             assert create("Alts", ["#2PP", "#9QQ"], binding).status_code == 201
-            assert sorted(group["name"] for group in api_accounts.list_groups(
+            assert sorted(group["name"] for group in api_groups.list_groups(
                 database, owner_id
             )) == ["Alts", "Main"]
         finally:
@@ -441,7 +443,7 @@ def test_group_creation_does_not_queue_behind_a_worker_transaction(
 
 
 def add_player(database: ApiDatabase, account_id: int, group_id: str, tag: str, **kw):
-    return api_accounts.add_group_player(database,
+    return api_groups.add_group_player(database,
         account_binding(
             account_id,
             "groups.add_player",
@@ -464,7 +466,7 @@ def test_group_players_join_one_at_a_time_only_once_the_game_confirms_them(
         database = ApiDatabase(connection_info)
         try:
             owner_id = create_owner(database)
-            group_id = api_accounts.create_group(database,
+            group_id = api_groups.create_group(database,
                 account_binding(
                     owner_id, "groups.create", "/v1/account/groups",
                     {"name": "Main", "tags": []},
@@ -514,7 +516,7 @@ def test_group_players_join_one_at_a_time_only_once_the_game_confirms_them(
             assert missing.payload == {"error": "player_not_found"}
             assert unchecked.status_code == 409
             assert unchecked.payload == {"error": "player_not_checked", "state": "unknown"}
-            [group] = api_accounts.list_groups(database, owner_id, now=NOW)
+            [group] = api_groups.list_groups(database, owner_id, now=NOW)
             assert group["players"] == [
                 {"tag": "#2PP", "name": "Player #2PP", "trophies": 5400, "state": "tracking", "season_reset_pending": False},
                 {
@@ -526,7 +528,7 @@ def test_group_players_join_one_at_a_time_only_once_the_game_confirms_them(
                 },
             ]
 
-            removed = api_accounts.remove_group_player(database,
+            removed = api_groups.remove_group_player(database,
                 account_binding(
                     owner_id,
                     "groups.remove_player",
@@ -538,7 +540,7 @@ def test_group_players_join_one_at_a_time_only_once_the_game_confirms_them(
                 normalized_tag="#2PP",
             )
             assert removed.payload == {"group_id": group_id, "tag": "#2PP", "removed": True}
-            assert api_accounts.list_groups(database, owner_id, now=NOW)[0]["tags"] == ["#8PY"]
+            assert api_groups.list_groups(database, owner_id, now=NOW)[0]["tags"] == ["#8PY"]
 
             # Another account's group reads as missing, and nothing joins it.
             api_accounts.create_account(database,
@@ -556,7 +558,7 @@ def test_group_players_join_one_at_a_time_only_once_the_game_confirms_them(
                 database, other.internal_id, group_id, "#2PP",
                 subject="other-owner-subject",
             ).payload == {"error": "group_not_found"}
-            assert api_accounts.list_groups(database, owner_id, now=NOW)[0]["tags"] == ["#8PY"]
+            assert api_groups.list_groups(database, owner_id, now=NOW)[0]["tags"] == ["#8PY"]
         finally:
             database.close()
 
@@ -571,7 +573,7 @@ def test_a_full_group_refuses_the_twenty_first_player(database_url: str) -> None
             tags = [
                 "#" + "".join(chars) for chars in islice(product("289LYQ", repeat=3), 20)
             ]
-            group_id = api_accounts.create_group(database,
+            group_id = api_groups.create_group(database,
                 account_binding(
                     owner_id, "groups.create", "/v1/account/groups",
                     {"name": "Clan", "tags": tags},
@@ -586,7 +588,7 @@ def test_a_full_group_refuses_the_twenty_first_player(database_url: str) -> None
 
             assert full.status_code == 422
             assert full.payload == {"error": "group_full"}
-            assert "#2PP" not in api_accounts.list_groups(database, owner_id, now=NOW)[0]["tags"]
+            assert "#2PP" not in api_groups.list_groups(database, owner_id, now=NOW)[0]["tags"]
         finally:
             database.close()
 
@@ -636,7 +638,7 @@ def test_confirmed_players_join_with_their_name(
 
         try:
             owner_id = create_owner(database)
-            group_id = api_accounts.create_group(database,
+            group_id = api_groups.create_group(database,
                 account_binding(
                     owner_id, "groups.create", "/v1/account/groups",
                     {"name": "Main", "tags": []},
@@ -663,14 +665,14 @@ def test_confirmed_players_join_with_their_name(
 
             assert added.status_code == 200
             assert added.payload == {"group_id": group_id, **player}
-            assert api_accounts.list_groups(database, owner_id, now=NOW)[0]["players"] == [player]
+            assert api_groups.list_groups(database, owner_id, now=NOW)[0]["players"] == [player]
 
             process(
                 {**body, "leagueTier": None, "name": "Orion"},
                 "renamed-profile",
                 NOW + timedelta(minutes=1),
             )
-            assert api_accounts.list_groups(database, owner_id, now=NOW)[0]["players"] == [
+            assert api_groups.list_groups(database, owner_id, now=NOW)[0]["players"] == [
                 {**player, "name": renamed_to}
             ]
         finally:

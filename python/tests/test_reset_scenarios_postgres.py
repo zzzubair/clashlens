@@ -441,8 +441,9 @@ class Story:
         """The Armies view the API serves at ``at`` for the current Season's
         top 10, sorted by Avg. trophies, read as the data service."""
         api = ApiDatabase(as_api_role(self.connection_info))
+        api_reader = api_analytics.ArmyAnalyticsReader(api.pool)
         try:
-            return api_analytics.get_army_analytics(api, ArmyAnalyticsSelection.parse(
+            return api_analytics.get_army_analytics(api_reader, ArmyAnalyticsSelection.parse(
                 lens="offense", season="current", start_day=1, end_day=28,
                 population="top-10", category="army-types", sort="average-trophies",
             ), now=at)

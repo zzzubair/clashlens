@@ -43,8 +43,8 @@ def _army_range_database(
     days: tuple[int, ...] = (23, 24, 25),
 ):
     database = MagicMock()
-    database._army_request_timeout_seconds = 30
-    database._army_cache_get.return_value = None
+    database.request_timeout_seconds = 30
+    database.cache_get.return_value = None
     connection = database.pool.connection.return_value.__enter__.return_value
     cursor = connection.execute.return_value
     cursor.fetchone.side_effect = [anchor, (0, "a" * 64), (0,)]
@@ -1297,12 +1297,12 @@ def test_api_role_reads_current_season_army_analytics(
                 make_conninfo(
                     connection_info,
                     options=f"{options} -c role=clashlens_python_api".strip(),
-                ),
-                army_cache_capacity=0,
+                )
             )
+            api_reader = api_analytics.ArmyAnalyticsReader(api.pool, cache_capacity=0)
             try:
                 result = api_analytics.get_army_analytics(
-                    api,
+                    api_reader,
                     ArmyAnalyticsSelection.parse(
                         lens="offense",
                         season="current",

@@ -544,9 +544,10 @@ def test_players_waiting_for_their_season_reset_stay_off_the_live_board(
                 return board, [e["tag"] for e in board["entries"]]
 
             def waiting(tag):
-                page = api_players.get_player_page(
-                    database, tag, now=now, freshness_seconds=900
-                )
+                with database.pool.connection() as page_connection:
+                    page = api_players.read_player_page(
+                        page_connection, tag, now=now, freshness_seconds=900
+                    )
                 labels = [q["label"] for q in page["screen_ready"]["data_quality"]]
                 notice = "Waiting for this player's Season reset" in labels
                 assert page["season_reset_pending"] is notice
@@ -712,9 +713,10 @@ def test_first_day_trophies_from_before_the_reset_wait_for_the_season_reset(
                     r["trophies"] is None for r in known if r["season_reset_pending"]
                 )
                 for tag in players:
-                    page = api_players.get_player_page(
-                        database, tag, now=now, freshness_seconds=900
-                    )
+                    with database.pool.connection() as page_connection:
+                        page = api_players.read_player_page(
+                            page_connection, tag, now=now, freshness_seconds=900
+                        )
                     labels = [q["label"] for q in page["screen_ready"]["data_quality"]]
                     pending = "Waiting for this player's Season reset" in labels
                     assert (page["season_reset_pending"], pending) == (

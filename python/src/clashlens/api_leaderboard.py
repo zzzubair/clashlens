@@ -9,15 +9,15 @@ from typing import Any
 from .analytics import (
     tie_order_sql,
 )
-from .api_db import (
-    ApiDatabase,
-    _json_array,
-    _net_so_far,
-    _public_confidence,
-    _public_snapshot_confidence,
-    _shown_total,
-    _text,
+from .api_db import ApiDatabase
+from .api_player_presentation import (
+    json_array,
+    net_so_far,
+    player_confidence,
+    public_snapshot_confidence,
+    shown_total,
 )
+from .db_rows import text_value
 from .domain import (
     RANKED_DAY_DURATION,
     SEASON_DURATION,
@@ -146,15 +146,15 @@ def search_live_leaderboard(
     found = exact or [
         (rank, row)
         for rank, row in ranked
-        if row[0] == tag or needle in _text(row[1]).casefold()
+        if row[0] == tag or needle in text_value(row[1]).casefold()
     ]
     return {
         "exact_tag": tag if exact else None,
         "has_more": len(found) > 20,
         "results": [
             {
-                "tag": _text(row[0]),
-                "name": _text(row[1]),
+                "tag": text_value(row[0]),
+                "name": text_value(row[1]),
                 "trophies": int(row[2]),
                 "rank": rank,
             }
@@ -174,7 +174,7 @@ def live_positions(connection: Any, tags: list[str], *, now: datetime) -> dict[s
         """,
         {"tags": tags, **season_params(now)},
     ).fetchall()
-    return {_text(row[0]): int(row[1]) for row in rows}
+    return {text_value(row[0]): int(row[1]) for row in rows}
 
 
 def live_freshness_metrics(database: ApiDatabase, *, now: datetime) -> dict[str, Any]:
@@ -230,9 +230,9 @@ class _LiveBoard:
         """Each tag's position on this board; a tag off it is left out."""
         wanted = set(tags)
         return {
-            _text(row[0]): position
+            text_value(row[0]): position
             for position, row in enumerate(self.rows, start=1)
-            if _text(row[0]) in wanted
+            if text_value(row[0]) in wanted
         }
 
 
@@ -358,15 +358,15 @@ def get_live_leaderboard(
         entries.append(
             {
                 "position": position,
-                "tag": _text(row[0]),
-                "name": _text(row[1]),
+                "tag": text_value(row[0]),
+                "name": text_value(row[1]),
                 "trophies": int(row[2]),
                 "observed_at": observed_at.isoformat(),
                 "age_seconds": age_seconds,
                 "freshness": freshness,
-                "confidence": _text(row[4]),
-                "public_confidence": _public_confidence(True, _text(row[4])),
-                "clan": None if row[5] is None else _text(row[5]),
+                "confidence": text_value(row[4]),
+                "public_confidence": player_confidence(True, text_value(row[4])),
+                "clan": None if row[5] is None else text_value(row[5]),
                 "official_rank": None,
                 "tied": board.tied(position - 1),
             }
@@ -571,7 +571,7 @@ def linked_season_days(
     players: dict[int, dict[str, Any]] = {}
     for row in rows:
         player = players.setdefault(int(row[0]), {
-            "tag": _text(row[1]),
+            "tag": text_value(row[1]),
             "reset_position": None if row[2] is None else int(row[2]),
             "season_weeks": [],
             "days": [],
@@ -580,8 +580,8 @@ def linked_season_days(
             continue
         attacks = None if row[4] is None else int(row[4])
         defenses = None if row[5] is None else int(row[5])
-        reasons = _json_array(row[8])
-        result = _shown_total(row[6], _text(row[7]), attacks, defenses, reasons)
+        reasons = json_array(row[8])
+        result = shown_total(row[6], text_value(row[7]), attacks, defenses, reasons)
         player["days"].append([
             (row[3] - day.season_start) // RANKED_DAY_DURATION + 1,
             attacks,
@@ -602,8 +602,8 @@ def linked_season_days(
     ).fetchall():
         players[int(player_id)]["season_weeks"].append({
             "week_start": week_start.astimezone(UTC).isoformat(),
-            "league": _text(league),
-            "entry": None if entry is None else _text(entry),
+            "league": text_value(league),
+            "entry": None if entry is None else text_value(entry),
         })
     return list(players.values())
 
@@ -663,9 +663,9 @@ def _reset_entries(
     logs: dict[tuple[str, datetime], Any] = {}
     for row in rows:
         if row[1] is not None:
-            places[_text(row[0])] = int(row[1])
+            places[text_value(row[0])] = int(row[1])
         if row[2] is not None:
-            logs[_text(row[0]), row[2]] = row
+            logs[text_value(row[0]), row[2]] = row
     result: dict[str, tuple[int | None, int | None, list[dict[str, Any]]]] = {}
     for tag in tags:
         today = logs.get((tag, day.start))
@@ -674,12 +674,12 @@ def _reset_entries(
             log = logs.get((tag, start))
             days.append({
                 "ranked_day_start": start.isoformat(),
-                "net_trophy_change": None if log is None else _shown_total(
-                    log[7], _text(log[8]), log[3], log[5], _json_array(log[9])),
+                "net_trophy_change": None if log is None else shown_total(
+                    log[7], text_value(log[8]), log[3], log[5], json_array(log[9])),
             })
         result[tag] = (
             places.get(tag),
-            None if today is None else _net_so_far(*today[3:7], _json_array(today[9])),
+            None if today is None else net_so_far(*today[3:7], json_array(today[9])),
             days,
         )
     return result
@@ -730,7 +730,7 @@ def get_frozen_leaderboard(
         if locator is None:
             return None
         snapshot = None
-        if _text(locator[0]) == "v2":
+        if text_value(locator[0]) == "v2":
             snapshot_query = """
                 SELECT snapshot.id, snapshot.boundary_at, snapshot.version,
                        snapshot.ordering_rule_version,
@@ -827,81 +827,18 @@ def get_frozen_leaderboard(
                 """,
                 (legacy[0], limit, offset),
             ).fetchall()
-            boundary_at = legacy[2].astimezone(UTC)
-            newest_input_at = (legacy[12] or boundary_at).astimezone(UTC)
-            season_start = boundary_at - timedelta(days=int(legacy[7]))
-            season_end = season_start + timedelta(days=28)
             coverage = dict(legacy[5])
-            measured = float(coverage.get("measured", 0))
-            population = int(coverage.get("eligible_population", total_entries))
-            page_count = (total_entries + limit - 1) // limit
-            page = offset // limit + 1
-            return {
-                "kind": "frozen",
-                "snapshot_id": str(legacy[1]),
-                "boundary_at": boundary_at.isoformat(),
-                "reset_at": boundary_at.isoformat(),
-                "official_season_id": _text(legacy[6]),
-                "season_day_number": int(legacy[7]),
-                "season_start_at": season_start.isoformat(),
-                "season_end_at": season_end.isoformat(),
-                "previous_snapshot": legacy[8],
-                "next_snapshot": legacy[9],
-                "generated_at": boundary_at.isoformat(),
-                "version": int(legacy[3]),
-                "ordering_rule_version": _text(legacy[4]),
-                "tracked_population": population,
-                "total_entries": total_entries,
-                "page": page,
-                "page_size": limit,
-                "page_count": page_count,
-                "has_previous": page > 1,
-                "has_next": page < page_count,
-                "coverage": {
-                    "state": "partial",
-                    "tracked_players": population,
-                    "measured_percent": measured * 100
-                    if measured <= 1
-                    else measured,
-                    "note": "Published frozen snapshot coverage is measured from its accepted population.",
-                },
-                "provenance": {
-                    "source": "published frozen leaderboard snapshot",
-                    "observed_at": newest_input_at.isoformat(),
-                    "freshness": "stale" if int(legacy[11]) else "fresh",
-                    "confidence": "partial",
-                    "coverage": "partial",
-                    "version": _text(legacy[4]),
-                },
-                "quality_states": ["partial"]
-                + (["stale"] if int(legacy[11]) else []),
-                "entries": [
-                    {
-                        "position": int(row[0]),
-                        "tag": _text(row[1]),
-                        "name": None if row[2] is None else _text(row[2]),
-                        "clan": None if row[3] is None else _text(row[3]),
-                        "trophies": int(row[4]),
-                        "observed_at": row[5].astimezone(UTC).isoformat(),
-                        "age_seconds": max(
-                            0,
-                            int(
-                                (
-                                    now.astimezone(UTC) - row[5].astimezone(UTC)
-                                ).total_seconds()
-                            ),
-                        ),
-                        "freshness": _text(row[6]),
-                        "confidence": _text(row[7]),
-                        "public_confidence": _public_snapshot_confidence(
-                            _text(row[7])
-                        ),
-                        "official_rank": None if row[8] is None else int(row[8]),
-                        "tied": bool(row[9]),
-                    }
-                    for row in rows
-                ],
-            }
+            return _daily_board_response(
+                snapshot_id=str(legacy[1]), boundary_at=legacy[2],
+                season_id=text_value(legacy[6]), day_number=int(legacy[7]),
+                previous=legacy[8], following=legacy[9],
+                version=int(legacy[3]), ordering_version=text_value(legacy[4]),
+                population=int(coverage.get("eligible_population", total_entries)),
+                total_entries=total_entries, measured=float(coverage.get("measured", 0)),
+                stale_count=int(legacy[11]), newest_input_at=legacy[12],
+                entries=_daily_board_entries(rows, now, legacy=True),
+                limit=limit, offset=offset,
+            )
         total_entries = int(snapshot[7])
         if offset and offset >= total_entries:
             return None
@@ -939,71 +876,93 @@ def get_frozen_leaderboard(
             """,
             (snapshot[0], limit, offset),
         ).fetchall()
-        boundary_at = snapshot[1].astimezone(UTC)
-        newest_input_at = (snapshot[16] or boundary_at).astimezone(UTC)
-        season_start = boundary_at - timedelta(days=int(snapshot[15]))
-        season_end = season_start + timedelta(days=28)
-        measured = float(snapshot[5])
-        page_count = (total_entries + limit - 1) // limit
-        page = offset // limit + 1
-        return {
-            "kind": "frozen",
-            "snapshot_id": str(snapshot[0]),
-            "boundary_at": boundary_at.isoformat(),
-            "reset_at": boundary_at.isoformat(),
-            "official_season_id": _text(snapshot[14]),
-            "season_day_number": int(snapshot[15]),
-            "season_start_at": season_start.isoformat(),
-            "season_end_at": season_end.isoformat(),
-            "previous_snapshot": snapshot[17],
-            "next_snapshot": snapshot[18],
-            "generated_at": boundary_at.isoformat(),
-            "version": int(snapshot[2]),
-            "ordering_rule_version": _text(snapshot[3]),
-            "tracked_population": int(snapshot[6]),
-            "total_entries": total_entries,
-            "page": page,
-            "page_size": limit,
-            "page_count": page_count,
-            "has_previous": page > 1,
-            "has_next": page < page_count,
-            "coverage": {
-                "state": "partial",
-                "tracked_players": int(snapshot[6]),
-                "measured_percent": measured * 100 if measured <= 1 else measured,
-                "note": "Published frozen snapshot coverage is measured from its accepted population.",
-            },
-            "provenance": {
-                "source": "published frozen leaderboard snapshot",
-                "observed_at": newest_input_at.isoformat(),
-                "freshness": "stale" if int(snapshot[8]) else "fresh",
-                "confidence": "partial",
-                "coverage": "partial",
-                "version": _text(snapshot[3]),
-            },
-            "quality_states": ["partial"] + (["stale"] if int(snapshot[8]) else []),
-            "entries": [
-                {
-                    "position": int(row[0]),
-                    "tag": _text(row[1]),
-                    "name": None if row[2] is None else _text(row[2]),
-                    "trophies": int(row[3]),
-                    "observed_at": row[4].astimezone(UTC).isoformat(),
-                    "age_seconds": max(
-                        0,
-                        int(
-                            (
-                                now.astimezone(UTC) - row[4].astimezone(UTC)
-                            ).total_seconds()
-                        ),
-                    ),
-                    "freshness": _text(row[5]),
-                    "confidence": _text(row[6]),
-                    "public_confidence": _public_snapshot_confidence(_text(row[6])),
-                    "official_rank": None if row[7] is None else int(row[7]),
-                    "clan": None if row[8] is None else _text(row[8]),
-                    "tied": bool(row[9]),
-                }
-                for row in rows
-            ],
-        }
+        return _daily_board_response(
+            snapshot_id=str(snapshot[0]), boundary_at=snapshot[1],
+            season_id=text_value(snapshot[14]), day_number=int(snapshot[15]),
+            previous=snapshot[17], following=snapshot[18],
+            version=int(snapshot[2]), ordering_version=text_value(snapshot[3]),
+            population=int(snapshot[6]), total_entries=total_entries,
+            measured=float(snapshot[5]), stale_count=int(snapshot[8]),
+            newest_input_at=snapshot[16], entries=_daily_board_entries(rows, now),
+            limit=limit, offset=offset,
+        )
+
+
+def _daily_board_entries(rows: list[Any], now: datetime, *, legacy: bool = False) -> list[dict[str, Any]]:
+    entries = []
+    for row in rows:
+        # The retained older board table orders clan before trophies.
+        position, tag, name, trophies, observed_at, freshness, confidence, official_rank, clan, tied = (
+            (row[0], row[1], row[2], row[4], row[5], row[6], row[7], row[8], row[3], row[9])
+            if legacy else row
+        )
+        clan = None if clan is None else text_value(clan)
+        entries.append({
+            "position": int(position),
+            "tag": text_value(tag),
+            "name": None if name is None else text_value(name),
+            **({"clan": clan} if legacy else {}),
+            "trophies": int(trophies),
+            "observed_at": observed_at.astimezone(UTC).isoformat(),
+            "age_seconds": max(0, int((now.astimezone(UTC) - observed_at.astimezone(UTC)).total_seconds())),
+            "freshness": text_value(freshness),
+            "confidence": text_value(confidence),
+            "public_confidence": public_snapshot_confidence(text_value(confidence)),
+            "official_rank": None if official_rank is None else int(official_rank),
+            **({} if legacy else {"clan": clan}),
+            "tied": bool(tied),
+        })
+    return entries
+
+
+def _daily_board_response(
+    *, snapshot_id: str, boundary_at: datetime, season_id: str,
+    day_number: int, previous: Any, following: Any, version: int,
+    ordering_version: str, population: int, total_entries: int, measured: float,
+    stale_count: int, newest_input_at: datetime | None, entries: list[dict[str, Any]],
+    limit: int, offset: int,
+) -> dict[str, Any]:
+    boundary_at = boundary_at.astimezone(UTC)
+    newest_input_at = (newest_input_at or boundary_at).astimezone(UTC)
+    season_start = boundary_at - timedelta(days=day_number)
+    season_end = season_start + timedelta(days=28)
+    page_count = (total_entries + limit - 1) // limit
+    page = offset // limit + 1
+    return {
+        "kind": "frozen",
+        "snapshot_id": snapshot_id,
+        "boundary_at": boundary_at.isoformat(),
+        "reset_at": boundary_at.isoformat(),
+        "official_season_id": season_id,
+        "season_day_number": day_number,
+        "season_start_at": season_start.isoformat(),
+        "season_end_at": season_end.isoformat(),
+        "previous_snapshot": previous,
+        "next_snapshot": following,
+        "generated_at": boundary_at.isoformat(),
+        "version": version,
+        "ordering_rule_version": ordering_version,
+        "tracked_population": population,
+        "total_entries": total_entries,
+        "page": page,
+        "page_size": limit,
+        "page_count": page_count,
+        "has_previous": page > 1,
+        "has_next": page < page_count,
+        "coverage": {
+            "state": "partial",
+            "tracked_players": population,
+            "measured_percent": measured * 100 if measured <= 1 else measured,
+            "note": "Published frozen snapshot coverage is measured from its accepted population.",
+        },
+        "provenance": {
+            "source": "published frozen leaderboard snapshot",
+            "observed_at": newest_input_at.isoformat(),
+            "freshness": "stale" if stale_count else "fresh",
+            "confidence": "partial",
+            "coverage": "partial",
+            "version": ordering_version,
+        },
+        "quality_states": ["partial"] + (["stale"] if stale_count else []),
+        "entries": entries,
+    }

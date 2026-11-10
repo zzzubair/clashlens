@@ -39,9 +39,9 @@ from test_reset_scenarios_postgres import (
 from clashlens import board_deadline, league_days, reset_baselines
 from clashlens.api_db import ApiDatabase
 from clashlens.api_players import (
-    get_player_page,
     get_player_season_summary,
     left_legend_i,
+    read_player_page,
 )
 from clashlens.boundary import queue_board_rebuilds
 from clashlens.collector_db import CollectorDatabase
@@ -284,9 +284,10 @@ def test_a_mid_season_monday_moves_players_between_leagues(
                                  tuesday + timedelta(hours=14))
         api = ApiDatabase(connection_info)
         try:
-            pages = {tag: get_player_page(api, tag, now=tuesday + timedelta(hours=14),
-                                          freshness_seconds=900)
-                     for tag in (DROPPED, PROMOTED, STEADY_1)}
+            with api.pool.connection() as page_connection:
+                pages = {tag: read_player_page(page_connection, tag, now=tuesday + timedelta(hours=14),
+                                              freshness_seconds=900)
+                         for tag in (DROPPED, PROMOTED, STEADY_1)}
             summary = get_player_season_summary(api, DROPPED, season_id)
         finally:
             api.close()

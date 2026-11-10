@@ -18,7 +18,8 @@ from test_api_db_verification import (
 )
 
 from clashlens import api_accounts, api_crews, api_verification
-from clashlens.api_db import ApiDatabase, RequestBinding
+from clashlens.api_db import ApiDatabase
+from clashlens.api_requests import RequestBinding
 from clashlens.verification import VerificationOutcome
 
 NOW = datetime(2026, 8, 6, 12, 0, tzinfo=UTC)

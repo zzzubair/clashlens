@@ -14,7 +14,8 @@ from bot.commands import Commands
 from bot.replies import Site
 from bot.store import Store
 from clashlens import api_accounts, live_board
-from clashlens.api_db import ApiDatabase, RequestBinding
+from clashlens.api_db import ApiDatabase
+from clashlens.api_requests import RequestBinding
 
 DISCORD_ID = "100000000000000001"
 

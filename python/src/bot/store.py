@@ -8,8 +8,6 @@ of the command, so one reply never mixes two Legend days.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
 
@@ -21,61 +19,14 @@ from clashlens import (
     api_players,
     live_board,
 )
-from clashlens.api_db import (
-    AccountContext,
-    ApiDatabase,
-)
+from clashlens.api_db import ApiDatabase
+from clashlens.api_requests import AccountContext
 from clashlens.domain import SEASON_START_TROPHIES
 
 from . import replies
 
 # The website's own freshness limit for a saved player profile.
 FRESHNESS_SECONDS = 900
-
-
-def _linked_players(
-    connection: Any, account_id: int
-) -> list[tuple[int, str, str | None, str | None, str | None]]:
-    """Every verified player's id, tag, and newest saved name, clan and league:
-    the website's own read, without its 500-player cutoff, so the bot lists
-    them all."""
-    rows = connection.execute(
-        """
-        SELECT player.id, player.normalized_tag, profile.name, profile.clan,
-               profile.league
-        FROM verified_player_links AS link
-        JOIN players AS player ON player.id = link.player_id
-        LEFT JOIN LATERAL (
-            SELECT version.name, version.profile_json -> 'clan' ->> 'name' AS clan,
-                   CASE WHEN version.eligibility_state <> 'uncertain'
-                        THEN version.league_tier_name END AS league,
-                   version.player_id
-            FROM player_profile_versions AS version
-            CROSS JOIN LATERAL (
-                SELECT max(observed_at) AS observed_at FROM player_profile_effects
-                WHERE profile_version_id = version.id
-            ) AS effect
-            WHERE version.normalized_tag = player.normalized_tag
-            ORDER BY COALESCE(effect.observed_at, version.observed_at) DESC,
-                     version.id DESC
-            LIMIT 1
-        ) AS profile ON profile.player_id = player.id
-        WHERE link.account_id = %s
-        ORDER BY player.normalized_tag
-        """,
-        (account_id,),
-    ).fetchall()
-    return [
-        (
-            int(row[0]),
-            str(row[1]),
-            None if row[2] is None else str(row[2]),
-            None if row[3] is None else str(row[3]),
-            None if row[4] is None else str(row[4]),
-        )
-        for row in rows
-    ]
-
 
 
 def link_colours(connection: Any, account_id: int) -> dict[str, int]:
@@ -92,23 +43,6 @@ def link_colours(connection: Any, account_id: int) -> dict[str, int]:
         (account_id,),
     ).fetchall()
     return replies.colours([str(row[0]) for row in rows])
-
-
-class _OneConnection:
-    """The API database with every read on one open connection, so the
-    website's own page read shares that connection's snapshot."""
-
-    def __init__(self, database: ApiDatabase, connection: Any) -> None:
-        self._database = database
-        self._connection = connection
-        self.pool = self
-
-    @contextmanager
-    def connection(self) -> Iterator[Any]:
-        yield self._connection
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._database, name)
 
 
 class Store:
@@ -148,7 +82,7 @@ class Store:
             connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             cards = api_players.player_cards(
                 connection,
-                _linked_players(connection, account.internal_id),
+                api_players.linked_players(connection, account.internal_id, limit=None),
                 now=now,
             )
             seen = dict(
@@ -200,13 +134,13 @@ class Store:
         Clash Lens has never heard of the tag."""
         with self.database.pool.connection() as connection:
             connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-            page = api_players.get_player_page(
-                _OneConnection(self.database, connection),  # type: ignore[arg-type]
+            page = api_players.read_player_page(
+                connection,
                 tag,
                 now=now,
                 freshness_seconds=FRESHNESS_SECONDS,
             )
-            lookup = api_player_lookup._lookup(connection, tag)
+            lookup = api_player_lookup.read_lookup(connection, tag)
             if page is None:
                 if lookup["state"] == "unknown":
                     return None

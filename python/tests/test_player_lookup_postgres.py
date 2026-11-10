@@ -195,7 +195,7 @@ def test_a_profile_processed_while_the_lookup_reads_is_never_a_failed_check(
                     return self.connection.execute(*args)
 
             with database.pool.connection() as connection:
-                lookup = api_player_lookup._lookup(
+                lookup = api_player_lookup.read_lookup(
                     ProcessedAfterFirstRead(connection), "#2PP"
                 )
             # Still checking until the weekly league record decides.
@@ -722,9 +722,10 @@ def test_season_zero_player_at_5000_has_a_page_and_ranks_until_a_legend_battle(
             }
             # Collection continues.
             assert [work.normalized_tag for work in _claim(info)] == ["#2PP"]
-            page = api_players.get_player_page(
-                database, "#2PP", now=NOW, freshness_seconds=900
-            )
+            with database.pool.connection() as page_connection:
+                page = api_players.read_player_page(
+                    page_connection, "#2PP", now=NOW, freshness_seconds=900
+                )
             assert (page["trophies"], page["season_reset_pending"]) == (5000, False)
             # Its trophies reach no search, but it ranks at 5,000 on the Live
             # Leaderboard.
@@ -786,9 +787,10 @@ def test_season_zero_player_at_5000_has_a_page_and_ranks_until_a_legend_battle(
             assert api_player_lookup.get_lookup(database, "#2PP") == {
                 "tag": "#2PP", "state": "tracking",
             }
-            page = api_players.get_player_page(
-                database, "#2PP", now=NOW, freshness_seconds=900
-            )
+            with database.pool.connection() as page_connection:
+                page = api_players.read_player_page(
+                    page_connection, "#2PP", now=NOW, freshness_seconds=900
+                )
             assert page is not None and page["trophies"] == 5040
 
             # A later Season 0 profile is explained, but keeps the accepted
@@ -807,9 +809,10 @@ def test_season_zero_player_at_5000_has_a_page_and_ranks_until_a_legend_battle(
                     "clan_tag": "#2CLAN", "trophies": 5000,
                 },
             }
-            page = api_players.get_player_page(
-                database, "#2PP", now=NOW, freshness_seconds=900
-            )
+            with database.pool.connection() as page_connection:
+                page = api_players.read_player_page(
+                    page_connection, "#2PP", now=NOW, freshness_seconds=900
+                )
             assert (page["trophies"], page["clan"], page["clan_tag"]) == (
                 5040, "Synthetic Clan", "#2CLAN"
             )
@@ -849,9 +852,10 @@ def test_other_rejected_profiles_get_their_own_explanation(
             lookup = api_player_lookup.get_lookup(database, "#2PP")
 
             assert lookup == {"tag": "#2PP", "state": "tracking", "reason": reason}
-            page = api_players.get_player_page(
-                database, "#2PP", now=NOW, freshness_seconds=900
-            )
+            with database.pool.connection() as page_connection:
+                page = api_players.read_player_page(
+                    page_connection, "#2PP", now=NOW, freshness_seconds=900
+                )
             # The older accepted profile stays saved, never replaced.
             assert (page and page["trophies"]) == (6123 if accepted_before else None)
         finally:

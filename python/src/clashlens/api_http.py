@@ -11,7 +11,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
 from . import api_accounts
-from .api_db import AccountContext, ApiDatabase, OperationResult, RequestBinding
+from .api_db import ApiDatabase
+from .api_requests import AccountContext, OperationResult, RequestBinding
 from .hmac_proof import VerifiedProof
 from .profile import normalize_player_tag
 
@@ -173,3 +174,12 @@ def json_safe(value: Any) -> Any:
     if isinstance(value, list):
         return [json_safe(item) for item in value]
     return value
+
+
+def api_error_response(error: ApiError) -> JSONResponse:
+    content: dict[str, Any] = {"error": error.code}
+    if error.detail:
+        content["detail"] = error.detail
+    if error.affected_days is not None:
+        content["affected_days"] = error.affected_days
+    return JSONResponse(status_code=error.status_code, content=content)

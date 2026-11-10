@@ -458,7 +458,8 @@ def test_season_opening_reading_of_the_old_season_starts_day_1_at_5000(
         # The player page reads the start's source as the data-service role.
         api = ApiDatabase(as_api_role(connection_info))
         try:
-            page = api_players.get_player_page(api, TAG, now=login, freshness_seconds=900)
+            with api.pool.connection() as page_connection:
+                page = api_players.read_player_page(page_connection, TAG, now=login, freshness_seconds=900)
         finally:
             api.close()
         opening_day = next((

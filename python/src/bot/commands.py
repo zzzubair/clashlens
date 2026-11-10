@@ -15,7 +15,7 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, Protocol, TypeVar
 
-from clashlens.api_db import AccountContext
+from clashlens.api_requests import AccountContext
 from clashlens.domain import ranked_day_for
 
 from . import picture, replies

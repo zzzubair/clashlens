@@ -689,9 +689,10 @@ def test_player_page_reports_battle_history_publication_separately(database_url)
                 seed_check(connection, "#2PP", "battle_log", now - timedelta(minutes=1))
 
             def battle_history_updated_at(tag):
-                page = api_players.get_player_page(
-                    database, tag, now=now, freshness_seconds=900
-                )
+                with database.pool.connection() as page_connection:
+                    page = api_players.read_player_page(
+                        page_connection, tag, now=now, freshness_seconds=900
+                    )
                 return page["battle_history_updated_at"]
 
             assert battle_history_updated_at("#2PP") == published_at.isoformat()

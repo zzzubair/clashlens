@@ -68,8 +68,10 @@ from threading import Condition, Lock, Thread
 from typing import Any, Literal
 
 from . import army_types, projected_place
-from .api_db import ApiDatabase, _screen_events, _text
+from .api_db import ApiDatabase
 from .api_leaderboard import LiveBoardCache
+from .api_player_presentation import screen_events
+from .db_rows import text_value
 from .domain import (
     CHAIN_BREAK_REASONS,
     MAX_BATTLE_TROPHIES,
@@ -277,7 +279,7 @@ def _read_board(
     days' slots it used; ``slots`` holds those already read."""
     day_start = ranked_day_for(now).start
     days = {
-        _text(row[0]): row[1:]
+        text_value(row[0]): row[1:]
         for row in connection.execute(_BOARD_SQL, {"day_start": day_start}).fetchall()
     }
     versions = {int(day[6]) for day in days.values() if day[6] is not None}
@@ -293,7 +295,7 @@ def _read_board(
     # Day start trophies -> [defenses, held defenses, trophies lost].
     by_start: dict[int, list[int]] = {}
     for row in live:
-        tag, trophies = _text(row[0]), row[2]
+        tag, trophies = text_value(row[0]), row[2]
         start, attacks, gained, defended, lost, tripled, version = days.get(
             tag, (None,) * 7
         )
@@ -355,7 +357,7 @@ def _latest_changes(
         for log, lens, battle, at, moved in connection.execute(
             _LOG_REPORTS_SQL, (unread[first : first + _LOGS_A_READ],)
         ):
-            read[log].append((lens == "offense", _text(battle), at, moved is True))
+            read[log].append((lens == "offense", text_value(battle), at, moved is True))
     kept |= {log: tuple(events) for log, events in read.items()}
     attack_ends = {
         battle: at
@@ -386,7 +388,7 @@ def _projection_inputs(
         return None, reports
     tags = list(board.slots_left)
     players = {
-        _text(row[0]): row[1:]
+        text_value(row[0]): row[1:]
         for row in connection.execute(
             _PROJECTION_PLAYERS_SQL, {"tags": tags, "day_start": board.day_start}
         ).fetchall()
@@ -784,11 +786,11 @@ def _opponents(
     """The bases ``tag`` attacked in ``own``, its latest log of the Legend
     day ``day_start``, in the order they happened: each with its defenses
     that day and ``compare``'s comparison for its Reset trophies."""
-    attacks, _ = _screen_events(None if own is None else own[5])
+    attacks, _ = screen_events(None if own is None else own[5])
     attacks = sorted(attacks[:_MAX_OPPONENTS], key=lambda event: event["battle_timestamp"])
     opponent_tags = sorted({event["opponent"]["tag"] for event in attacks})
     opponent_rows = {
-        _text(row[0]): row
+        text_value(row[0]): row
         for row in connection.execute(
             _DAY_LOGS_SQL, {"tags": opponent_tags, "day_start": day_start}
         ).fetchall()
@@ -798,7 +800,7 @@ def _opponents(
     for attack in attacks:
         opponent_tag = attack["opponent"]["tag"]
         row = opponent_rows.get(opponent_tag)
-        _, defended = _screen_events(None if row is None else row[5])
+        _, defended = screen_events(None if row is None else row[5])
         defenses = [
             {
                 "stars": event["stars"],
@@ -874,7 +876,7 @@ def get_player_today(
         ).fetchone() is None:
             return None
         own_rows = {
-            _text(row[0]): row
+            text_value(row[0]): row
             for row in connection.execute(
                 _DAY_LOGS_SQL, {"tags": [tag], "day_start": day.start}
             ).fetchall()
@@ -1057,7 +1059,7 @@ def get_player_armies(
         if player is None:
             return None
         covered = [
-            (start, _text(season_id), int(day_number), _text(marker))
+            (start, text_value(season_id), int(day_number), text_value(marker))
             for start, season_id, day_number, marker in connection.execute(
                 """
                 SELECT day.ranked_day_start, day.official_season_id,

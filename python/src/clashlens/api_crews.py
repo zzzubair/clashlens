@@ -23,15 +23,10 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from . import api_db, api_player_lookup
-from .api_accounts import _MEMBER_JOINS, _group_player
-from .api_db import (
-    ApiDatabase,
-    OperationResult,
-    RequestBinding,
-    _text,
-)
-from .api_players import left_legend_i
+from . import api_player_lookup, api_requests
+from .api_db import ApiDatabase
+from .api_players import MEMBER_JOINS, group_player, left_legend_i
+from .api_requests import OperationResult, RequestBinding
 from .crew_states import (
     INVITE_LIFETIME,
     LIVE_INVITE_SQL,
@@ -50,6 +45,7 @@ from .crew_states import (
 from .crew_states import (
     Refused as _Refused,
 )
+from .db_rows import text_value
 from .domain import ranked_day_for, season_opening_reset
 from .season_reset_sql import frozen_trophies_sql, opening_day_battles_sql
 
@@ -67,7 +63,7 @@ def _write(
     so far and is stored as the answer, as every Group write's is."""
     with database.pool.connection() as connection:
         with connection.transaction():
-            existing = api_db._reserve_request(connection, binding)
+            existing = api_requests.reserve_request(connection, binding)
             if existing is not None:
                 return existing
             try:
@@ -75,7 +71,7 @@ def _write(
                     result = operation(connection)
             except _Refused as refusal:
                 result = OperationResult(refusal.status_code, refusal.payload)
-            api_db._complete_request(connection, binding.request_id, result)
+            api_requests.complete_request(connection, binding.request_id, result)
             return result
 
 
@@ -97,7 +93,7 @@ def _membership(
         ).fetchone()
     if member is None:
         raise _Refused(404, {"error": "crew_not_found"})
-    return int(crew[0]), int(crew[1]), CrewRole(_text(member[0]))
+    return int(crew[0]), int(crew[1]), CrewRole(text_value(member[0]))
 
 
 def _used(connection: Any, crew_row: int) -> int:
@@ -114,7 +110,7 @@ def _header(connection: Any, crew_row: int) -> dict[str, Any]:
     ).fetchone()
     return {
         "crew_id": str(row[0]),
-        "name": _text(row[1]),
+        "name": text_value(row[1]),
         "size": int(row[2]),
         "used": _used(connection, crew_row),
     }
@@ -145,7 +141,7 @@ def _add_places(
     for tag in tags:
         api_player_lookup.lock_tag(connection, tag)
     linked = {
-        _text(row[0]): int(row[1])
+        text_value(row[0]): int(row[1])
         for row in connection.execute(
             """
             SELECT player.normalized_tag, player.id
@@ -160,7 +156,7 @@ def _add_places(
         if tag not in linked:
             raise _Refused(422, {"error": "player_not_linked", "tag": tag})
     for tag in tags:
-        state = api_player_lookup._lookup(connection, tag)["state"]
+        state = api_player_lookup.read_lookup(connection, tag)["state"]
         if state in {"not_in_legend", "uncertain"}:
             raise _Refused(422, {"error": "player_not_in_legend", "tag": tag})
         if state != "tracking":
@@ -181,7 +177,7 @@ def _add_places(
     ).fetchone()
     if present is not None:
         raise _Refused(
-            409, {"error": "player_already_in_crew", "tag": _text(present[0])}
+            409, {"error": "player_already_in_crew", "tag": text_value(present[0])}
         )
     used = _used(connection, crew_row)
     if used + len(tags) > size:
@@ -214,7 +210,7 @@ def _add_places(
 
 def _own_tags(connection: Any, crew_row: int, account_id: int) -> list[str]:
     return [
-        _text(row[0])
+        text_value(row[0])
         for row in connection.execute(
             """
             SELECT player.normalized_tag
@@ -251,11 +247,11 @@ def list_crews(database: ApiDatabase, account_id: int) -> dict[str, Any]:
     crews = [
         {
             "crew_id": str(row[0]),
-            "name": _text(row[1]),
+            "name": text_value(row[1]),
             "size": int(row[2]),
             "used": int(row[4]),
-            "role": _text(row[3]),
-            "my_tags": [_text(tag) for tag in row[5]],
+            "role": text_value(row[3]),
+            "my_tags": [text_value(tag) for tag in row[5]],
         }
         for row in rows
     ]
@@ -302,7 +298,7 @@ def _players(
     left = left_legend_i(connection, [int(row[9]) for row in rows], now)
     players = []
     for row in rows:
-        player = _group_player(connection, row[1:8], now)
+        player = group_player(connection, row[1:8], now)
         if player["state"] != "tracking":
             status = "not_in_legend"
         else:
@@ -350,7 +346,7 @@ def get_crew(
         places: dict[int, list[dict[str, Any]]] = {}
         for owner, player in _players(
             connection,
-            f"crew_players AS member {_MEMBER_JOINS} WHERE member.crew_id = %s",
+            f"crew_players AS member {MEMBER_JOINS} WHERE member.crew_id = %s",
             (crew_row,),
             now,
         ):
@@ -359,9 +355,9 @@ def get_crew(
         members = sorted(
             (
                 {
-                    "username": _text(row[1]),
-                    "display_name": _text(row[2]),
-                    "role": _text(row[3]),
+                    "username": text_value(row[1]),
+                    "display_name": text_value(row[2]),
+                    "role": text_value(row[3]),
                     "you": int(row[0]) == account_id,
                     "players": places.get(int(row[0]), []),
                 }
@@ -402,7 +398,7 @@ def get_crew(
         "invites": [
             {
                 "invite_id": str(row[0]),
-                "made_by": _text(row[1]),
+                "made_by": text_value(row[1]),
                 "expires_at": row[2],
                 "mine": bool(row[3]),
             }
@@ -427,7 +423,7 @@ def _crew_and_role(
             "SELECT role FROM crew_accounts WHERE crew_id = %s AND account_id = %s",
             (crew[0], account_id),
         ).fetchone()
-    return int(crew[0]), None if member is None else _text(member[0])
+    return int(crew[0]), None if member is None else text_value(member[0])
 
 
 def view_crew(
@@ -446,7 +442,7 @@ def view_crew(
         players = []
         for _owner, player in _players(
             connection,
-            f"crew_players AS member {_MEMBER_JOINS} WHERE member.crew_id = %s",
+            f"crew_players AS member {MEMBER_JOINS} WHERE member.crew_id = %s",
             (crew_row,),
             now,
         ):
@@ -495,7 +491,7 @@ def player_crews(database: ApiDatabase, tag: str) -> dict[str, Any]:
     return {
         "kind": "player-crews",
         "tag": tag,
-        "crews": [{"crew_id": str(row[0]), "name": _text(row[1])} for row in rows],
+        "crews": [{"crew_id": str(row[0]), "name": text_value(row[1])} for row in rows],
     }
 
 
@@ -622,7 +618,7 @@ def remove_player(
         if place is None:
             raise _Refused(404, {"error": "player_not_in_crew"})
         holder, player_id = int(place[0]), int(place[1])
-        holder_role = CrewRole(_text(place[2]))
+        holder_role = CrewRole(text_value(place[2]))
         if holder != account_id and not role.outranks(holder_role):
             raise _Refused(403, {"error": "crew_forbidden"})
         after: CrewRole | None = holder_role
@@ -666,7 +662,7 @@ def _member(
     ).fetchone()
     if row is None:
         raise _Refused(404, {"error": "member_not_found"})
-    return int(row[0]), _text(row[1]), CrewRole(_text(row[2]))
+    return int(row[0]), text_value(row[1]), CrewRole(text_value(row[2]))
 
 
 def _set_role(
@@ -823,7 +819,7 @@ def make_invite(
             200,
             {
                 "invite_id": str(newest[0]),
-                "code": _text(newest[1]),
+                "code": text_value(newest[1]),
                 "expires_at": newest[2].isoformat(),
                 "open_places": open_places,
                 "live_count": int(live_count),
@@ -879,7 +875,7 @@ def _invite(connection: Any, code: str) -> Invite | None:
     ).fetchone()
     if row is None:
         return None
-    return Invite(int(row[0]), str(row[1]), _text(row[2]), int(row[3]), row[4], row[5])
+    return Invite(int(row[0]), str(row[1]), text_value(row[2]), int(row[3]), row[4], row[5])
 
 
 def get_invite(
@@ -932,7 +928,7 @@ def get_invite(
             is not None
         )
         placed = {
-            _text(row[0])
+            text_value(row[0])
             for row in connection.execute(
                 """
                 SELECT player.normalized_tag
@@ -949,7 +945,7 @@ def get_invite(
             f"""
             (SELECT link.account_id, link.player_id
              FROM verified_player_links AS link
-             WHERE link.account_id = %s) AS member {_MEMBER_JOINS}
+             WHERE link.account_id = %s) AS member {MEMBER_JOINS}
             """,
             (account_id,),
             now,
@@ -979,7 +975,7 @@ def get_invite(
         "state": state.value,
         "crew_id": invite.crew_id,
         "name": invite.name,
-        "owner_display_name": None if owner is None else _text(owner[0]),
+        "owner_display_name": None if owner is None else text_value(owner[0]),
         "size": invite.size,
         "used": used,
         "expires_at": invite.expires_at,
