@@ -17,7 +17,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import claimed_jobs
+from . import claimed_jobs, day_recalculation
 from .claimed_jobs import (
     observation_source,
     record_processing_outcome,
@@ -324,16 +324,15 @@ def queue_season_end(connection: Any, player_id: int, season_end: datetime) -> N
     accept, is left as saved. The
     day's calculation lock makes the two meet: a calculation either reads
     this total or has saved before this reads it."""
-    from . import first_battle_log
     from .db import PYTHON_BACKFILL_PRIORITY
     from .domain import ranked_day_for
     from .profile import LEGEND_I_TIER_ID
     from .ranked_day_inputs import lock_ranked_day
     from .reconciliation import RECONCILIATION_RULE_VERSION
-    from .reconciliation_db import _anchored_day
+    from .season_anchors import anchored_day
 
     day_start = season_end - timedelta(days=1)
-    anchor, season_day = _anchored_day(connection, day_start)
+    anchor, season_day = anchored_day(connection, day_start)
     if season_day is None or day_start < anchor[3]:
         return
     lock_ranked_day(connection, int(player_id), ranked_day_for(day_start))
@@ -367,7 +366,7 @@ def queue_season_end(connection: Any, player_id: int, season_end: datetime) -> N
     ).fetchone()
     if stale is None:
         return
-    first_battle_log._queue(
+    day_recalculation.request(
         connection, int(player_id), day_start, None,
         key=(f"reconcile:official-final:{player_id}:"
              f"{day_start:%Y-%m-%dT%H:%M:%SZ}:{RECONCILIATION_RULE_VERSION}:"

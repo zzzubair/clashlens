@@ -19,7 +19,7 @@ from domain_test_support import (
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from test_collector_db_postgres import _handoff, _hash
 
-from clashlens import league_week, population, promotion_candidates
+from clashlens import league_decider, league_week, population, promotion_candidates
 from clashlens.collector_db import CollectorDatabase
 from clashlens.db import Database, enqueue_discovered_players
 from clashlens.weekly_eligibility import Eligibility, eligibility
@@ -384,7 +384,7 @@ def test_a_promotion_answer_needs_a_saved_profile_newer_than_this_weeks_answer(
         try:
             assert processor.process_once(owner="promotion-early") is not None
             # The worker's weekly league record decides it within seconds.
-            while league_week.decide_due(database):
+            while league_decider.decide_due(database):
                 pass
         finally:
             database.close()
@@ -453,7 +453,7 @@ def test_repair_marks_never_answered_players_due_and_lists_known_lower_legends(
         try:
             assert processor.process_once(owner="repair-1") is not None
             assert processor.process_once(owner="repair-2") is not None
-            while league_week.decide_due(database):
+            while league_decider.decide_due(database):
                 pass
         finally:
             database.close()
@@ -546,7 +546,7 @@ def test_tracked_players_are_split_into_available_waiting_and_unavailable(
         try:
             for owner in ("split-1", "split-2", "split-3"):
                 assert processor.process_once(owner=owner) is not None
-            while league_week.decide_due(database):
+            while league_decider.decide_due(database):
                 pass
         finally:
             database.close()

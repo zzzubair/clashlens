@@ -15,6 +15,7 @@ the next publication re-check carries on from it.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
@@ -194,3 +195,29 @@ def decode_verdict(
     else:
         current = text_value(active[5]) == decoded.category
     return DecodeVerdict.CURRENT if current else DecodeVerdict.OUTDATED
+
+
+def boundary_held(connection: Any, boundary_at: datetime) -> bool:
+    """Whether an active or paused campaign still holds this Reset."""
+    return connection.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM domain_repair_items AS item
+            JOIN domain_repair_campaigns AS campaign ON campaign.id = item.campaign_id
+            WHERE item.kind = 'publication' AND item.boundary_at = %s
+              AND item.state IN ('pending', 'failed')
+              -- 'paused' is declared by the schema; nothing enters it yet.
+              AND campaign.state IN ('active', 'paused')
+        )
+        """,
+        (boundary_at,),
+    ).fetchone()[0]
+
+
+
+
+def day_snapshot_status(state: str, *, has_profile: bool = True) -> str:
+    """A saved day's member status, including the Complete day's required reading."""
+    status = {"Complete": "complete", "Partial": "partial",
+              "Inconsistent": "inconsistent", "Malformed": "malformed"}.get(state, "pending")
+    return "missing" if status == "complete" and not has_profile else status

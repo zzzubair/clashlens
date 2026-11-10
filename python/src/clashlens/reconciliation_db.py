@@ -49,7 +49,9 @@ from .reconciliation import (
     reconcile_ranked_day,
     serialize_ranked_day_battles,
 )
-from .season_summaries import acquire_player_season_lock, materialize_player_season
+from .season_anchors import anchored_day
+from .season_lifecycle import acquire_player_season_lock
+from .season_summaries import materialize_player_season
 
 # The 2026-10-05 and 2026-10-06 Resets saved every reading within 45 minutes.
 DAY_END_RECALCULATION_DELAY = timedelta(hours=2)
@@ -183,7 +185,7 @@ def recalculate_ranked_day(
     now_row = connection.execute("SELECT clock_timestamp()").fetchone()
     assert now_row is not None
     now = now_row[0]
-    from .season_retirement import (
+    from .season_lifecycle import (
         SEASON_DETAIL_RETIRED,
         acquire_season_lock_shared,
         is_detail_retired_for_day,
@@ -200,7 +202,7 @@ def recalculate_ranked_day(
     ).fetchone()
     season_id = text_value(season_row[0]) if season_row else None
     if season_id is None:
-        season_day = _anchored_day(connection, ranked_day.start)[1]
+        season_day = anchored_day(connection, ranked_day.start)[1]
         season_id = season_day.official_season_id if season_day else None
     if season_id is not None and season_id != "unknown":
         acquire_season_lock_shared(connection, season_id)
@@ -313,7 +315,7 @@ def recalculate_ranked_day(
         ),
         *domain.battle_window(ranked_day.start),
     )
-    anchor, season_day = _anchored_day(connection, ranked_day.start)
+    anchor, season_day = anchored_day(connection, ranked_day.start)
     # Days before the anchor's previous Season stay an anchor conflict.
     anchor_valid = season_day is not None and ranked_day.start >= anchor[3]
     official_season_id = season_day.official_season_id if season_day else "unknown"
@@ -816,26 +818,6 @@ def _official_final(connection: Any, player_id: int, season_end: datetime) -> in
     return None if row is None or row[0] is None else int(row[0])
 
 
-def _anchored_day(connection: Any, day_start: datetime) -> tuple[Any, RankedDay | None]:
-    """The confirmed anchor row and the day's Season identity counted from it
-    in 28-day steps; no identity without an anchor or with an off-phase one."""
-    anchor = connection.execute(
-        """
-        SELECT current_league_season_id, previous_league_season_id,
-               current_start, previous_start
-        FROM legend_season_anchors
-        WHERE state = 'confirmed' AND anchor_rule_version = %s
-        ORDER BY current_start DESC LIMIT 1
-        """,
-        (SEASON_ANCHOR_RULE_VERSION,),
-    ).fetchone()
-    try:
-        ids = (text_value(anchor[0]), text_value(anchor[1])) if anchor else None
-        return anchor, domain.anchored_ranked_day(day_start, *ids) if ids else None
-    except DomainRuleError:
-        return anchor, None
-
-
 def _restored_result_hash(result_hash: str, replaces_version_id: Any) -> str:
     """The unique hash of an earlier result published again over another."""
     return hashlib.sha256(
@@ -903,7 +885,7 @@ def _publish_player_daily_log(
     # Targeted corrections for a retired season are rejected before any
     # domain mutation; detailed reconstruction ends at finalization.
     if official_season_id != "unknown":
-        from .season_retirement import (
+        from .season_lifecycle import (
             SEASON_DETAIL_RETIRED,
             acquire_season_lock_shared,
             is_season_detail_retired,
@@ -1022,7 +1004,7 @@ def _publish_player_daily_log(
     # A public day names its Legend I week's record row (migration 0118).
     week = (
         (league_week.week_start(ranked_day_start), league_week.League.LEGEND_I.value)
-        if ranked_day_start >= league_days.RECORDED_FROM else (None, None)
+        if ranked_day_start >= league_week.RECORDED_FROM else (None, None)
     )
     connection.execute(
         """

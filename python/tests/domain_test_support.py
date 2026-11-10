@@ -17,7 +17,7 @@ from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.types.json import Jsonb
 
-from clashlens import army_ingestion, boundary_publication, league_week
+from clashlens import army_ingestion, boundary_publication, league_decider, league_week
 from clashlens.archive import S3ArchiveReader
 from clashlens.db import DEFAULT_POOL_SIZE, Database
 from clashlens.domain import is_season_boundary, ranked_day_for
@@ -232,20 +232,18 @@ def record_seasons_to(monkeypatch: Any, season_end: datetime) -> None:
     ``season_end`` from their starts, as it decides every Season from 5
     October 2026, with its clock on the later one's last day: their Legend
     days, Season starts and ends then follow its decisions."""
-    from clashlens import league_days
-
-    monkeypatch.setattr(league_days, "RECORDED_FROM", season_end - timedelta(days=56))
-    monkeypatch.setattr(league_week, "_now", lambda: season_end - timedelta(hours=1))
-    monkeypatch.setattr(league_week, "_retry_at", float("-inf"))
+    monkeypatch.setattr(league_week, "RECORDED_FROM", season_end - timedelta(days=56))
+    monkeypatch.setattr(league_decider, "_now", lambda: season_end - timedelta(hours=1))
+    monkeypatch.setattr(league_decider, "_retry_at", float("-inf"))
 
 
 def decide_leagues(database: Any, at: datetime) -> None:
     """Decide every marked week, as the worker's league week thread does
     within seconds of the evidence, with its clock at ``at``: whether a
     player is tracked follows the decision."""
-    with patch.object(league_week, "_now", lambda: at), \
-            patch.object(league_week, "_retry_at", float("-inf")):
-        while league_week.decide_due(database):
+    with patch.object(league_decider, "_now", lambda: at), \
+            patch.object(league_decider, "_retry_at", float("-inf")):
+        while league_decider.decide_due(database):
             pass
 
 
@@ -264,7 +262,7 @@ def repair_season(
         preview = season_repair(database, season, "preview", max_jobs=max_jobs)
         for _ in range(10):
             queued = season_repair(database, season, "queue", max_jobs=max_jobs)
-            while queued.get("phase") == "league" and league_week.decide_due(database):
+            while queued.get("phase") == "league" and league_decider.decide_due(database):
                 pass
             if queued.get("phase") not in {"inputs", "league"}:
                 return preview, queued

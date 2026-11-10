@@ -16,7 +16,7 @@ from domain_test_support import domain_database, text
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from test_reset_scenarios_postgres import SEASON, _story, attacks, day, defenses
 
-from clashlens import league_week, queue_refresh, worker
+from clashlens import league_decider, league_week, queue_refresh, worker
 from clashlens.collector_db import CollectorDatabase
 from clashlens.db import Database
 from clashlens.stage_metrics import StageMetrics
@@ -149,11 +149,11 @@ def _decide(connection_info: str, monkeypatch) -> None:
     run as the worker's database login until no week is left to decide, on
     Wednesday 14 October 2026. It takes one mark a batch and one batch a
     call, so it must keep deciding on its own after the timer's one run."""
-    monkeypatch.setattr(league_week, "_now", lambda: datetime(2026, 10, 14, 12, tzinfo=UTC))
-    monkeypatch.setattr(league_week, "_retry_at", float("-inf"))
-    monkeypatch.setattr(league_week, "IDLE_SECONDS", 0.05)
-    monkeypatch.setattr(league_week, "BATCH", 1)
-    monkeypatch.setattr(league_week, "TICK_SECONDS", 0.0)
+    monkeypatch.setattr(league_decider, "_now", lambda: datetime(2026, 10, 14, 12, tzinfo=UTC))
+    monkeypatch.setattr(league_decider, "_retry_at", float("-inf"))
+    monkeypatch.setattr(league_decider, "IDLE_SECONDS", 0.05)
+    monkeypatch.setattr(league_decider, "BATCH", 1)
+    monkeypatch.setattr(league_decider, "TICK_SECONDS", 0.0)
     # The twice-daily re-check follows the real clock; it is not under test.
     monkeypatch.setattr(queue_refresh, "due_recheck_slot", lambda _connection, _now: None)
     options = conninfo_to_dict(connection_info).get("options", "")
@@ -326,7 +326,7 @@ def test_a_player_whose_decision_fails_is_set_aside_and_counted_as_failed_work(
     about BROKEN tries again. A decider that stops deciding counts too, once
     a mark has waited 30 minutes: no new week then has a league."""
     broken_tag, fine_tag = "#2PP", "#8PP"
-    original = league_week.load_season
+    original = league_decider.load_season
     broken: list[int] = []
 
     def load(connection, player_id, season_start, now):
@@ -334,9 +334,9 @@ def test_a_player_whose_decision_fails_is_set_aside_and_counted_as_failed_work(
             raise ValueError("unreadable evidence")
         return original(connection, player_id, season_start, now)
 
-    monkeypatch.setattr(league_week, "load_season", load)
-    monkeypatch.setattr(league_week, "_now", lambda: datetime(2026, 10, 14, 12, tzinfo=UTC))
-    monkeypatch.setattr(league_week, "_retry_at", float("-inf"))
+    monkeypatch.setattr(league_decider, "load_season", load)
+    monkeypatch.setattr(league_decider, "_now", lambda: datetime(2026, 10, 14, 12, tzinfo=UTC))
+    monkeypatch.setattr(league_decider, "_retry_at", float("-inf"))
     with domain_database(database_url) as connection_info:
         options = conninfo_to_dict(connection_info).get("options", "")
         as_role = {role: make_conninfo(connection_info, options=f"{options} -c role={role}")
@@ -352,7 +352,7 @@ def test_a_player_whose_decision_fails_is_set_aside_and_counted_as_failed_work(
         def decide() -> tuple[dict[str, bool], int]:
             database = Database(as_role["clashlens_python_worker"])
             try:
-                while league_week.decide_due(database):
+                while league_decider.decide_due(database):
                     pass
             finally:
                 database.close()
@@ -412,9 +412,9 @@ def test_players_whose_lock_is_busy_hold_up_no_one_else(
     each batch before the looked-up player, so it waited as long as the
     lock was held. Once it is free the ten are decided too."""
     sunday, monday = day(7), day(8)
-    monkeypatch.setattr(league_week, "_busy", {}, raising=False)
-    monkeypatch.setattr(league_week, "BATCH", 4)
-    monkeypatch.setattr(league_week, "BUSY_SECONDS", 1.0)
+    monkeypatch.setattr(league_decider, "_busy", {}, raising=False)
+    monkeypatch.setattr(league_decider, "BATCH", 4)
+    monkeypatch.setattr(league_decider, "BUSY_SECONDS", 1.0)
     # The twice-daily re-check follows the real clock; it is not under test.
     monkeypatch.setattr(queue_refresh, "due_recheck_slot", lambda _connection, _now: None)
     with domain_database(database_url) as connection_info:

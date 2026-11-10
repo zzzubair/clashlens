@@ -253,12 +253,23 @@ def test_live_parser_accepts_compact_battle_timestamps(timestamp: object) -> Non
     assert battle.battle_timestamp == datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
 
 
-@pytest.mark.parametrize("timestamp", [True, "9" * 40, -2**70])
-def test_live_parser_marks_unusable_battle_times_as_gaps(
-    timestamp: object,
-) -> None:
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"battleTimestamp": True},
+        {"battleTimestamp": "9" * 40},
+        {"battleTimestamp": -2**70},
+        # Before year 1 once moved to UTC.
+        {"battleTimestamp": "0001-01-01T00:00:00+01:00"},
+        # Past Python's integer digit limit.
+        {"battleTimestamp": None, "battleTime": "9" * 4301},
+    ],
+)
+def test_live_parser_marks_unusable_battle_times_as_gaps(fields: dict) -> None:
     payload = json.loads(FIXTURE.read_bytes())
-    payload["items"][0]["battleTimestamp"] = timestamp
+    payload["items"][0].update(fields)
+    if payload["items"][0]["battleTimestamp"] is None:
+        del payload["items"][0]["battleTimestamp"]
 
     parsed = parse_battle_log(
         json.dumps(payload).encode(),

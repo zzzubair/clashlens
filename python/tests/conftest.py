@@ -141,7 +141,7 @@ def worker_maintenance_services(monkeypatch):
     monkeypatch.setattr(worker, "MaintenancePermit", lambda _conninfo: permit)
     for target, name in (
         (worker.boundary_publication, "reevaluate_boundary_publications"),
-        (worker.league_week, "decide_until"),
+        (worker.league_decider, "decide_until"),
         (worker.late_battle_sweep.LateBattleSweep, "run_when_due"),
         (worker.queue_refresh.DailyRecheck, "run_when_due"),
         (worker.army_rank_bands, "refresh_rank_band_totals"),

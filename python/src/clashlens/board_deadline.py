@@ -35,8 +35,8 @@ from .db import (
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
 )
-from .domain_repair import boundary_held
 from .past_reset_pacing import past_reset_build_waits
+from .publication_states import boundary_held
 
 BOARD_DEADLINE = timedelta(minutes=30)
 MAX_UNFINISHED = 50

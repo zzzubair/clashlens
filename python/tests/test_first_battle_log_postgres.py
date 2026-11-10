@@ -30,7 +30,13 @@ from test_reset_settlement_state_postgres import (
     _season_profile,
 )
 
-from clashlens import domain_repair, first_battle_log, loss_rule, reconciliation_db
+from clashlens import (
+    day_recalculation,
+    domain_repair,
+    first_battle_log,
+    loss_rule,
+    reconciliation_db,
+)
 from clashlens.db import PYTHON_BACKFILL_PRIORITY, Database
 from clashlens.domain import allocate_trophies
 from clashlens.reconciliation import RECONCILIATION_RULE_VERSION
@@ -410,7 +416,7 @@ def test_day_1_saved_with_the_previous_season_average_is_recalculated_once(
             player_id = connection.execute(
                 "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
             ).fetchone()[0]
-            first_battle_log._queue(
+            day_recalculation.request(
                 connection, player_id, DAY_1, None, trigger="season_day_1",
                 key=f"reconcile:season-day-1:{player_id}:"
                 f"{DAY_1:%Y-%m-%dT%H:%M:%SZ}:{RECONCILIATION_RULE_VERSION}",

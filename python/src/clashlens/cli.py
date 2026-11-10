@@ -26,13 +26,13 @@ import uvicorn
 
 from . import (
     api_verification,
-    battle_day_repair,
     collector_http,
     game_rankings,
     league_history_refresh,
     population,
     promotion_candidates,
     provider_membership,
+    republish,
 )
 from . import db as _db
 from .api import ClashKingClient, create_app
@@ -295,7 +295,7 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap_population.add_argument("--run-id", required=True)
     bootstrap_population.add_argument("--result-file", required=True)
 
-    battle_day_repair.add_republish_command(
+    republish.add_republish_command(
         subparsers, _database_argument, _bounded_int
     )
     league_history_refresh.add_command(subparsers, _database_argument)
@@ -541,7 +541,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps(report, sort_keys=True))
             return 0
         if arguments.command == "republish-current-season":
-            return battle_day_repair.run_republish_command(_database_url(arguments), arguments)
+            return republish.run_republish_command(_database_url(arguments), arguments)
         if arguments.command == "refresh-league-history":
             return league_history_refresh.run_command(_database_url(arguments))
         if arguments.command == "load-promotion-candidates":

@@ -28,7 +28,12 @@ from test_reconciliation_postgres import (
     _profile,
 )
 
-from clashlens import api_players, league_week, reconciliation_db, reset_baselines
+from clashlens import (
+    api_players,
+    league_decider,
+    reconciliation_db,
+    reset_baselines,
+)
 from clashlens.api_db import ApiDatabase
 
 TAG = "#2PP"
@@ -126,7 +131,7 @@ def _process(connection_info, archive_server, jobs) -> None:
             if pending is None:
                 # The worker's league week thread decides the weeks the
                 # work marked, queueing the days a decision changes.
-                if league_week.decide_due(database):
+                if league_decider.decide_due(database):
                     continue
                 return
             processor.process_job(int(pending[0]), owner="reconcile")

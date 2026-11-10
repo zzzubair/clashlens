@@ -39,7 +39,7 @@ from . import (
     claimed_jobs,
     ingestion,
     late_battle_sweep,
-    league_week,
+    league_decider,
     live_board,
     projected_place,
     queue_refresh,
@@ -235,7 +235,7 @@ class TimedMaintenance:
     Given ``derived_turns``, the publication checks and correction sweep run
     only after taking a derived lane's turn, and stay due without one; queue
     maintenance does not wait for a turn. Their first run starts the weekly
-    league record's decider on a thread of its own (``league_week``), which
+    league record's decider on a thread of its own (``league_decider``), which
     ``close`` stops.
     """
 
@@ -283,7 +283,7 @@ class TimedMaintenance:
             try:
                 if self.league_weeks is None:
                     self.league_weeks = threading.Thread(
-                        target=league_week.decide_until, args=(self.database, self.stopping),
+                        target=league_decider.decide_until, args=(self.database, self.stopping),
                         name="clashlens-worker-league-week", daemon=True)
                     self.league_weeks.start()
                 # Each operation commits its own transaction. Keep publication

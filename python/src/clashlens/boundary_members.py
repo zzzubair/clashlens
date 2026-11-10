@@ -12,7 +12,7 @@ board ranks Sunday, whose week
 was decided days earlier, so no board waits for a new week's decisions; a
 swept player whose week is not decided yet stays a member, so a board never
 loses its players while the record catches up. Before the record
-(``league_days.RECORDED_FROM``) the members are the swept players, as they
+(``league_week.RECORDED_FROM``) the members are the swept players, as they
 always were.
 
 A generation's members never change once taken (migration 0011). The first
@@ -23,7 +23,7 @@ Legend I or of unknown league is never waited for; a player whose day is
 saved after the members were taken joins at the board's next rebuild
 (``boundary._record_boundary_generation``); and a player whose week leaves
 Legend I stops being waited for and ranks nowhere at once, and leaves the
-member list at the next rebuild (``leave``, ``leagues``).
+member list at the next rebuild (``boundary.remove_league_members``, ``leagues``).
 """
 
 from __future__ import annotations
@@ -33,17 +33,19 @@ import json
 from datetime import datetime, timedelta
 from typing import Any
 
-from . import league_days
+from . import league_week
 from .analytics import FRESHNESS_RULE_VERSION, SNAPSHOT_ORDERING_RULE_VERSION
+from .army_decoder import DECODER_VERSION
+from .boundary_battles import moved_sides
 from .db import (
     ANALYTICS_RULE_VERSION,
     ARMY_ANALYTICS_RULE_VERSION,
-    RESET_LOCK_WAIT,
     Database,
 )
 from .db_rows import text_value
 from .domain import RANKED_DAY_DURATION
 from .league_week import week_start
+from .publication_states import CorrectionState, day_snapshot_status, move_correction
 
 
 def board_members(
@@ -54,7 +56,7 @@ def board_members(
     day = boundary_at - RANKED_DAY_DURATION
     if only is not None:
         swept = [only] if only in swept else []
-    if day < league_days.RECORDED_FROM:
+    if day < league_week.RECORDED_FROM:
         return sorted(set(swept))
     # A swept Legend I player is a member by the first half, so the second
     # reads the day and profile history only of the unswept, filtered first:
@@ -150,7 +152,7 @@ def joins_late(boundary_at: datetime) -> bool:
     """Whether a player whose ended day is saved after the board's members
     were taken joins it: from the record on, a saved day is in a Legend I
     week, so its player is a member."""
-    return boundary_at - RANKED_DAY_DURATION >= league_days.RECORDED_FROM
+    return boundary_at - RANKED_DAY_DURATION >= league_week.RECORDED_FROM
 
 
 def _population_hash(player_ids: list[int]) -> str:
@@ -176,15 +178,23 @@ def create_generation(
     supersedes_id: int | None,
     pending_inputs: list[dict[str, Any]] | None = None,
     ordering_rule_version: str | None = None,
+    inherited_rules: tuple[Any, ...] | None = None,
+    affected_artifacts: list[str] | None = None,
+    correction_id: int | None = None,
 ) -> tuple[int, int]:
     """Create the board's generation ``generation`` with its members now,
     replacing ``supersedes_id`` when given, then apply ``pending_inputs``.
     The caller holds the Reset's full publication lock."""
-    from .boundary import _boundary_army_status, _boundary_snapshot_status
-
     target_at = boundary_at + timedelta(
         minutes=10 if boundary_at.weekday() == 0 else 5
     )
+    rules = (ordering_rule_version or SNAPSHOT_ORDERING_RULE_VERSION,
+             FRESHNESS_RULE_VERSION, "active-members-v1", ANALYTICS_RULE_VERSION,
+             ARMY_ANALYTICS_RULE_VERSION, "boundary-delay-v1", target_at)
+    if inherited_rules is not None:
+        # The replaced generation's rules, which the caller read and locked:
+        # ordering, freshness, membership, snapshot, army, target rule and time.
+        rules = (ordering_rule_version or inherited_rules[0], *inherited_rules[1:])
     row = connection.execute(
         """
         INSERT INTO boundary_publication_generations (
@@ -201,56 +211,30 @@ def create_generation(
             boundary_at,
             generation,
             sweep_id,
-            ordering_rule_version or SNAPSHOT_ORDERING_RULE_VERSION,
-            FRESHNESS_RULE_VERSION,
+            rules[0],
+            rules[1],
             0,
             _population_hash([]),
-            "active-members-v1",
-            ANALYTICS_RULE_VERSION,
-            ARMY_ANALYTICS_RULE_VERSION,
-            "boundary-delay-v1",
-            target_at,
+            *rules[2:],
             supersedes_id,
             supersedes_id,
             "active" if supersedes_id is not None else "none",
-            ["snapshot", "army"] if supersedes_id is not None else [],
+            affected_artifacts if affected_artifacts is not None else (
+                ["snapshot", "army"] if supersedes_id is not None else []),
         ),
     ).fetchone()
     assert row is not None
     generation_id = int(row[0])
+    if correction_id is not None:
+        move_correction(connection, correction_id, CorrectionState.INHERITANCE)
     copy_members(database, connection, generation_id, supersedes_id, boundary_at)
     for pending in pending_inputs or []:
-        pending_version = pending.get("ranked_day_version_id")
-        pending_snapshot_status = _boundary_snapshot_status(
-            connection,
-            player_id=int(pending["player_id"]),
-            ranked_day_version_id=int(pending_version),
-            boundary_at=boundary_at,
-        )
-        pending_army_status = _boundary_army_status(
-            database,
-            connection,
-            player_id=int(pending["player_id"]),
-            ranked_day_version_id=int(pending_version),
-            snapshot_status=pending_snapshot_status,
-        )
-        connection.execute(
-            """
-            UPDATE boundary_publication_generation_members
-            SET ranked_day_version_id = %s, ranked_day_input_hash = %s,
-                status = 'terminal', snapshot_status = %s,
-                army_status = %s, updated_at = clock_timestamp()
-            WHERE generation_id = %s AND player_id = %s
-            """,
-            (
-                pending_version,
-                pending.get("input_hash"),
-                pending_snapshot_status,
-                pending_army_status,
-                generation_id,
-                pending.get("player_id"),
-            ),
-        )
+        pending_version = pending.get("ranked_day_version_id") if isinstance(pending, dict) else None
+        if pending_version is None:
+            continue
+        record_day(database, connection, generation_id=generation_id, boundary_at=boundary_at,
+                   player_id=int(pending["player_id"]), ranked_day_version_id=int(pending_version),
+                   input_hash=pending.get("input_hash"), settled=True)
     connection.execute(
         """
         UPDATE boundary_publication_generations
@@ -321,8 +305,6 @@ def take_saved_days(
     nothing new: on 22 October 2026 six rebuilds waited for 74 such players
     for good, so the publication check gives them their saved day too
     (``board_deadline.settle_waiting_members``)."""
-    from .boundary import _boundary_army_status, _boundary_snapshot_status
-
     for player_id, version_id, input_hash in connection.execute(
         """
         SELECT member.player_id, saved.ranked_day_version_id, saved.input_hash
@@ -343,25 +325,9 @@ def take_saved_days(
         {"day": boundary_at - RANKED_DAY_DURATION, "generation": generation_id,
          "players": player_ids},
     ).fetchall():
-        snapshot_status = _boundary_snapshot_status(
-            connection, player_id=int(player_id),
-            ranked_day_version_id=int(version_id), boundary_at=boundary_at,
-        )
-        army_status = _boundary_army_status(
-            database, connection, player_id=int(player_id),
-            ranked_day_version_id=int(version_id), snapshot_status=snapshot_status,
-        )
-        connection.execute(
-            """
-            UPDATE boundary_publication_generation_members
-            SET ranked_day_version_id = %s, ranked_day_input_hash = %s, status = %s,
-                snapshot_status = %s, army_status = %s, updated_at = clock_timestamp()
-            WHERE generation_id = %s AND player_id = %s
-            """,
-            (version_id, text_value(input_hash),
-             "terminal" if snapshot_status != "pending" else "pending",
-             snapshot_status, army_status, generation_id, player_id),
-        )
+        record_day(database, connection, generation_id=generation_id, boundary_at=boundary_at,
+                   player_id=int(player_id), ranked_day_version_id=int(version_id),
+                   input_hash=text_value(input_hash))
 
 
 def _recount(connection: Any, generation_id: int) -> None:
@@ -387,7 +353,7 @@ def leagues(connection: Any, boundary_at: datetime, player_ids: list[int]) -> di
     record; empty before it. A member whose week left Legend I after the
     members were taken ranks on no board (``boundary_manifest``)."""
     day = boundary_at - RANKED_DAY_DURATION
-    if day < league_days.RECORDED_FROM:
+    if day < league_week.RECORDED_FROM:
         return {}
     found = dict(connection.execute(
         """
@@ -399,83 +365,172 @@ def leagues(connection: Any, boundary_at: datetime, player_ids: list[int]) -> di
     return {player_id: text_value(found.get(player_id, "unknown")) for player_id in player_ids}
 
 
-def leave(database: Database, connection: Any, player_id: int, days: list[datetime]) -> None:
-    """The player's week holding ``days`` left Legend I: take them off the
-    board of each Reset ending one where they are a member. A generation's
-    members never change, so a board not frozen yet stops waiting for their
-    day and ranks them nowhere (``leagues``), and a frozen one gets a queued
-    correction, whose replacement takes the members again. The caller holds
-    the player's week rows. The Reset's lock is taken as a day result takes
-    it (``boundary.lock_boundary_members``), shared while many members wait,
-    so this never waits behind them; a Reset busy past ``RESET_LOCK_WAIT``
-    (``TAIL_LOCK_WAIT`` while the last members wait), as while its board
-    freezes, raises LockNotAvailable, and the decider tries the player again
-    after the rest, ``league_week.BUSY_SECONDS`` later."""
-    from .boundary import _try_enqueue_boundary_artifacts, lock_boundary_members
+def snapshot_status(
+    connection: Any,
+    *,
+    player_id: int,
+    ranked_day_version_id: int,
+    boundary_at: datetime,
+) -> str:
+    ranked = connection.execute(
+        "SELECT state FROM ranked_day_versions WHERE id = %s AND player_id = %s",
+        (ranked_day_version_id, player_id),
+    ).fetchone()
+    status = day_snapshot_status(text_value(ranked[0]) if ranked else "")
+    if status != "complete":
+        return status
+    # Whether any accepted reading is at or before the Reset: stop at the
+    # first. Sorting the whole history for it read about 118 pages a member
+    # cold on the copy of 14 October 2026, at every member result.
+    profile = connection.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1
+            FROM player_profile_versions AS profile
+            LEFT JOIN player_profile_effects AS effect
+              ON effect.profile_version_id = profile.id
+            WHERE profile.player_id = %s
+              AND profile.source_contract_state = 'accepted'
+              AND COALESCE(effect.observed_at, profile.observed_at) <= %s)
+        """,
+        (player_id, boundary_at),
+    ).fetchone()[0]
+    # A player not read in the ended day's week before the Reset ranks by
+    # their Complete day, named by their first Legend I reading since.
+    return "complete" if profile or (
+        first_readings(
+            connection, boundary_at, {player_id: ranked_day_version_id})
+    ) else "missing"
 
-    # The Reset's newest generation, and the player's member row in it.
-    newest = """
-        SELECT generation.id, generation.snapshot_manifest_id,
-               generation.army_manifest_id, member.status
-        FROM boundary_publication_generations AS generation
-        LEFT JOIN boundary_publication_generation_members AS member
-          ON member.generation_id = generation.id AND member.player_id = %s
-        WHERE generation.boundary_at = %s AND generation.snapshot_state <> 'superseded'
-          AND generation.army_state <> 'superseded'
-        ORDER BY generation.generation DESC LIMIT 1
+
+def army_status(
+    database: Database,
+    connection: Any,
+    *,
+    player_id: int,
+    ranked_day_version_id: int,
+    snapshot_status: str,
+) -> str:
+    if snapshot_status in {"pending", "unavailable", "missing", "failed"}:
+        return (
+            "unavailable"
+            if snapshot_status in {"unavailable", "missing", "failed"}
+            else "pending"
+        )
+    daily_log = connection.execute(
+        """
+        SELECT battles, state, coverage
+        FROM api_player_daily_logs
+        WHERE player_id = %s AND ranked_day_version_id = %s
+        ORDER BY version DESC LIMIT 1
+        """,
+        (player_id, ranked_day_version_id),
+    ).fetchone()
+    # Publication requires daily-log evidence before army readiness.
+    if daily_log is None:
+        return "pending"
+    daily_state = text_value(daily_log[1])
+    daily_coverage = text_value(daily_log[2])
+    if daily_state == "Partial":
+        return "partial"
+    if daily_state != "Complete" or daily_coverage != "complete":
+        return "pending"
+    sides = [
+        (int(event["battle_id"]), event.get("lens"))
+        for event in (daily_log[0] if isinstance(daily_log[0], list) else [])
+        if isinstance(event, dict) and str(event.get("battle_id", "")).isdigit()
+    ]
+    if not sides:
+        return "complete"
+    moved = moved_sides(connection, sides)
+    battle_ids = [moved.get(side, side[0]) for side in sides]
+    decoded = connection.execute(
+        """
+        SELECT count(DISTINCT battle_id)
+        FROM battle_army_decodes
+        WHERE battle_id = ANY(%s::bigint[]) AND is_active AND decoder_version = %s
+        """,
+        (battle_ids, DECODER_VERSION),
+    ).fetchone()
+    return (
+        snapshot_status
+        if decoded is not None and int(decoded[0]) == len(set(battle_ids))
+        else "pending"
+    )
+
+
+def record_day(
+    database: Database, connection: Any, *, generation_id: int,
+    boundary_at: datetime, player_id: int, ranked_day_version_id: int,
+    input_hash: str | None, settled: bool = False, insert_missing: bool = False,
+) -> None:
+    """Apply a saved day and its readiness to a generation member.
+
+    Pending correction inputs are already settled before activation. An
+    arriving day may create a late member; captured correction inputs and
+    saved-day checks only update members already selected for that generation.
     """
-    for day in sorted(set(days)):
-        boundary_at = day + RANKED_DAY_DURATION
-        current = connection.execute(newest, (player_id, boundary_at)).fetchone()
-        if current is None or current[3] is None:
-            continue
-        shared = lock_boundary_members(connection, boundary_at, RESET_LOCK_WAIT)
-        current = connection.execute(
-            newest + ("" if shared else " FOR UPDATE OF generation"), (player_id, boundary_at)
-        ).fetchone()
-        if current is None or current[3] is None:
-            continue
-        if current[1] is None and current[2] is None:
-            if text_value(current[3]) == "pending":
-                connection.execute(
-                    """
-                    UPDATE boundary_publication_generation_members
-                    SET status = 'terminal', snapshot_status = 'unavailable',
-                        army_status = 'unavailable', updated_at = clock_timestamp()
-                    WHERE generation_id = %s AND player_id = %s
-                    """,
-                    (current[0], player_id),
-                )
-            if not shared:
-                _try_enqueue_boundary_artifacts(
-                    database, connection, boundary_at=boundary_at, generation_id=int(current[0]))
-            continue
-        queued = connection.execute(
+    snapshot = snapshot_status(connection, player_id=player_id,
+                               ranked_day_version_id=ranked_day_version_id,
+                               boundary_at=boundary_at)
+    army = army_status(database, connection, player_id=player_id,
+                       ranked_day_version_id=ranked_day_version_id, snapshot_status=snapshot)
+    write_member_result(connection, generation_id, player_id, snapshot, army,
+                        day=(ranked_day_version_id, input_hash),
+                        status="terminal" if settled else None, insert_missing=insert_missing)
+
+
+def write_member_result(
+    connection: Any, generation_id: int, player_id: int, snapshot: str, army: str,
+    *, day: tuple[int, str | None] | None = None, status: str | None = None,
+    insert_missing: bool = False,
+) -> None:
+    """Write member readiness, optionally replacing its saved-day identity."""
+    status = status or ("terminal" if snapshot != "pending" else "pending")
+    assignments = "status = %s, snapshot_status = %s, army_status = %s"
+    values = [status, snapshot, army]
+    if day is not None:
+        assignments = "ranked_day_version_id = %s, ranked_day_input_hash = %s, " + assignments
+        values = [*day, *values]
+    updated = connection.execute(
+        f"""
+        UPDATE boundary_publication_generation_members
+        SET {assignments}, updated_at = clock_timestamp()
+        WHERE generation_id = %s AND player_id = %s
+        """, (*values, generation_id, player_id),
+    )
+    if insert_missing and updated.rowcount == 0:
+        assert day is not None
+        connection.execute(
             """
-            SELECT id FROM boundary_publication_corrections
-            WHERE boundary_at = %s AND source_generation_id = %s
-              AND state IN ('queued', 'pending_inputs')
-            ORDER BY id DESC LIMIT 1
-            FOR UPDATE
+            INSERT INTO boundary_publication_generation_members (
+                generation_id, player_id, ranked_day_version_id,
+                ranked_day_input_hash, status, snapshot_status, army_status
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
             """,
-            (boundary_at, current[0]),
-        ).fetchone()
-        if queued is not None:
-            connection.execute(
-                """
-                UPDATE boundary_publication_corrections
-                SET affected_artifacts = ARRAY(SELECT DISTINCT unnest(
-                        affected_artifacts || ARRAY['snapshot', 'army']))
-                WHERE id = %s
-                """,
-                (queued[0],),
-            )
-        else:
-            connection.execute(
-                """
-                INSERT INTO boundary_publication_corrections
-                    (boundary_at, source_generation_id, affected_artifacts, pending_inputs)
-                VALUES (%s, %s, ARRAY['snapshot', 'army'], '[]'::jsonb)
-                """,
-                (boundary_at, current[0]),
-            )
+            (generation_id, player_id, *day, status, snapshot, army),
+        )
+
+
+def inherit_artifact(
+    connection: Any, generation_id: int, source_id: int, artifact: str,
+    *, published: bool = False, touch: bool = False,
+) -> None:
+    """Keep an unaffected artifact's immutable identity in a successor."""
+    columns = {
+        "snapshot": ("snapshot_id", "snapshot_input_hash", "snapshot_manifest_id",
+                     "snapshot_analytics_publication_id", "snapshot_coverage"),
+        "army": ("army_input_hash", "army_manifest_id", "army_publication_id", "army_coverage"),
+    }[artifact]
+    state = "'published'" if published else f"source.{artifact}_state"
+    assignments = [f"{artifact}_state = {state}"] + [f"{c} = source.{c}" for c in columns]
+    if touch:
+        assignments.append("updated_at = clock_timestamp()")
+    connection.execute(
+        f"""
+        UPDATE boundary_publication_generations AS target
+        SET {", ".join(assignments)}
+        FROM boundary_publication_generations AS source
+        WHERE target.id = %s AND source.id = %s
+        """, (generation_id, source_id),
+    )

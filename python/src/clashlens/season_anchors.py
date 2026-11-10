@@ -13,7 +13,9 @@ from .db_rows import text_value
 from .domain import (
     SEASON_ANCHOR_RULE_VERSION,
     DomainRuleError,
+    RankedDay,
     SeasonAnchor,
+    anchored_ranked_day,
     validate_season_anchor,
 )
 from .profile import PROFILE_PARSER_VERSION, ParsedProfile
@@ -242,3 +244,23 @@ def record(
             (profile_version_id,),
         )
     return outcome
+
+
+def anchored_day(connection: Any, day_start: datetime) -> tuple[Any, RankedDay | None]:
+    """The confirmed anchor row and the day's Season identity counted from it
+    in 28-day steps; no identity without an anchor or with an off-phase one."""
+    anchor = connection.execute(
+        """
+        SELECT current_league_season_id, previous_league_season_id,
+               current_start, previous_start
+        FROM legend_season_anchors
+        WHERE state = 'confirmed' AND anchor_rule_version = %s
+        ORDER BY current_start DESC LIMIT 1
+        """,
+        (SEASON_ANCHOR_RULE_VERSION,),
+    ).fetchone()
+    try:
+        ids = (text_value(anchor[0]), text_value(anchor[1])) if anchor else None
+        return anchor, anchored_ranked_day(day_start, *ids) if ids else None
+    except DomainRuleError:
+        return anchor, None

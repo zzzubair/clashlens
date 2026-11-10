@@ -40,7 +40,7 @@ from .background_pacing import (
     LIVE_WORK_TYPES,
 )
 from .reconciliation import RECONCILIATION_RULE_VERSION
-from .season_retirement import SEASON_CLOSE_WAIT
+from .season_lifecycle import SEASON_CLOSE_WAIT
 
 EVIDENCE_REFRESH_WINDOW = timedelta(days=7)
 CHECK_INTERVAL_SECONDS = 600

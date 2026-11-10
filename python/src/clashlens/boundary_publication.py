@@ -13,6 +13,7 @@ from . import (
     battle,
     board_deadline,
     boundary,
+    boundary_battles,
     boundary_members,
     claimed_jobs,
     reset_baselines,
@@ -33,13 +34,17 @@ from .db import (
 )
 from .db_rows import text_value
 from .domain import DomainRuleError, battle_window
-from .domain_repair import boundary_held
 from .past_reset_pacing import (
     OPERATOR_CORRECTION,
     correction_waits,
     operator_correction_waits,
 )
-from .publication_states import CorrectionState, move_correction, pending_inputs_settled
+from .publication_states import (
+    CorrectionState,
+    boundary_held,
+    move_correction,
+    pending_inputs_settled,
+)
 
 
 def _positive_int_input(values: dict[str, Any], name: str) -> int:
@@ -179,7 +184,7 @@ def _reevaluate_boundary(database, connection: Any, boundary_at: datetime) -> in
             """,
             (generation_id,),
         ).fetchall():
-            army_status = boundary._boundary_army_status(
+            army_status = boundary_members.army_status(
                 database,
                 connection,
                 player_id=int(player_id),
@@ -341,11 +346,9 @@ def _maybe_emit_boundary_signal(
             ).fetchone()[0])
             source = connection.execute(
                 """
-                SELECT sweep_id, expected_population_count, expected_population_hash,
-                       ordering_rule_version, freshness_rule_version,
-                       generation + 1, membership_rule_version,
-                       snapshot_rule_version, army_rule_version,
-                       target_rule, target_at
+                SELECT sweep_id, generation + 1, ordering_rule_version,
+                       freshness_rule_version, membership_rule_version,
+                       snapshot_rule_version, army_rule_version, target_rule, target_at
                 FROM boundary_publication_generations
                 WHERE id = %s
                 FOR UPDATE
@@ -359,113 +362,17 @@ def _maybe_emit_boundary_signal(
                 return
             move_correction(connection, queued[0], CorrectionState.ACTIVATION)
             affected = [text_value(value) for value in (queued[1] or [])]
-            new = connection.execute(
-                """
-                INSERT INTO boundary_publication_generations (
-                    boundary_at, generation, sweep_id, ordering_rule_version,
-                    freshness_rule_version, expected_population_count,
-                    expected_population_hash, membership_rule_version,
-                    snapshot_rule_version, army_rule_version,
-                    target_rule, target_at, supersedes_id, source_generation_id,
-                    correction_state, affected_artifacts
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', %s)
-                RETURNING id
-                """,
-                (
-                    row[0],
-                    int(source[5]),
-                    source[0],
-                    SNAPSHOT_ORDERING_RULE_VERSION if "snapshot" in affected else source[3],
-                    source[4],
-                    source[1],
-                    source[2],
-                    source[6],
-                    source[7],
-                    source[8],
-                    source[9],
-                    source[10],
-                    generation_id,
-                    generation_id,
-                    queued[1],
-                ),
-            ).fetchone()
-            assert new is not None
-            new_id = int(new[0])
-            move_correction(connection, queued[0], CorrectionState.INHERITANCE)
-            boundary_members.copy_members(database, connection, new_id, generation_id, row[0])
-            for pending in pending_inputs:
-                pending_version = (
-                    pending.get("ranked_day_version_id")
-                    if isinstance(pending, dict)
-                    else None
-                )
-                # An army-only marker ({"kind": "decode"}) changes no member;
-                # the replacement army manifest picks up the new decode.
-                if pending_version is None:
-                    continue
-                pending_snapshot_status = boundary._boundary_snapshot_status(
-                    connection,
-                    player_id=int(pending["player_id"]),
-                    ranked_day_version_id=int(pending_version),
-                    boundary_at=row[0],
-                )
-                pending_army_status = boundary._boundary_army_status(
-                    database,
-                    connection,
-                    player_id=int(pending["player_id"]),
-                    ranked_day_version_id=int(pending_version),
-                    snapshot_status=pending_snapshot_status,
-                )
-                connection.execute(
-                    """
-                    UPDATE boundary_publication_generation_members
-                    SET ranked_day_version_id = %s, ranked_day_input_hash = %s,
-                        status = 'terminal', snapshot_status = %s,
-                        army_status = %s, updated_at = clock_timestamp()
-                    WHERE generation_id = %s AND player_id = %s
-                    """,
-                    (
-                        pending_version,
-                        pending.get("input_hash"),
-                        pending_snapshot_status,
-                        pending_army_status,
-                        new_id,
-                        pending.get("player_id"),
-                    ),
-                )
-            connection.execute(
-                "UPDATE boundary_publication_generations SET membership_captured_at = clock_timestamp() WHERE id = %s",
-                (new_id,),
+            new_id, _ = boundary_members.create_generation(
+                database, connection, boundary_at=row[0], sweep_id=int(source[0]),
+                generation=int(source[1]), supersedes_id=generation_id,
+                pending_inputs=pending_inputs,
+                ordering_rule_version=SNAPSHOT_ORDERING_RULE_VERSION if "snapshot" in affected else None,
+                inherited_rules=tuple(source[2:]), affected_artifacts=affected,
+                correction_id=int(queued[0]),
             )
-            if "snapshot" not in affected:
-                connection.execute(
-                    """
-                    UPDATE boundary_publication_generations AS target
-                    SET snapshot_state = source.snapshot_state,
-                        snapshot_id = source.snapshot_id,
-                        snapshot_input_hash = source.snapshot_input_hash,
-                        snapshot_manifest_id = source.snapshot_manifest_id,
-                        snapshot_analytics_publication_id = source.snapshot_analytics_publication_id,
-                        snapshot_coverage = source.snapshot_coverage
-                    FROM boundary_publication_generations AS source
-                    WHERE target.id = %s AND source.id = %s
-                    """,
-                    (new_id, generation_id),
-                )
-            if "army" not in affected:
-                connection.execute(
-                    """
-                    UPDATE boundary_publication_generations AS target
-                    SET army_state = source.army_state,
-                        army_input_hash = source.army_input_hash,
-                        army_manifest_id = source.army_manifest_id,
-                        army_publication_id = source.army_publication_id,
-                        army_coverage = source.army_coverage
-                    FROM boundary_publication_generations AS source
-                    WHERE target.id = %s AND source.id = %s
-                    """,
-                    (new_id, generation_id),
-                )
+            for artifact in ("snapshot", "army"):
+                if artifact not in affected:
+                    boundary_members.inherit_artifact(connection, new_id, generation_id, artifact)
             # Unaffected artifacts retain the exact immutable publication
             # identity. Only the affected artifact receives a new identity.
             connection.execute(
@@ -1063,7 +970,7 @@ def _boundary_army_manifest_needs_correction(
             "SELECT battles FROM api_player_daily_logs WHERE id = %s",
             (identity.get("daily_log_id"),),
         ).fetchone()
-        _battles, current, _moved = boundary._army_decode_selection(
+        _battles, current, _moved = boundary_battles.army_decode_selection(
             connection, daily[0] if daily else None
         )
         if not connection.execute(
@@ -1167,20 +1074,8 @@ def _queue_boundary_army_correction(
             (affected, new_id),
         )
         if not defer_inheritance:
-            connection.execute(
-                """
-                UPDATE boundary_publication_generations AS target
-                SET snapshot_state = 'published',
-                    snapshot_id = source.snapshot_id,
-                    snapshot_input_hash = source.snapshot_input_hash,
-                    snapshot_manifest_id = source.snapshot_manifest_id,
-                    snapshot_analytics_publication_id = source.snapshot_analytics_publication_id,
-                    snapshot_coverage = source.snapshot_coverage
-                FROM boundary_publication_generations AS source
-                WHERE target.id = %s AND source.id = %s
-                """,
-                (new_id, generation_id),
-            )
+            boundary_members.inherit_artifact(
+                connection, new_id, generation_id, "snapshot", published=True)
         connection.execute(
             """
             INSERT INTO boundary_publication_corrections
@@ -1262,7 +1157,7 @@ def _enqueue_army_analytics(
             """,
             (generation_id, player_ids, player_ids),
         ).fetchall()
-        from .season_retirement import (
+        from .season_lifecycle import (
             SEASON_DETAIL_RETIRED,
             acquire_season_lock_shared,
             is_season_detail_retired,
@@ -1290,7 +1185,7 @@ def _enqueue_army_analytics(
                     f"season {season_id} detail is retired",
                 )
         for player_id, version_id, snapshot_status in members:
-            army_status = boundary._boundary_army_status(
+            army_status = boundary_members.army_status(
                 database,
                 connection,
                 player_id=int(player_id),
@@ -1348,10 +1243,7 @@ def _enqueue_army_analytics(
         return
     ranked_day_version_id = int(completed[0])
     season_id = text_value(completed[1])
-    from .season_retirement import (
-        acquire_season_lock_shared,
-        is_season_detail_retired,
-    )
+    from .season_lifecycle import acquire_season_lock_shared, is_season_detail_retired
 
     acquire_season_lock_shared(connection, season_id)
     if is_season_detail_retired(connection, season_id):
