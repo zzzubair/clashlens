@@ -16,6 +16,7 @@ import {
   isNullableString,
   isOneOf,
   isRecord,
+  isSnakeProvenance,
   isString,
   isUtcTimestamp,
 } from "./python-response.server";
@@ -328,7 +329,10 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
       )
     )
       malformed();
-    const adjustments = (value.adjustments ?? []) as { type: string; amount: number }[];
+    const adjustments = (value.adjustments ?? []) as {
+      type: string;
+      amount: number;
+    }[];
     const automatic = adjustments.find((item) => item.type === "automatic_defense");
     const reset = adjustments.find(
       (item) => item.type === "weekly_reset" || item.type === "season_reset",
@@ -580,18 +584,6 @@ function calculateStartingTrophies(
     day.startTrophiesCalculation = { trophies, netChange };
     day.startTrophiesSource = "Calculated";
   }
-}
-
-function isSnakeProvenance(value: unknown): value is Record<string, unknown> {
-  return (
-    isRecord(value) &&
-    isString(value.source) &&
-    isUtcTimestamp(value.observed_at) &&
-    isOneOf(value.freshness, ["fresh", "stale", "unknown"] as const) &&
-    isOneOf(value.confidence, ["high", "partial", "uncertain"] as const) &&
-    isOneOf(value.coverage, ["complete", "partial", "missing", "unknown"] as const) &&
-    isString(value.version)
-  );
 }
 
 function mapSnakeProvenanceRequired(value: unknown) {

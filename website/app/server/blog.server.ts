@@ -257,7 +257,7 @@ export async function readBlogFolder(
 let cached:
   { directory: string | null; readAt: number; folder: Promise<BlogFolder> } | undefined;
 
-/** The configured blog checkout, or null when this site has no blog folder. */
+/** Read each time so a changed checkout invalidates the folder cache immediately. */
 export function blogDirectory(): string | null {
   const directory = process.env.CLASHLENS_BLOG_DIR?.trim();
   return directory ? resolve(directory) : null;
@@ -340,8 +340,8 @@ export async function blogOrigin(request: Request): Promise<string> {
 /** The configured public origin, or null when the site settings cannot be read. */
 async function configuredOrigin(): Promise<string | null> {
   try {
-    const { getWebsiteConfig } = await import("./config.server");
-    return getWebsiteConfig().publicOrigin.origin;
+    const { getPublicOrigin } = await import("./public-origin.server");
+    return getPublicOrigin().origin;
   } catch {
     return null;
   }

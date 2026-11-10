@@ -1,6 +1,6 @@
 import type { UpdateStatus } from "../lib/contracts";
 import { isRecord, isUtcTimestamp } from "../services/python-response.server";
-import { requestJson } from "../services/python.server";
+import { requestJson } from "../services/python-transport.server";
 
 // Every page shows this, so read it at most twice a minute and never wait long.
 const CACHE_MS = 30_000;
@@ -37,16 +37,11 @@ export function clearUpdateStatusCache(): void {
 
 async function readUpdateStatus(): Promise<UpdateStatus | null> {
   try {
-    const payload = await requestJson<unknown>(
-      "/v1/status",
-      "GET",
-      undefined,
-      "update-status",
-      undefined,
-      undefined,
-      undefined,
-      TIMEOUT_MS,
-    );
+    const payload = await requestJson<unknown>("/v1/status", {
+      method: "GET",
+      expectedKind: "update-status",
+      timeoutMs: TIMEOUT_MS,
+    });
     return mapUpdateStatus(payload);
   } catch {
     return null;

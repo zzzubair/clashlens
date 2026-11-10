@@ -1,6 +1,7 @@
 import type { PlayerLookup } from "../lib/contracts";
 import { allowPublicRefresh } from "../server/abuse.server";
-import { PythonApiError, requestJson } from "./python.server";
+import { PythonApiError } from "./python-response.server";
+import { requestJson } from "./python-transport.server";
 
 export async function getPlayerLookup(tag: string): Promise<PlayerLookup> {
   return lookupRequest(tag, "GET");
@@ -22,10 +23,10 @@ export async function startPlayerLookup(
 async function lookupRequest(tag: string, method: "GET" | "POST"): Promise<PlayerLookup> {
   const payload = await requestJson<PlayerLookup>(
     `/v1/players/${encodeURIComponent(tag)}/lookup`,
-    method,
-    undefined,
-    undefined,
-    method === "POST" ? globalThis.crypto.randomUUID() : undefined,
+    {
+      method: method,
+      requestId: method === "POST" ? globalThis.crypto.randomUUID() : undefined,
+    },
   );
   if (
     payload?.tag !== tag ||

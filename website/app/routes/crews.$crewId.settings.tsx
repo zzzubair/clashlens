@@ -4,12 +4,12 @@ import { data, Form, redirect, useActionData, useLoaderData } from "react-router
 import { type BackHandle } from "../components/BackLink";
 import { FormResult } from "../components/CrewForms";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { LocalTimestamp } from "../components/Provenance";
+import "../crews.css";
 import { isInappropriateName, normalizeGroupName } from "../lib/account-validation";
 import { MAX_CREW_SIZE, MIN_CREW_SIZE, type Crew } from "../lib/crew-contracts";
-import { LocalTimestamp } from "../components/Provenance";
 import { isCanonicalUuid } from "../lib/validation";
 import type { Route } from "./+types/crews.$crewId.settings";
-import "../crews.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 const INTENTS = ["rename", "resize", "revoke", "transfer", "delete"] as const;
@@ -50,19 +50,19 @@ export function meta({ loaderData: loaded }: Route.MetaArgs) {
  * or delete. The private API checks every role and has the final say.
  */
 export async function action({ request, params }: Route.ActionArgs) {
-  const { crewFormAction, writeCrew } = await import("../services/crews.server");
+  const { crewFormAction, updateCrew, revokeCrewInvite, handOverCrew, deleteCrew } =
+    await import("../services/crews.server");
   return crewFormAction(
     request,
     params.crewId,
     INTENTS,
     async ({ identity, crewId, intent, fields, key }) => {
-      const path = `crews/${crewId}`;
       if (intent === "rename") {
         const raw = fields["name"] ?? "";
         const name = normalizeGroupName(raw);
         if (name === null) return { error: "Crew name must be 1–80 characters." };
         if (isInappropriateName(raw)) return { error: "Choose a different crew name." };
-        await writeCrew(identity, "PATCH", path, { name }, key(name));
+        await updateCrew(identity, crewId, { name }, key(name));
         return { notice: "Name saved." };
       }
       if (intent === "resize") {
@@ -72,39 +72,27 @@ export async function action({ request, params }: Route.ActionArgs) {
             error: `Places must be a whole number from ${MIN_CREW_SIZE} to ${MAX_CREW_SIZE}.`,
           };
         }
-        await writeCrew(identity, "PATCH", path, { size }, key(String(size)));
+        await updateCrew(identity, crewId, { size }, key(String(size)));
         return { notice: `Size saved: ${size} places.` };
       }
       if (intent === "revoke") {
         const invite = fields["invite"] ?? "";
         if (!isCanonicalUuid(invite))
           return { error: "That link is already off or expired." };
-        await writeCrew(
-          identity,
-          "DELETE",
-          `${path}/invites/${invite}`,
-          undefined,
-          key(invite),
-        );
+        await revokeCrewInvite(identity, crewId, invite, key(invite));
         return { notice: "Link turned off." };
       }
       if (intent === "transfer") {
         const username = fields["username"] ?? "";
         if (username === "") return { error: "Pick the new owner." };
-        const handed = (await writeCrew(
-          identity,
-          "POST",
-          `${path}/owner`,
-          { username },
-          key(username),
-        )) as { left_crew?: unknown };
+        const handed = await handOverCrew(identity, crewId, username, key(username));
         // An owner with no places left is out of the crew once it is handed over.
-        if (handed.left_crew === true) throw redirect("/crews");
+        if (handed.leftCrew === true) throw redirect("/crews");
         return { notice: `@${username} owns the crew now.` };
       }
       if (fields["confirm"] !== "on")
         return { error: "Tick the box to delete the crew." };
-      await writeCrew(identity, "DELETE", path, undefined, key(""));
+      await deleteCrew(identity, crewId, key(""));
       throw redirect("/crews");
     },
   );

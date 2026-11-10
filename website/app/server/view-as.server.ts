@@ -12,8 +12,9 @@
 import { mapLinkedPlayerCard, type LinkedPlayerCard } from "../lib/account-contracts";
 import { VIEW_AS_PARAM } from "../lib/dashboard";
 import { normalizePlayerTag } from "../lib/player-tag";
-import { requestJson, type GoogleAccountIdentity } from "../services/python.server";
 import { isRecord } from "../services/python-response.server";
+import { requestJson } from "../services/python-transport.server";
+import { type LoginIdentity } from "./auth.server";
 
 /** The owner's own Discord switches for the viewed player. */
 export type OwnerFollow = { attack: boolean; daySummary: boolean };
@@ -47,18 +48,14 @@ export function viewAsTag(value: string | null): string | null {
  * owner: their dashboard is the same whatever they typed.
  */
 export async function readViewAs(
-  identity: GoogleAccountIdentity,
+  identity: LoginIdentity,
   typed: string | null,
 ): Promise<ViewAsAccess> {
   const tag = viewAsTag(typed);
   try {
     const payload = await requestJson<unknown>(
       `/v1/account/view-as${tag === null ? "" : `?tag=${encodeURIComponent(tag)}`}`,
-      "GET",
-      undefined,
-      "view-as",
-      undefined,
-      identity,
+      { method: "GET", expectedKind: "view-as", identity: identity },
     );
     if (!isRecord(payload) || payload.owner !== true) return NOT_OWNER;
     const pinned =
@@ -103,19 +100,22 @@ export function refuseViewAsChanges(request: Request): Response | null {
  * signed-in account and refuses anyone else the same way whatever the tag.
  */
 export async function saveOwnerChoice(
-  identity: GoogleAccountIdentity,
+  identity: LoginIdentity,
   choice:
     | { kind: "pin"; tag: string | null }
-    | { kind: "follow"; tag: string; alert: "attack" | "day_summary"; on: boolean },
+    | {
+        kind: "follow";
+        tag: string;
+        alert: "attack" | "day_summary";
+        on: boolean;
+      },
   idempotencyKey: string,
 ): Promise<void> {
   const { kind, ...body } = choice;
-  await requestJson<unknown>(
-    `/v1/account/view-as/${kind}`,
-    "POST",
-    Buffer.from(JSON.stringify(body), "utf8"),
-    undefined,
-    idempotencyKey,
-    identity,
-  );
+  await requestJson<unknown>(`/v1/account/view-as/${kind}`, {
+    method: "POST",
+    body: Buffer.from(JSON.stringify(body), "utf8"),
+    requestId: idempotencyKey,
+    identity: identity,
+  });
 }

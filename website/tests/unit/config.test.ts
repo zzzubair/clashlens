@@ -72,6 +72,21 @@ describe("server-only website login configuration", () => {
     if (tempDirectory !== undefined) rmSync(tempDirectory, { recursive: true });
   });
 
+  it("keeps the canonical origin available when enabled login credentials are invalid", async () => {
+    delete process.env.CLASHLENS_GOOGLE_CLIENT_SECRET;
+    const { getPublicOrigin } = await import("../../app/server/public-origin.server");
+    expect(getPublicOrigin().origin).toBe("http://127.0.0.1:3000");
+    await expect(loadConfig()).rejects.toThrow("missing Google client secret");
+    expect(getPublicOrigin().origin).toBe("http://127.0.0.1:3000");
+  });
+
+  it("keeps the public origin for the process after successful validation", async () => {
+    const { getPublicOrigin } = await import("../../app/server/public-origin.server");
+    const origin = getPublicOrigin();
+    process.env.CLASHLENS_PUBLIC_ORIGIN = "https://changed.example";
+    expect(getPublicOrigin()).toBe(origin);
+  });
+
   it("loads a complete local development login configuration", async () => {
     const config = await loadConfig();
     expect(config.loginEnabled).toBe(true);

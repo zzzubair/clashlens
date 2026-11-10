@@ -4,11 +4,13 @@ import {
   type GroupComparison,
 } from "../lib/group-comparison";
 import { isCanonicalUuid } from "../lib/validation";
-import { PythonApiError, requestJson, type GoogleAccountIdentity } from "./python.server";
+import { type LoginIdentity } from "../server/auth.server";
+import { PythonApiError } from "./python-response.server";
+import { requestJson } from "./python-transport.server";
 
 /** Read one private group's side-by-side comparison for the signed-in account. */
 export async function getGroupComparison(
-  identity: GoogleAccountIdentity,
+  identity: LoginIdentity,
   groupId: string,
   days: ComparisonDays,
 ): Promise<GroupComparison> {
@@ -17,11 +19,7 @@ export async function getGroupComparison(
   }
   const payload = await requestJson<unknown>(
     `/v1/account/groups/${groupId}/comparison?days=${days}`,
-    "GET",
-    undefined,
-    undefined,
-    undefined,
-    identity,
+    { method: "GET", identity: identity },
   );
   const comparison = mapGroupComparison(payload);
   if (comparison === null || comparison.groupId !== groupId) {

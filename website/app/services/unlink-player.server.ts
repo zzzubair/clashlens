@@ -1,7 +1,8 @@
 import type { ListedCrew } from "../lib/crew-contracts";
 import { isCanonicalUuid } from "../lib/validation";
-import { PythonApiError, requestJson, type GoogleAccountIdentity } from "./python.server";
-import { isRecord, isString } from "./python-response.server";
+import { type LoginIdentity } from "../server/auth.server";
+import { isRecord, isString, PythonApiError } from "./python-response.server";
+import { requestJson } from "./python-transport.server";
 
 /** A crew the Clasher owns where the player is their only one. */
 export type HandOverCrew = Pick<ListedCrew, "crewId" | "name">;
@@ -10,7 +11,7 @@ export type HandOverCrew = Pick<ListedCrew, "crewId" | "name">;
  * over first, empty once it is unlinked. The private API answers 404 when the
  * player is not linked to this account. */
 export async function unlinkPlayer(
-  identity: GoogleAccountIdentity,
+  identity: LoginIdentity,
   tag: string,
   idempotencyKey: string,
 ): Promise<HandOverCrew[]> {
@@ -18,14 +19,11 @@ export async function unlinkPlayer(
     throw new PythonApiError(400, { error: "invalid_input" });
   }
   try {
-    await requestJson<unknown>(
-      `/v1/account/players/${encodeURIComponent(tag)}`,
-      "DELETE",
-      undefined,
-      undefined,
-      idempotencyKey,
-      identity,
-    );
+    await requestJson<unknown>(`/v1/account/players/${encodeURIComponent(tag)}`, {
+      method: "DELETE",
+      requestId: idempotencyKey,
+      identity: identity,
+    });
     return [];
   } catch (cause) {
     const crews = handOverCrews(cause);

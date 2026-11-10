@@ -1,5 +1,4 @@
 import type { PastSeasonFinish } from "../lib/contracts";
-import { requestJson } from "./python.server";
 import {
   PythonApiError,
   isInteger,
@@ -7,6 +6,7 @@ import {
   isResetTimestamp,
   isString,
 } from "./python-response.server";
+import { requestJson } from "./python-transport.server";
 
 // Under the page's five-second streaming limit; a timeout hides only this section.
 const PAST_SEASONS_TIMEOUT_MS = 4_000;
@@ -14,13 +14,7 @@ const PAST_SEASONS_TIMEOUT_MS = 4_000;
 export async function getPastSeasons(tag: string): Promise<PastSeasonFinish[]> {
   const payload = await requestJson<unknown>(
     `/v1/players/${encodeURIComponent(tag)}/past-seasons`,
-    "GET",
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    PAST_SEASONS_TIMEOUT_MS,
+    { method: "GET", timeoutMs: PAST_SEASONS_TIMEOUT_MS },
   );
   if (!isRecord(payload) || payload.tag !== tag || !Array.isArray(payload.seasons))
     throw new PythonApiError(502, { error: "malformed" });

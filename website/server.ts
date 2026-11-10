@@ -1,15 +1,16 @@
+import type { RequestListenerOptions } from "@react-router/node";
+import { createRequestListener } from "@react-router/node";
 import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
-import { createServer } from "node:http";
 import type { IncomingMessage, RequestListener, ServerResponse } from "node:http";
+import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { extname, join, relative, resolve } from "node:path";
 import { pipeline } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { constants } from "node:zlib";
-import { createRequestListener } from "@react-router/node";
-import type { RequestListenerOptions } from "@react-router/node";
 import type { ServerBuild } from "react-router";
+import { loadPublicOrigin } from "./app/server/public-origin.server.ts";
 
 const serverRequire = createRequire(
   import.meta.resolve("@react-router/serve/package.json"),
@@ -67,8 +68,11 @@ export async function createWebsiteServer(
   clientDirectory: string,
   publicOrigin = process.env.CLASHLENS_PUBLIC_ORIGIN,
 ) {
-  // Read like the website config does, so "https://clashlens.net/" counts too.
-  const live = URL.parse(publicOrigin?.trim() ?? "")?.origin === LIVE_ORIGIN.origin;
+  // ops allows an unset origin (no sign-in); such a host is never the live site.
+  const live =
+    !!publicOrigin?.trim() &&
+    loadPublicOrigin(publicOrigin, process.env.NODE_ENV === "production").origin ===
+      LIVE_ORIGIN.origin;
   // Only files found in the built public directory can be served. No request
   // pathname is ever resolved against the filesystem, and symlinks are excluded.
   const files = new Map<string, string>();
@@ -85,7 +89,10 @@ export async function createWebsiteServer(
   };
   if (typeof entry.getLoadContext !== "function")
     throw new Error("Missing socket context adapter");
-  const listener = createRequestListener({ build, getLoadContext: entry.getLoadContext });
+  const listener = createRequestListener({
+    build,
+    getLoadContext: entry.getLoadContext,
+  });
   const handleRequest: RequestListener = async (request, response) => {
     // No other site may show these pages inside a frame, so it cannot overlay
     // them to trick a click. X-Frame-Options covers older browsers.

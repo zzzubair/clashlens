@@ -69,8 +69,9 @@ describe("server-only Python account client", () => {
         }),
       ),
     );
-    const client = await importClient();
-    const result = await client.searchPlayers("nova");
+    const result = await (
+      await import("../../app/services/players.server")
+    ).searchPlayers("nova");
     expect(result.users).toEqual([
       { username: "nova88", displayName: "Nova", linkedPlayerCount: 2 },
     ]);
@@ -92,8 +93,9 @@ describe("server-only Python account client", () => {
         }),
       ),
     );
-    const client = await importClient();
-    await expect(client.searchPlayers("nova")).rejects.toMatchObject({ status: 502 });
+    await expect(
+      (await import("../../app/services/players.server")).searchPlayers("nova"),
+    ).rejects.toMatchObject({ status: 502 });
   });
 
   it("rejects search responses without public profile results", async () => {
@@ -105,8 +107,9 @@ describe("server-only Python account client", () => {
           jsonResponse({ query: "nova", known_only: true, results: [] }),
         ),
     );
-    const client = await importClient();
-    await expect(client.searchPlayers("nova")).rejects.toMatchObject({ status: 502 });
+    await expect(
+      (await import("../../app/services/players.server")).searchPlayers("nova"),
+    ).rejects.toMatchObject({ status: 502 });
   });
 
   it("creates an account with the exact body, Google identity, and idempotency request ID", async () => {
@@ -167,7 +170,10 @@ describe("server-only Python account client", () => {
 
     await expect(
       client.createAccount({ username: "nova88", displayName: "Nova" }, "not-a-uuid"),
-    ).rejects.toMatchObject({ status: 400, payload: { error: "invalid_input" } });
+    ).rejects.toMatchObject({
+      status: 400,
+      payload: { error: "invalid_input" },
+    });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -435,10 +441,10 @@ describe("server-only Python account client", () => {
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const { createPythonClient } = await import("../../app/services/python.server");
-    const client = createPythonClient();
 
-    await expect(client.getPublicUser("Nova88")).resolves.toEqual({
+    await expect(
+      (await import("../../app/services/public-user.server")).getPublicUser("Nova88"),
+    ).resolves.toEqual({
       username: "nova88",
       displayName: "Nova",
       verifiedPlayers: [],
@@ -453,10 +459,10 @@ describe("server-only Python account client", () => {
   it("rejects an invalid public username before contacting the service", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    const { createPythonClient } = await import("../../app/services/python.server");
-    const client = createPythonClient();
 
-    await expect(client.getPublicUser("X!")).rejects.toMatchObject({
+    await expect(
+      (await import("../../app/services/public-user.server")).getPublicUser("X!"),
+    ).rejects.toMatchObject({
       status: 404,
       payload: { error: "user_not_found" },
     });
@@ -615,9 +621,8 @@ describe("server-only Python account client", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const { createPythonClient } = await import("../../app/services/python.server");
-    const client = createPythonClient();
 
-    await expect(client.getAccount()).rejects.toMatchObject({
+    await expect(createPythonClient().getAccount()).rejects.toMatchObject({
       status: 403,
       payload: { error: "forbidden" },
     });

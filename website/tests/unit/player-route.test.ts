@@ -1,4 +1,3 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
@@ -6,6 +5,32 @@ import {
   createStaticRouter,
   StaticRouterProvider,
 } from "react-router";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  NEWER_PROFILE,
+  PLAYER,
+  REFRESH_STATUS,
+  SAVED_DAY,
+  SEASON,
+  SEASONS,
+  SUMMARY,
+  TAG,
+} from "../fixtures/player-route-data";
+vi.mock("../../app/services/players.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/players.server")>();
+  return {
+    ...actual,
+    getPlayer: async (...args: Parameters<typeof actual.getPlayer>) =>
+      mocks.createPythonClient().getPlayer(...args),
+    getPlayerSeasons: async (...args: Parameters<typeof actual.getPlayerSeasons>) =>
+      mocks.createPythonClient().getPlayerSeasons(...args),
+    getPlayerSeason: async (...args: Parameters<typeof actual.getPlayerSeason>) =>
+      mocks.createPythonClient().getPlayerSeason(...args),
+    getRefreshStatus: async (...args: Parameters<typeof actual.getRefreshStatus>) =>
+      mocks.createPythonClient().getRefreshStatus(...args),
+  };
+});
 
 const mocks = vi.hoisted(() => ({
   createPythonClient: vi.fn(),
@@ -41,127 +66,12 @@ import type {
   PlayerLookup,
   PlayerPage,
   RankedDaySummary,
-  RefreshStatus,
-  SummarizedSeasonRef,
 } from "../../app/lib/contracts";
-import { PythonApiError } from "../../app/services/python.server";
 import { playerLookupView } from "../../app/lib/player-lookup-text";
-import PlayerRoute, { loader as playerLoader } from "../../app/routes/player";
 import { isRefreshStatusPayload } from "../../app/lib/validation";
+import PlayerRoute, { loader as playerLoader } from "../../app/routes/player";
 import { createClientAddressContext } from "../../app/server/client-address.server";
-
-const TAG = "#2PP";
-const SEASON = "1785714000";
-
-const SUMMARY: HistoricalSeasonSummary = {
-  kind: "player-season-summary",
-  tag: TAG,
-  seasonId: SEASON,
-  seasonStart: "2026-05-01T05:00:00+00:00",
-  seasonEnd: "2026-05-29T05:00:00+00:00",
-  startTrophies: 6000,
-  endTrophies: 6280,
-  finalRank: null,
-  attackCount: 56,
-  attackGain: 840,
-  defenseCount: 28,
-  defenseLoss: 560,
-  netTrophyChange: 280,
-  attackStars: { "0": 0, "1": 0, "2": 28, "3": 28 },
-  defenseStars: { "0": 0, "1": 28, "2": 0, "3": 0 },
-  attackStarsUnknown: 0,
-  defenseStarsUnknown: 0,
-  daysObserved: 28,
-  daysMissing: [],
-  coverageState: "partial",
-  unresolvedFlags: [],
-  dailyEntries: [],
-  publishedAt: "2026-05-29T06:00:00+00:00",
-  source: "tracked_summary",
-  officialHistory: null,
-};
-
-const SEASONS: SummarizedSeasonRef[] = [
-  {
-    seasonId: SEASON,
-    coverageState: "partial",
-    daysObserved: 28,
-    daysMissing: 0,
-    source: "tracked_summary",
-    officialHistory: null,
-  },
-];
-
-const PLAYER = {
-  kind: "player-page",
-  tag: TAG,
-  trackingState: "tracking",
-  profile: {
-    tag: TAG,
-    name: "Nova",
-    clan: "Example",
-    trophies: 6000,
-    freshness: { state: "fresh", observedAt: "2026-09-07T12:00:00Z", ageSeconds: 0 },
-    confidence: "high",
-    coverage: "complete",
-    eligibility: "legend-i",
-  },
-  season: null,
-  currentDay: null,
-  recentDays: [],
-  seasonDays: [],
-  dataQuality: [],
-  provenance: {
-    source: "api_player_daily_logs",
-    observedAt: "2026-09-07T12:00:00Z",
-    freshness: "fresh",
-    confidence: "high",
-    coverage: "complete",
-    version: "v1",
-  },
-} satisfies PlayerPage;
-
-const NEWER_PROFILE = {
-  ...PLAYER.profile,
-  freshness: { ...PLAYER.profile.freshness, observedAt: "2026-09-07T12:00:01Z" },
-};
-
-const SAVED_DAY: RankedDaySummary = {
-  dayNumber: null,
-  label: "Ranked day",
-  period: "2026-09-07T05:00:00Z – 2026-09-08T05:00:00Z",
-  state: "Complete",
-  startTrophies: 6000,
-  offense: { attacks: 1, threeStars: 1, trophyGain: 40 },
-  defense: { defenses: 0, threeStarsAgainst: 0, trophyLoss: 0 },
-  trophyChange: 40,
-  offenseEvents: [
-    {
-      battleId: "saved-attack",
-      battleTimestamp: "2026-09-07T13:00:00Z",
-      opponent: { tag: "#2PY", name: "Saved opponent" },
-      destructionPercentage: 100,
-      stars: 3,
-      trophyChange: 40,
-      perspectiveDisagreement: false,
-      armyShareCode: null,
-    },
-  ],
-  defenseEvents: [],
-  completeness: { state: "complete", reason: "Complete" },
-  uncertainty: ["player_not_eligible"],
-};
-
-const REFRESH_STATUS: RefreshStatus = {
-  kind: "refresh-status",
-  workId: "work_1",
-  tag: TAG,
-  state: "complete",
-  progressPercent: 100,
-  message: "Complete",
-  publishedAt: "2026-09-07T12:00:00Z",
-  player: PLAYER,
-};
+import { PythonApiError } from "../../app/services/python-response.server";
 
 async function renderRoute(
   data: Awaited<ReturnType<typeof playerLoader>>,
@@ -414,7 +324,12 @@ describe("player route historical independence", () => {
     });
     const html = await renderRoute({
       requestedTag: TAG,
-      player: { ...PLAYER, currentDay: days[27], recentDays: days, seasonDays: days },
+      player: {
+        ...PLAYER,
+        currentDay: days[27],
+        recentDays: days,
+        seasonDays: days,
+      },
       error: null,
       refreshStatus: null,
       refreshError: null,
@@ -575,7 +490,10 @@ describe("automatic tag lookup", () => {
     const profile = { name: "Sloothy", clan: null, trophies: 152, league };
     mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state, profile });
     const html = await renderRoute(
-      await playerLoader({ request: requestFor(null), params: { tag: TAG } } as never),
+      await playerLoader({
+        request: requestFor(null),
+        params: { tag: TAG },
+      } as never),
     );
     expect(html).toContain("<h1><bdi>Sloothy</bdi></h1>");
     expect(html).toContain(note);
@@ -667,7 +585,11 @@ describe("automatic tag lookup", () => {
     async (pending) => {
       const player = {
         ...PLAYER,
-        profile: { ...PLAYER.profile, trophies: 6400, seasonResetPending: pending },
+        profile: {
+          ...PLAYER.profile,
+          trophies: 6400,
+          seasonResetPending: pending,
+        },
       };
       mocks.createPythonClient.mockReturnValue({
         getPlayer: vi.fn().mockResolvedValue(player),
@@ -731,9 +653,11 @@ describe("automatic tag lookup", () => {
 
   it("keeps dated history on tracked pages without a confirmed season", async () => {
     mocks.createPythonClient.mockReturnValue({
-      getPlayer: vi
-        .fn()
-        .mockResolvedValue({ ...PLAYER, currentDay: SAVED_DAY, recentDays: [SAVED_DAY] }),
+      getPlayer: vi.fn().mockResolvedValue({
+        ...PLAYER,
+        currentDay: SAVED_DAY,
+        recentDays: [SAVED_DAY],
+      }),
       getPlayerSeasons: vi.fn().mockResolvedValue([]),
     });
     mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state: "tracking" });
@@ -783,7 +707,10 @@ describe("automatic tag lookup", () => {
     expect(fresh).toContain("Updated just nowProfile 12:00 UTCBattles not saved yet");
     const oldHistory = await render({
       ...PLAYER,
-      profile: { ...PLAYER.profile, battleHistoryUpdatedAt: "2026-09-07T11:40:00Z" },
+      profile: {
+        ...PLAYER.profile,
+        battleHistoryUpdatedAt: "2026-09-07T11:40:00Z",
+      },
     });
     expect(oldHistory).toContain(
       "Updated just nowProfile 12:00 UTCBattles 7 Sep 2026, 11:40 UTC",
@@ -792,9 +719,11 @@ describe("automatic tag lookup", () => {
 
   it("keeps a newly published battle when a completed Refresh has the same check time", async () => {
     mocks.createPythonClient.mockReturnValue({
-      getPlayer: vi
-        .fn()
-        .mockResolvedValue({ ...PLAYER, currentDay: SAVED_DAY, recentDays: [SAVED_DAY] }),
+      getPlayer: vi.fn().mockResolvedValue({
+        ...PLAYER,
+        currentDay: SAVED_DAY,
+        recentDays: [SAVED_DAY],
+      }),
       getPlayerSeasons: vi.fn().mockResolvedValue([]),
       getRefreshStatus: vi.fn().mockResolvedValue(REFRESH_STATUS),
     });
@@ -911,7 +840,10 @@ describe("automatic tag lookup", () => {
     [true, false],
     ["unknown", false],
   ])("validates tracking state %s in Refresh results", (trackingState, accepted) => {
-    const payload = { ...REFRESH_STATUS, player: { ...PLAYER, trackingState } };
+    const payload = {
+      ...REFRESH_STATUS,
+      player: { ...PLAYER, trackingState },
+    };
     expect(isRefreshStatusPayload(payload)).toBe(accepted);
   });
 
@@ -1209,7 +1141,10 @@ describe("player day honesty", () => {
     expect(today).not.toContain("not recorded<");
     expect(html).not.toContain('id="legend-day-2026-10-03" open=""');
 
-    const missingDefense = { ...TODAY, defense: { ...TODAY.defense, trophyLoss: null } };
+    const missingDefense = {
+      ...TODAY,
+      defense: { ...TODAY.defense, trophyLoss: null },
+    };
     const later = await page([missingDefense], { currentDay: missingDefense });
     expect(dayHtml(later, "2026-10-03")).not.toContain("from battles");
   });
@@ -1374,7 +1309,13 @@ describe("player day honesty", () => {
               coverage: "partial",
               flags: ["missing_end_baseline", "attack_star_total_mismatch"],
             },
-            { ...entry, dayNumber: 3, netChange: null, eodState: null, flags: [] },
+            {
+              ...entry,
+              dayNumber: 3,
+              netChange: null,
+              eodState: null,
+              flags: [],
+            },
             {
               ...entry,
               dayNumber: 4,

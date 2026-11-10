@@ -25,8 +25,11 @@ it("signs leaderboard search and preserves a match's whole-board rank", async ()
     }),
   );
   vi.stubGlobal("fetch", fetch);
-  const { createPythonClient } = await import("../../app/services/python.server");
-  await expect(createPythonClient().searchLeaderboard("Nova")).resolves.toEqual({
+  await expect(
+    (await import("../../app/services/leaderboard-search.server")).searchLeaderboard(
+      "Nova",
+    ),
+  ).resolves.toEqual({
     exactTag: null,
     hasMore: false,
     results: [{ name: "Nova", tag: "#2PP", rank: 103, trophies: 6000 }],
@@ -49,8 +52,11 @@ it.each([0, -1, 1.5, "103", null])("rejects invalid rank %s", async (rank) => {
       }),
     ),
   );
-  const { createPythonClient } = await import("../../app/services/python.server");
-  await expect(createPythonClient().searchLeaderboard("Nova")).rejects.toMatchObject({
+  await expect(
+    (await import("../../app/services/leaderboard-search.server")).searchLeaderboard(
+      "Nova",
+    ),
+  ).rejects.toMatchObject({
     status: 502,
   });
 });
@@ -66,8 +72,11 @@ it("rejects an exact tag pointing to another result", async () => {
       }),
     ),
   );
-  const { createPythonClient } = await import("../../app/services/python.server");
-  await expect(createPythonClient().searchLeaderboard("2py")).rejects.toMatchObject({
+  await expect(
+    (await import("../../app/services/leaderboard-search.server")).searchLeaderboard(
+      "2py",
+    ),
+  ).rejects.toMatchObject({
     status: 502,
   });
 });
@@ -77,8 +86,11 @@ it.each(["", " ", "x".repeat(81)])(
   async (query) => {
     const fetch = vi.fn();
     vi.stubGlobal("fetch", fetch);
-    const { createPythonClient } = await import("../../app/services/python.server");
-    await expect(createPythonClient().searchLeaderboard(query)).rejects.toMatchObject({
+    await expect(
+      (await import("../../app/services/leaderboard-search.server")).searchLeaderboard(
+        query,
+      ),
+    ).rejects.toMatchObject({
       status: 400,
     });
     expect(fetch).not.toHaveBeenCalled();
@@ -136,14 +148,9 @@ const neighborEntries = [
 
 it("keeps a selected player's neighbor from the previous page", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(livePage(neighborEntries)));
-  const { createPythonClient } = await import("../../app/services/python.server");
-  const board = await createPythonClient().getTrackedLeaderboard(
-    2,
-    "live",
-    2,
-    undefined,
-    "#2PP",
-  );
+  const board = await (
+    await import("../../app/services/leaderboard.server")
+  ).getTrackedLeaderboard(2, "live", 2, undefined, "#2PP");
   expect(board.page).toBe(2);
   expect(board.entries.map((entry) => entry.rank)).toEqual([2, 3, 4]);
 });
@@ -154,8 +161,13 @@ it.each([
   ["with a gap in ranks", [liveEntry(2, "#2PY"), liveEntry(4, "#2PP")], "#2PP"],
 ])("rejects extra rows %s", async (_, entries, focusTag) => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(livePage(entries)));
-  const { createPythonClient } = await import("../../app/services/python.server");
   await expect(
-    createPythonClient().getTrackedLeaderboard(2, "live", 2, undefined, focusTag),
+    (await import("../../app/services/leaderboard.server")).getTrackedLeaderboard(
+      2,
+      "live",
+      2,
+      undefined,
+      focusTag,
+    ),
   ).rejects.toMatchObject({ status: 502 });
 });

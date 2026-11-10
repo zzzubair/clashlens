@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { ShouldRevalidateFunctionArgs } from "react-router";
 import {
   Link,
   data,
@@ -8,7 +9,10 @@ import {
   useNavigation,
   useSearchParams,
 } from "react-router";
-import type { ShouldRevalidateFunctionArgs } from "react-router";
+import { BattleStatistics } from "../components/BattleStatistics";
+import { getTrackedLeaderboard } from "../services/leaderboard.server";
+import { getPlayer } from "../services/players.server";
+import { getPublicUser } from "../services/public-user.server";
 
 import { Dashboard } from "../components/DashboardGrid";
 import { DashboardIcon } from "../components/DashboardIcon";
@@ -18,14 +22,11 @@ import {
   FrontPage,
   type FrontPageData,
 } from "../components/FrontPage";
-import { BattleStatistics } from "../components/BattleStatistics";
 import { SeasonStory } from "../components/SeasonStory";
 import { ViewAsBar, ViewAsForm, type OwnerChoices } from "../components/ViewAs";
 import type { LinkedPlayerCard } from "../lib/account-contracts";
-import type { PlayerPage, WebsiteErrorResponse } from "../lib/contracts";
-import { leftDate, leftLine, type LeftLegendI } from "../lib/left-legend";
-import { seasonShape } from "../lib/season-shape";
 import { publicPageMeta } from "../lib/blog";
+import type { PlayerPage, WebsiteErrorResponse } from "../lib/contracts";
 import type { DashboardSettings } from "../lib/dashboard";
 import {
   ACCOUNT_CARDS,
@@ -39,10 +40,11 @@ import {
   shownCards,
 } from "../lib/dashboard";
 import type { CardReads } from "../lib/dashboard-cards";
+import { leftDate, leftLine, type LeftLegendI } from "../lib/left-legend";
 import { LOOKUP_MESSAGES } from "../lib/player-lookup-text";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
+import { seasonShape } from "../lib/season-shape";
 import type { Route } from "./+types/dashboard";
-
 import "../dashboard.css";
 import "../dashboard-cards.css";
 import "../dashboard-day.css";
@@ -138,7 +140,6 @@ export async function loader({ request }: Route.LoaderArgs) {
       ? await readLoginIdentity(request, config).catch(() => null)
       : null;
   if (identity === null) return frontPage(config.loginEnabled);
-
   const { createPythonClient } = await import("../services/python.server");
   const client = createPythonClient(identity);
   let account;
@@ -162,7 +163,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   let players: LinkedPlayerCard[] = [];
   let playersUnavailable = false;
   try {
-    players = (await client.getPublicUser(account.username)).verifiedPlayers;
+    players = (await getPublicUser(account.username)).verifiedPlayers;
   } catch {
     playersUnavailable = true;
   }
@@ -205,7 +206,12 @@ export async function loader({ request }: Route.LoaderArgs) {
           ? CARD_IDS.filter((card) => only.includes(card))
           : shownCards(settings.layout)
         ).filter((card) => viewing === undefined || !ACCOUNT_CARDS.includes(card)),
-        { client, selected, settings, waitForBoard: query.get("board") === "wait" },
+        {
+          client,
+          selected,
+          settings,
+          waitForBoard: query.get("board") === "wait",
+        },
         identity,
       ),
       CARD_WAIT_MS,
@@ -215,7 +221,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   // An account that left Legend I keeps this Season's Legend I part, read-only.
   const leftPlayer =
     selected?.state === "not_in_legend" && selected.leftLegendI
-      ? await client.getPlayer(selected.tag).catch(() => null)
+      ? await getPlayer(selected.tag).catch(() => null)
       : null;
 
   const saved = query.get("saved");
@@ -258,11 +264,7 @@ async function frontPage(loginAvailable: boolean) {
   let leaderboard = null;
   let error: WebsiteErrorResponse | null = null;
   try {
-    const { createPythonClient } = await import("../services/python.server");
-    leaderboard = await createPythonClient().getTrackedLeaderboard(
-      FRONT_PAGE_PLAYERS,
-      "live",
-    );
+    leaderboard = await getTrackedLeaderboard(FRONT_PAGE_PLAYERS, "live");
   } catch (cause) {
     const { safeWebsiteError } = await import("../server/errors.server");
     error = safeWebsiteError(cause);

@@ -1,4 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock("../../app/services/players.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/players.server")>();
+  return {
+    ...actual,
+    getPlayer: async (...args: Parameters<typeof actual.getPlayer>) =>
+      mocks.createPythonClient().getPlayer(...args),
+    getPlayerSeasons: async (...args: Parameters<typeof actual.getPlayerSeasons>) =>
+      mocks.createPythonClient().getPlayerSeasons(...args),
+    getPlayerSeason: async (...args: Parameters<typeof actual.getPlayerSeason>) =>
+      mocks.createPythonClient().getPlayerSeason(...args),
+  };
+});
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
@@ -6,6 +18,7 @@ import {
   createStaticRouter,
   StaticRouterProvider,
 } from "react-router";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createPythonClient: vi.fn(),
@@ -30,8 +43,8 @@ import type {
   RankedDaySummary,
 } from "../../app/lib/contracts";
 import { selectPlayerHistory } from "../../app/lib/player-lookup-text";
-import { PythonApiError } from "../../app/services/python.server";
 import PlayerRoute, { loader as playerLoader } from "../../app/routes/player";
+import { PythonApiError } from "../../app/services/python-response.server";
 
 const TAG = "#2PP";
 const SEASON = "1788757200";
@@ -194,7 +207,12 @@ describe("Daily Legend log days", () => {
 
   it("keeps the saved Season's days before its Reset", () => {
     const history = selectPlayerHistory(
-      { ...PLAYER, season: septemberSeason, currentDay: null, recentDays: ended },
+      {
+        ...PLAYER,
+        season: septemberSeason,
+        currentDay: null,
+        recentDays: ended,
+      },
       afterReset - 60 * 60 * 1000,
     );
     expect(history.map(({ seasonDay }) => seasonDay)).toEqual([
@@ -245,7 +263,10 @@ describe("Daily Legend log fold", () => {
         ...PLAYER,
         profile: {
           ...PLAYER.profile,
-          freshness: { ...PLAYER.profile.freshness, observedAt: "2026-10-05T04:00:00Z" },
+          freshness: {
+            ...PLAYER.profile.freshness,
+            observedAt: "2026-10-05T04:00:00Z",
+          },
         },
         season: {
           id: SEASON,
@@ -426,7 +447,13 @@ describe("past-Season view", () => {
   });
 
   it("averages over played days only, leaving out quiet days and days before sign-up", async () => {
-    const quiet = { ...DAY, attacks: 0, defenses: 0, attackGain: 0, defenseLoss: 0 };
+    const quiet = {
+      ...DAY,
+      attacks: 0,
+      defenses: 0,
+      attackGain: 0,
+      defenseLoss: 0,
+    };
     const html = await loadAndRender(
       {
         getPlayer: vi.fn().mockResolvedValue(PLAYER),
@@ -637,7 +664,12 @@ describe("past-Season view", () => {
           source: "official_league_history",
           officialHistory: { observedAt: "2026-09-07T06:00:00Z", eodTrophies: 5600 },
         },
-        { ...ref, seasonId: SEASON, source: "tracked_summary", officialHistory: null },
+        {
+          ...ref,
+          seasonId: SEASON,
+          source: "tracked_summary",
+          officialHistory: null,
+        },
       ]),
       getPlayerSeason: vi.fn().mockResolvedValue({
         ...SUMMARY,

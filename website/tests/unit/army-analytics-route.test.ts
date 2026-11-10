@@ -1,3 +1,17 @@
+vi.mock("../../app/services/army-analytics.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/army-analytics.server")>();
+  return {
+    ...actual,
+    getArmyAnalytics: async (...args: Parameters<typeof actual.getArmyAnalytics>) =>
+      mocks.createPythonClient().getArmyAnalytics(...args),
+    getArmySeasonSummary: async (
+      ...args: Parameters<typeof actual.getArmySeasonSummary>
+    ) => mocks.createPythonClient().getArmySeasonSummary(...args),
+    getArmySeasons: async (...args: Parameters<typeof actual.getArmySeasons>) =>
+      mocks.createPythonClient().getArmySeasons(...args),
+  };
+});
 import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createElement } from "react";
@@ -46,7 +60,7 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
 });
 
 import ArmyRoute, { loader as armyLoader } from "../../app/routes/army-analytics";
-import { PythonApiError } from "../../app/services/python.server";
+import { PythonApiError } from "../../app/services/python-response.server";
 
 const SEASON = "1785714000";
 const SEASON_END = (Number(SEASON) + 28 * 86400) * 1000;
@@ -985,8 +999,8 @@ describe("army analytics player groups", () => {
 
   it("keeps the picker and explains a request that hits the 5-second limit", async () => {
     const actual = await vi.importActual<
-      typeof import("../../app/services/python.server")
-    >("../../app/services/python.server");
+      typeof import("../../app/services/army-analytics.server")
+    >("../../app/services/army-analytics.server");
     let reply: (response: ServerResponse) => void = () => {};
     const server = createServer((_request, response) => reply(response));
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -997,7 +1011,7 @@ describe("army analytics player groups", () => {
     process.env.CLASHLENS_PYTHON_API_URL = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 =
       "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
-    mocks.createPythonClient.mockImplementation(actual.createPythonClient);
+    mocks.createPythonClient.mockReturnValue(actual);
     const timeout = AbortSignal.timeout.bind(AbortSignal);
     const limit = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => timeout(100));
     const tooLong =
@@ -1222,7 +1236,10 @@ describe("army analytics variant rows", () => {
             ...row("army-type:3", "Thrower", 8),
             typeId: 3,
             variants: [
-              { ...row("army-variant:3:3", "Revenge Thrower", 6), variantId: 3 },
+              {
+                ...row("army-variant:3:3", "Revenge Thrower", 6),
+                variantId: 3,
+              },
               { ...row("army-variant:3:0", "Other Thrower", 2), variantId: 0 },
             ],
           },

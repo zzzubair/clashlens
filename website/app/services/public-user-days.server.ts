@@ -1,6 +1,5 @@
 import type { SeasonWeek } from "../lib/contracts";
 import { mapSeasonWeeks } from "./player-response.server";
-import { requestJson } from "./python.server";
 import {
   PythonApiError,
   isCanonicalPlayerTag,
@@ -8,6 +7,7 @@ import {
   isRecord,
   isResetTimestamp,
 } from "./python-response.server";
+import { requestJson } from "./python-transport.server";
 
 // Under the page's five-second streaming limit; a timeout hides only the
 // cards' Reset moves and heat maps.
@@ -52,13 +52,11 @@ const isBoolean = (value: unknown): value is boolean => typeof value === "boolea
 export async function getPublicUserDays(username: string): Promise<PublicUserDays> {
   const payload = await requestJson<unknown>(
     `/v1/users/${encodeURIComponent(username)}/days`,
-    "GET",
-    undefined,
-    "public-user-days",
-    undefined,
-    undefined,
-    undefined,
-    PUBLIC_USER_DAYS_TIMEOUT_MS,
+    {
+      method: "GET",
+      expectedKind: "public-user-days",
+      timeoutMs: PUBLIC_USER_DAYS_TIMEOUT_MS,
+    },
   );
   const malformed = () => new PythonApiError(502, { error: "malformed" });
   if (

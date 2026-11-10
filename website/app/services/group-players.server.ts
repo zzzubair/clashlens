@@ -1,8 +1,10 @@
 import { mapGroupPlayer, type GroupPlayer } from "../lib/account-contracts";
 import type { PlayerLookup } from "../lib/contracts";
 import { isCanonicalUuid } from "../lib/validation";
+import { type LoginIdentity } from "../server/auth.server";
 import { getPlayerLookup, startPlayerLookup } from "./player-lookup.server";
-import { PythonApiError, requestJson, type GoogleAccountIdentity } from "./python.server";
+import { PythonApiError } from "./python-response.server";
+import { requestJson } from "./python-transport.server";
 
 // How long adding a player waits for the game to answer before asking the
 // clasher to press Add again; the check keeps running either way.
@@ -36,20 +38,18 @@ export async function checkPlayerTag(
 
 /** Add one checked player; Python repeats every check and has the final say. */
 export async function addGroupPlayer(
-  identity: GoogleAccountIdentity,
+  identity: LoginIdentity,
   groupId: string,
   tag: string,
   idempotencyKey: string,
 ): Promise<GroupPlayer> {
   requireIds(groupId, idempotencyKey);
-  const payload = await requestJson<unknown>(
-    `/v1/account/groups/${groupId}/players`,
-    "POST",
-    Buffer.from(JSON.stringify({ tag }), "utf8"),
-    undefined,
-    idempotencyKey,
-    identity,
-  );
+  const payload = await requestJson<unknown>(`/v1/account/groups/${groupId}/players`, {
+    method: "POST",
+    body: Buffer.from(JSON.stringify({ tag }), "utf8"),
+    requestId: idempotencyKey,
+    identity: identity,
+  });
   const player = mapGroupPlayer(payload);
   if (player === null || player.tag !== tag) {
     throw new PythonApiError(502, { error: "malformed" });
@@ -58,7 +58,7 @@ export async function addGroupPlayer(
 }
 
 export async function removeGroupPlayer(
-  identity: GoogleAccountIdentity,
+  identity: LoginIdentity,
   groupId: string,
   tag: string,
   idempotencyKey: string,
@@ -66,11 +66,7 @@ export async function removeGroupPlayer(
   requireIds(groupId, idempotencyKey);
   await requestJson<unknown>(
     `/v1/account/groups/${groupId}/players/${encodeURIComponent(tag)}`,
-    "DELETE",
-    undefined,
-    undefined,
-    idempotencyKey,
-    identity,
+    { method: "DELETE", requestId: idempotencyKey, identity: identity },
   );
 }
 

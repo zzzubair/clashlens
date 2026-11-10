@@ -1,4 +1,12 @@
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
+import {
+  createStaticHandler,
+  createStaticRouter,
+  StaticRouterProvider,
+} from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mapGroups } from "../../app/lib/account-contracts";
 
 const mocks = vi.hoisted(() => ({
   getWebsiteConfig: vi.fn(),
@@ -39,16 +47,8 @@ vi.mock("../../app/services/group-players.server", () => ({
 }));
 
 import GroupsRoute, { action, loader } from "../../app/routes/account.groups";
-import { createElement } from "react";
-import { renderToString } from "react-dom/server";
-import {
-  createStaticHandler,
-  createStaticRouter,
-  StaticRouterProvider,
-} from "react-router";
-import { mapGroups } from "../../app/lib/account-contracts";
 import { loadWebsiteConfig } from "../../app/server/config.server";
-import { PythonApiError } from "../../app/services/python.server";
+import { PythonApiError } from "../../app/services/python-response.server";
 import { worstComparison, worstGroups } from "../fixtures/worst-case-accounts";
 
 const ORIGIN = "https://clashlens.example";

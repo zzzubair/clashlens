@@ -4,8 +4,8 @@ import {
   LOGIN_COOKIE_NAME,
   createLoginCookieValue,
   parseLoginCookieValue,
-  type LoginIdentity,
 } from "../../app/server/auth-cookies.server";
+import { type LoginIdentity } from "../../app/server/auth.server";
 import { devLoginSecret, websiteOrigin } from "../fixtures/test-values";
 import {
   ensureAccount,

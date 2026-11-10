@@ -1,3 +1,6 @@
+vi.mock("../../app/services/python-transport.server", () => ({
+  requestJson: mocks.requestJson,
+}));
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
@@ -6,6 +9,8 @@ import {
   StaticRouterProvider,
 } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GainLines } from "../../app/components/GainLines";
+import { mapGroupComparison, type GroupComparison } from "../../app/lib/group-comparison";
 
 const mocks = vi.hoisted(() => ({
   requireLogin: vi.fn(),
@@ -16,17 +21,9 @@ vi.mock("../../app/server/auth-guard.server", () => ({
   requireLogin: mocks.requireLogin,
 }));
 
-vi.mock("../../app/services/python.server", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../app/services/python.server")>();
-  return { ...actual, requestJson: mocks.requestJson };
-});
-
 import GroupCompareRoute, { loader } from "../../app/routes/account.groups.$groupId";
-import { PythonApiError } from "../../app/services/python.server";
-import { mapGroupComparison, type GroupComparison } from "../../app/lib/group-comparison";
+import { PythonApiError } from "../../app/services/python-response.server";
 import { worstComparison } from "../fixtures/worst-case-accounts";
-import { GainLines } from "../../app/components/GainLines";
 
 const ORIGIN = "https://clashlens.example";
 const GROUP_ID = "6c1e3f8a-2a44-4b7d-9c0e-1f2a3b4c5d6e";
@@ -139,11 +136,7 @@ describe("group comparison", () => {
     expect(result.data.comparison).not.toBeNull();
     expect(mocks.requestJson).toHaveBeenCalledWith(
       `/v1/account/groups/${GROUP_ID}/comparison?days=3`,
-      "GET",
-      undefined,
-      undefined,
-      undefined,
-      IDENTITY,
+      { method: "GET", identity: IDENTITY },
     );
     mocks.requestJson.mockResolvedValue({
       ...payload(),
@@ -157,11 +150,7 @@ describe("group comparison", () => {
     expect(fallback.data.sort).toBe("net");
     expect(mocks.requestJson).toHaveBeenLastCalledWith(
       `/v1/account/groups/${GROUP_ID}/comparison?days=7`,
-      "GET",
-      undefined,
-      undefined,
-      undefined,
-      IDENTITY,
+      { method: "GET", identity: IDENTITY },
     );
   });
 
@@ -347,8 +336,20 @@ describe("group comparison", () => {
     // day. Ace's line ends highest, so Ace's +280 wears the crown.
     const comparison = mapGroupComparison(
       payload([
-        player({ tag: "#2PP", name: "Ace", net: 280, net_per_day: 40, counted_days: 7 }),
-        player({ tag: "#2QQ", name: "Bea", net: 150, net_per_day: 50, counted_days: 3 }),
+        player({
+          tag: "#2PP",
+          name: "Ace",
+          net: 280,
+          net_per_day: 40,
+          counted_days: 7,
+        }),
+        player({
+          tag: "#2QQ",
+          name: "Bea",
+          net: 150,
+          net_per_day: 50,
+          counted_days: 3,
+        }),
       ]),
     );
     if (comparison === null) throw new Error("the payload should map");
@@ -383,7 +384,12 @@ describe("group comparison", () => {
           net: 60,
           net_per_day: 20,
         }),
-        player({ tag: "#2PP", name: "Ace", attack: attack(3, 9), net_per_day: 10 }),
+        player({
+          tag: "#2PP",
+          name: "Ace",
+          attack: attack(3, 9),
+          net_per_day: 10,
+        }),
         player({
           tag: "#2RR",
           name: "Cy",

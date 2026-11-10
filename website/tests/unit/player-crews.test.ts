@@ -1,3 +1,22 @@
+vi.mock("../../app/services/leaderboard.server", () => ({
+  getTrackedLeaderboard: async () => {
+    throw new Error("board unavailable");
+  },
+}));
+vi.mock("../../app/services/python-transport.server", () => ({
+  requestJson: mocks.requestJson,
+}));
+vi.mock("../../app/services/players.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/players.server")>();
+  return {
+    ...actual,
+    getPlayer: async (...args: Parameters<typeof actual.getPlayer>) =>
+      mocks.createPythonClient().getPlayer(...args),
+    getPlayerSeasons: async (...args: Parameters<typeof actual.getPlayerSeasons>) =>
+      mocks.createPythonClient().getPlayerSeasons(...args),
+  };
+});
 import { PassThrough } from "node:stream";
 import { createElement } from "react";
 import { renderToPipeableStream } from "react-dom/server";
@@ -33,14 +52,13 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
   return {
     ...actual,
     createPythonClient: mocks.createPythonClient,
-    requestJson: mocks.requestJson,
   };
 });
 
 import type { PlayerPage } from "../../app/lib/contracts";
 import PlayerRoute, { loader as playerLoader } from "../../app/routes/player";
 import "../../app/services/crews.server";
-import { PythonApiError } from "../../app/services/python.server";
+import { PythonApiError } from "../../app/services/python-response.server";
 
 const TAG = "#2PP";
 const CREW_ID = "6f1c2b9e-4a7d-4c1e-9b2a-0d5e8f7a6b3c";

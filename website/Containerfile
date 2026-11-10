@@ -28,6 +28,7 @@ COPY --from=build /app/package.json /app/package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY --from=build /app/build ./build
 COPY --from=build /app/server.ts ./server.ts
+COPY --from=build /app/app/server/public-origin.server.ts ./app/server/public-origin.server.ts
 
 USER node
 EXPOSE 3000

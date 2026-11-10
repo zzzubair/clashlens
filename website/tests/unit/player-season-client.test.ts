@@ -188,12 +188,17 @@ describe("historical player-season client boundary", () => {
       );
       process.env.NODE_ENV = "test";
       process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-      const { createPythonClient } = await import("../../app/services/python.server");
-      const client = createPythonClient();
-      expect((await client.getPlayer("#2PP")).trackingState).toBe(trackingState);
-      expect((await client.getRefreshStatus(workId, "#2PP")).player?.trackingState).toBe(
-        trackingState,
-      );
+      expect(
+        (await (await import("../../app/services/players.server")).getPlayer("#2PP"))
+          .trackingState,
+      ).toBe(trackingState);
+      expect(
+        (
+          await (
+            await import("../../app/services/players.server")
+          ).getRefreshStatus(workId, "#2PP")
+        ).player?.trackingState,
+      ).toBe(trackingState);
     },
   );
 
@@ -275,8 +280,9 @@ describe("historical player-season client boundary", () => {
       );
       process.env.NODE_ENV = "test";
       process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-      const { createPythonClient } = await import("../../app/services/python.server");
-      const player = await createPythonClient().getPlayer("#2PP");
+      const player = await (
+        await import("../../app/services/players.server")
+      ).getPlayer("#2PP");
       expect(player.profile.seasonResetPending).toBe(pending);
       expect(player.profile.clanTag).toBe("#2CLAN");
       expect(player.currentDay?.startTrophies).toBe(expected);
@@ -357,8 +363,9 @@ describe("historical player-season client boundary", () => {
       );
       process.env.NODE_ENV = "test";
       process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-      const { createPythonClient } = await import("../../app/services/python.server");
-      const player = await createPythonClient().getPlayer("#2PP");
+      const player = await (
+        await import("../../app/services/players.server")
+      ).getPlayer("#2PP");
       expect(player.seasonDays[0].startTrophies).toBe(expected);
       expect(player.recentDays[0].startTrophies).toBe(expected);
       expect(player.recentDays.map((d) => [d.dayNumber, d.resetRank])).toEqual(
@@ -382,9 +389,10 @@ describe("historical player-season client boundary", () => {
     vi.stubGlobal("fetch", fetchMock);
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
 
-    const seasons = await createPythonClient().getPlayerSeasons("#2PP");
+    const seasons = await (
+      await import("../../app/services/players.server")
+    ).getPlayerSeasons("#2PP");
     expect(seasons).toEqual([
       {
         seasonId: "1785714000",
@@ -396,7 +404,9 @@ describe("historical player-season client boundary", () => {
       },
     ]);
 
-    const summary = await createPythonClient().getPlayerSeason("#2PP", "1785714000");
+    const summary = await (
+      await import("../../app/services/players.server")
+    ).getPlayerSeason("#2PP", "1785714000");
     expect(summary).toMatchObject({
       kind: "player-season-summary",
       seasonId: "1785714000",
@@ -449,8 +459,9 @@ describe("historical player-season client boundary", () => {
     vi.stubGlobal("fetch", fetchMock);
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
-    const summary = await createPythonClient().getPlayerSeason("#2PP", "1785714000");
+    const summary = await (
+      await import("../../app/services/players.server")
+    ).getPlayerSeason("#2PP", "1785714000");
     expect(summary.attackStarsUnknown).toBe(2);
     expect(summary.defenseStarsUnknown).toBe(1);
     expect(summary.dailyEntries).toHaveLength(2);
@@ -494,9 +505,10 @@ describe("historical player-season client boundary", () => {
     );
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
 
-    const summary = await createPythonClient().getPlayerSeason("#2PP", "1781499600");
+    const summary = await (
+      await import("../../app/services/players.server")
+    ).getPlayerSeason("#2PP", "1781499600");
 
     expect(summary.source).toBe("official_league_history");
     expect(summary.attackStars["3"]).toBeNull();
@@ -512,7 +524,10 @@ describe("historical player-season client boundary", () => {
       .fn()
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify({ ...seasonPayload(), attack_stars_unknown: undefined }),
+          JSON.stringify({
+            ...seasonPayload(),
+            attack_stars_unknown: undefined,
+          }),
           { status: 200 },
         ),
       )
@@ -540,15 +555,23 @@ describe("historical player-season client boundary", () => {
     vi.stubGlobal("fetch", fetchMock);
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
     await expect(
-      createPythonClient().getPlayerSeason("#2PP", "1785714000"),
+      (await import("../../app/services/players.server")).getPlayerSeason(
+        "#2PP",
+        "1785714000",
+      ),
     ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
     await expect(
-      createPythonClient().getPlayerSeason("#2PP", "1785714000"),
+      (await import("../../app/services/players.server")).getPlayerSeason(
+        "#2PP",
+        "1785714000",
+      ),
     ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
     await expect(
-      createPythonClient().getPlayerSeason("#2PP", "1785714000"),
+      (await import("../../app/services/players.server")).getPlayerSeason(
+        "#2PP",
+        "1785714000",
+      ),
     ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
   });
 
@@ -625,27 +648,45 @@ describe("historical player-season client boundary", () => {
     vi.stubGlobal("fetch", fetchMock);
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
-    await expect(createPythonClient().getPlayerSeasons("#2PP")).rejects.toMatchObject({
+    await expect(
+      (await import("../../app/services/players.server")).getPlayerSeasons("#2PP"),
+    ).rejects.toMatchObject({
       status: 502,
       payload: { error: "malformed" },
     });
     await expect(
-      createPythonClient().getPlayerSeason("#2PP", "1785714000"),
+      (await import("../../app/services/players.server")).getPlayerSeason(
+        "#2PP",
+        "1785714000",
+      ),
     ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
     await expect(
-      createPythonClient().getPlayerSeason("#2PP", "1785714000"),
+      (await import("../../app/services/players.server")).getPlayerSeason(
+        "#2PP",
+        "1785714000",
+      ),
     ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
     await expect(
-      createPythonClient().getPlayerSeason("#2PP", "1785714000"),
+      (await import("../../app/services/players.server")).getPlayerSeason(
+        "#2PP",
+        "1785714000",
+      ),
     ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
     await expect(
-      createPythonClient().getPlayerSeason("#2PP", "1785714000"),
+      (await import("../../app/services/players.server")).getPlayerSeason(
+        "#2PP",
+        "1785714000",
+      ),
     ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
     await expect(
-      createPythonClient().getPlayerSeason("#2PP", "1785714000"),
+      (await import("../../app/services/players.server")).getPlayerSeason(
+        "#2PP",
+        "1785714000",
+      ),
     ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
-    await expect(createPythonClient().getPlayerSeasons("#2PP")).rejects.toMatchObject({
+    await expect(
+      (await import("../../app/services/players.server")).getPlayerSeasons("#2PP"),
+    ).rejects.toMatchObject({
       status: 502,
       payload: { error: "malformed" },
     });

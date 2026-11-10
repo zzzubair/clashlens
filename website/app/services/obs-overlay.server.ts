@@ -8,20 +8,19 @@ import {
   type OverlayPlayer,
   type OverlaySettings,
 } from "../lib/obs-overlay";
-import { PythonApiError, requestJson, type GoogleAccountIdentity } from "./python.server";
+import { type LoginIdentity } from "../server/auth.server";
+import { searchLeaderboard } from "./leaderboard-search.server";
+import { getPlayer } from "./players.server";
+import { PythonApiError } from "./python-response.server";
+import { requestJson } from "./python-transport.server";
 
 /** The account's overlay, made on first ask, and its verified players. */
-export async function getOverlay(
-  identity: GoogleAccountIdentity,
-): Promise<OverlayAccount> {
-  const payload = await requestJson<unknown>(
-    "/v1/account/obs-overlay",
-    "GET",
-    undefined,
-    "obs-overlay",
-    undefined,
-    identity,
-  );
+export async function getOverlay(identity: LoginIdentity): Promise<OverlayAccount> {
+  const payload = await requestJson<unknown>("/v1/account/obs-overlay", {
+    method: "GET",
+    expectedKind: "obs-overlay",
+    identity: identity,
+  });
   const overlay = parseOverlayAccount(payload);
   if (overlay === null) throw new PythonApiError(502, { error: "malformed" });
   return overlay;
@@ -29,35 +28,31 @@ export async function getOverlay(
 
 /** Save the player shown and the settings; returns the new version. */
 export async function saveOverlay(
-  identity: GoogleAccountIdentity,
+  identity: LoginIdentity,
   tag: string | null,
   settings: OverlaySettings,
 ): Promise<number> {
-  const payload = await requestJson<{ version: number }>(
-    "/v1/account/obs-overlay",
-    "POST",
-    Buffer.from(JSON.stringify({ tag, settings }), "utf8"),
-    "obs-overlay-saved",
-    undefined,
-    identity,
-  );
+  const payload = await requestJson<{ version: number }>("/v1/account/obs-overlay", {
+    method: "POST",
+    body: Buffer.from(JSON.stringify({ tag, settings }), "utf8"),
+    expectedKind: "obs-overlay-saved",
+    identity: identity,
+  });
   return payload.version;
 }
 
 /** Replace the private link `replaces`; the old one shows nothing from then
  * on. Returns the new link. */
 export async function newOverlayLink(
-  identity: GoogleAccountIdentity,
+  identity: LoginIdentity,
   replaces: string,
 ): Promise<string> {
-  const payload = await requestJson<{ link?: unknown }>(
-    "/v1/account/obs-overlay/link",
-    "POST",
-    Buffer.from(JSON.stringify({ replaces }), "utf8"),
-    "obs-overlay",
-    undefined,
-    identity,
-  );
+  const payload = await requestJson<{ link?: unknown }>("/v1/account/obs-overlay/link", {
+    method: "POST",
+    body: Buffer.from(JSON.stringify({ replaces }), "utf8"),
+    expectedKind: "obs-overlay",
+    identity: identity,
+  });
   if (!isOverlayLinkId(payload.link))
     throw new PythonApiError(502, { error: "malformed" });
   return payload.link;
@@ -65,15 +60,10 @@ export async function newOverlayLink(
 
 /** What an overlay in OBS shows, by its private link; null once replaced. */
 export async function readOverlayLink(link: string): Promise<OverlayLink | null> {
-  const payload = await requestJson<unknown>(
-    `/v1/overlays/${encodeURIComponent(link)}`,
-    "GET",
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    [404],
-  );
+  const payload = await requestJson<unknown>(`/v1/overlays/${encodeURIComponent(link)}`, {
+    method: "GET",
+    allowedStatuses: [404],
+  });
   if ((payload as { error?: unknown } | null)?.error === "overlay_not_found") return null;
   const overlay = parseOverlayLink(payload);
   if (overlay === null) throw new PythonApiError(502, { error: "malformed" });
@@ -98,13 +88,11 @@ export function getOverlayPlayer(tag: string): Promise<OverlayPlayer> {
 }
 
 async function readPlayer(tag: string): Promise<OverlayPlayer> {
-  const { createPythonClient } = await import("./python.server");
-  const client = createPythonClient();
   // The Rank read starts with the page read; only a Legend I player uses it.
-  const searchRead = client.searchLeaderboard(tag).catch(() => null);
+  const searchRead = searchLeaderboard(tag).catch(() => null);
   let page;
   try {
-    page = await client.getPlayer(tag);
+    page = await getPlayer(tag);
   } catch (error) {
     if (error instanceof PythonApiError && error.status === 404)
       return { tag, state: "missing" };
