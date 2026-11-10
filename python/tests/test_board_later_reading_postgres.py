@@ -11,6 +11,7 @@ reading plus the 8 attacks. See docs/testing.md.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from board_later_reading_postgres_support import (
@@ -22,6 +23,7 @@ from reset_scenarios_postgres_support import (
     Battle,
     _ranked,
     _story,
+    attacks,
     day,
     defenses,
 )
@@ -31,7 +33,8 @@ from clashlens import queue_refresh
 # PROVEN is #CLU28LR2's numbers. EARLY's 02:54:19 reading came before that
 # defense showed, so the reading plus the attacks is 26 too many: its later
 # reading proves the other way of reading it, which the board cannot rank
-# from that reading. NEW_DAY attacks for 30 at 05:10, before its later reading.
+# from that reading, so it shows the day's own end, unproven. NEW_DAY
+# attacks for 30 at 05:10, before its later reading.
 # SLOW, read at 03:00 after that defense showed, has its Reset responses
 # saved last, as #CLU28LR2's board waited for other players' until 05:43.
 PROVEN, EARLY, NEW_DAY, SLOW = "#2PP", "#8PP", "#9PP", "#PPP"
@@ -81,12 +84,113 @@ def test_a_later_reading_proves_the_battles_after_an_older_one(
         board = story.served_board(end)
 
     assert unfinished == []
-    # Each day's own readings leave its end unproven: the board ranks a reading.
+    # Each day's own readings leave its end unproven: the board ranks a
+    # reading where a later one proves it, else the day's end.
     assert {tag: (days[tag]["state"], days[tag]["end"]) for tag in LATE} == dict.fromkeys(
         LATE, ("Partial", 5233))
-    assert _ranked(board) == {SLOW: 5233, PROVEN: 5233, NEW_DAY: 5233, EARLY: 4950}
+    assert _ranked(board) == {SLOW: 5233, PROVEN: 5233, NEW_DAY: 5233, EARLY: 5233}
     labels = {entry["tag"]: entry["confidence"] for entry in board["entries"]}
     # SLOW's 03:00 reading proves the battles after it, but no reading
     # proves the day's end: its Reset reading came while its last attack landed.
     assert labels == {
         SLOW: "uncertain", PROVEN: "confirmed", NEW_DAY: "confirmed", EARLY: "uncertain"}
+
+
+# Days whose Reset reading proves nothing, each as a player's day on the
+# board of 8, 9 or 10 November 2026, all ending 7 October here. Each one's
+# newest reading before the Reset is taken while a battle may or may not
+# show in it, or lags battles its log already lists.
+SWEDEN, KOREA, IRAQ, SINGAPORE, NEVER_CREDITED = "#2QQ", "#8QQ", "#9QQ", "#PQQ", "#YQQ"
+# Days a Reset reading contradicts: one read 3 minutes after a defense,
+# one with no battle near its reading.
+CONTRADICTED, CONTRADICTED_FAR = "#LQQ", "#GQQ"
+
+
+def test_an_unproven_day_shows_its_calculated_end(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """A day nothing contradicts that no reading proves yet shows its own
+    calculated end, uncertain, not its newest reading before the Reset,
+    until a later reading proves the reading plus the battles after it. A
+    day a reading contradicts shows that reading plus every battle stamped
+    after it, even when a battle may or may not show in it.
+
+    SWEDEN (#2Q2C2U8UL, 8 November) reads 4,899 at 03:53:36, 3 minutes
+    after a defense for 21, and loses 40 at 04:40: 4,859. KOREA
+    (#2JLY0P2U0, 9 November) reads 4,807 at 02:44:19, 3 minutes after a
+    defense for 20, then gains 278 over 8 attacks: 5,085. IRAQ (#28LQ0992U,
+    10 November) reads 5,155 at 04:53:18, 3 minutes after a defense for 40
+    and still without one for 28 at 04:20: 5,087. Their Reset readings lag
+    a battle (SWEDEN's and IRAQ's) or the attacks' credits (KOREA's).
+    SINGAPORE (#20GCYC90Q, 10 November) reads 4,970 at 01:44:31, 3 minutes
+    after a defense for 40, then loses 31: 4,939, which its Reset reading
+    matches while a new-day defense is in flight, so the day is Complete;
+    at 05:44:56 a reading lacks its three new-day attacks' credits and
+    leaves the day unproven. NEVER_CREDITED (#UQUQR02Q, 7 November) has an
+    attack for 40 at 09:11 its profile never shows: its day ends at 4,680
+    by its battles, 4,640 in the game, which its 05:44:56 reading proves."""
+    start, end = day(2), day(3)
+    evening = [Battle(_at(3, 0, 0) + timedelta(minutes=15 * n), amount, True)
+               for n, amount in enumerate((40, 40, 40, 40, 40, 40, 19, 19))]
+    battles = {
+        SWEDEN: [*attacks(start, 40, 40), *defenses(start, *[10] * 6),
+                 Battle(_at(3, 49, 59), -21, False), Battle(_at(4, 40, 0), -40, False)],
+        KOREA: [*defenses(start, *[40] * 6, 20), Battle(_at(2, 41, 11), -20, False), *evening],
+        IRAQ: [*attacks(start, 40, 40), *defenses(start, *[10] * 6),
+               Battle(_at(4, 20, 0), -28, False), Battle(_at(4, 50, 30), -40, False)],
+        SINGAPORE: [*attacks(start, 40, 40), *defenses(start, 20, *[10] * 5),
+                    Battle(_at(1, 41, 7), -40, False), Battle(_at(4, 55, 0), -31, False),
+                    *(Battle(end + timedelta(minutes=minutes), 30, True)
+                      for minutes in (20, 25, 30))],
+        NEVER_CREDITED: [*attacks(start, 40, 40), Battle(start + timedelta(hours=4, minutes=11),
+                                                         40, True),
+                         *defenses(start + timedelta(hours=5), *[5] * 7),
+                         Battle(_at(4, 55, 0), -5, False)],
+        CONTRADICTED: [*defenses(start, *[10] * 7), Battle(_at(2, 41, 11), -30, False),
+                       *(Battle(_at(3, 0, 0) + timedelta(minutes=30 * n), 40, True)
+                         for n in range(3))],
+    }
+    battles[CONTRADICTED_FAR] = [
+        replace(battle, at=_at(2, 0, 0)) if battle.at == _at(2, 41, 11) else battle
+        for battle in battles[CONTRADICTED]]
+    with domain_database(database_url) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, *battles)
+        for tag, played in battles.items():
+            story.players[tag].battles = played
+        story.reset(start, {SWEDEN: (4900, SEASON), KOREA: (5087, SEASON), IRAQ: (5135, SEASON),
+                            SINGAPORE: (5000, SEASON), NEVER_CREDITED: (4600, SEASON),
+                            CONTRADICTED: (5000, SEASON), CONTRADICTED_FAR: (5000, SEASON)})
+        story.reads(_at(1, 44, 31), {SINGAPORE: 4970})
+        story.reads(_at(2, 44, 19), {KOREA: 4807, CONTRADICTED: 4900, CONTRADICTED_FAR: 4900})
+        story.reads(_at(3, 53, 36), {SWEDEN: 4899})
+        story.reads(_at(4, 0, 0), {NEVER_CREDITED: 4645})
+        story.reads(_at(4, 53, 18), {IRAQ: 5155})
+        story.reset(end, {SWEDEN: (4899, SEASON), KOREA: (4807, SEASON), IRAQ: (5127, SEASON),
+                          SINGAPORE: (4939, SEASON), NEVER_CREDITED: (4640, SEASON),
+                          CONTRADICTED: (5037, SEASON), CONTRADICTED_FAR: (5037, SEASON)})
+        first_days = {tag: story.saved_day(tag, start)["state"] for tag in battles}
+        first = story.served_board(end)
+        story.reads(_at(5, 44, 56), {SINGAPORE: 4939, NEVER_CREDITED: 4640})
+        story.wait(timedelta(hours=1))
+        later_days = {tag: story.saved_day(tag, start)["state"] for tag in battles}
+        later = story.served_board(end)
+        unfinished = story.unfinished_jobs()
+
+    assert unfinished == []
+    assert first_days == {
+        **dict.fromkeys((SWEDEN, KOREA, IRAQ, NEVER_CREDITED), "Partial"),
+        SINGAPORE: "Complete", CONTRADICTED: "Inconsistent", CONTRADICTED_FAR: "Inconsistent"}
+    assert later_days == {**first_days, SINGAPORE: "Partial"}
+    shown = {SWEDEN: (4859, "uncertain"), KOREA: (5085, "uncertain"),
+             IRAQ: (5087, "uncertain"), SINGAPORE: (4939, "uncertain"),
+             NEVER_CREDITED: (4680, "uncertain"), CONTRADICTED: (5020, "uncertain"),
+             CONTRADICTED_FAR: (5020, "uncertain")}
+    assert _entries(first) == shown
+    # The board was rebuilt for the two days the later readings changed.
+    assert later["snapshot_id"] != first["snapshot_id"]
+    assert _entries(later) == {**shown, NEVER_CREDITED: (4640, "confirmed")}
+
+
+def _entries(board: dict[str, object] | None) -> dict[str, tuple[int, str]]:
+    _ranked(board)
+    return {entry["tag"]: (entry["trophies"], entry["confidence"]) for entry in board["entries"]}
