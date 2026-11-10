@@ -708,6 +708,9 @@ def test_monday_reset_with_sundays_ending_around_5000(
         unfinished = story.unfinished_jobs()
         members = story.board_members(monday)
         board = story.served_board()
+        from test_player_facts_postgres import assert_weekly_facts
+
+        assert_weekly_facts(story, sunday, monday, RAISED, DROPPED_WEEKLY, IN_FLIGHT)
     assert unfinished == []
     sunday_day = {
         "start": 5140, "end": 4940, "next_start": 5000, "automatic_loss": None,
@@ -821,6 +824,9 @@ def test_season_end_reset_and_its_first_day(
         story.wait(timedelta(hours=1))
         season_end_members = story.board_members(day_1)
         season_end_board = story.served_board(day_1)
+        from test_player_facts_postgres import assert_season_end_facts
+
+        assert_season_end_facts(story, OFFICIAL, day_28, day_1)
         # The nightly re-check reads Day 28's rows against the same rule.
         with psycopg.connect(story.connection_info) as connection:
             players = [int(row[0]) for row in connection.execute("SELECT id FROM players")]
@@ -1016,6 +1022,10 @@ def test_wednesday_reset_with_days_that_once_could_not_save(
         unfinished = story.unfinished_jobs()
         members = story.board_members(wednesday)
         board = story.served_board(wednesday)
+        from test_player_facts_postgres import assert_wednesday_facts
+
+        assert_wednesday_facts(story, tuesday, wednesday,
+                               (NO_START, FULL_WITH_GAP, NINTH, GAP_BEFORE, SHIELD_RUN))
     assert unfinished == []
     played = {"state": "Complete", "start": 5340, "automatic_loss": None, "raise": 0,
               "residual": 0}
@@ -1211,6 +1221,11 @@ def _assert_served_calendars(story: Story, tag: str, indexes: tuple[int, ...]) -
                     if suffix != "/today" and screen["season"] is not None:
                         assert screen["season"]["day_count"] == 28
                         assert screen["season"]["initial_trophies"] == 5000
+                    if suffix == "?battles=false":
+                        assert screen["army_units"] == {}
+                        assert not {"battle_statistics", "dashboard_season", "dashboard_windows", "dashboard_goal"}.intersection(screen)
+                        assert all("presentation" not in saved and not saved["offense_events"]
+                                   and not saved["defense_events"] for saved in screen["days"])
                 target = "/v1/analytics/armies?season=current"
                 response = client.get(target, headers=signed_headers(target))
                 assert response.status_code in (200, 404), response.text

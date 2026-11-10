@@ -11,12 +11,15 @@ from .analytics import (
 )
 from .api_db import ApiDatabase
 from .api_player_presentation import (
+    calendar_payload,
+    heatmap_kind,
     json_array,
     net_so_far,
     player_confidence,
     public_snapshot_confidence,
     shown_total,
 )
+from .api_player_season_facts import heatmap_day_numbers
 from .db_rows import text_value
 from .domain import (
     RANKED_DAY_DURATION,
@@ -386,6 +389,7 @@ def get_live_leaderboard(
         "focus_neighbors": _FOCUS_NEIGHBORS,
         "ordering_rule_version": _LIVE_ORDER_VERSION,
         "generated_at": now.astimezone(UTC).isoformat(),
+        "calendar": calendar_payload(now),
         "tracked_population": board.tracked_population,
         "total_entries": total_entries,
         # Tracked players left off until a profile names this Season.
@@ -606,6 +610,12 @@ def linked_season_days(
             "league": text_value(league),
             "entry": None if entry is None else text_value(entry),
         })
+    for player in players.values():
+        # One letter per day tuple, in the same order: played, shield or missing.
+        player["heatmap_day_kinds"] = "".join(heatmap_kind(kept[1], kept[2], kept[3])[0] for kept in player["days"])
+        player["heatmap_day_numbers"] = heatmap_day_numbers(
+            day.season_start, day.day_number, player["season_weeks"], player["days"]
+        )
     return list(players.values())
 
 

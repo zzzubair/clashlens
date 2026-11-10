@@ -1121,6 +1121,7 @@ def get_player_armies(
     result = {
         "tag": tag,
         "lens": lens,
+        "calendar": calendar_payload(now),
         "days": span,
         **({"season": True} if days == "season" else {}),
         "covered_days": [_iso(day[0]) for day in covered],

@@ -505,26 +505,13 @@ def season_days(page: Mapping[str, Any]) -> list[Mapping[str, Any] | None] | Non
     where none is published; None when the Season's days are not available.
     Weeks the weekly league record puts below Legend I have no Legend days."""
     ready = page["screen_ready"]
-    season = ready.get("season")
-    if season is None:
+    starts = ready.get("stats_day_starts")
+    if starts is None:
         return None
-    published = {datetime.fromisoformat(start) for start in ready["season_day_starts"]}
-    by_start = {
-        moment: day
-        for day in ready["days"]
-        if (moment := datetime.fromisoformat(day["ranked_day_start"])) in published
-    }
-    season_start = datetime.fromisoformat(season["start"])
-    below = {
-        datetime.fromisoformat(week["week_start"])
-        for week in ready.get("season_weeks") or ()
-        if week["league"] == "below_legend_i"
-    }
-    return [
-        by_start.get(season_start + timedelta(days=offset))
-        for offset in range(season["current_day_number"])
-        if season_start + timedelta(weeks=offset // 7) not in below
-    ]
+    published = set(ready["season_day_starts"])
+    by_start = {day["ranked_day_start"]: day for day in ready["days"]
+                if day["ranked_day_start"] in published}
+    return [by_start.get(start) for start in starts]
 
 
 def hit_rate(days: Sequence[Mapping[str, Any] | None]) -> str:
@@ -662,29 +649,6 @@ def alerts_on(site: Site, switch: Mapping[str, Any], colour: int) -> Reply:
     )
 
 
-# The website's codes that leave a day's 8 attacks and 8 defenses in doubt,
-# and that mean a battle may be missing from its logs: BATTLE_DOUBT_CODES and
-# GAP_CODES in website/app/lib/player-lookup-text.ts, which labels each day.
-_BATTLE_DOUBT_CODES = frozenset({
-    "perspective_disagreement",
-    "duplicate_contribution_disagreement",
-    "trophy_equation_mismatch",
-    "ranked_version_mismatch",
-    "attack_star_total_mismatch",
-    "defense_star_total_mismatch",
-    "truncated_reasons",
-    "attack_count_exceeds_eight",
-    "defense_count_exceeds_eight",
-})
-_GAP_CODES = frozenset({
-    "missing_start_battle_log_baseline",
-    "missing_end_battle_log_baseline",
-    "battle_log_row_gap",
-    "battle_log_overlap_gap",
-    "battle_log_stale_window",
-    "battle_log_row_count_exceeds_fifty",
-    "unclassified_rows",
-})
 # Discord shows at most 10 boxes and 6,000 characters across them in one
 # message of its older layout; each box's top line and the settings link
 # take the rest.
@@ -692,25 +656,6 @@ _SUMMARY_LENGTH = 3_700
 _SUMMARY_CARDS = 8
 # Players named in one "Not finished yet" card, so no card outgrows a DM.
 _WAITING_NAMES = 40
-
-
-def _day_status(day: Mapping[str, Any]) -> str:
-    """A finished day's label on the player page: presentDay in
-    website/app/lib/player-lookup-text.ts."""
-    codes = day["uncertainty_reasons"]
-    coverage = (
-        day["coverage"] if day["coverage"] in ("complete", "partial")
-        else day["completeness"]["state"]
-    )
-    doubtful = any(code in _BATTLE_DOUBT_CODES for code in codes) or (
-        not day["battles_complete"]
-        and (coverage != "complete" or any(code in _GAP_CODES for code in codes))
-    )
-    if day["net_trophy_change"] is None or doubtful:
-        return "Uncertain"
-    if day["state"] == "Complete" and day["confidence"] == "exact" and not codes:
-        return "Verified"
-    return "Calculated"
 
 
 def _adjustment(day: Mapping[str, Any], *kinds: str) -> Mapping[str, Any] | None:
@@ -735,10 +680,7 @@ def summary_day(
     day = days.get(reset - timedelta(days=1))
     if day is None:
         return {"tag": page["tag"], "name": page["name"], "finished": False} if unfinished else None
-    codes = day["uncertainty_reasons"]
-    battles = len(day["offense_events"]) + len(day["defense_events"])
-    # The page's own rule for a day that is not a Legend day.
-    if not battles and ("not_enrolled" in codes or "player_not_eligible" in codes):
+    if not day["presentation"]["show_in_day_summary"]:
         return None
     if day["state"] == "Live":
         return {"tag": page["tag"], "name": page["name"], "finished": False}
@@ -747,7 +689,7 @@ def summary_day(
         "tag": page["tag"],
         "name": page["name"],
         "finished": True,
-        "status": _day_status(day),
+        "status": {"verified": "Verified", "calculated": "Calculated", "uncertain": "Uncertain"}[day["presentation"]["day_summary_status"]],
         "version": day["version"],
         "day_number": day["season_day_number"],
         "end": None,

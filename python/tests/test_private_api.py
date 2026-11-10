@@ -916,6 +916,7 @@ def test_account_metadata_matches_database_and_http_acceptance(database_url: str
                 assert call(f"/v1/account/groups/{group_id}/comparison?days=4").status_code == 422
                 overlay = call("/v1/account/obs-overlay").json()
                 settings = overlay["settings_contract"]
+                assert settings == contract["overlay"]
                 assert settings["defaults"] == overlay["settings"]
                 assert settings["choices"]["bg"] == ["card", "none", "tint"]
                 assert settings["numeric_max"] == 4000
@@ -924,6 +925,7 @@ def test_account_metadata_matches_database_and_http_acceptance(database_url: str
                 board = client.get("/v1/leaderboards/live", headers=signed_headers("/v1/leaderboards/live")).json()
                 assert board["entries"] == []
                 assert board["focus_neighbors"] == 5
+                assert board["calendar"] == listing["calendar"]
         finally:
             database.close()
 

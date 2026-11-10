@@ -12,6 +12,7 @@ from bot.alerts import AlertLoop, Unreachable
 from bot.discord_app import DiscordMessenger, lay_out_notice
 from bot.replies import GREY, Reply, Site, say
 from bot.summaries import Summary, SummaryLoop
+from clashlens.api_player_presentation import day_presentation
 
 SITE = Site("https://clashlens.test")
 RESET = datetime(2026, 10, 7, 5, tzinfo=UTC)
@@ -20,7 +21,7 @@ RESET = datetime(2026, 10, 7, 5, tzinfo=UTC)
 def _day(start: datetime, **fields: object) -> dict:
     """A player page day as the private API sends it: a Complete, exact day
     with all 8 of each battle, 5,000 to 5,080."""
-    return {
+    result = {
         "ranked_day_start": start.isoformat(), "version": 1, "season_day_number": 2,
         "state": "Complete", "confidence": "exact", "coverage": "complete",
         "completeness": {"state": "complete"}, "uncertainty_reasons": [],
@@ -30,6 +31,8 @@ def _day(start: datetime, **fields: object) -> dict:
         "attack_count": 8, "attack_gain": 320, "defense_count": 8, "defense_loss": 240,
         **fields,
     }
+    result["presentation"] = day_presentation(result, is_current=False)
+    return result
 
 
 def _page(tag: str, *days: dict, name: str = "Wanderer") -> dict:

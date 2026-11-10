@@ -543,6 +543,7 @@ class SeasonPages:
                     "current_day_number": day.day_number,
                 },
                 "season_day_starts": starts,
+                "stats_day_starts": starts,
                 "days": [
                     {"ranked_day_start": start, "attack_count": attacks,
                      "attack_three_star_count": stars}
@@ -606,6 +607,7 @@ class ResetRound(AlertStore):
                     "current_day_number": day.day_number,
                 },
                 "season_day_starts": [start.isoformat() for start in starts],
+                "stats_day_starts": [start.isoformat() for start in starts],
                 "days": [
                     {"ranked_day_start": start.isoformat(),
                      "attack_three_star_count": results[start][0],

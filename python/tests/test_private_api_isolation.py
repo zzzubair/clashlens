@@ -10,6 +10,7 @@ from test_private_api import NOW, NOW_SECONDS, TS_CURRENT, json_body, signed_hea
 
 from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
+from clashlens.api_player_presentation import calendar_payload
 
 
 @pytest.fixture(params=[("google", "google"), ("google", "discord")])
@@ -125,6 +126,7 @@ def test_direct_reads_ignore_guessed_owner_and_do_not_publish_membership(account
             "username": other["username"],
             "display_name": other["username"],
             "verified_players": [],
+            "calendar": calendar_payload(NOW),
         }
         assert call(client, owner, "GET", "/v1/account/summary").json() == {
             "username": owner["username"],

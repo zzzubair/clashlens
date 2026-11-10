@@ -24,6 +24,7 @@ from clashlens import (
 )
 from clashlens.api_db import ApiDatabase
 from clashlens.api_requests import RequestBinding
+from clashlens.domain import ranked_day_for
 from clashlens.profile import PROFILE_PARSER_VERSION
 from clashlens.verification import VerificationOutcome
 
@@ -115,11 +116,16 @@ def test_groups_public_user_and_multi_account_stay_separate(
                     ],
                 }
             ]
-            assert api_accounts.get_public_user(database, "groupowner", now=NOW) == {
+            public_user = api_accounts.get_public_user(database, "groupowner", now=NOW)
+            assert public_user == {
                 "username": "groupowner",
                 "display_name": "Group Owner",
                 "verified_players": [],
+                "calendar": public_user["calendar"],
             }
+            # The request's own Legend day, whatever the cards hold.
+            assert public_user["calendar"]["as_of"] == NOW.isoformat()
+            assert public_user["calendar"]["day_end"] == ranked_day_for(NOW).end.isoformat()
             assert api_accounts.get_multi_account_summary(database, account_id) == {
                 "username": "groupowner",
                 "display_name": "Group Owner",
@@ -164,7 +170,8 @@ def test_groups_public_user_and_multi_account_stay_separate(
                 (player["tag"], player["name"]) for player in public_user["verified_players"]
             ] == [("#2PP", None)]
             assert summary["verified_players"] == [{"tag": "#2PP", "name": None}]
-            assert "id" not in str(public_user).lower()
+            # No account or row id; the calendar's public Season id is not one.
+            assert "id" not in str({**public_user, "calendar": None}).lower()
             assert "id" not in str(summary).lower()
         finally:
             database.close()

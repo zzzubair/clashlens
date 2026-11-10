@@ -8,6 +8,12 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from . import api_leaderboard, api_player_lookup, live_board
+from .api_dashboard_facts import (
+    dashboard_goal,
+    dashboard_season,
+    dashboard_windows,
+    rival_season,
+)
 from .api_db import ApiDatabase
 from .api_player_presentation import (
     PLAYER_SCREEN_READY_VERSION,
@@ -20,6 +26,7 @@ from .api_player_presentation import (
     summary_bounds_payload,
     withhold_unsupported_entries,
 )
+from .api_player_season_facts import historical_facts, player_facts
 from .army_decoder import SIEGE_TROOP_IDS, DecodedArmy, decode_army_share_code
 from .catalog import unit_label
 from .db_rows import text_value
@@ -103,9 +110,13 @@ def read_player_page(
     now: datetime,
     freshness_seconds: int,
     battles: bool = True,
+    goal_rank: int | None = None,
+    dashboard: bool = False,
 ) -> dict[str, Any] | None:
     """A player's page. Without ``battles``, each day keeps its totals but
-    lists none of its battles, and no army is named."""
+    lists none of its battles, and no army is named. Only ``dashboard``,
+    or a ``goal_rank``, adds the Dashboard's Season, window and rival facts."""
+    dashboard = dashboard or goal_rank is not None
     metadata_join, metadata_columns = _current_profile_metadata()
     # A player who has not played yet this Season shows the newest
     # profile that ranks them at 5,000, as the Live Leaderboard does.
@@ -360,9 +371,6 @@ def read_player_page(
     for day in days.values():
         end = day["ranked_day_end"]
         day["reset_rank"] = None if end is None else ranks.get(datetime.fromisoformat(end))
-        if not battles:
-            # Its totals and battles_complete were worked out from them.
-            day["offense_events"], day["defense_events"] = [], []
     data_quality = []
     if age_seconds > freshness_seconds:
         data_quality.append(
@@ -412,7 +420,7 @@ def read_player_page(
                 "detail": "The official league history and ranked-day publication disagree, so season days are withheld.",
             }
         )
-    return {
+    result = {
         "tag": text_value(row[0]),
         "name": text_value(row[3]),
         "trophies": int(row[4]),
@@ -481,7 +489,9 @@ def read_player_page(
                 event.get("army_share_code")
                 for day in days.values()
                 for event in (*day["offense_events"], *day["defense_events"])
-            ),
+            )
+            if battles
+            else {},
             "provenance": {
                 "source": "api_player_daily_logs",
                 "observed_at": observed_at.isoformat(),
@@ -504,6 +514,30 @@ def read_player_page(
             },
         },
     }
+
+    recent, season, current = player_facts(result, now, battles=battles)
+    ready = result["screen_ready"]
+    if dashboard:
+        ready["rival_season"] = rival_season(ready["season"], recent, season, current)
+    if battles and dashboard:
+        ready["dashboard_season"] = dashboard_season(ready["season"], recent, season, current)
+        if ready["dashboard_season"] is not None:
+            dashboard_ends = {day["start"]: day["end_trophies"] for day in ready["dashboard_season"]["days"]}
+            for day in ready["days"]:
+                if day["ranked_day_start"] in dashboard_ends:
+                    day["display_end"]["dashboard"] = dashboard_ends[day["ranked_day_start"]]
+        ready["dashboard_windows"] = dashboard_windows(ready["dashboard_season"])
+    elif battles:
+        for day in ready["days"]:
+            day["display_end"].pop("dashboard", None)
+    if battles and goal_rank is not None:
+        ready["dashboard_goal"] = dashboard_goal(connection, result, goal_rank)
+    if not battles:
+        for day in ready["days"]:
+            day["offense_events"], day["defense_events"] = [], []
+            for key in ("display_start", "display_start_by_reference", "display_end", "presentation"):
+                day.pop(key, None)
+    return result
 
 
 def army_units(codes: Iterable[str | None]) -> dict[str, dict[str, Any]]:
@@ -867,6 +901,9 @@ def get_player_season_summary(
                     datetime.fromtimestamp(int(official_season_id), UTC),
                 )
             ]
+            # Shaped from the Season's dates, which come from its id as the
+            # website's pastSeasonShape did.
+            historical_facts(result)
             return result
         if history is None:
             return None
@@ -874,7 +911,7 @@ def get_player_season_summary(
             "SELECT id FROM players WHERE normalized_tag = %s", (normalized_tag,)
         ).fetchone()[0]
         final_rank = season_final_rank(connection, int(player_id), history["season_end"])
-        return {
+        result = {
             "kind": "player-season-summary",
             "tag": normalized_tag,
             "official_season_id": official_season_id,
@@ -906,6 +943,9 @@ def get_player_season_summary(
             "source": "official_league_history",
             "official_history": _official_history_payload(history),
         }
+
+        historical_facts(result)
+        return result
 
 
 def _known_players_sql(opening_reset: datetime | None, name_filter: str) -> str:
