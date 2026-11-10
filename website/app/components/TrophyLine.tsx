@@ -107,7 +107,6 @@ export function TrophyLine({
   };
   // A Refresh can bring fewer Resets than the one picked; then nothing is.
   const shown = active === null || active >= marks.length ? null : resetText(active);
-  // The nearest Reset to a pointer across the chart.
   const nearest = (event: React.PointerEvent<HTMLDivElement>) => {
     const box = event.currentTarget.getBoundingClientRect();
     const slot = ((event.clientX - box.left) / box.width) * last;
@@ -204,7 +203,6 @@ export function TrophyLine({
             aria-hidden="true"
           />
         )}
-        {/* A dot at each Reset; the last, now, is filled. */}
         {marks.map(([slot, value], i) => (
           <span
             key={slot}

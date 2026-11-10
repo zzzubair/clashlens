@@ -187,7 +187,6 @@ export async function parseBoundedFormData(
   return values;
 }
 
-/** Fresh canonical idempotency UUID for one form render or action target. */
 export function freshIdempotencyKey(): string {
   return randomUUID();
 }
@@ -207,7 +206,6 @@ export function followUpIdempotencyKey(key: string, step: string): string {
   ].join("-");
 }
 
-/** Strict canonical lowercase UUID check for idempotency keys. */
 export function isIdempotencyKey(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -326,7 +324,7 @@ export function mapAccountNameError(error: unknown): AccountNameErrorOutcome {
   return { kind: "general", generalError: safeWebsiteError(error) };
 }
 
-/** True only for the documented unresolved Google-account response. */
+/** True only for the private API's documented account_not_found response. */
 export function isAccountNotFoundError(error: unknown): boolean {
   if (!isPythonApiErrorLike(error)) return false;
   if (error.status !== 403 && error.status !== 404) return false;

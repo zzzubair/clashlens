@@ -14,7 +14,6 @@ export function tone(value: number | null): string {
   return value === null || value === 0 ? "" : value > 0 ? "positive" : "negative";
 }
 
-/** "Last 7 days", "Whole Season · 11 days", or how many days the Season has had so far. */
 export function lastDaysLabel(asked: number | "season", span: number): string {
   const days = `${span} day${span === 1 ? "" : "s"}`;
   if (asked === "season") return `Whole Season · ${days}`;
@@ -22,7 +21,6 @@ export function lastDaysLabel(asked: number | "season", span: number): string {
   return `Last ${asked} days`;
 }
 
-/** The card's title row; `meta` sits at the right end. */
 export function CardHead({
   title,
   info,
@@ -30,7 +28,6 @@ export function CardHead({
   icon,
 }: {
   title: ReactNode;
-  /** The card's ⓘ, right after its title. */
   info?: ReactNode;
   meta?: ReactNode;
   icon?: IconName;
@@ -63,7 +60,6 @@ export function InfoTip({ label, children }: { label: string; children: ReactNod
   );
 }
 
-/** A choice flipped while looking at the card, such as 3 days or 7 days. */
 export function Switch<Value extends string>({
   label,
   options,
@@ -100,7 +96,6 @@ export function Name({ children }: { children: string }) {
   );
 }
 
-/** Shown in place of a card's numbers when there are none yet. */
 export function CardNote({ children }: { children: ReactNode }) {
   return <p className="dash-card-note">{children}</p>;
 }

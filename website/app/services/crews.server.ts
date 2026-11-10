@@ -51,7 +51,6 @@ import { createPythonClient } from "./python.server";
 // The player page never waits for this list; a late answer hides only the list.
 const PLAYER_CREWS_TIMEOUT_MS = 1_000;
 
-/** The signed-in account's crews. */
 export async function listCrews(identity: LoginIdentity): Promise<CrewList> {
   const payload = await requestJson<unknown>("/v1/account/crews", {
     method: "GET",
@@ -61,7 +60,6 @@ export async function listCrews(identity: LoginIdentity): Promise<CrewList> {
   return mapped(mapCrewList(payload));
 }
 
-/** Make a crew with some of the account's linked players; returns its id. */
 export async function createCrew(
   identity: LoginIdentity,
   crew: { name: string; size: number; tags: string[] },
@@ -79,7 +77,6 @@ export async function createCrew(
   return mapped(mapCreatedCrew(payload));
 }
 
-/** One crew the account is in: its name, places and members. */
 export async function getCrew(identity: LoginIdentity, crewId: string): Promise<Crew> {
   requireCrewId(crewId);
   const payload = await requestJson<unknown>(`/v1/account/crews/${crewId}`, {
@@ -108,7 +105,6 @@ export async function viewCrew(
   return crew;
 }
 
-/** The crews a player has a place in; none while crews are switched off. */
 export async function getPlayerCrews(tag: string): Promise<PlayerCrew[]> {
   if (!isCrewsEnabled()) return [];
   const payload = await requestJson<unknown>(
@@ -329,7 +325,6 @@ export async function getInvite(
   return mapped(mapInvitePreview(payload));
 }
 
-/** Join through an invite link with the picked accounts; returns the crew's id. */
 export async function acceptInvite(
   identity: LoginIdentity,
   code: string,
@@ -347,7 +342,6 @@ export async function acceptInvite(
   );
 }
 
-/** The account's linked Clash of Clans accounts, with whether each is in Legend League. */
 export async function linkedAccounts(identity: LoginIdentity): Promise<LinkedAccount[]> {
   const client = createPythonClient(identity);
   const summary = await client.getAccountSummary();
@@ -503,7 +497,6 @@ function loadFailure(request: Request, cause: unknown): WebsiteErrorResponse {
   return safeWebsiteError(cause);
 }
 
-/** The error code of a refused crew request, if it has one. */
 export function crewErrorCode(cause: unknown): string | null {
   const payload = (cause as { payload?: unknown } | null)?.payload;
   const code =
@@ -513,7 +506,6 @@ export function crewErrorCode(cause: unknown): string | null {
   return typeof code === "string" ? code : null;
 }
 
-/** What a crew page's form action answers. */
 export interface CrewActionData {
   intent: string;
   /** The key the page's forms send next: the same one until a final answer. */
@@ -523,7 +515,6 @@ export interface CrewActionData {
   invite: InviteLink | null;
 }
 
-/** A crew page's checked form, ready for one write. */
 export interface CrewForm {
   identity: LoginIdentity;
   crewId: string;

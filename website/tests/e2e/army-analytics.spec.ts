@@ -87,7 +87,6 @@ test("the top-bar Analytics link drops a chosen sort", async ({ page }) => {
     .getByRole("link", { name: "Analytics" })
     .click();
   await expect(page).toHaveURL(/\/analytics\/armies$/);
-  // Even back on the earlier page, the table is in its default order again.
   await page.goBack();
   await expect(usage).toHaveAttribute("aria-sort", "descending");
   await expect(name).not.toHaveAttribute("aria-sort");
@@ -124,7 +123,6 @@ test("Clan Castle Troops is a unit type of its own", async ({ page }) => {
     .getByRole("table", { name: "Army analytics results" })
     .getByRole("row");
   await expect(page.getByRole("heading", { name: "Troops", exact: true })).toBeVisible();
-  // A long list opens on its first 20 rows.
   await expect(rows).toHaveCount(21);
   await page.getByRole("button", { name: "Show all 31" }).click();
   await expect(rows).toHaveCount(32);
@@ -149,7 +147,6 @@ test("unit types change when JavaScript is off", async ({ browser }) => {
     const rows = page
       .getByRole("table", { name: "Army analytics results" })
       .getByRole("row");
-    // Every row shows, with no Show all to press.
     await expect(rows).toHaveCount(32);
     await expect(page.getByRole("button", { name: /^Show all/ })).toBeHidden();
 
@@ -255,7 +252,6 @@ test("retired IDs render honest labels, quantities and stars before and after na
     const row = page.getByRole("row").filter({ hasText: label });
     await expect(row).toContainText("1 of 2");
     await expect(row).toContainText("50.0%");
-    // Quantity, Usage, then 3-star, 2-star and 1-star.
     await expect(row.getByRole("cell").first()).toHaveText(String(quantity));
     await expect(row.getByRole("cell").nth(2)).toContainText("0 battles");
     await expect(row.getByRole("cell").nth(3)).toContainText("1 battle");

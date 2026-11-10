@@ -212,7 +212,6 @@ export async function getPlayerBases(tag: string, day: number): Promise<PastBase
   return { dayNumber: day, rows: nullable(payload.opponents, opponents) };
 }
 
-/** What the card reads need to know about the signed-in user. */
 export interface CardContext {
   client: PythonClient;
   /** The account the cards follow; always in Legend I. */
@@ -300,11 +299,6 @@ export function seasonData(page: PlayerPage): SeasonData {
   return { today: season.currentDayNumber, startMs: anchor, days };
 }
 
-/**
- * The selected account's Legend day for the Legend day card: the player
- * page's battles and totals, and the automatic defense loss from today's
- * read.
- */
 function legendDay(page: PlayerPage, today: PlayerToday | null): PlayerDay {
   const day = page.currentDay;
   const complete = day?.battlesComplete === true;
@@ -372,7 +366,6 @@ function clockData(page: PlayerPage): ClockData {
   };
 }
 
-/** The selected account's Season, with the board selector for its last Reset. */
 async function lastReset(ctx: CardContext, pages: PageReader) {
   const page = await pages(ctx.selected.tag);
   if (page === null) return null;
@@ -395,7 +388,6 @@ function unlessMissing<T>(read: Promise<T>): Promise<T | null> {
   });
 }
 
-/** The trophies at one rank of a board; null when the board or the rank is missing. */
 async function trophiesAt(
   rank: number,
   selector?: { officialSeasonId: string; dayNumber: number },
@@ -445,7 +437,6 @@ function rivalPlaces(rank: number, total: number): number[] {
   return Array.from({ length: stop - start + 1 }, (_, index) => start + index);
 }
 
-/** The rows at `places` in `entries`, each player once. */
 function rowsAt(entries: TrackedPlayerEntry[], places: number[]): TrackedPlayerEntry[] {
   const tags = new Set<string>();
   return places.flatMap((place) => {
@@ -476,7 +467,6 @@ async function rivalEntries(
   );
 }
 
-/** The rows around `tag` that one `board` reply holds, or null when `tag` is off it. */
 function rivalsIn(board: TrackedLeaderboard, tag: string): TrackedPlayerEntry[] | null {
   const rank = board.entries.find((entry) => entry.tag === tag)?.rank;
   return rank === undefined
@@ -710,7 +700,6 @@ async function groupWatchData(
   identity: LoginIdentity,
 ): Promise<GroupWatchData | null> {
   const { groups } = await ctx.client.listGroups();
-  // Oldest first; a group without a creation time sorts last, by name.
   const made = (item: ListedGroup) =>
     item.createdAt ? Date.parse(item.createdAt) : Number.POSITIVE_INFINITY;
   const ordered = [...groups].sort(

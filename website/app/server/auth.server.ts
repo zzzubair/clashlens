@@ -47,7 +47,7 @@ export class OAuthCallbackError extends Error {
   }
 }
 
-/** Google subject bound: non-empty, bounded, no whitespace or control chars. */
+/** Provider subject bound: non-empty, bounded, no whitespace or control chars. */
 export function isProviderSubject(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -60,7 +60,6 @@ export function isProviderSubject(value: unknown): value is string {
   );
 }
 
-/** Constant-time string comparison for state and nonce values. */
 export function constantTimeEqual(left: string, right: string): boolean {
   const leftBytes = Buffer.from(left, "utf8");
   const rightBytes = Buffer.from(right, "utf8");

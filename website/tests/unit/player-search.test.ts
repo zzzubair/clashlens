@@ -41,7 +41,6 @@ describe("search suggestions", () => {
     expect(suggestionsView("ali", "ali", { state: "idle", data: failed }).state).toBe(
       "shown",
     );
-    // Dismissing clears the requested text.
     expect(suggestionsView("ali", "", { state: "idle", data: failed }).state).toBe(
       "closed",
     );

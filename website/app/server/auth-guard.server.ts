@@ -1,7 +1,7 @@
 /**
  * Server-only auth guard for account loaders and actions.
  *
- * The guard reads the signed login cookie and yields the validated Google
+ * The guard reads the signed login cookie and yields the validated provider
  * identity for the private Python client. A page opened without a login
  * answers 401 with the current page as a validated same-origin return path,
  * and the site shows that page's "needs an account" box in place. A form

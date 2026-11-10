@@ -23,7 +23,6 @@ const count = (value: number | null) =>
 const words = (value: string) => (/[a-z]/i.test(value) ? "summary-words" : undefined);
 export const per = (total: number | null, by: number | null) =>
   total === null || !by ? null : total / by;
-// How much of a side's known battles one star count is, as its bar's width.
 const share = (stars: Array<number | null>, star: number) => {
   const known = stars.reduce<number>((sum, each) => sum + (each ?? 0), 0);
   return {

@@ -330,14 +330,12 @@ it("shows each Live row's places moved and trophies won since the last Reset", a
     "",
     '<span class="today-change" data-sign="up">+180</span>',
   ]);
-  // The heading says once what the arrows count from.
   expect(html).toContain(
     '<th scope="col" class="move-cell"><span class="move-head">Since Reset</span></th>',
   );
   expect(html).toContain(
     '<th scope="col" class="today-cell" title="Trophies won or lost since the last Reset">Today</th>',
   );
-  // The old trophy gap to the row above is gone; the change since Reset took its place.
   expect(html).not.toContain("To player above");
 });
 
@@ -589,7 +587,6 @@ it("shows all 50 rows of a page under one range, with a small pager there and th
   expect(html).toMatch(
     /<nav aria-label="Previous and next page" class="standings-steps"><span class="button button-secondary" aria-hidden="true">‹<\/span><a class="button button-secondary" rel="next" aria-label="Next 50" title="Next 50" href="[^"]*page=2"[^>]*>›<\/a><\/nav>/,
   );
-  // The foot has the same pager, with the range between its steps.
   expect(html.match(/aria-label="Leaderboard pages"/g)).toHaveLength(1);
   expect(html).toMatch(
     /<nav aria-label="Leaderboard pages" class="standings-pagination"><span class="button button-secondary" aria-hidden="true">‹<\/span><span class="standings-range">1–50<span class="standings-total"> of 9,000<\/span><\/span><a class="button button-secondary" rel="next" aria-label="Next 50" title="Next 50" href="[^"]*page=2"[^>]*>›<\/a><\/nav>/,

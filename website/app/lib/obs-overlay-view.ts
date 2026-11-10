@@ -183,7 +183,7 @@ function demoBattle(kind: OverlayBattle["kind"], i: number): OverlayBattle {
  * What the overlay shows, from its settings alone (`overlaySource`):
  *
  * - `none`: no player picked; it says "Pick a player".
- * - `player`: the picked player, read every 3 seconds. A failed read keeps
+ * - `player`: the picked player, read every 20 seconds. A failed read keeps
  *   the last view and marks it offline; the next read tries again.
  * - `demo`: a made-up day that plays a battle every 12 seconds, named after
  *   the picked player when one is read.

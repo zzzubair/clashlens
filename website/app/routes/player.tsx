@@ -424,7 +424,6 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         kind: gap.kind,
       }))
     : [];
-  // The Season summary's heat map, from the days the log shows.
   const heatMap = shape ? (
     <SeasonHeatMap
       days={heatDays(history, shape.seasonStart)}
@@ -525,7 +524,6 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     return () => clearTimeout(timer);
   }, [deadline, refreshSettled, resetRefresh]);
 
-  // Only `polling` reads the work's status.
   const workId = refresh.phase === "polling" ? refresh.status.workId : null;
   useEffect(() => {
     if (!workId || refreshResourcePath === null || deadline === null) return;
@@ -764,7 +762,6 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             <LiveRank rank={data.liveRank} tag={trackedPlayer.tag} />
           )}
         </div>
-        {/* When the count was saved, and Refresh, beside the count it acts on. */}
         <PlayerFreshness profile={trackedPlayer.profile} />
         <PlayerActions tag={trackedPlayer.tag}>
           <refreshFetcher.Form
@@ -803,7 +800,6 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             </button>
           </refreshFetcher.Form>
         </PlayerActions>
-        {/* Today's battles so far, under the trophies they moved. */}
         {today && !seasonExpired && !trackedPlayer.profile.seasonResetPending ? (
           <TodaySlots day={today} />
         ) : null}
@@ -1018,7 +1014,6 @@ function PlayerFreshness({ profile }: { profile: PlayerProfile }) {
   );
 }
 
-// An age in a few words: "just now", "15 min ago", "2 hours ago", "3 days ago".
 function ago(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
   if (minutes < 1) return "just now";

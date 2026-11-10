@@ -14,7 +14,6 @@ import type { Route } from "./+types/crews.$crewId.settings";
 const NO_STORE = { "Cache-Control": "no-store" };
 const INTENTS = ["rename", "resize", "revoke", "transfer", "delete"] as const;
 
-/** Back leads to the crew. */
 export const handle: BackHandle = {
   back: (match) => {
     const crew = (match.loaderData as { crew?: Crew | null } | undefined)?.crew;
