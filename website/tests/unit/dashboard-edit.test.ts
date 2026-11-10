@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   CARDS_FROM_LOAD,
@@ -11,6 +11,7 @@ import {
   type DashboardEdit,
   type DashboardEditEvent,
 } from "../../app/components/DashboardState";
+import { saveSettings } from "../../app/components/DashboardGrid";
 import { defaultSettings, type CardId } from "../../app/lib/dashboard";
 import type { CardReads } from "../../app/lib/dashboard-cards";
 import type {
@@ -76,6 +77,37 @@ describe("Customise", () => {
     expect(cancelled).toEqual({ mode: "viewing", status: "Changes discarded" });
     expect(edit([{ type: "change", draft: [], status: "x" }], cancelled)).toBe(cancelled);
     expect(edit([{ type: "dragStart", card: "goal" }], cancelled)).toBe(cancelled);
+  });
+
+  it("ends View as Customise on Done at once, waiting for no save", () => {
+    const done = edit([
+      { type: "customise", layout: "default" },
+      { type: "change", draft: ["goal", "legend-day"], status: "Moved Goal earlier" },
+      { type: "kept" },
+    ]);
+    expect(done).toEqual({ mode: "viewing", status: "Moved Goal earlier" });
+  });
+
+  it("never sends a settings save in View as, whatever asks for one", () => {
+    const fetcher = { data: undefined, submit: vi.fn(async () => {}) };
+    const settings = defaultSettings();
+    for (const next of [
+      { ...settings, layout: ["goal", "legend-day"] as CardId[] },
+      { ...settings, layout: "default" as const },
+      { ...settings, goal: 50 },
+      { ...settings, group: "group-1" },
+    ])
+      saveSettings(fetcher, "#2PP8QLY0", "key", next);
+    expect(fetcher.submit).not.toHaveBeenCalled();
+    // The owner's own dashboard still saves.
+    saveSettings(fetcher, null, "key", settings);
+    expect(fetcher.submit).toHaveBeenCalledOnce();
+    expect(fetcher.submit).toHaveBeenCalledWith(
+      expect.objectContaining({ idempotencyKey: "key" }),
+      {
+        method: "post",
+      },
+    );
   });
 
   it("opens Add a card from an empty dashboard straight into Customise", () => {

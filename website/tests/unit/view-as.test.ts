@@ -50,6 +50,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LinkedPlayerCard } from "../../app/lib/account-contracts";
 import { sanitizeEvent } from "../../app/lib/analytics";
+import { DEFAULT_LAYOUT } from "../../app/lib/dashboard";
 import { middleware as rootMiddleware } from "../../app/root";
 
 const mocks = vi.hoisted(() => ({
@@ -364,7 +365,7 @@ describe("who can View as", () => {
 describe("the owner's View as", () => {
   beforeEach(() => mocks.readLoginIdentity.mockResolvedValue(OWNER));
 
-  it("shows the viewed player's cards in the owner's own layout, without the owner's Watchlists", async () => {
+  it("shows the viewed player's cards in the default layout, not the owner's saved one", async () => {
     const { data, headers } = await load(viewUrl("2pp8qly0"));
     expect(data).toMatchObject({
       kind: "signed-in",
@@ -372,11 +373,12 @@ describe("the owner's View as", () => {
       viewAs: { tag: VIEWED, name: "Curtypie" },
       players: [card(VIEWED, "Curtypie")],
       selectedTag: VIEWED,
-      // The owner's own settings: never the viewed player's account's.
-      settings: { layout: ["goal", "group-watch"], goal: 50 },
+      // The default layout, though the owner saved ["goal", "group-watch"],
+      // with the owner's own card settings: never the viewed account's.
+      settings: { layout: "default", goal: 50 },
     });
     if (data.kind !== "signed-in") throw new Error("expected signed in");
-    expect(Object.keys(data.cards)).toEqual(["goal"]);
+    expect(Object.keys(data.cards).sort()).toEqual([...DEFAULT_LAYOUT].sort());
     await Promise.all(Object.values(data.cards));
     expect(client.getPlayer).toHaveBeenCalledWith(VIEWED, true, true, 50);
     expect(client.getPlayer.mock.calls.map(([tag]) => tag)).not.toContain(MINE);
@@ -416,14 +418,21 @@ describe("the owner's View as", () => {
     expect(theirs).not.toContain(VIEWED.slice(1));
   });
 
-  it("marks View as read only, with Exit and no Customise or Link player", async () => {
+  it("marks View as read only, with Exit and Customise but no Link player", async () => {
     const html = await page((await load(viewUrl(VIEWED))).data);
     expect(text(html)).toContain("Viewing as Curtypie (#2PP8QLY0) – read only");
     expect(html).toContain('href="/"');
     expect(html).toContain("Exit");
-    expect(html).not.toContain("Customise");
+    expect(html).toContain('aria-label="Customise dashboard"');
     expect(html).not.toContain("Link player");
-    expect(text(html)).toContain("Your Watchlists stay off while you view as");
+    // Watchlists, once added in Customise, stay the owner's and stay off.
+    const viewed = (await load(viewUrl(VIEWED))).data;
+    if (viewed.kind !== "signed-in") throw new Error("expected signed in");
+    const withWatchlist = await page({
+      ...viewed,
+      settings: { ...viewed.settings, layout: ["group-watch"] },
+    });
+    expect(text(withWatchlist)).toContain("Your Watchlists stay off while you view as");
     const missing = await page((await load(viewUrl("#9999999"))).data);
     expect(text(missing)).toContain("Player not found");
   });

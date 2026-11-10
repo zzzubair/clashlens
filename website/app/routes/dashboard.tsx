@@ -149,7 +149,10 @@ export async function loader({ request }: Route.LoaderArgs) {
     playersUnavailable = false;
   }
 
-  const settings = readSettings(account.preferences.dashboard);
+  const ownSettings = readSettings(account.preferences.dashboard);
+  // View as opens on the default layout, never the owner's own.
+  const settings =
+    viewing === undefined ? ownSettings : { ...ownSettings, layout: "default" as const };
   const requested = normalizePlayerTag(query.get("player") ?? "");
   const only = query.get("cards")?.split(",");
   const selected =
@@ -575,7 +578,8 @@ function SignedInDashboard({
         <>
           {dayOver ? <NewDayNotice /> : null}
           <Dashboard
-            key={selected.tag}
+            // A card order changed in View as stays with that view alone.
+            key={viewAs ? `view-as ${selected.tag}` : selected.tag}
             tag={selected.tag}
             viewAs={viewAs?.tag ?? null}
             settings={settings}
