@@ -33,7 +33,6 @@ from .async_runtime import (
     wait_or_stop,
 )
 from .battle_log_schedule import BattleLogSchedule
-from .collection_rules import COLLECTION_WINDOW
 from .collector_db import (
     REVISIT_INTERVAL,
     CollectorDatabase,
@@ -50,6 +49,7 @@ from .collector_http import (
     ProviderFailure,
     retry_after_seconds,
 )
+from .domain import RESET_COLLECTION_WINDOW
 from .operating import SchedulingDelayMetrics
 from .response_fields import content_fingerprint
 from .spool import Spool, SpoolError
@@ -814,7 +814,7 @@ class Collector:
                         self.database.expire_settlement_checks, now
                     )
                     if expired == 0:
-                        closes = boundary - timedelta(days=1) + COLLECTION_WINDOW
+                        closes = boundary - timedelta(days=1) + RESET_COLLECTION_WINDOW
                         next_expiry_at = closes if closes > now else closes + timedelta(days=1)
                 if now >= boundary and boundary != scheduled_boundary:
                     async with self._regular_admission_lock:

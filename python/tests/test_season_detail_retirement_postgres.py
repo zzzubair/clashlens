@@ -335,6 +335,11 @@ def test_finalize_preview_then_full_retirement_cycle(database_url: str) -> None:
                 )
                 assert before_player is not None and len(before_player["daily_entries"]) == 28
                 assert before_army is not None
+                close = SEASON_END + timedelta(days=7)
+                early = finalize_season_detail(connection, SEASON, close - timedelta(microseconds=1))
+                assert early["status"] == "blocked" and early["reason"] == "season_close_wait"
+                assert early["eligible_at"] == close.isoformat()
+                assert finalize_season_detail(connection, SEASON, close)["status"] == "ready"
                 preview = finalize_season_detail(connection, SEASON, CLOSE_AT)
                 assert preview["status"] == "ready"
                 assert preview["player_summary_count"] == 1

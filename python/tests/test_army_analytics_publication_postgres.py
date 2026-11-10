@@ -519,6 +519,10 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 expected["publication_identity"] = (
                     f"army-publication-{selection_hash[:24]}-{expected_result_hash[:16]}"
                 )
+                expected["season_bounds"] = {
+                    "id": SEASON_ID, "start": "2026-07-13T05:00:00+00:00",
+                    "end": "2026-08-10T05:00:00+00:00", "day_count": 28,
+                    "last_day_start": "2026-08-09T05:00:00+00:00"}
                 assert first == expected
                 category_columns = {
                     "troops": "home_troops",

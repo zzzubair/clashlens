@@ -15,11 +15,15 @@ from __future__ import annotations
 
 import json
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import psycopg
 from domain_test_support import as_api_role, domain_database, store_observation, text
+from fastapi.testclient import TestClient
+from test_private_api import NOW_SECONDS, TS_CURRENT, signed_headers
 from test_reconciliation_postgres import BATTLE_FIXTURE, PROFILE_FIXTURE, _processor
 
 from clashlens import (
@@ -35,8 +39,10 @@ from clashlens import (
     past_reset_pacing,
     reconcile_pass,
 )
+from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
 from clashlens.army_analytics import ArmyAnalyticsSelection
+from clashlens.collector_db import CollectorDatabase
 from clashlens.db import Database
 from clashlens.domain import _ALLOCATION_THRESHOLDS
 from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
@@ -443,10 +449,13 @@ class Story:
         api = ApiDatabase(as_api_role(self.connection_info))
         api_reader = api_analytics.ArmyAnalyticsReader(api.pool)
         try:
-            return api_analytics.get_army_analytics(api_reader, ArmyAnalyticsSelection.parse(
+            result = api_analytics.get_army_analytics(api_reader, ArmyAnalyticsSelection.parse(
                 lens="offense", season="current", start_day=1, end_day=28,
                 population="top-10", category="army-types", sort="average-trophies",
             ), now=at)
+            assert result["season_bounds"]["day_count"] == 28
+            assert result["season_bounds"]["id"] == result["selection"]["season"]
+            return result
         finally:
             api.close()
 
@@ -613,6 +622,7 @@ def test_monday_reset_of_a_sunday_below_5000_only_after_its_loss(
         unfinished = story.unfinished_jobs()
         members = story.board_members(monday)
         board = story.served_board()
+        _assert_served_calendars(story, AFTER_LOSS, (4, 5))
 
     assert unfinished == []
     assert saved == {
@@ -793,6 +803,7 @@ def test_season_end_reset_and_its_first_day(
         opening = {tag: (5000, new) for tag in story.players}
         opening.update({LATE_RESET: (5400, new), DISAGREES: (5290, new),
                         DROPPED: (5320, None)})
+        _assert_served_calendars(story, LATE_RESET, (0, 1))
         story.reset(day_1, opening)
         story.reads(day_1 + timedelta(minutes=20), {
             tag: trophies for tag, (trophies, _) in opening.items()})
@@ -800,6 +811,7 @@ def test_season_end_reset_and_its_first_day(
             story.read(tag, day_1 + timedelta(hours=1), 5000)
         story.run_worker()
         published_board = story.served_board(day_1)
+        _assert_served_calendars(story, OFFICIAL, (2, 3))
         # The official final totals arrive at 11:00 and include each
         # automatic loss; DISAGREES's is 30 below the calculated end.
         finals = {**ends, END_LOSS: 5240, DISAGREES: 5290}
@@ -1176,3 +1188,112 @@ def test_reset_at_full_size(database_url: str, archive_server, monkeypatch) -> N
     assert second_page is not None
     assert {entry["tag"]: entry["trophies"] for entry in second_page["entries"]} == {
         tag: 5000 for tag in unplayed}
+
+
+def _assert_served_calendars(story: Story, tag: str, indexes: tuple[int, ...]) -> None:
+    cases = json.loads((Path(__file__).parents[2] / "testdata/w6-domain-contract.json").read_text())["calendars"]
+    now = datetime.fromisoformat(cases[indexes[0]]["as_of"])
+    api = ApiDatabase(as_api_role(story.connection_info))
+    try:
+        app = create_app(api, keys={("typescript-website", "current"): TS_CURRENT},
+                         clock=lambda: NOW_SECONDS, now=lambda: now, dashboard_enabled=True)
+        with TestClient(app) as client:
+            for index in indexes:
+                expected = cases[index]
+                now = datetime.fromisoformat(expected["as_of"])
+                for suffix in ("", "?battles=false", "/today"):
+                    target = f"/v1/players/%23{tag[1:]}{suffix}"
+                    response = client.get(target, headers=signed_headers(target))
+                    assert response.status_code == 200, response.text
+                    payload = response.json()
+                    screen = payload if suffix == "/today" else payload["screen_ready"]
+                    assert screen["calendar"] == expected
+                    if suffix != "/today" and screen["season"] is not None:
+                        assert screen["season"]["day_count"] == 28
+                        assert screen["season"]["initial_trophies"] == 5000
+                target = "/v1/analytics/armies?season=current"
+                response = client.get(target, headers=signed_headers(target))
+                assert response.status_code in (200, 404), response.text
+                payload = response.json()
+                if response.status_code == 200 or payload["error"] == "no_completed_legend_days":
+                    assert payload["calendar"] == expected
+    finally:
+        api.close()
+
+
+def test_calendar_does_not_claim_an_unknown_player_season(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    with domain_database(database_url) as info:
+        story = _story(info, archive_server, monkeypatch, STEADY, "#8PY")
+        story.reset(day(1), {STEADY: (5000, SEASON)})
+        story.reset(day(2), {STEADY: (5000, SEASON)})
+        assert _ranked(story.served_board(day(2))) == {STEADY: 5000}
+        payload = json.loads(story.players["#8PY"].profile(4800, SEASON))
+        payload["leagueTier"] = {"id": 105000035, "name": "Legend II"}
+        store_observation(info, archive_server, occurrence_key="unknown-calendar-profile",
+                          endpoint="profile", body=json.dumps(payload).encode(),
+                          observed_at=day(2), normalized_tag="#8PY")
+        story.run_worker()
+        api = ApiDatabase(as_api_role(info))
+        try:
+            from clashlens.api_players import read_player_page
+
+            with api.pool.connection() as connection:
+                response = read_player_page(connection, "#8PY", now=day(2), freshness_seconds=900)
+            assert response["screen_ready"]["season"] is None
+            assert response["screen_ready"]["calendar"]["day_number"] == 2
+            assert response["screen_ready"]["calendar"]["season_id"] == "1791176400"
+        finally:
+            api.close()
+
+
+def test_collection_cutoff_keeps_both_origins_and_next_reset_board(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    with domain_database(database_url) as info:
+        sunday, monday, tuesday = day(7), day(8), day(9)
+        story = _story(info, archive_server, monkeypatch, STEADY)
+        story.players[STEADY].battles = attacks(sunday, *[40] * 8) + defenses(sunday, *[40] * 8)
+        story.reset(sunday, {STEADY: (5100, SEASON)})
+        story.reset(monday, {STEADY: (5100, SEASON)}, run=False)
+        with psycopg.connect(info) as connection:
+            reset_work = connection.execute(
+                "SELECT id FROM collector_work WHERE kind = 'reset_baseline' AND sweep_id = "
+                "(SELECT id FROM collector_reset_sweeps WHERE boundary_at = %s)", (monday,)
+            ).fetchone()[0]
+            connection.execute("UPDATE collector_work SET status = 'pending', completed_at = NULL, "
+                               "created_at = %s WHERE id = %s", (monday + timedelta(hours=2), reset_work))
+            regular = connection.execute(
+                "SELECT work_id FROM clashlens_enqueue_interactive('live_refresh', '#2PP', 0)"
+            ).fetchone()[0]
+            created = monday + timedelta(hours=2)
+            connection.execute("UPDATE collector_work SET created_at = %s WHERE id = %s", (created, regular))
+            # Freeze only the collector connection's SQL clock; the worker uses its real clock.
+            connection.execute("CREATE FUNCTION clock_timestamp() RETURNS timestamptz "
+                               "LANGUAGE sql AS $$ SELECT current_setting('clashlens.test_now')::timestamptz $$")
+        collector = CollectorDatabase(info)
+        now = monday
+
+        @contextmanager
+        def frozen_connection():
+            with psycopg.connect(info) as connection:
+                schema = connection.execute("SELECT current_schema()").fetchone()[0]
+                connection.execute("SELECT set_config('search_path', %s, false)", (f'"{schema}",pg_catalog',))
+                connection.execute("SELECT set_config('clashlens.test_now', %s, false)", (now.isoformat(),))
+                yield connection
+
+        monkeypatch.setattr(collector, "connection", frozen_connection)
+        for work, origin in ((reset_work, monday), (regular, created)):
+            cutoff = origin + timedelta(hours=23, minutes=55)
+            now = cutoff - timedelta(microseconds=1)
+            assert collector.fail_intent(work, category="network_failure", retryable=True) == "waiting_retry"
+            with psycopg.connect(info) as connection:
+                due = connection.execute("SELECT due_at FROM collector_work WHERE id = %s", (work,)).fetchone()[0]
+                assert due == now + timedelta(seconds=5)
+            now = cutoff
+            assert collector.fail_intent(work, category="network_failure", retryable=True) == "failed"
+        story.run_worker()
+        assert _ranked(story.served_board(monday)) == {STEADY: 5100}
+        story.reset(tuesday, {STEADY: (5100, SEASON)})
+        assert _ranked(story.served_board(tuesday)) == {STEADY: 5100}

@@ -23,14 +23,12 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
+from .domain import SEASON_DAY_COUNT, SEASON_START_TROPHIES
 from .season_lifecycle import acquire_player_season_lock, season_completed
 
 # v2 added eod_change and its evidence states; readers report them unknown for v1.
 PROJECTION_VERSION = "player-season-summary-v2"
-MAX_DAILY_ENTRIES = 28
-_SEASON_DAYS = tuple(range(1, 29))
-_SEASON_LENGTH_DAYS = 28
-SEASON_START_TROPHIES = 5000
+_SEASON_DAYS = tuple(range(1, SEASON_DAY_COUNT + 1))
 
 # Arbitrary source reason strings are normalized into a bounded
 # representation so a valid source row can never fail the compact
@@ -218,7 +216,7 @@ def _project(player_id: int, season_id: str, connection: Any) -> dict[str, Any] 
     )}
     observed_numbers: set[int] = set()
     numbers_known = True
-    for day in days[:MAX_DAILY_ENTRIES]:
+    for day in days[:SEASON_DAY_COUNT]:
         number = _int_or_none(day.get("season_day_number"))
         if number is None:
             numbers_known = False
@@ -305,7 +303,7 @@ def _project(player_id: int, season_id: str, connection: Any) -> dict[str, Any] 
                 "flags": sorted(set(flags)),
             }
         )
-    if len(days) > MAX_DAILY_ENTRIES:
+    if len(days) > SEASON_DAY_COUNT:
         season_literals.add("too_many_days")
     _add_eod_changes(entries)
 
@@ -319,7 +317,7 @@ def _project(player_id: int, season_id: str, connection: Any) -> dict[str, Any] 
 
     by_number = {entry["season_day_number"]: entry for entry in entries if entry["season_day_number"] is not None}
     first = by_number.get(1)
-    last = by_number.get(28)
+    last = by_number.get(SEASON_DAY_COUNT)
     start_trophies = first["start_trophies"] if first else None
     end_trophies = last["end_trophies"] if last else None
     season_start = first["ranked_day_start"] if first else None
@@ -338,7 +336,7 @@ def _project(player_id: int, season_id: str, connection: Any) -> dict[str, Any] 
     # boundary trophies. Unknown stays NULL and forces partial.
     complete = (
         numbers_known
-        and len(days) == MAX_DAILY_ENTRIES
+        and len(days) == SEASON_DAY_COUNT
         and not missing
         and all(day["state"] == "Complete" and day["coverage"] == "complete" for day in days)
         and not unresolved
@@ -361,7 +359,7 @@ def _project(player_id: int, season_id: str, connection: Any) -> dict[str, Any] 
         "final_rank": final_rank,
         **resolved_totals,
         **stars,
-        "days_observed": len(days[:MAX_DAILY_ENTRIES]),
+        "days_observed": len(days[:SEASON_DAY_COUNT]),
         "days_missing": len(missing),
         "missing_days": missing,
         "coverage_state": "complete" if complete else "partial",

@@ -9,6 +9,7 @@ from typing import Any
 from . import army_types
 from .army_decoder import with_unnamed_ids
 from .catalog import CATALOG_VERSION, unit_label
+from .domain import SEASON_DAY_COUNT
 
 ARMY_ANALYTICS_RULE_VERSION = "army-analytics-v2"
 LENSES = frozenset({"offense", "defense"})
@@ -128,7 +129,7 @@ class ArmyAnalyticsSelection:
             raise ValueError("only army types have average trophies")
         if not re.fullmatch(r"[A-Za-z0-9._:-]{1,80}", season):
             raise ValueError("invalid season")
-        if not 1 <= start_day <= end_day <= 28:
+        if not 1 <= start_day <= end_day <= SEASON_DAY_COUNT:
             raise ValueError("invalid Legend day range")
         _validate_population(population)
         return cls(lens, season, start_day, end_day, population, category, sort)

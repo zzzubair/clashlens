@@ -23,9 +23,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from .collection_rules import COLLECTION_WINDOW
 from .collector_liveness import BULK_STATEMENT_TIMEOUT
-from .domain import is_season_boundary
+from .domain import RESET_COLLECTION_WINDOW, is_season_boundary
 from .league_history_refresh import REFRESH_DELAY, schedule_refresh
 
 SETTLEMENT_DELAY = timedelta(minutes=20)
@@ -218,5 +217,5 @@ def expire_settlement_checks(
                 FOR NO KEY UPDATE OF unfinished
             )
             """,
-            (COLLECTION_WINDOW, now, batch),
+            (RESET_COLLECTION_WINDOW, now, batch),
         ).rowcount

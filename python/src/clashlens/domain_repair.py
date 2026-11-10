@@ -83,7 +83,7 @@ import hashlib
 import json
 from collections import Counter
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -103,6 +103,7 @@ from .domain import (
     TROPHY_ALLOCATION_RULE_VERSION,
 )
 from .reconciliation import RECONCILIATION_RULE_VERSION
+from .season_lifecycle import SEASON_CLOSE_WAIT
 from .source_observation_contract import BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT
 
 # The rules saved days and Daily boards come out by; see season_repair.
@@ -777,7 +778,7 @@ class CampaignState(StrEnum):
 def campaign_window(season_start: datetime) -> tuple[datetime, datetime]:
     """The Season's end and the moment its correction window closes."""
     end = season_start + SEASON_DURATION
-    return end, end + timedelta(days=7)
+    return end, end + SEASON_CLOSE_WAIT
 
 
 def target_versions() -> dict[str, str]:

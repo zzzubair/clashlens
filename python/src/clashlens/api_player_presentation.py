@@ -8,6 +8,14 @@ from typing import Any
 from .army_decoder import with_unnamed_ids
 from .catalog import unit_label
 from .db_rows import text_value
+from .domain import (
+    RANKED_DAY_DURATION,
+    SEASON_DAY_COUNT,
+    SEASON_DURATION,
+    DomainRuleError,
+    ranked_day_for,
+    validate_legend_season_start,
+)
 from .profile import normalize_player_tag
 from .reconciliation import (
     COVERAGE_GAP_REASONS,
@@ -455,8 +463,9 @@ def historical_season_summary(record: dict[str, Any]) -> dict[str, Any]:
         "kind": "player-season-summary",
         "tag": text_value(record["normalized_tag"]),
         "official_season_id": text_value(record["official_season_id"]),
-        "season_start": _iso(record["season_start"]),
-        "season_end": _iso(record["season_end"]),
+        **summary_bounds_payload(
+            text_value(record["official_season_id"]), record["season_start"], record["season_end"]
+        ),
         "start_trophies": _optional_int(record["start_trophies"]),
         "end_trophies": _optional_int(record["end_trophies"]),
         "final_rank": _optional_int(record["final_rank"]),
@@ -489,6 +498,62 @@ def historical_season_summary(record: dict[str, Any]) -> dict[str, Any]:
     hidden = withhold_unsupported_entries(summary["daily_entries"])
     if hidden:
         summary["net_trophy_change"] = None
-    if 28 in hidden:
+    if SEASON_DAY_COUNT in hidden:
         summary["end_trophies"] = None
     return summary
+
+
+def calendar_payload(now: datetime) -> dict[str, Any]:
+    day = ranked_day_for(now)
+    return {
+        "as_of": now.astimezone(UTC).isoformat(),
+        "day_start": day.start.isoformat(),
+        "day_end": day.end.isoformat(),
+        "season_id": day.official_season_id,
+        "season_start": day.season_start.isoformat(),
+        "season_end": day.season_end.isoformat(),
+        "day_number": day.day_number,
+        "day_count": SEASON_DAY_COUNT,
+    }
+
+
+def season_bounds_payload(season_id: str) -> dict[str, Any] | None:
+    try:
+        start = validate_legend_season_start(
+            season_id, observed_at=datetime.max.replace(tzinfo=UTC)
+        )
+    except DomainRuleError:
+        return None
+    return {
+        "id": season_id,
+        "start": start.isoformat(),
+        "end": (start + SEASON_DURATION).isoformat(),
+        "last_day_start": (start + SEASON_DURATION - RANKED_DAY_DURATION).isoformat(),
+        "day_count": SEASON_DAY_COUNT,
+    }
+
+
+def summary_bounds_payload(
+    season_id: str, start: datetime | None, end: datetime | None
+) -> dict[str, Any]:
+    """A Season's dates from its id, the Season's first Reset, as the website
+    dated Seasons; the saved start and end, often missing when Reset readings
+    are, only for an id that is not a Season start."""
+    bounds = season_bounds_payload(season_id)
+    if bounds is not None:
+        return {
+            "season_start": bounds["start"],
+            "season_end": bounds["end"],
+            "last_day_start": bounds["last_day_start"],
+            "day_count": SEASON_DAY_COUNT,
+        }
+
+    def _iso(value: datetime | None) -> str | None:
+        return None if value is None else value.astimezone(UTC).isoformat()
+
+    return {
+        "season_start": _iso(start),
+        "season_end": _iso(end),
+        "last_day_start": _iso(None if end is None else end - RANKED_DAY_DURATION),
+        "day_count": SEASON_DAY_COUNT,
+    }

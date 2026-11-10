@@ -455,6 +455,8 @@ def test_player_screen_ready_current_day_preserves_partial_inferred_evidence(
                 current_day["ranked_day_start"]
             ]
             assert player["screen_ready"]["season"] == {
+                "day_count": 28,
+                "initial_trophies": 5000,
                 "id": "1783918800",
                 "current_day_number": 25,
                 "start": "2026-07-13T05:00:00+00:00",
@@ -872,6 +874,8 @@ def test_player_screen_ready_limits_season_days_to_current_official_season(
             current_day = by_start[screen["current_day_start"]]
             assert [day["season_day_number"] for day in season_days] == [3, 2]
             assert screen["season"] == {
+                "day_count": 28,
+                "initial_trophies": 5000,
                 "id": "current-season",
                 "current_day_number": 3,
                 "start": "2026-08-04T05:00:00+00:00",
@@ -1099,6 +1103,7 @@ def test_concurrent_refreshes_share_one_collector_work_and_public_refresh_identi
             status = api_accounts.get_refresh_status(database, next(iter(refresh_ids)))
             assert status == {
                 "refresh_id": next(iter(refresh_ids)),
+                "display_state": "queued",
                 "tag": "#2PP",
                 "status": "pending",
                 "outcome": "created",

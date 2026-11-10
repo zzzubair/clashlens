@@ -41,6 +41,7 @@ _CHOICES = {
     "popup": {"0"},
     "demo": {"1"},
 }
+NUMERIC_MAX = 4000
 _NUMBERS = {"w", "h", "x", "y", "cw", "ch"}
 _PARTS = {"trophies", "rank", "attacks", "defenses", "net", "day", "updated"}
 DEFAULTS = {"w": "366", "h": "222", "x": "40", "y": "40", "fit": "screen",
@@ -96,7 +97,7 @@ def clean_settings(raw: dict[str, str]) -> dict[str, str]:
     for key, value in raw.items():
         if value in _CHOICES.get(key, ()):
             out[key] = value
-        elif key in _NUMBERS and value.isdigit() and int(value) <= 4000:
+        elif key in _NUMBERS and value.isdigit() and int(value) <= NUMERIC_MAX:
             out[key] = str(int(value))
         elif key == "show" and set(filter(None, value.split(","))) <= _PARTS:
             out[key] = value
@@ -120,6 +121,7 @@ def get_overlay(database: ApiDatabase, account_id: int) -> dict[str, Any]:
         players = linked_players(connection, account_id, None)
     return {
         "kind": "obs-overlay",
+        "settings_contract": settings_contract(),
         **_overlay(row),
         "players": [
             {"tag": tag, "name": name, "league": league}
@@ -204,7 +206,7 @@ def read_link(database: ApiDatabase, link_id: str) -> dict[str, Any] | None:
         )
     result = _overlay(row)
     del result["link"]
-    return {"kind": "obs-overlay-link", **result}
+    return {"kind": "obs-overlay-link", "settings_contract": settings_contract(), **result}
 
 
 # The player is shown only while it is still one of the account's verified players.
@@ -272,3 +274,9 @@ def _link(value: str) -> str:
     if not _LINK.fullmatch(value):
         raise ApiError(404, "overlay_not_found")
     return value
+
+
+def settings_contract() -> dict[str, Any]:
+    return {"choices": {key: sorted(values) for key, values in _CHOICES.items()},
+            "numeric_keys": sorted(_NUMBERS), "numeric_max": NUMERIC_MAX,
+            "parts": sorted(_PARTS), "defaults": dict(DEFAULTS)}

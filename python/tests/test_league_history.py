@@ -231,6 +231,10 @@ def test_public_season_reader_uses_only_valid_legend_history(
     assert seasons == [
         {
             "official_season_id": older_season_id,
+            "season_start": "2026-04-20T05:00:00+00:00",
+            "season_end": "2026-05-18T05:00:00+00:00",
+            "last_day_start": "2026-05-17T05:00:00+00:00",
+            "day_count": 28,
             "coverage_state": "partial",
             "days_observed": 0,
             "days_missing": 28,
@@ -247,6 +251,10 @@ def test_public_season_reader_uses_only_valid_legend_history(
         },
         {
             "official_season_id": "1781499600",
+            "season_start": "2026-06-15T05:00:00+00:00",
+            "season_end": "2026-07-13T05:00:00+00:00",
+            "last_day_start": "2026-07-12T05:00:00+00:00",
+            "day_count": 28,
             "coverage_state": "partial",
             "days_observed": 0,
             "days_missing": 28,
@@ -264,6 +272,8 @@ def test_public_season_reader_uses_only_valid_legend_history(
     ]
     assert detail is not None
     assert detail["source"] == "official_league_history"
+    assert detail["day_count"] == 28
+    assert detail["last_day_start"] == "2026-07-12T05:00:00+00:00"
     assert detail["season_start"] == "2026-06-15T05:00:00+00:00"
     assert detail["season_end"] == "2026-07-13T05:00:00+00:00"
     assert detail["end_trophies"] == 5812
@@ -352,6 +362,8 @@ def test_partial_day_28_on_final_board_shows_board_rank(
 
     assert detail is not None
     assert detail["source"] == "official_league_history"
+    assert detail["day_count"] == 28
+    assert detail["last_day_start"] == "2026-07-12T05:00:00+00:00"
     assert detail["final_rank"] == 3
     assert detail["official_history"]["final_placement"] == 12
 

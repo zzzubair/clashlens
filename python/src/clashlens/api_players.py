@@ -11,18 +11,22 @@ from . import api_leaderboard, api_player_lookup, live_board
 from .api_db import ApiDatabase
 from .api_player_presentation import (
     PLAYER_SCREEN_READY_VERSION,
+    calendar_payload,
     daily_log,
     historical_season_summary,
     json_array,
     player_confidence,
     screen_daily_log_with_events,
+    summary_bounds_payload,
     withhold_unsupported_entries,
 )
 from .army_decoder import SIEGE_TROOP_IDS, DecodedArmy, decode_army_share_code
 from .catalog import unit_label
 from .db_rows import text_value
 from .domain import (
+    SEASON_DAY_COUNT,
     SEASON_DURATION,
+    SEASON_START_TROPHIES,
     awaits_season_reset,
     ranked_day_for,
     season_opening_reset,
@@ -178,7 +182,7 @@ def read_player_page(
             FROM api_player_daily_logs AS saved
             WHERE saved.player_id = player.id
             ORDER BY saved.ranked_day_start DESC
-            LIMIT 28
+            LIMIT %s
         ) AS day
         CROSS JOIN LATERAL (
             SELECT ranked_day_start, ranked_day_end, official_season_id,
@@ -198,7 +202,7 @@ def read_player_page(
         WHERE player.normalized_tag = %s
         ORDER BY daily.ranked_day_start DESC
         """,
-        (normalized_tag,),
+        (SEASON_DAY_COUNT, normalized_tag),
     ).fetchall()
     history_updated_at = max(
         (day[20].astimezone(UTC) for day in daily_rows), default=None
@@ -270,7 +274,7 @@ def read_player_page(
     if (
         season_context is not None
         and not season_anchor_conflict
-        and (len(daily_rows) < 28 or daily_rows[-1][0] <= season_context["start"])
+        and (len(daily_rows) < SEASON_DAY_COUNT or daily_rows[-1][0] <= season_context["start"])
     ):
         # The 28 latest days hold every day from the oldest of them on,
         # so here they hold all of the Season's: its days are these rows,
@@ -325,13 +329,14 @@ def read_player_page(
             WHERE official_season_id = %s
             ORDER BY season_day_number DESC NULLS LAST,
                      ranked_day_start DESC
-            LIMIT 28
+            LIMIT %s
             """,
             (
                 normalized_tag,
                 season_context["start"],
                 season_context["end"],
                 season_context["id"],
+                SEASON_DAY_COUNT,
             ),
         ).fetchall()
     # Send each day once: the Season's days are almost always among the
@@ -435,6 +440,7 @@ def read_player_page(
             None if not_found_at is None else not_found_at.isoformat()
         ),
         "screen_ready": {
+            "calendar": calendar_payload(now),
             "days": sorted(
                 days.values(), key=lambda day: day["ranked_day_start"], reverse=True
             ),
@@ -460,6 +466,8 @@ def read_player_page(
             if season_context is None or season_anchor_conflict
             else {
                 "id": season_context["id"],
+                "day_count": SEASON_DAY_COUNT,
+                "initial_trophies": SEASON_START_TROPHIES,
                 "current_day_number": season_context["current_day_number"],
                 "start": season_context["start"].isoformat(),
                 "end": season_context["end"].isoformat(),
@@ -717,7 +725,7 @@ def list_player_seasons(
                    summary.days_observed, summary.days_missing,
                    summary.start_trophies, summary.end_trophies,
                    summary.published_at, summary.season_start,
-                   summary.daily_entries
+                   summary.daily_entries, summary.season_end
             FROM player_season_summaries AS summary
             JOIN players AS player ON player.id = summary.player_id
             WHERE player.normalized_tag = %s
@@ -733,12 +741,13 @@ def list_player_seasons(
                 "start_trophies": None if row[4] is None else int(row[4]),
                 "end_trophies": None
                 if row[5] is None
-                or 28 in withhold_unsupported_entries(json_array(row[8]))
+                or SEASON_DAY_COUNT in withhold_unsupported_entries(json_array(row[8]))
                 else int(row[5]),
                 "published_at": row[6].astimezone(UTC).isoformat(),
                 "source": "tracked_summary",
                 "official_history": None,
                 "_sort_start": row[7],
+                **summary_bounds_payload(text_value(row[0]), row[7], row[9]),
             }
             for row in rows
         }
@@ -753,13 +762,16 @@ def list_player_seasons(
                 "official_season_id": season_id,
                 "coverage_state": "partial",
                 "days_observed": 0,
-                "days_missing": 28,
+                "days_missing": SEASON_DAY_COUNT,
                 "start_trophies": None,
                 "end_trophies": history["eod_trophies"],
                 "published_at": None,
                 "source": "official_league_history",
                 "official_history": _official_history_payload(history),
                 "_sort_start": history["season_start"],
+                **summary_bounds_payload(
+                    season_id, history["season_start"], history["season_end"]
+                ),
             }
         ordered = sorted(
             seasons.values(),
@@ -866,8 +878,9 @@ def get_player_season_summary(
             "kind": "player-season-summary",
             "tag": normalized_tag,
             "official_season_id": official_season_id,
-            "season_start": history["season_start"].isoformat(),
-            "season_end": history["season_end"].isoformat(),
+            **summary_bounds_payload(
+                official_season_id, history["season_start"], history["season_end"]
+            ),
             "start_trophies": None,
             "end_trophies": history["eod_trophies"],
             "final_rank": final_rank,
@@ -883,8 +896,8 @@ def get_player_season_summary(
             "defense_stars": {str(star): None for star in range(4)},
             "defense_stars_unknown": None,
             "days_observed": 0,
-            "days_missing": 28,
-            "missing_days": list(range(1, 29)),
+            "days_missing": SEASON_DAY_COUNT,
+            "missing_days": list(range(1, SEASON_DAY_COUNT + 1)),
             "coverage_state": "partial",
             "unresolved_flags": ["tracked_day_detail_unavailable"],
             "daily_entries": [],

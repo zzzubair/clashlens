@@ -17,7 +17,7 @@ from psycopg_pool import ConnectionPool, PoolTimeout
 
 from . import army_types
 from .api_db import ApiDatabase
-from .api_player_presentation import json_array
+from .api_player_presentation import json_array, season_bounds_payload
 from .api_players import army_units
 from .army_analytics import (
     ArmyAnalyticsSelection,
@@ -38,6 +38,7 @@ from .db_rows import text_value
 from .domain import (
     RANKED_DAY_DURATION,
     SEASON_ANCHOR_RULE_VERSION,
+    SEASON_DAY_COUNT,
     SEASON_DURATION,
     ranked_day_for,
 )
@@ -173,7 +174,7 @@ def get_army_season_summary(
             "lens": lens,
             "season": official_season_id,
             "start_day": 1,
-            "end_day": 28,
+            "end_day": SEASON_DAY_COUNT,
             "population": "all",
             "category": category,
             "sort": sort,
@@ -184,6 +185,7 @@ def get_army_season_summary(
         return {
             "kind": "army-analytics",
             "history_usage_only": True,
+            "season_bounds": season_bounds_payload(official_season_id),
             "pagination": {"offset": offset, "total_rows": len(rows),
                            "next_offset": offset + 200 if offset + 200 < len(rows) else None},
             "selection": requested,
@@ -208,7 +210,7 @@ def get_army_season_summary(
             "freshness": {"state": "frozen"},
             "reproducibility": {
                 "official_season_id": official_season_id,
-                "legend_days": [1, 28],
+                "legend_days": [1, SEASON_DAY_COUNT],
                 "snapshot_versions": [],
             },
             "versions": {
@@ -252,6 +254,7 @@ def _army_type_season_summary(
     return {
         **result,
         "selection": selection,
+        "season_bounds": season_bounds_payload(season_id),
         "cohort_evidence": {
             "cohort_players": 0,
             "stale_or_uncertain_cohort_members": 0,
@@ -259,7 +262,7 @@ def _army_type_season_summary(
             "shielded_player_days": 0,
         },
         "collection_coverage": {
-            "state": "complete" if len(covered) == 28 else "partial",
+            "state": "complete" if len(covered) == SEASON_DAY_COUNT else "partial",
             "completed_days": len(covered),
             "covered_days": covered,
         },
@@ -321,6 +324,7 @@ def get_army_analytics(
     """The Armies page result for ``selection``, or with ``examples`` (a type
     and variant id, army types only) that variant's example armies for the
     same players and Legend days."""
+    now = datetime.now(tz=UTC) if now is None else now.astimezone(UTC)
     deadline = monotonic() + database.request_timeout_seconds
     # A bounded pre-checkout gate leaves one paired pool slot per admitted
     # troop request. Other categories never need the second connection.
@@ -359,9 +363,7 @@ def get_army_analytics(
                 # Bound the default range using Reset chronology (05:00 UTC).
                 # Publication delays do not make an ended day unfinished; the
                 # population-specific coverage checks below decide availability.
-                current_time = (
-                    now.astimezone(UTC) if now is not None else datetime.now(tz=UTC)
-                )
+                current_time = now
                 if current_time >= anchor[2] + SEASON_DURATION:
                     # The anchor advances only when a newer profile is
                     # processed, which can lag the Reset. Once its 28 days
@@ -676,6 +678,7 @@ def get_army_analytics(
                 tuple(streak_gap_days),
                 examples,
             )
+            bounds = season_bounds_payload(resolved.season)
             cached = database.cache_get(cache_key)
             if cached is not None:
                 return cached
@@ -750,6 +753,7 @@ def get_army_analytics(
                     result["army_units"] = army_units(
                         group["army_share_code"] for group in result["groups"]
                     )
+                    result["season_bounds"] = bounds
                     result["selection"] = resolved.as_dict()
                     result["covered_days"] = covered_days
                     database.cache_put(cache_key, result)
@@ -884,6 +888,7 @@ def get_army_analytics(
                     requested, sort_keys=True, separators=(",", ":")
                 ).encode()
             ).hexdigest()
+            result["season_bounds"] = bounds
             result["selection"] = requested
             result["publication_identity"] = (
                 f"army-publication-{publication_key[:24]}-{result_hash[:16]}"

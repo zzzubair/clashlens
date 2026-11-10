@@ -47,6 +47,7 @@ from .api_http import (
     safe_tag,
     safe_uuid,
 )
+from .api_player_presentation import calendar_payload, season_bounds_payload
 from .army_analytics import (
     ArmyAnalyticsSelection,
     ArmyAnalyticsUnavailable,
@@ -55,7 +56,7 @@ from .army_analytics import (
 )
 from .clashking import ClashKingClient, get_past_seasons
 from .db import CONTRACT_VERSION
-from .domain import ranked_day_for
+from .domain import SEASON_DAY_COUNT, ranked_day_for
 from .hmac_proof import InvalidProof, VerifiedProof, verify_proof
 from .operating import ApiMetrics, elapsed
 from .verification import (
@@ -424,7 +425,7 @@ def create_app(
 
     @app.get("/v1/players/{tag}/bases")
     def player_bases(
-        tag: str, request: Request, day: int = Query(ge=1, le=28)
+        tag: str, request: Request, day: int = Query(ge=1, le=SEASON_DAY_COUNT)
     ) -> JSONResponse:
         authorize(request, "player.read", production_database)
         if not dashboard_enabled:
@@ -454,7 +455,7 @@ def create_app(
             raise ApiError(404, "dashboard_disabled")
         allowed = (
             days in api_dashboard.OFFENSE_ARMY_DAYS if lens == "offense"
-            else days != "season" and 1 <= days <= api_dashboard.MAX_ARMY_DAYS
+            else days != "season" and 1 <= days <= SEASON_DAY_COUNT
         )
         if not allowed:
             raise ApiError(422, "invalid_request")
@@ -579,7 +580,7 @@ def create_app(
         limit: int = Query(default=100, ge=1, le=200),
         offset: int = Query(default=0, ge=0),
         official_season_id: str | None = None,
-        season_day_number: int | None = Query(default=None, ge=1, le=28),
+        season_day_number: int | None = Query(default=None, ge=1, le=SEASON_DAY_COUNT),
         focus_tag: str | None = Query(default=None, max_length=16),
     ) -> JSONResponse:
         authorize(request, "leaderboards.read", production_database)
@@ -616,8 +617,8 @@ def create_app(
         request: Request,
         season: str = Query(min_length=1, max_length=80),
         lens: str = Query(default="offense", max_length=16),
-        start_day: int = Query(default=1, ge=1, le=28),
-        end_day: int = Query(default=28, ge=1, le=28),
+        start_day: int = Query(default=1, ge=1, le=SEASON_DAY_COUNT),
+        end_day: int = Query(default=SEASON_DAY_COUNT, ge=1, le=SEASON_DAY_COUNT),
         population: str = Query(default="top-100", max_length=40),
         category: str = Query(default="troops", max_length=40),
         sort: str = Query(default="usage-rate", max_length=40),
@@ -645,12 +646,14 @@ def create_app(
             } or selection.category != army_types.CATEGORY:
                 raise ApiError(422, "invalid_army_analytics_selection")
             examples = (type_id, variant_id)
+        now = current_time()
         try:
             result = api_analytics.get_army_analytics(
-                army_reader, selection, now=current_time(), examples=examples
+                army_reader, selection, now=now, examples=examples
             )
         except CurrentSeasonEmpty as empty:
-            content: dict[str, Any] = {"error": "no_completed_legend_days"}
+            content: dict[str, Any] = {"error": "no_completed_legend_days",
+                                       "calendar": calendar_payload(now)}
             if empty.previous_season_id:
                 content["previous_season_id"] = empty.previous_season_id
             return JSONResponse(status_code=404, content=content)
@@ -668,14 +671,19 @@ def create_app(
             raise ApiError(503, "timeout") from timeout
         if result is None:
             raise ApiError(404, "army_analytics_unavailable")
+        result["calendar"] = calendar_payload(now)
         return JSONResponse(status_code=200, content=json_safe(result))
 
     @app.get("/v1/analytics/armies/seasons")
     def army_seasons(request: Request) -> JSONResponse:
         authorize(request, "analytics.read", production_database)
+        seasons = api_analytics.list_army_seasons(production_database)
         return JSONResponse(
             status_code=200,
-            content={"seasons": api_analytics.list_army_seasons(production_database)},
+            content={"seasons": seasons, "season_details": [
+                bounds for season in seasons
+                if (bounds := season_bounds_payload(season)) is not None
+            ]},
         )
 
     @app.get("/v1/analytics/armies/seasons/{season_id}")
@@ -697,7 +705,7 @@ def create_app(
                 lens=lens,
                 season=season_id,
                 start_day=1,
-                end_day=28,
+                end_day=SEASON_DAY_COUNT,
                 population=population,
                 category=category,
                 sort=sort,
@@ -847,6 +855,8 @@ def create_app(
         return JSONResponse(
             status_code=200,
             content={
+                "calendar": calendar_payload(now),
+                "limits": api_groups.group_limits(),
                 "groups": api_groups.list_groups(
                     production_database, context.account.internal_id, now=now
                 ),

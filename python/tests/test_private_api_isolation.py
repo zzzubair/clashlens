@@ -406,6 +406,7 @@ def test_an_overlay_only_ever_shows_the_accounts_own_verified_player(accounts):
     shown = client.get(target, headers=signed_headers(target))
     assert shown.json() == {
         "kind": "obs-overlay-link", "settings": theirs["settings"], "version": 1, "tag": None,
+        "settings_contract": theirs["settings_contract"],
     }
     unknown = f"/v1/overlays/{'b' * 22}"
     assert client.get(unknown, headers=signed_headers(unknown)).status_code == 404

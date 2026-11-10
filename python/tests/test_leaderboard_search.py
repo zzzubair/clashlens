@@ -178,6 +178,8 @@ def test_search_keeps_whole_board_tie_ranks_and_focus_tracks_moves(board_databas
         database, limit=100, now=NOW, focus_tag=target["tag"]
     )
     assert focused["page"] == 2
+    assert focused["focus_neighbors"] == 5
+    assert min(e["position"] for e in focused["entries"]) == 103 - focused["focus_neighbors"]
     assert [entry["position"] for entry in focused["entries"]] == list(range(98, 106))
     assert focused["entries"][5]["tag"] == target["tag"]
     with database.pool.connection() as connection:

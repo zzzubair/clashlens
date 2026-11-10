@@ -5,6 +5,8 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from itertools import islice, product
+from pathlib import Path
 from time import perf_counter
 from uuid import UUID, uuid4
 
@@ -164,6 +166,11 @@ def test_player_season_routes_publish_only_public_history_fields(
     assert detail_response.status_code == 200
     assert list_response.json()["seasons"][0]["source"] == "official_league_history"
     detail = detail_response.json()
+    for bounds in (detail, list_response.json()["seasons"][0]):
+        assert bounds["season_start"] == "2026-06-15T05:00:00+00:00"
+        assert bounds["season_end"] == "2026-07-13T05:00:00+00:00"
+        assert bounds["last_day_start"] == "2026-07-12T05:00:00+00:00"
+        assert bounds["day_count"] == 28
     assert detail["official_history"] == {
         "source": "official_league_history",
         "observed_at": "2026-08-06T12:00:00+00:00",
@@ -759,6 +766,10 @@ def test_signed_army_analytics_http_contract_preserves_auth_and_error_details(
             assert empty.json() == {
                 "error": "no_completed_legend_days",
                 "previous_season_id": "2026-07",
+                "calendar": {"as_of": NOW.isoformat(), "day_start": "2027-04-06T05:00:00+00:00",
+                             "day_end": "2027-04-07T05:00:00+00:00", "season_id": "1805691600",
+                             "season_start": "2027-03-22T05:00:00+00:00",
+                             "season_end": "2027-04-19T05:00:00+00:00", "day_number": 16, "day_count": 28},
             }
 
             def cancelled(setting: str):
@@ -861,3 +872,100 @@ def test_removed_routes_are_not_available(database_url: str, method: str, target
             headers=signed_headers(target, method=method),
         )
     assert response.status_code == 404
+
+
+def test_account_metadata_matches_database_and_http_acceptance(database_url: str) -> None:
+    from test_api_db_organization import create_owner
+
+    contract = json.loads((Path(__file__).parents[2] / "testdata/w6-domain-contract.json").read_text())
+    with migrated_production_database(database_url, include_compact_collector=True) as info:
+        database = ApiDatabase(info)
+        try:
+            create_owner(database)
+            app = create_app(database, keys={("typescript-website", "current"): TS_CURRENT},
+                             clock=lambda: NOW_SECONDS, now=lambda: NOW)
+            with TestClient(app) as client:
+                def call(target, value=None, method="GET"):
+                    body = b"" if value is None else json_body(value)
+                    return client.request(method, target, content=body, headers=signed_headers(
+                        target, method=method, body=body, provider="google", subject="group-owner-subject"))
+
+                listing = call("/v1/account/groups").json()
+                assert listing["groups"] == []
+                assert listing["limits"] == contract["groups"]
+                assert listing["calendar"]["as_of"] == NOW.isoformat()
+                assert listing["calendar"]["day_start"] == "2027-04-06T05:00:00+00:00"
+                tags = ["#" + "".join(chars) for chars in islice(product("289LYQ", repeat=3), 21)]
+                too_many = call("/v1/account/groups", {"name": "Too many", "tags": tags}, "POST")
+                assert too_many.status_code == 422
+                for index in range(listing["limits"]["max_groups"]):
+                    created = call("/v1/account/groups", {"name": f"Group {index}", "tags": tags[:20]}, "POST")
+                    assert created.status_code == 201, created.text
+                    group_id = created.json()["group_id"]
+                listing = call("/v1/account/groups").json()
+                assert len(listing["groups"]) == listing["limits"]["max_groups"] == 10
+                assert all(len(group["tags"]) == listing["limits"]["max_players"] == 20 for group in listing["groups"])
+                assert call("/v1/account/groups", {"name": "Eleventh", "tags": []}, "POST").json() == {
+                    "error": "group_limit_reached"}
+                for days in listing["limits"]["comparison_days"]:
+                    compared = call(f"/v1/account/groups/{group_id}/comparison?days={days}")
+                    assert compared.status_code == 200, compared.text
+                    assert compared.json()["limits"] == listing["limits"]
+                    assert compared.json()["calendar"] == listing["calendar"]
+                    assert len(compared.json()["day_starts"]) == days
+                assert call(f"/v1/account/groups/{group_id}/comparison?days=4").status_code == 422
+                overlay = call("/v1/account/obs-overlay").json()
+                settings = overlay["settings_contract"]
+                assert settings["defaults"] == overlay["settings"]
+                assert settings["choices"]["bg"] == ["card", "none", "tint"]
+                assert settings["numeric_max"] == 4000
+                linked = call(f"/v1/overlays/{overlay['link']}").json()
+                assert linked["settings_contract"] == settings
+                board = client.get("/v1/leaderboards/live", headers=signed_headers("/v1/leaderboards/live")).json()
+                assert board["entries"] == []
+                assert board["focus_neighbors"] == 5
+        finally:
+            database.close()
+
+
+def test_refresh_display_states_are_served_without_changing_raw_status(database_url: str) -> None:
+    contract = json.loads((Path(__file__).parents[2] / "testdata/w6-domain-contract.json").read_text())
+    with migrated_production_database(database_url, include_compact_collector=True) as info:
+        database = ApiDatabase(info)
+        try:
+            seed_profile(database, "#2PP", 5300)
+            app = create_app(database, keys={("typescript-website", "current"): TS_CURRENT},
+                             clock=lambda: NOW_SECONDS, now=lambda: NOW)
+            with TestClient(app) as client:
+                target = "/v1/players/%232PP/refresh"
+                request_id = str(uuid4())
+                headers = signed_headers(target, method="POST", request_id=request_id)
+                submitted = client.post(target, headers=headers)
+                assert submitted.status_code == 202, submitted.text
+                assert submitted.json()["display_state"] == "queued"
+                refresh = submitted.json()
+                assert client.post(target, headers=headers).json() == refresh
+                with database.pool.connection() as connection:
+                    saved = connection.execute("SELECT response_json FROM private_api_requests WHERE request_id = %s", (request_id,)).fetchone()[0]
+                    assert "display_state" not in saved
+                target = f"/v1/refreshes/{refresh['refresh_id']}"
+                # Compact collector work is unleased; its schema admits these five raw states.
+                for raw in ("pending", "waiting_retry", "complete", "failed", "cancelled"):
+                    with database.pool.connection() as connection:
+                        connection.execute("UPDATE collector_work SET status = %s, completed_at = CASE WHEN %s = 'complete' THEN clock_timestamp() ELSE NULL END", (raw, raw))
+                    response = client.get(target, headers=signed_headers(target))
+                    assert response.status_code == 200, response.text
+                    assert response.json() == {**refresh, "status": raw, "display_state": contract["refresh"][raw]}
+                player = "/v1/players/%232PP"
+                assert client.get(player, headers=signed_headers(player)).json()["tag"] == refresh["tag"]
+                missing = f"/v1/refreshes/{uuid4()}"
+                assert client.get(missing, headers=signed_headers(missing)).status_code == 404
+                malformed = "/v1/refreshes/not-a-uuid"
+                assert client.get(malformed, headers=signed_headers(malformed)).status_code == 422
+        finally:
+            database.close()
+
+    for raw, display in contract["refresh"].items():
+        assert api_accounts.refresh_display_state(raw) == display
+    with pytest.raises(KeyError):
+        api_accounts.refresh_display_state("invented")

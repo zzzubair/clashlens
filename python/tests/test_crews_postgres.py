@@ -163,6 +163,7 @@ def test_creating_and_listing_crews(site: Site) -> None:
         ],
         "crew_count": 1,
         "max_crews": 5,
+        "limits": {"min_size": 2, "max_size": 100, "default_size": 50},
     }
     crew = site.crew("akira", crew_id)
     assert (crew["my_role"], crew["used"], crew["invites"]) == ("owner", 2, [])
@@ -340,6 +341,9 @@ def test_five_crews_at_most_counting_every_role(site: Site) -> None:
     assert site.accept("busy", code, [tags[4]]).status_code == 200
     preview = api_crews.get_invite(site.api, site.ids["busy"], code, now=NOW)
     assert (preview["state"], preview["crew_count"]) == ("ok", 5)
+    listed = api_crews.list_crews(site.api, site.ids["busy"])
+    assert listed["crew_count"] == listed["max_crews"] == 5
+    assert listed["limits"] == {"min_size": 2, "max_size": 100, "default_size": 50}
     refused = site.call(
         "busy", api_crews.create_crew, name="Sixth", size=5, tags=[tags[5]]
     )
