@@ -599,7 +599,6 @@ def test_first_day_trophies_from_before_the_reset_wait_for_the_season_reset(
 ):
     from datetime import UTC, datetime, timedelta
 
-    from clashlens import api_analytics
 
     season_start = datetime(2026, 10, 5, 5, tzinfo=UTC)
     old_season = str(int((season_start - timedelta(days=28)).timestamp()))
@@ -733,10 +732,6 @@ def test_first_day_trophies_from_before_the_reset_wait_for_the_season_reset(
                     )
                     assert shared == cards
                 assert {c["tag"] for c in cards if c["season_reset_pending"]} == waiting
-                average = api_analytics.get_basic_analytics(
-                    database, now=now, freshness_seconds=900
-                )
-                assert average["sample_size"] == len(players) - len(waiting)
 
             # Day 1: the frozen September trophies, other than 5,000, still
             # wait, and so do trophies the day's recorded battles cannot explain.

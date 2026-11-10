@@ -423,7 +423,7 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                 ).fetchone()
                 if season_id_row is None:
                     season_id, _season_day = _season_metadata_for_ranked_day(
-                        database, connection, boundary_at - timedelta(days=1)
+                        connection, boundary_at - timedelta(days=1)
                     )
                 else:
                     season_id = _text_value(season_id_row[0])
@@ -489,7 +489,6 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                 )
                 return
             season_id = _ensure_army_day_dependency(
-                database,
                 connection,
                 ranked_day_start,
                 ranked_version_ids=manifest_versions,
@@ -584,7 +583,6 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
 
 
 def _ensure_army_day_dependency(
-    database: Database,
     connection: Any,
     ranked_day_start: datetime,
     *,
@@ -1294,7 +1292,7 @@ def _refresh_army_season_summaries(database, connection: Any, season_id: str) ->
 
 
 def _season_metadata_for_ranked_day(
-    database, connection: Any, ranked_day_start: datetime
+    connection: Any, ranked_day_start: datetime
 ) -> tuple[str, int]:
     ranked_day_start = ranked_day_start.astimezone(UTC)
     anchor = connection.execute(

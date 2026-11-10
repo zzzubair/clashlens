@@ -1,7 +1,7 @@
 """Finalized usage keeps unit quantities and star outcomes by ID."""
 from clashlens import catalog
 from clashlens.army_decoder import DecodedArmy, decode_army_share_code
-from clashlens.army_history import aggregate_usage, usage_rows
+from clashlens.army_history import count_usage, usage_by_category, usage_rows
 
 
 def fact(code, stars=3, destruction=100, trophies=6000):
@@ -31,7 +31,11 @@ def test_five_uses_are_five_of_ten_with_quantity_and_star_counts():
         )
         for index in range(10)
     ]
-    rows = usage_rows(aggregate_usage(facts)["troops"], "troops", 10)
+    counts = {}
+    for item in facts:
+        count_usage(counts, item)
+    stored = usage_by_category(counts)
+    rows = usage_rows(stored["troops"], "troops", 10)
     row = next(row for row in rows if row["unit_id"] == "troop:58")
     assert row == {
         "key": "troop:58@5", "unit_id": "troop:58", "label": "Ice Golem",
@@ -40,11 +44,16 @@ def test_five_uses_are_five_of_ten_with_quantity_and_star_counts():
         "three_star_count": 2,
     }
     without_trophies = [{**item, "battle_time_trophies": None} for item in facts]
-    assert aggregate_usage(without_trophies) == aggregate_usage(facts)
+    without_counts = {}
+    for item in without_trophies:
+        count_usage(without_counts, item)
+    assert usage_by_category(without_counts) == stored
 
 
 def test_unknown_namespaces_and_siege_are_resolved_without_armies(monkeypatch):
-    stored = aggregate_usage([fact("h900p900e14_900u5x900-1x901s2x900i7x900-1x901d3x900")])
+    counts = {}
+    count_usage(counts, fact("h900p900e14_900u5x900-1x901s2x900i7x900-1x901d3x900"))
+    stored = usage_by_category(counts)
     before = {}
     for category, namespace in (
         ("troops", "troop"), ("siege", "troop"), ("spells", "spell"),
@@ -87,7 +96,9 @@ def test_unknown_namespaces_and_siege_are_resolved_without_armies(monkeypatch):
 
 def test_clan_castle_changes_cannot_change_retained_usage():
     home = "h0p9e14_32u5x58-1x97s2x2"
-    assert aggregate_usage([fact(home)]) == aggregate_usage([
-        fact(home + "i2x58-1x97d1x2")])
-    assert aggregate_usage([fact(home)]) == aggregate_usage([
-        fact(home + "i5x900-1x901d2x900")])
+    home_counts = {}
+    count_usage(home_counts, fact(home))
+    for castle in ("i2x58-1x97d1x2", "i5x900-1x901d2x900"):
+        castle_counts = {}
+        count_usage(castle_counts, fact(home + castle))
+        assert usage_by_category(castle_counts) == usage_by_category(home_counts)

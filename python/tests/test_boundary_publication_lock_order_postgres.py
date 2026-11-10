@@ -9,7 +9,9 @@ from datetime import UTC, datetime, timedelta
 import psycopg
 import pytest
 from domain_test_support import domain_database, store_observation, text
-from test_army_analytics_publication_postgres import _insert_confirmed_anchor
+from test_army_analytics_publication_seasons_postgres import (
+    _insert_confirmed_anchor,
+)
 from test_army_ingestion_postgres import _live_row, _unswept_battles
 from test_boundary_publication_postgres import (
     BOUNDARY,

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-from uuid import uuid4
 
 import psycopg
 import pytest
@@ -26,7 +25,7 @@ def test_collector_429_cooldown_blocks_api_verification_and_is_audited(
             collector.register_interactive_key(fingerprint, starts_per_second=29)
             api_verification.register_official_credential(api, fingerprint)
             permit = api_verification.acquire_official_permit(
-                api, fingerprint, request_id=str(uuid4())
+                api, fingerprint
             )
 
             assert permit.granted is False
@@ -101,7 +100,7 @@ def test_lowering_shared_rate_preserves_outstanding_permissions(database_url: st
 
             assert collector.acquire_collector_permit(fingerprint).granted is False
             verification = api_verification.acquire_official_permit(
-                api, fingerprint, request_id=str(uuid4())
+                api, fingerprint
             )
             assert verification.granted is False
             assert verification.reason == "combined_budget_exhausted"
@@ -113,7 +112,7 @@ def test_lowering_shared_rate_preserves_outstanding_permissions(database_url: st
                 )
             assert collector.acquire_collector_permit(fingerprint).granted is True
             assert api_verification.acquire_official_permit(
-                api, fingerprint, request_id=str(uuid4())
+                api, fingerprint
             ).granted is True
         finally:
             api.close()

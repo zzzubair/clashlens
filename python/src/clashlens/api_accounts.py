@@ -62,7 +62,7 @@ def create_account(
 ) -> OperationResult:
     with database.pool.connection() as connection:
         with connection.transaction():
-            existing = api_db._reserve_request(database, connection, binding)
+            existing = api_db._reserve_request(connection, binding)
             if existing is not None:
                 return existing
             public_id = uuid4()
@@ -154,7 +154,7 @@ def update_account(
 ) -> OperationResult:
     with database.pool.connection() as connection:
         with connection.transaction():
-            existing = api_db._reserve_request(database, connection, binding)
+            existing = api_db._reserve_request(connection, binding)
             if existing is not None:
                 return existing
             account = connection.execute(
@@ -216,7 +216,7 @@ def submit_refresh(
 ) -> OperationResult:
     with database.pool.connection() as connection:
         with connection.transaction():
-            existing = api_db._reserve_request(database, connection, binding)
+            existing = api_db._reserve_request(connection, binding)
             if existing is not None:
                 return existing
             row = api_db._execute_without_waiting(
@@ -284,84 +284,6 @@ def get_refresh_status(database: ApiDatabase, refresh_id: str) -> dict[str, Any]
         }
 
 
-def submit_export(
-    database: ApiDatabase,
-    binding: RequestBinding,
-    *,
-    export_format: str,
-) -> OperationResult:
-    with database.pool.connection() as connection:
-        with connection.transaction():
-            existing = api_db._reserve_request(database, connection, binding)
-            if existing is not None:
-                return existing
-            public_id = uuid4()
-            export_row = connection.execute(
-                """
-                INSERT INTO account_export_requests (
-                    public_id, account_id, format, state
-                ) VALUES (%s, %s, %s, 'pending')
-                RETURNING id
-                """,
-                (public_id, binding.account_id, export_format),
-            ).fetchone()
-            assert export_row is not None
-            export_request_id = int(export_row[0])
-            connection.execute(
-                """
-                INSERT INTO python_processing_jobs (
-                    observation_id, work_type, deduplication_key, input_json,
-                    priority, parser_version, max_attempts
-                ) VALUES (
-                    NULL, 'build_export', %s, %s, 100,
-                    'export-scaffold-v1', 3
-                )
-                """,
-                (
-                    f"export:{public_id}",
-                    Jsonb({"export_request_id": export_request_id}),
-                ),
-            )
-            result = OperationResult(
-                202,
-                {
-                    "export_id": str(public_id),
-                    "format": export_format,
-                    "status": "pending",
-                },
-            )
-            api_db._complete_request(connection, binding.request_id, result)
-            return result
-
-
-def get_export_status(
-    database: ApiDatabase,
-    account_id: int,
-    export_id: str,
-) -> dict[str, Any] | None:
-    with database.pool.connection() as connection:
-        row = connection.execute(
-            """
-            SELECT public_id, format, state, result_reference, safe_failure
-            FROM account_export_requests
-            WHERE public_id = %s AND account_id = %s
-            """,
-            (export_id, account_id),
-        ).fetchone()
-        if row is None:
-            return None
-        result: dict[str, Any] = {
-            "export_id": str(row[0]),
-            "format": _text(row[1]),
-            "status": _text(row[2]),
-        }
-        if row[3] is not None:
-            result["result_reference"] = _text(row[3])
-        if row[4] is not None:
-            result["failure"] = _text(row[4])
-        return result
-
-
 def create_group(
     database: ApiDatabase,
     binding: RequestBinding,
@@ -372,7 +294,7 @@ def create_group(
 ) -> OperationResult:
     with database.pool.connection() as connection:
         with connection.transaction():
-            existing = api_db._reserve_request(database, connection, binding)
+            existing = api_db._reserve_request(connection, binding)
             if existing is not None:
                 return existing
             public_id = uuid4()
@@ -388,9 +310,7 @@ def create_group(
                         (public_id, binding.account_id, name, normalized_name),
                     ).fetchone()
                     assert group is not None
-                    _replace_group_players(database, 
-                        connection, int(group[0]), normalized_tags
-                    )
+                    _replace_group_players(connection, int(group[0]), normalized_tags)
             except psycopg.errors.UniqueViolation:
                 result = OperationResult(409, {"error": "group_name_conflict"})
                 api_db._complete_request(connection, binding.request_id, result)
@@ -424,7 +344,7 @@ def update_group(
 ) -> OperationResult:
     with database.pool.connection() as connection:
         with connection.transaction():
-            existing = api_db._reserve_request(database, connection, binding)
+            existing = api_db._reserve_request(connection, binding)
             if existing is not None:
                 return existing
             try:
@@ -440,9 +360,7 @@ def update_group(
                         (name, normalized_name, group_id, binding.account_id),
                     ).fetchone()
                     if group is not None and normalized_tags is not None:
-                        _replace_group_players(database, 
-                            connection, int(group[0]), normalized_tags
-                        )
+                        _replace_group_players(connection, int(group[0]), normalized_tags)
             except psycopg.errors.UniqueViolation:
                 result = OperationResult(409, {"error": "group_name_conflict"})
                 api_db._complete_request(connection, binding.request_id, result)
@@ -474,7 +392,7 @@ def delete_group(
 ) -> OperationResult:
     with database.pool.connection() as connection:
         with connection.transaction():
-            existing = api_db._reserve_request(database, connection, binding)
+            existing = api_db._reserve_request(connection, binding)
             if existing is not None:
                 return existing
             deleted = connection.execute(
@@ -506,7 +424,7 @@ def add_group_player(
     now = now or datetime.now(UTC)
     with database.pool.connection() as connection:
         with connection.transaction():
-            existing = api_db._reserve_request(database, connection, binding)
+            existing = api_db._reserve_request(connection, binding)
             if existing is not None:
                 return existing
             group = _lock_group(connection, binding, group_id)
@@ -559,7 +477,7 @@ def remove_group_player(
 ) -> OperationResult:
     with database.pool.connection() as connection:
         with connection.transaction():
-            existing = api_db._reserve_request(database, connection, binding)
+            existing = api_db._reserve_request(connection, binding)
             if existing is not None:
                 return existing
             group = _lock_group(connection, binding, group_id)
@@ -807,7 +725,7 @@ def set_default_player(
     """Choose the verified player the Discord bot uses when none is named."""
     with database.pool.connection() as connection:
         with connection.transaction():
-            existing = api_db._reserve_request(database, connection, binding)
+            existing = api_db._reserve_request(connection, binding)
             if existing is not None:
                 return existing
             # Locking the ownership row holds off a transfer until this commits,
@@ -871,7 +789,7 @@ def unlink_player(
     from the crew."""
     with database.pool.connection() as connection:
         with connection.transaction():
-            existing = api_db._reserve_request(database, connection, binding)
+            existing = api_db._reserve_request(connection, binding)
             if existing is not None:
                 return existing
             outcome, crews = _unlink_player(connection, binding.account_id, normalized_tag)
@@ -940,7 +858,6 @@ def _unlink_player(
 
 
 def _replace_group_players(
-    database: ApiDatabase,
     connection: Any,
     group_id: int,
     normalized_tags: list[str],

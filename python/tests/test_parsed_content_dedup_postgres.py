@@ -102,8 +102,7 @@ def test_snapshot_manifest_uses_owning_ranking_version_observed_at(
                     """,
                     (generation_id, player_id),
                 )
-                manifest = boundary._freeze_boundary_manifest(database,
-                    connection, generation_id=generation_id, artifact_kind="snapshot"
+                manifest = boundary._freeze_boundary_manifest(connection, generation_id=generation_id, artifact_kind="snapshot"
                 )
                 assert manifest is not None
                 observed = connection.execute(

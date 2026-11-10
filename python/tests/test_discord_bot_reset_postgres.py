@@ -62,8 +62,8 @@ def test_stats_totals_every_saved_day_and_never_hides_a_missing_one(
             commands = Commands(
                 store, Site("https://clashlens.test"), now=lambda: day_3 - timedelta(minutes=1)
             )
-            full = commands.stats(DISCORD_ID, "drift", FULL)
-            late = commands.stats(DISCORD_ID, "drift", LATE)
+            full = commands.stats(DISCORD_ID, FULL)
+            late = commands.stats(DISCORD_ID, LATE)
         finally:
             api.close()
             owner.close()

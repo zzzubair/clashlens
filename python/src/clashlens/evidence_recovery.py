@@ -14,14 +14,11 @@ from .spool import SpoolError
 
 
 class Evidence(StrEnum):
-    """Where a claimed new response's bytes stand before processing.
+    """Why a claimed new response's bytes could not be read.
 
-    Two states hand the bytes on. ``LOCAL``: the spool's copy is there and
-    its hash matches. ``RECOVERED``: the spool's copy was gone, as after a
-    lost disk or a database restored to before spool cleanup ran, and the
-    archive's copy was read back, its hash checked and saved locally again.
-
-    The rest raise ``ArchiveReadError`` for the job, whose queue state
+    A successful local or recovered archive read hands on an
+    ``ArchiveReadResult``. These failures raise ``ArchiveReadError`` for the
+    job, whose queue state
     (``job_outcomes.fail_claim``) then decides what a failure means:
 
     - ``NO_LOCAL_READER``: this worker has no spool reader; fails for good.
@@ -44,8 +41,6 @@ class Evidence(StrEnum):
     restart, starts again from the spool.
     """
 
-    LOCAL = "local"
-    RECOVERED = "recovered"
     NO_LOCAL_READER = "no_local_reader"
     LOCAL_READ_FAILED = "local_read_failed"
     NOT_ARCHIVED = "not_archived"

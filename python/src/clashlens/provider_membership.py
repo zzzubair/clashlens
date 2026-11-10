@@ -114,7 +114,7 @@ def link_provider(
                 result = OperationResult(404, {"error": "account_not_found"})
                 api_db._complete_request(connection, binding.request_id, result)
                 return result
-            existing = api_db._reserve_request(database, connection, binding)
+            existing = api_db._reserve_request(connection, binding)
             if existing is not None:
                 return existing
             membership = read_membership(connection, account_id, provider, provider_subject)
@@ -181,7 +181,7 @@ def unlink_provider(
                 result = OperationResult(404, {"error": "account_not_found"})
                 api_db._complete_request(connection, binding.request_id, result)
                 return result
-            existing = api_db._reserve_request(database, connection, binding)
+            existing = api_db._reserve_request(connection, binding)
             if existing is not None:
                 return existing
             membership = read_membership(

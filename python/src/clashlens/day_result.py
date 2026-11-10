@@ -104,8 +104,8 @@ class ShieldState(StrEnum):
     player, a gap in the logs, a missing Reset reading, a disputed battle, an
     automatic loss not known to be none, or a next Reset that disagrees).
     INFERRED_SHIELDED: an ended day with no battle, no automatic loss and the
-    same trophies at both Resets. NOT_SHIELDED and UNCERTAIN_SEQUENCE:
-    allowed by the database, never written by the current code.
+    same trophies at both Resets. Historical ``not_shielded`` and
+    ``uncertain_sequence`` values remain allowed by the database.
 
     The run: a shielded day after a shielded day continues its run, one day
     longer (``shield_duration_days``); any other day ends it, so the next
@@ -119,8 +119,6 @@ class ShieldState(StrEnum):
     NOT_INFERRED = "not_inferred"
     UNKNOWN = "unknown"
     INFERRED_SHIELDED = "inferred_shielded"
-    NOT_SHIELDED = "not_shielded"
-    UNCERTAIN_SEQUENCE = "uncertain_sequence"
 
 
 class Shield(NamedTuple):

@@ -280,7 +280,6 @@ def _request_phase(
 
 
 def _reserve_request(
-    database: ApiDatabase,
     connection: Any,
     binding: RequestBinding,
     *,

@@ -46,7 +46,6 @@ from .collector_http import (
     ProviderFailure,
     retry_after_seconds,
 )
-from .collector_liveness import CollectorPhase
 from .operating import SchedulingDelayMetrics
 from .response_fields import content_fingerprint
 from .spool import Spool, SpoolError
@@ -135,7 +134,6 @@ class Collector:
         # their loop and start, for the container health check.
         self.loop_passes: dict[str, float] = {}
         self.database_waits: dict[object, tuple[str, float]] = {}
-        self.phase = CollectorPhase.STARTING
         collector_liveness.mark(self, "start")
 
     async def _database_call(self, operation: Any, *args: Any, **kwargs: Any) -> Any:
@@ -794,7 +792,6 @@ class Collector:
             await _drain_to_thread(self.recover_handoffs)
             collector_commits.commit_unrecovered(self, self._unrecovered)
             await _drain_to_thread(self.spool.cleanup_stale, 60.0)
-            self.phase = CollectorPhase.RUNNING
             tasks += [
                 asyncio.create_task(self._regular_loop(stop_requested, idle_seconds)),
                 asyncio.create_task(
@@ -817,7 +814,6 @@ class Collector:
                 error = failed.exception()
                 assert error is not None
                 raise error
-            self.phase = CollectorPhase.STOPPING
             stop_requested.set()
             outage = getattr(self.client, "provider_outage", None)
             if outage is not None:
@@ -825,8 +821,6 @@ class Collector:
             await asyncio.gather(*tasks)
             await _drain_to_thread(self._sweep_unreferenced)
         finally:
-            self.phase = CollectorPhase.STOPPING
-
             async def finish() -> None:
                 stop_task.cancel()
                 for task in tasks:
@@ -835,7 +829,6 @@ class Collector:
                 await asyncio.gather(stop_task, *tasks, return_exceptions=True)
                 server.close()
                 await server.wait_closed()
-                self.phase = CollectorPhase.STOPPED
 
             await _drain_awaitable(finish())
 

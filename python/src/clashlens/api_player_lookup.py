@@ -290,7 +290,7 @@ def submit_lookup(
 ) -> OperationResult:
     with database.pool.connection() as connection:
         with connection.transaction():
-            existing = api_db._reserve_request(database, connection, binding)
+            existing = api_db._reserve_request(connection, binding)
             if existing is not None:
                 return existing
             lookup = admit(connection, normalized_tag)

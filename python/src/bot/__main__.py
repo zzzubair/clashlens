@@ -130,11 +130,6 @@ def run(config: Config) -> None:
     client.run(token, log_handler=None)
 
 
-def command_payload() -> list[dict]:
-    _client, tree = build_client(_offline_commands())
-    return [command.to_dict(tree) for command in tree.get_commands()]
-
-
 async def register(config: Config) -> int:
     token = read_token(config.token_file)
     client, tree = build_client(_offline_commands())

@@ -1140,7 +1140,6 @@ def _archive_arguments(parser: argparse.ArgumentParser) -> None:
         "--archive-secret-key-file",
         default=os.environ.get("CLASHLENS_ARCHIVE_SECRET_KEY_FILE", ""),
     )
-    parser.add_argument("--archive-secure", action="store_true", default=True)
     parser.add_argument("--archive-insecure-test-only", action="store_true")
     parser.add_argument(
         "--spool-root", default=os.environ.get("CLASHLENS_SPOOL_ROOT", "")
@@ -1412,7 +1411,7 @@ def _run_recover_discord(arguments: argparse.Namespace) -> int:
             fingerprint = _official_credential_fingerprint(official_key)
             api_verification.register_official_credential(database, fingerprint)
             permit = api_verification.acquire_official_permit(
-                database, fingerprint, request_id=str(uuid4())
+                database, fingerprint
             )
             if not permit.granted:
                 print(json.dumps({"status": "verification_unavailable"}))

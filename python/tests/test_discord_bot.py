@@ -17,9 +17,9 @@ from PIL import Image
 from test_discord_alerts import DARK, LIGHT, background
 
 from bot import discord_app, replies
-from bot.__main__ import ConfigError, command_payload, main, read_token
+from bot.__main__ import ConfigError, main, read_token
 from bot.commands import Commands
-from bot.discord_app import DiscordApp, MenuState
+from bot.discord_app import DiscordApp, MenuState, build_client
 from bot.replies import GOLD, PLAYER_COLOURS, Site
 from clashlens.api_db import AccountContext, _screen_daily_log_with_events
 from clashlens.domain import ranked_day_for
@@ -305,8 +305,9 @@ def links(message: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def test_commands_install_for_users_and_servers_with_no_share_option() -> None:
-    commands = {command["name"]: command for command in command_payload()}
+def test_commands_install_for_users_and_servers_with_no_share_option(store) -> None:
+    _client, tree = build_client(Commands(store, SITE))
+    commands = {command.name: command.to_dict(tree) for command in tree.get_commands()}
     assert set(commands) == {"help", "link", "alerts", "stats"}
     for command in commands.values():
         # Guild, bot DM and group DM; installable to a server and to a user.

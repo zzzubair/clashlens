@@ -935,7 +935,6 @@ def get_frozen_leaderboard(
     official_season_id: str | None = None,
     season_day_number: int | None = None,
     now: datetime | None = None,
-    freshness_seconds: int = 900,
 ) -> dict[str, Any] | None:
     if offset < 0 or offset % limit:
         raise ValueError("offset must be non-negative and aligned to limit")

@@ -55,8 +55,8 @@ WORKER_STATEMENT_TIMEOUT_SECONDS = 900
 RESET_LOCK_WAIT = "250ms"
 
 # Work types this worker image may claim. Unsupported work types (for example
-# build_export) and unknown or future contracts stay pending and unclaimed so a
-# later image that supports them can pick them up.
+# build_export, retained in SQL history) and unknown or future contracts stay
+# pending and unclaimed for a later image that supports them.
 SUPPORTED_WORK_TYPES = (
     "process_observation",
     "replay_observation",

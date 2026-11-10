@@ -5,7 +5,9 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from domain_test_support import domain_database, store_observation, text
 from psycopg.types.json import Jsonb
-from test_army_analytics_publication_postgres import _insert_confirmed_anchor
+from test_army_analytics_publication_seasons_postgres import (
+    _insert_confirmed_anchor,
+)
 
 from clashlens import (
     army_ingestion,
@@ -129,8 +131,7 @@ def test_complete_ranked_day_without_profile_is_not_snapshot_complete(
                     """,
                     (BOUNDARY,),
                 ).fetchone()[0]
-                manifest = boundary._freeze_boundary_manifest(database, 
-                    connection,
+                manifest = boundary._freeze_boundary_manifest(connection,
                     generation_id=int(generation_id),
                     artifact_kind="snapshot",
                 )
@@ -784,8 +785,7 @@ def test_enqueue_army_routes_frozen_drift_for_each_state_despite_unrelated_recon
                 generation = connection.execute(
                     "SELECT id FROM boundary_publication_generations"
                 ).fetchone()[0]
-                manifest = boundary._freeze_boundary_manifest(database, 
-                    connection, generation_id=int(generation), artifact_kind="army"
+                manifest = boundary._freeze_boundary_manifest(connection, generation_id=int(generation), artifact_kind="army"
                 )
                 connection.execute(
                     """
@@ -899,13 +899,11 @@ def test_enqueue_army_decode_only_inherits_snapshot_after_restart(
                     """
                 ).fetchone()
                 assert generation is not None
-                snapshot_manifest = boundary._freeze_boundary_manifest(database, 
-                    connection,
+                snapshot_manifest = boundary._freeze_boundary_manifest(connection,
                     generation_id=int(generation[0]),
                     artifact_kind="snapshot",
                 )
-                army_manifest = boundary._freeze_boundary_manifest(database, 
-                    connection, generation_id=int(generation[0]), artifact_kind="army"
+                army_manifest = boundary._freeze_boundary_manifest(connection, generation_id=int(generation[0]), artifact_kind="army"
                 )
                 snapshot_id = connection.execute(
                     """
@@ -1058,11 +1056,9 @@ def test_boundary_correction_recovery_activates_pending_inputs(
                 generation = connection.execute(
                     "SELECT id FROM boundary_publication_generations"
                 ).fetchone()[0]
-                snapshot_manifest = boundary._freeze_boundary_manifest(database, 
-                    connection, generation_id=int(generation), artifact_kind="snapshot"
+                snapshot_manifest = boundary._freeze_boundary_manifest(connection, generation_id=int(generation), artifact_kind="snapshot"
                 )
-                army_manifest = boundary._freeze_boundary_manifest(database, 
-                    connection, generation_id=int(generation), artifact_kind="army"
+                army_manifest = boundary._freeze_boundary_manifest(connection, generation_id=int(generation), artifact_kind="army"
                 )
                 snapshot_id = connection.execute(
                     """
@@ -1183,8 +1179,7 @@ def test_source_correction_marks_both_artifacts_when_one_manifest_is_frozen(
                 generation = connection.execute(
                     "SELECT id FROM boundary_publication_generations"
                 ).fetchone()[0]
-                snapshot_manifest = boundary._freeze_boundary_manifest(database, 
-                    connection, generation_id=int(generation), artifact_kind="snapshot"
+                snapshot_manifest = boundary._freeze_boundary_manifest(connection, generation_id=int(generation), artifact_kind="snapshot"
                 )
                 assert snapshot_manifest is not None
                 connection.execute(

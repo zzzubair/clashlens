@@ -205,7 +205,7 @@ def require_open_generation(row: Any, boundary_at: datetime) -> None:
 
 
 def _inherit_deferred_army_successor_snapshot(
-    database, connection: Any, *, generation_id: int
+    connection: Any, *, generation_id: int
 ) -> bool:
     target = connection.execute(
         """
@@ -327,9 +327,7 @@ def _try_enqueue_boundary_artifacts(
     # A repair holds no Reset's first board and army results past 06:00.
     if boundary_held(connection, boundary_at) and not board_deadline.overdue(connection, boundary_at):
         return
-    _inherit_deferred_army_successor_snapshot(database, 
-        connection, generation_id=generation_id
-    )
+    _inherit_deferred_army_successor_snapshot(connection, generation_id=generation_id)
     generation = connection.execute(
         """
         SELECT generation, sweep_id, snapshot_state, army_state,
@@ -412,7 +410,7 @@ def _try_enqueue_boundary_artifacts(
                 database, connection, boundary_at=boundary_at, generation_id=new_id, army=army
             )
             return
-        manifest = _freeze_boundary_manifest(database, 
+        manifest = _freeze_boundary_manifest(
             connection, generation_id=generation_id, artifact_kind="snapshot"
         )
         if manifest is None:
@@ -465,7 +463,7 @@ def _try_enqueue_boundary_artifacts(
         and (not affected_artifacts or "army" in affected_artifacts)
         and army and not board_first
     ):
-        manifest = _freeze_boundary_manifest(database, 
+        manifest = _freeze_boundary_manifest(
             connection, generation_id=generation_id, artifact_kind="army"
         )
         if manifest is None:
@@ -523,7 +521,7 @@ def _boundary_snapshot_status(
     *,
     player_id: int,
     ranked_day_version_id: int,
-    boundary_at: datetime | None = None,
+    boundary_at: datetime,
 ) -> str:
     ranked = connection.execute(
         "SELECT state FROM ranked_day_versions WHERE id = %s AND player_id = %s",
@@ -549,14 +547,13 @@ def _boundary_snapshot_status(
               ON effect.profile_version_id = profile.id
             WHERE profile.player_id = %s
               AND profile.source_contract_state = 'accepted'
-              AND (%s::timestamptz IS NULL
-                   OR COALESCE(effect.observed_at, profile.observed_at) <= %s))
+              AND COALESCE(effect.observed_at, profile.observed_at) <= %s)
         """,
-        (player_id, boundary_at, boundary_at),
+        (player_id, boundary_at),
     ).fetchone()[0]
     # A player not read in the ended day's week before the Reset ranks by
     # their Complete day, named by their first Legend I reading since.
-    return "complete" if profile or boundary_at is not None and (
+    return "complete" if profile or (
         boundary_members.first_readings(
             connection, boundary_at, {player_id: ranked_day_version_id})
     ) else "missing"

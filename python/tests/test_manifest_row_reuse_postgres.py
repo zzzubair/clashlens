@@ -67,7 +67,7 @@ def _freeze(database: Database, connection: Any, generation_id: int, generation:
             connection, generation_id=generation_id, artifact_kind=artifact_kind
         )
         manifest_id, digest = boundary._freeze_boundary_manifest(
-            database, connection, generation_id=generation_id, artifact_kind=artifact_kind
+            connection, generation_id=generation_id, artifact_kind=artifact_kind
         )
         stored_digest, contents = manifest_contents(connection, manifest_id)
         assert stored_digest == digest == manifest_digest(contents)

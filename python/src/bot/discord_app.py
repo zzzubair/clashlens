@@ -378,7 +378,6 @@ class DiscordApp:
                 "stats",
                 app.commands.stats,
                 str(interaction.user.id),
-                interaction.user.name,
                 player,
             )
 
@@ -464,14 +463,12 @@ class ReplyView(_OwnedView):
                     for choice in reply.choices
                 ],
             )
-            action = reply.pick or "stats"
-
             async def picked(interaction: discord.Interaction) -> None:
                 tag = select.values[0]
                 await app.on_component(
                     interaction,
                     self,
-                    lambda: app.commands.pick(str(interaction.user.id), action, tag),
+                    lambda: app.commands.pick(str(interaction.user.id), tag),
                 )
 
             select.callback = picked  # type: ignore[method-assign]

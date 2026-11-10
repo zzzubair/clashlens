@@ -13,7 +13,6 @@ from test_api_migration import migrated_production_database
 from clashlens import (
     api,
     api_accounts,
-    api_analytics,
     api_db,
     api_leaderboard,
     api_players,
@@ -242,9 +241,6 @@ def test_public_saved_operations_are_bounded_and_screen_ready(
             live = api_leaderboard.get_live_leaderboard(
                 database, limit=100, now=NOW
             )
-            analytics = api_analytics.get_basic_analytics(
-                database, now=NOW, freshness_seconds=900
-            )
 
             assert player is not None
             assert player["tag"] == "#2PP"
@@ -273,10 +269,6 @@ def test_public_saved_operations_are_bounded_and_screen_ready(
                 "stale_count": 0,
             }
             assert live["provenance"]["observed_at"] == NOW.isoformat()
-            assert analytics["population"] == "tracked_players"
-            assert analytics["sample_size"] == 2
-            assert analytics["classification_state"] == "unclassified"
-            assert analytics["freshness"] == {"fresh": 2, "stale": 0}
         finally:
             database.close()
 

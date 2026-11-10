@@ -43,12 +43,9 @@ API_ROUTES = (
     "leaderboard_live",
     "leaderboard_frozen",
     "army_analytics",
-    "battle_army",
-    "basic_analytics",
     "public_user",
     "account",
     "groups",
-    "exports",
     "providers",
     "verification",
     "other",
@@ -201,16 +198,10 @@ def api_route(path: str) -> str:
         return "leaderboard_frozen"
     if path == "/v1/analytics/armies" or path.startswith("/v1/analytics/armies/"):
         return "army_analytics"
-    if path.startswith("/v1/battles/") and path.endswith("/army"):
-        return "battle_army"
-    if path == "/v1/analytics/basic":
-        return "basic_analytics"
     if path.startswith("/v1/users/"):
         return "public_user"
     if path.startswith("/v1/account/groups"):
         return "groups"
-    if path.startswith("/v1/account/exports"):
-        return "exports"
     if path.startswith("/v1/account/providers"):
         return "providers"
     if path.startswith("/v1/account/verification"):

@@ -11,7 +11,6 @@ from contextlib import contextmanager
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar
-from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -194,7 +193,7 @@ def test_live_reads_leave_verification_its_start_and_collection_half_its_share(
                 collector.acquire_collector_permit(FINGERPRINT).granted for _ in range(30)
             ]
             verification = api_verification.acquire_official_permit(
-                database, FINGERPRINT, request_id=str(uuid4())
+                database, FINGERPRINT
             )
             if time.monotonic() - started < 0.8:
                 break

@@ -16,9 +16,9 @@ from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
 from clashlens import (
     api_players,
+    battle_day_repair,
     boundary_publication,
     past_reset_pacing,
-    reconciliation_db,
 )
 from clashlens.api_db import ApiDatabase
 from clashlens.archive import S3ArchiveReader
@@ -1009,7 +1009,7 @@ def test_republication_rebuilds_a_day_wrongly_inferred_shielded(
                     (first[0],),
                 )
                 connection.commit()
-            rebuild_jobs = reconciliation_db.enqueue_current_season_republication(
+            rebuild_jobs = battle_day_repair.enqueue_current_season_republication(
                 database, max_jobs=10
             )["job_ids"]
             assert len(rebuild_jobs) == 1
@@ -1022,7 +1022,7 @@ def test_republication_rebuilds_a_day_wrongly_inferred_shielded(
             assert rebuilt[1] == first[1] + 1
             assert text(rebuilt[2]) == "Inconsistent"
             assert (text(rebuilt[3]), rebuilt[4]) == ("unknown", None)
-            assert reconciliation_db.enqueue_current_season_republication(
+            assert battle_day_repair.enqueue_current_season_republication(
                 database, max_jobs=10
             )["job_ids"] == []
         finally:
@@ -1154,7 +1154,7 @@ def test_reconciliation_publishes_frozen_canonical_battle_projection(
                     ),
                 )
                 connection.commit()
-            assert reconciliation_db.enqueue_current_season_republication(database, max_jobs=1)["job_ids"] == []
+            assert battle_day_repair.enqueue_current_season_republication(database, max_jobs=1)["job_ids"] == []
             with database.pool.connection() as connection:
                 # The source setup runs under v3 and therefore queued a normal
                 # reconciliation. Simulate a deployment whose v2 work is
@@ -1168,11 +1168,11 @@ def test_reconciliation_publishes_frozen_canonical_battle_projection(
                     (int(reconcile_job[0]),),
                 )
                 connection.commit()
-            republication_jobs = reconciliation_db.enqueue_current_season_republication(database,
+            republication_jobs = battle_day_repair.enqueue_current_season_republication(database,
                 max_jobs=1
             )["job_ids"]
             assert len(republication_jobs) == 1
-            assert reconciliation_db.enqueue_current_season_republication(database, max_jobs=1)["job_ids"] == []
+            assert battle_day_repair.enqueue_current_season_republication(database, max_jobs=1)["job_ids"] == []
             with database.pool.connection() as connection:
                 republication_input = connection.execute(
                     "SELECT input_json FROM python_processing_jobs WHERE id = %s",

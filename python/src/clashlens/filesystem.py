@@ -24,9 +24,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-FILESYSTEM_TYPES = ("btrfs", "ext4", "xfs", "other", "unknown")
-INODE_MODELS = ("finite", "dynamic", "unknown")
-
 _MOUNTINFO = Path("/proc/self/mountinfo")
 _MOUNTINFO_ESCAPES = (
     ("\\040", " "),
@@ -319,8 +316,6 @@ def filesystem_capacity(
 
 
 __all__ = [
-    "FILESYSTEM_TYPES",
-    "INODE_MODELS",
     "classify_inode_model",
     "filesystem_capacity",
     "mount_facts",

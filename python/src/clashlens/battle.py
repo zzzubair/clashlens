@@ -184,15 +184,13 @@ def _parse_row(
     parser_version: str,
 ) -> ParsedBattleRow:
     if not isinstance(source, dict):
-        return _gap(
-            index, source, "unsupported_legend_row", "battle row is not an object"
-        )
+        return _gap(index, source, "unsupported_legend_row")
     if source.get("battleType") != "legend":
         if is_unrecognised_battle_row(source):
             # A type that is not text, or "legend" spelt another way, may
             # be a Legend battle in a shape we do not read: a gap, not a
             # row of another mode to ignore.
-            return _gap(index, source, "unsupported_legend_row", "battle type is not recognised")
+            return _gap(index, source, "unsupported_legend_row")
         return ParsedBattleRow(
             source_row_index=index,
             outcome="ignored_non_legend",
@@ -236,14 +234,14 @@ def _parse_row(
             source.get("trophies", source.get("playerTrophies")), "reporter trophies"
         )
     except DomainRuleError as error:
-        return _gap(index, source, error.category, str(error))
+        return _gap(index, source, error.category)
     except (BattleLogParseError, KeyError, TypeError) as error:
         category = (
             error.category
             if isinstance(error, BattleLogParseError)
             else "unsupported_legend_row"
         )
-        return _gap(index, source, category, str(error))
+        return _gap(index, source, category)
 
     return ParsedBattleRow(
         source_row_index=index,
@@ -452,7 +450,6 @@ def _gap(
     index: int,
     source: Any,
     category: str,
-    _detail: str,
 ) -> ParsedBattleRow:
     return ParsedBattleRow(
         source_row_index=index,

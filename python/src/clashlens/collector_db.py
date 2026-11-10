@@ -19,15 +19,11 @@ from . import (
     collector_liveness,
     collector_metrics,
     collector_reset,
-    collector_uploads,
     queue_refresh,
     response_novelty,
 )
 from .db import PYTHON_LIVE_PRIORITY, PYTHON_RESET_PRIORITY
 from .raw_body import DELETABLE_SQL, RECORDED_SQL, STILL_PROCESSING_SQL
-
-UploadClaim = collector_uploads.UploadClaim
-UploadLeaseLost = collector_uploads.UploadLeaseLost
 
 PROCESSING_VERSION = "clashlens-domain-processing-v1"
 DOMAIN_RULE_VERSION = "clashlens-domain-rules-v1"

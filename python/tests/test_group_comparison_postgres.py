@@ -9,7 +9,7 @@ from test_api_db_organization import account_binding, create_owner
 from test_api_db_public_ops import NOW, seed_profile
 from test_api_migration import migrated_production_database
 
-from clashlens import api_accounts, api_analytics, api_groups, api_players
+from clashlens import api_accounts, api_groups, api_players
 from clashlens.api_db import ApiDatabase, _screen_daily_log_with_events
 from clashlens.domain import ranked_day_for
 
@@ -511,21 +511,16 @@ def test_profiles_from_before_a_season_reset_show_no_current_trophies(
                 found = api_players.search_known_players(
                     database, "Player", now=now, freshness_seconds=900
                 )
-                average = api_analytics.get_basic_analytics(
-                    database, now=now, freshness_seconds=900
-                )
                 return (
                     [(p["tag"], p["trophies"], p["season_reset_pending"])
                      for p in result["players"]],
                     [(r["tag"], r["trophies"], r["season_reset_pending"])
                      for r in found],
-                    (average["sample_size"], average["results"]["average_trophies"]),
                 )
 
-            groups, found, average = read(NOW)
+            groups, found = read(NOW)
             assert groups == [("#2PP", 6400, False), ("#8PY", 5100, False)]
             assert found == [("#2PP", 6400, False), ("#8PY", 5100, False)]
-            assert average == (2, 5750)
 
             # Day 2 of the next Season: only #8PY has reported its Season reset.
             now = datetime.fromisoformat("2026-08-11T12:00:00+00:00")
@@ -538,10 +533,9 @@ def test_profiles_from_before_a_season_reset_show_no_current_trophies(
                     """,
                     (ranked_day_for(now).official_season_id,),
                 )
-            groups, found, average = read(now)
+            groups, found = read(now)
             assert groups == [("#2PP", None, True), ("#8PY", 5100, False)]
             assert found == [("#8PY", 5100, False), ("#2PP", None, True)]
-            assert average == (1, 5100)
         finally:
             database.close()
 
