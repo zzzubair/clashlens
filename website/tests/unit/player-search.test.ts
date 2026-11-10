@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { suggestionsView } from "../../app/components/PlayerSearch";
-import type { PlayerSearchLoaderData } from "../../app/routes/player-search";
+import type { PlayerSearchLoaderData } from "../../app/lib/player-search-data";
 
 const answer = (query: string, failed = false): PlayerSearchLoaderData => ({
   query,

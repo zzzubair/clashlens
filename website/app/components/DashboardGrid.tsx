@@ -27,7 +27,7 @@ import {
 } from "../lib/dashboard";
 import type { CardDataMap, CardReads } from "../lib/dashboard-cards";
 import { canonicalPlayerPath } from "../lib/player-tag";
-import type { DashboardActionData, DashboardLoaderData } from "../routes/dashboard";
+import type { DashboardActionData, DashboardLoaderData } from "../lib/dashboard-data";
 import {
   ClockCard,
   CutoffsCard,
@@ -46,7 +46,8 @@ import {
   outdatedCards,
   type DashboardEditEvent,
 } from "./DashboardState";
-import { CardHead, CardNote, cardIcon, updatedAgo } from "./DashboardParts";
+import { CardHead, CardNote } from "./DashboardParts";
+import { updatedAgo } from "../lib/age-format";
 import { LegendDayCard, dayReadAt } from "./LegendDayCard";
 import { OpponentsCard, useBasesDay, type BasesDay } from "./OpponentsCard";
 import {
@@ -159,10 +160,11 @@ function cardBody(
   context: ViewContext,
 ): ReactNode {
   const title = CARDS[card].title;
-  if (context.dayOver || !hasView(card)) return <CardHead title={title} />;
+  if (context.dayOver || !hasView(card))
+    return <CardHead icon={CARDS[card].icon} title={title} />;
   const note = (text: string) => (
     <>
-      <CardHead title={title} />
+      <CardHead icon={CARDS[card].icon} title={title} />
       <CardNote>{text}</CardNote>
     </>
   );
@@ -933,9 +935,7 @@ export function Dashboard({
                 </button>
                 {/* The card's own title and mark, as outside Customise. */}
                 <span className="dash-edit-name">
-                  {cardIcon(CARDS[card].title) ? (
-                    <DashboardIcon name={cardIcon(CARDS[card].title)!} />
-                  ) : null}
+                  <DashboardIcon name={CARDS[card].icon} />
                   {CARDS[card].title}
                 </span>
                 {CARDS[card].settings ? (

@@ -1,6 +1,6 @@
 import { CARDS, shownCards, type CardId, type DashboardSettings } from "../lib/dashboard";
 import type { CardReads } from "../lib/dashboard-cards";
-import type { DashboardActionData, DashboardLoaderData } from "../routes/dashboard";
+import type { DashboardActionData, DashboardLoaderData } from "../lib/dashboard-data";
 
 type Layout = NonNullable<DashboardSettings["layout"]>;
 

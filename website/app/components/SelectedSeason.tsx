@@ -1,3 +1,5 @@
+import { formatCount, formatSigned, valueTone } from "../lib/number-format";
+import { legendDayDate, rankMoves, validDay } from "../lib/legend-log-data";
 import { useEffect } from "react";
 import { useLocation, useSearchParams } from "react-router";
 
@@ -12,17 +14,7 @@ import { gapLabel, inGap, logGaps, pastSeasonShape } from "../lib/season-shape";
 import { DayMark, DayStatusNote, provisional } from "./DayStatus";
 import { ErrorNotice } from "./ErrorNotice";
 import { ShieldIcon, SwordIcon } from "./GameIcons";
-import {
-  LogDate,
-  LogHead,
-  LogRank,
-  formatCount,
-  formatSigned,
-  legendDayDate,
-  rankMoves,
-  validDay,
-  valueTone,
-} from "./LegendLog";
+import { LogDate, LogHead, LogRank } from "./LegendLog";
 import { SeasonStory } from "./SeasonStory";
 import { SeasonSummary, per, type SummarySide } from "./SeasonSummary";
 

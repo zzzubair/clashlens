@@ -1,14 +1,8 @@
+import type { PlayerSearchLoaderData } from "../lib/player-search-data";
 import type { LoaderFunctionArgs } from "react-router";
-import type { SearchResponse, WebsiteErrorResponse } from "../lib/contracts";
 import { searchPlayers } from "../services/players.server";
 
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
-
-export interface PlayerSearchLoaderData {
-  query: string;
-  search: SearchResponse | null;
-  error: WebsiteErrorResponse | null;
-}
 
 export async function loader({
   request,

@@ -83,12 +83,12 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
 
 import routes from "../../app/routes";
 import { action as ownerAction } from "../../app/routes/account.view-as";
+import type { DashboardLoaderData } from "../../app/lib/dashboard-data";
 import DashboardRoute, {
   action,
   headers,
   loader,
   shouldRevalidate,
-  type DashboardLoaderData,
 } from "../../app/routes/dashboard";
 import { loadWebsiteConfig } from "../../app/server/config.server";
 import { readViewAs } from "../../app/server/view-as.server";

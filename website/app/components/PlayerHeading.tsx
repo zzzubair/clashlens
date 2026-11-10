@@ -1,3 +1,4 @@
+import { rankMovement } from "../lib/rank-movement";
 import { Suspense } from "react";
 import { Await, Link } from "react-router";
 
@@ -109,7 +110,7 @@ export function LiveRank({
         {(read) => {
           if (read === null) return null;
           const { now, atReset } = read;
-          const moved = atReset === null ? 0 : atReset - now;
+          const moved = rankMovement(now, atReset) ?? 0;
           const places = Math.abs(moved).toLocaleString("en-GB");
           return (
             <Link

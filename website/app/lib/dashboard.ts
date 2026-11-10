@@ -1,9 +1,10 @@
+import type { IconName } from "../components/DashboardIcon";
 /**
  * Dashboard cards, the default layout and each user's saved settings.
  *
  * Settings live in the account's existing `preferences` box under
  * `dashboard`, so they need no database change. Saved settings are read
- * leniently (unknown or unbuilt cards are dropped) so a card retired later
+ * leniently (unknown cards are dropped) so a card retired later
  * never breaks a page; posted settings are checked strictly.
  */
 
@@ -21,11 +22,7 @@ export interface CardDefinition {
   size: CardSize;
   /** The one line shown in "+ Add a card". */
   description: string;
-  /**
-   * The card is on the page and in "+ Add a card". A card that is not built
-   * yet stays out of both, even where the default layout names it.
-   */
-  built: boolean;
+  icon: IconName;
   /** The card has a "⚙ Settings" button while customising. */
   settings?: true;
 }
@@ -43,20 +40,20 @@ const CARD_LIST = {
     size: "m",
     description:
       "Today's trophies, rank and Next Reset range, with your attacks and defenses.",
-    built: true,
+    icon: "cal",
   },
   "legend-clock": {
     title: "Legend clock",
     size: "s",
     description: "Your attacks and defenses on a 24-hour dial in your time zone.",
-    built: true,
+    icon: "clock",
   },
   bases: {
     title: "Bases you attacked",
     size: "l",
     description:
       "Each base you hit today, and how many trophies it gives up against other attackers.",
-    built: true,
+    icon: "swords",
     settings: true,
   },
   goal: {
@@ -64,65 +61,65 @@ const CARD_LIST = {
     size: "s",
     description:
       "Pick a rank to finish the Season at, and see the trophies a day you need.",
-    built: true,
+    icon: "flag",
     settings: true,
   },
   "armies-defense": {
     title: "Armies on defense",
     size: "m",
     description: "Which armies attack you, and how your base holds against each.",
-    built: true,
+    icon: "shield",
   },
   "rivals-watch": {
     title: "Rivals watch",
     size: "m",
     description: "The players just above and below you on the live leaderboard.",
-    built: true,
+    icon: "users",
   },
   "heat-map": {
     title: "Season heat map",
     size: "s",
     description: "Every day of the Season coloured by your gain or loss.",
-    built: true,
+    icon: "grid",
   },
   cutoffs: {
     title: "Cutoffs",
     size: "s",
     description: "Trophies needed for Top 10, Top 200 and more, and your gap to each.",
-    built: true,
+    icon: "trophy",
     settings: true,
   },
   "season-graph": {
     title: "Season graph",
     size: "m",
     description: "Your trophies or rank at every Reset this Season.",
-    built: true,
+    icon: "chart",
   },
   "recent-form": {
     title: "Recent form",
     size: "s",
     description:
       "Your average day over the last 3 or 7 days, and whether you are improving.",
-    built: true,
+    icon: "bars",
   },
   "offense-consistency": {
     title: "Offense consistency",
     size: "s",
     description: "How often you triple, and what your misses cost.",
-    built: true,
+    icon: "star",
   },
   "group-watch": {
     title: "Watchlist",
     size: "m",
     description: "How you compare with the players in one of your watchlists.",
-    built: true,
+    icon: "list",
     settings: true,
   },
   "armies-offense": {
     title: "Armies on offense",
     size: "s",
     description: "Your hit rate with each army, next to everyone else's.",
-    built: true,
+    icon: "target",
   },
 } satisfies Record<string, CardDefinition>;
 
@@ -142,7 +139,7 @@ export function dashboardQuery(query: Record<string, string>, viewAs: string | n
 
 /**
  * The default layout, in order. Users on the default follow this list at
- * each release; cards not built yet are skipped until they are. On a wide
+ * each release. On a wide
  * screen the tall heat map shares Rivals watch's row and the short Goal
  * shares Armies on defense's, so neither row leaves a hole. An iPad keeps the
  * same pairs, with the clock beside the Legend day.
@@ -194,11 +191,9 @@ export function defaultSettings(): DashboardSettings {
   };
 }
 
-/** The cards a user sees, in order: the default list or their own, built cards only. */
+/** The cards a user sees, in order: the default list or their own. */
 export function shownCards(layout: DashboardSettings["layout"]): CardId[] {
-  return (Array.isArray(layout) ? layout : DEFAULT_LAYOUT).filter(
-    (id) => CARDS[id].built,
-  );
+  return [...(Array.isArray(layout) ? layout : DEFAULT_LAYOUT)];
 }
 
 /**
@@ -261,9 +256,9 @@ export function isDashboardSave(
   );
 }
 
-/** Cards "+ Add a card" offers: every built card not already shown. */
+/** Cards "+ Add a card" offers: every card not already shown. */
 export function addableCards(shown: readonly CardId[]): CardId[] {
-  return CARD_IDS.filter((id) => CARDS[id].built && !shown.includes(id));
+  return CARD_IDS.filter((id) => !shown.includes(id));
 }
 
 function isCardId(value: unknown): value is CardId {
@@ -319,9 +314,7 @@ export function readSettings(value: unknown): DashboardSettings {
   if (!isRecord(value) || value.v !== 3) return settings;
   if (value.layout === "default") settings.layout = "default";
   else if (Array.isArray(value.layout)) {
-    settings.layout = [...new Set(value.layout.filter(isCardId))].filter(
-      (id) => CARDS[id].built,
-    );
+    settings.layout = [...new Set(value.layout.filter(isCardId))];
   }
   if (isGoal(value.goal)) settings.goal = value.goal;
   if (isCutoffs(value.cutoffs)) settings.cutoffs = [...value.cutoffs];
@@ -342,7 +335,7 @@ export function parsePostedSettings(value: unknown): DashboardSettings | null {
     layout !== "default" &&
     !(
       Array.isArray(layout) &&
-      layout.every((id) => isCardId(id) && CARDS[id].built) &&
+      layout.every(isCardId) &&
       new Set(layout).size === layout.length
     )
   )

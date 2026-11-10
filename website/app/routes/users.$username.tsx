@@ -1,3 +1,5 @@
+import { rankMovement } from "../lib/rank-movement";
+import { formatNet } from "../lib/profile-format";
 import { Suspense } from "react";
 import {
   Await,
@@ -25,7 +27,7 @@ import type { SeasonDay } from "../lib/dashboard-cards";
 import { LOOKUP_MESSAGES, lookupExplanation } from "../lib/player-lookup-text";
 import { canonicalPlayerPath } from "../lib/player-tag";
 import { logGaps, shapeOf } from "../lib/season-shape";
-import type { RootLoaderData } from "../root";
+import type { RootLoaderData } from "../lib/root-data";
 import type { PublicUserDays } from "../services/public-user-days.server";
 import type { Route } from "./+types/users.$username";
 
@@ -569,7 +571,7 @@ function inLegend(player: LinkedPlayerCard): boolean {
 
 /** Places moved since the last Reset's Daily board; nothing when unknown or none. */
 function RankMove({ rank, since }: { rank: number; since: number | null }) {
-  const moved = since === null ? 0 : since - rank;
+  const moved = rankMovement(rank, since) ?? 0;
   if (!moved) return null;
   const places = Math.abs(moved).toLocaleString("en-GB");
   return (
@@ -584,11 +586,6 @@ function RankMove({ rank, since }: { rank: number; since: number | null }) {
       </span>
     </span>
   );
-}
-
-function formatNet(value: number | null): string {
-  if (value === null) return "Unknown";
-  return value > 0 ? `+${value}` : String(value);
 }
 
 function netTone(value: number | null): string | undefined {

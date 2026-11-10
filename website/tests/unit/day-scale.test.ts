@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { dayBar, dayLabel, dayRange, rowScale } from "../../app/components/DayScale";
+import { dayBar, rowScale } from "../../app/lib/day-bars";
+import { utcDate, dayRange } from "../../app/lib/date-format";
 
 describe("daily bars' own scale per row", () => {
   it("lets the row's biggest gain or loss reach the band's edge, from zero in the middle", () => {
@@ -29,6 +30,6 @@ describe("daily bars' own scale per row", () => {
       "29 Sep – 5 Oct",
     );
     expect(dayRange([])).toBeNull();
-    expect(dayLabel("2026-09-29T05:00:00Z")).toBe("29 Sep");
+    expect(utcDate("2026-09-29T05:00:00Z")).toBe("29 Sep");
   });
 });

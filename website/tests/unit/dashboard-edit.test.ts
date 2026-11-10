@@ -14,9 +14,9 @@ import {
 import { defaultSettings, type CardId } from "../../app/lib/dashboard";
 import type { CardReads } from "../../app/lib/dashboard-cards";
 import type {
-  DashboardActionData,
   DashboardLoaderData,
-} from "../../app/routes/dashboard";
+  DashboardActionData,
+} from "../../app/lib/dashboard-data";
 
 const edit = (events: DashboardEditEvent[], from: DashboardEdit = DASHBOARD_VIEWING) =>
   events.reduce(dashboardEditStep, from);

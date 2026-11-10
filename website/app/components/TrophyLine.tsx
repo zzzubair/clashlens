@@ -1,3 +1,4 @@
+import { signedNumber } from "../lib/number-format";
 import { useState } from "react";
 
 import type { PlayerPage, RankedDaySummary } from "../lib/contracts";
@@ -15,8 +16,6 @@ const date = new Intl.DateTimeFormat("en-GB", {
   timeZone: "UTC",
 });
 const count = (value: number) => value.toLocaleString("en-GB");
-const signed = (value: number) =>
-  value > 0 ? `+${count(value)}` : value < 0 ? `−${count(-value)}` : "±0";
 
 /**
  * The Season so far as one line, read like a stock chart: each finished
@@ -241,7 +240,7 @@ export function TrophyLine({
                       : undefined
                 }
               >
-                {signed(shown.change)}
+                {signedNumber(shown.change, { locale: "en-GB", zero: "±0" })}
               </span>
             )}
           </span>
@@ -276,7 +275,9 @@ export function TrophyLine({
           return (
             <li key={slot}>
               {when}: {count(value)}
-              {change === null ? "" : `, ${signed(change)}`}
+              {change === null
+                ? ""
+                : `, ${signedNumber(change, { locale: "en-GB", zero: "±0" })}`}
             </li>
           );
         })}

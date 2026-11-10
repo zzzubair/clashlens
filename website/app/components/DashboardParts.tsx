@@ -1,17 +1,6 @@
-import { isValidElement, type ReactNode } from "react";
+import { type ReactNode } from "react";
 
 import { DashboardIcon, type IconName } from "./DashboardIcon";
-
-/** A signed number rounded to `digits` places; "–" when unknown. */
-export function signedOr(value: number | null, digits = 0): string {
-  if (value === null || !Number.isFinite(value)) return "–";
-  const rounded = Number(value.toFixed(digits));
-  const text = Math.abs(rounded).toLocaleString("en-US", {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
-  return rounded > 0 ? `+${text}` : rounded < 0 ? `−${text}` : text;
-}
 
 export function count(value: number | null): string {
   return value === null ? "–" : value.toLocaleString("en-US");
@@ -25,55 +14,12 @@ export function tone(value: number | null): string {
   return value === null || value === 0 ? "" : value > 0 ? "positive" : "negative";
 }
 
-/** "updated 3 min ago", or nothing until the browser knows the time. */
-export function updatedAgo(
-  observedAtMs: number | null,
-  nowMs: number | null,
-): string | null {
-  if (observedAtMs === null || nowMs === null) return null;
-  const minutes = Math.max(0, Math.floor((nowMs - observedAtMs) / 60_000));
-  if (minutes < 1) return "updated just now";
-  if (minutes < 120) return `updated ${minutes} min ago`;
-  return `updated ${Math.floor(minutes / 60)} h ago`;
-}
-
 /** "Last 7 days", "Whole Season · 11 days", or how many days the Season has had so far. */
 export function lastDaysLabel(asked: number | "season", span: number): string {
   const days = `${span} day${span === 1 ? "" : "s"}`;
   if (asked === "season") return `Whole Season · ${days}`;
   if (span < asked) return `Last ${days} · only ${span} so far this Season`;
   return `Last ${asked} days`;
-}
-
-/** Each card's mark before its title, so cards differ by what they hold. */
-const CARD_ICONS: Record<string, IconName> = {
-  "Legend day": "cal",
-  "Legend clock": "clock",
-  "Bases you attacked": "swords",
-  Goal: "flag",
-  "Armies on defense": "shield",
-  "Armies on offense": "target",
-  "Rivals watch": "users",
-  "Season heat map": "grid",
-  Cutoffs: "trophy",
-  "Season graph": "chart",
-  "Recent form": "bars",
-  "Offense consistency": "star",
-  Watchlist: "list",
-};
-
-/** A card's own mark, found from its title; Customise shows it too. */
-export function cardIcon(title: string): IconName | undefined {
-  return CARD_ICONS[title];
-}
-
-/** The card's name: the title, or the first words of one built with markup. */
-function titleText(title: ReactNode): string {
-  if (typeof title === "string") return title;
-  if (!isValidElement<{ children?: ReactNode }>(title)) return "";
-  const children = title.props.children;
-  const first = Array.isArray(children) ? children[0] : children;
-  return typeof first === "string" ? first.trim() : "";
 }
 
 /** The card's title row; `meta` sits at the right end. */
@@ -87,14 +33,12 @@ export function CardHead({
   /** The card's ⓘ, right after its title. */
   info?: ReactNode;
   meta?: ReactNode;
-  /** Defaults to the card's own mark, found from its title. */
   icon?: IconName;
 }) {
-  const mark = icon ?? CARD_ICONS[titleText(title)];
   return (
     <header className="dash-card-head">
       <h2>
-        {mark ? <DashboardIcon name={mark} /> : null}
+        {icon ? <DashboardIcon name={icon} /> : null}
         {title}
       </h2>
       {info}

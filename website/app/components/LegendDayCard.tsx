@@ -1,9 +1,11 @@
 import type { LinkedPlayerCard } from "../lib/account-contracts";
 import type { ClockBattle, PlayerDay, RankRange } from "../lib/dashboard";
-import { CardHead, updatedAgo } from "./DashboardParts";
+import { CardHead } from "./DashboardParts";
+import { updatedAgo } from "../lib/age-format";
 import { ShieldIcon, Stars, SwordIcon } from "./GameIcons";
 import { TrophyMark } from "./LeaderboardShared";
-import { resetCountdown, signed } from "./LegendClock";
+import { signedNumber as signed } from "../lib/number-format";
+import { resetCountdown } from "../lib/clock-format";
 
 const SLOTS = 8;
 
