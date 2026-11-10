@@ -16,8 +16,8 @@ from clashlens import (
     battle_ingestion,
     boundary,
     boundary_publication,
+    claimed_jobs,
     ingestion,
-    job_outcomes,
     reset_baselines,
 )
 from clashlens.archive import ArchiveReadError, S3ArchiveReader
@@ -1252,7 +1252,7 @@ def test_time_limits_retry_a_battle_log_and_keep_the_lane_working(
         db, proc = _processor(ci, archive_server)
         pending = [limited]
         lock_publication = army_ingestion.boundary.lock_boundary_publication_once_swept
-        finish_claim = db._finish_claim
+        finish_claim = claimed_jobs.finish_claim
 
         def end_session(connection, setting: str) -> None:
             connection.execute(f"SET LOCAL {setting} = '50ms'")
@@ -1278,7 +1278,7 @@ def test_time_limits_retry_a_battle_log_and_keep_the_lane_working(
 
         monkeypatch.setattr(army_ingestion.boundary, "lock_boundary_publication_once_swept",
                             limited_lock_publication)
-        monkeypatch.setattr(db, "_finish_claim", limited_finish)
+        monkeypatch.setattr(claimed_jobs, "finish_claim", limited_finish)
         try:
             with psycopg.connect(ci) as publisher:
                 if limit == "busy_reset":
@@ -1402,7 +1402,7 @@ def test_a_session_ending_after_a_storage_wait_landed_reports_retrying(
             observed_at=ts + timedelta(minutes=1),
             normalized_tag="#2PP",
         )
-        original = job_outcomes.fail_claim
+        original = claimed_jobs.fail_claim
 
         def storage_down(*args, **kwargs):
             raise ArchiveReadError("archive_unavailable", "down", retryable=True)
@@ -1413,7 +1413,7 @@ def test_a_session_ending_after_a_storage_wait_landed_reports_retrying(
 
         db, proc = _processor(ci, archive_server)
         monkeypatch.setattr(proc.archive, "read_verified", storage_down)
-        monkeypatch.setattr(job_outcomes, "fail_claim", committed_then_lost)
+        monkeypatch.setattr(claimed_jobs, "fail_claim", committed_then_lost)
         try:
             assert proc.process_job(job_id, owner="storage") == ProcessResult(
                 job_id, "retrying", "archive_unavailable"
@@ -1442,7 +1442,7 @@ def test_a_session_ending_after_a_final_rejection_landed_reports_failed(
                 "UPDATE python_processing_jobs SET max_attempts = 1 WHERE id = %s",
                 (job_id,),
             )
-        original = job_outcomes.fail_claim
+        original = claimed_jobs.fail_claim
 
         def rejected(*args, **kwargs):
             raise psycopg.errors.RaiseException("reset evidence rejected")
@@ -1452,7 +1452,7 @@ def test_a_session_ending_after_a_final_rejection_landed_reports_failed(
             raise psycopg.errors.TransactionTimeout("terminating connection")
 
         monkeypatch.setattr(battle_ingestion, "complete_battle_log", rejected)
-        monkeypatch.setattr(job_outcomes, "fail_claim", committed_then_lost)
+        monkeypatch.setattr(claimed_jobs, "fail_claim", committed_then_lost)
         db, proc = _processor(ci, archive_server)
         try:
             assert proc.process_job(job_id, owner="rejected") == ProcessResult(

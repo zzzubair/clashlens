@@ -25,7 +25,7 @@ from clashlens.db import (
         ("reconcile_ranked_day", worker.reconciliation_db, "complete_reconciliation"),
     ],
 )
-def test_builds_release_freed_memory_without_changing_job_outcomes(
+def test_builds_release_freed_memory_without_changing_claimed_jobs(
     monkeypatch, entry, lose_lease, libc, work_type, module, completion
 ) -> None:
     claim = SimpleNamespace(

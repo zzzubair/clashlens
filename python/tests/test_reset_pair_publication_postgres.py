@@ -26,6 +26,7 @@ from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 from clashlens import (
     battle_day_repair,
     boundary_publication,
+    claimed_jobs,
     reconciliation_db,
     reset_baselines,
 )
@@ -51,6 +52,10 @@ from clashlens.worker import ObservationProcessor
 @pytest.mark.parametrize("repair", [False, True])
 def test_repair_rebuilds_dependent_results_in_one_job(monkeypatch, shielded, repair):
     database = MagicMock()
+    # This calculation test isolates claim storage; real claims are covered
+    # by the PostgreSQL worker stories below and in the claim tests.
+    monkeypatch.setattr(claimed_jobs, "lock_live_claim", MagicMock(return_value={}))
+    monkeypatch.setattr(claimed_jobs, "finish_claim", MagicMock())
     connection = database.pool.connection.return_value.__enter__.return_value
     days = [DAY_START + timedelta(days=offset) for offset in range(3)]
     connection.execute.return_value.fetchall.return_value = [(days[2],), (days[1],)]

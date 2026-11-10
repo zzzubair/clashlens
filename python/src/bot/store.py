@@ -19,6 +19,7 @@ from clashlens import (
     api_leaderboard,
     api_player_lookup,
     api_players,
+    live_board,
 )
 from clashlens.api_db import (
     AccountContext,
@@ -170,7 +171,7 @@ class Store:
                     continue
                 unplayed = connection.execute(
                     api_leaderboard.UNPLAYED_PROFILE_SQL,
-                    {**api_leaderboard._season_params(now), "tag": card["tag"]},
+                    {**live_board.season_params(now), "tag": card["tag"]},
                 ).fetchone()
                 if unplayed is None:
                     continue
@@ -237,7 +238,7 @@ class Store:
         Those players are found from the worker's saved list of them, as
         finding them all live took 17 s on 11 October 2026."""
         escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        params = {**api_leaderboard._season_params(now), "pattern": f"%{escaped}%"}
+        params = {**live_board.season_params(now), "pattern": f"%{escaped}%"}
         exact = query.casefold()
         website = {
             item["tag"]: item

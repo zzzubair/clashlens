@@ -31,10 +31,10 @@ from .db import (
     PYTHON_BACKFILL_PRIORITY,
     PYTHON_LIVE_PRIORITY,
     Database,
-    _text_value,
     ended_day_priority,
     lock_wait,
 )
+from .db_rows import text_value
 from .domain import SEASON_DURATION, is_season_boundary
 from .domain_repair import boundary_held
 from .past_reset_pacing import (
@@ -197,7 +197,7 @@ def require_open_generation(row: Any, boundary_at: datetime) -> None:
     to retry, rather than writing to a frozen generation.
     """
     if row is None or (
-        _text_value(row[0]), _text_value(row[1]), _text_value(row[2]), row[3], row[4]
+        text_value(row[0]), text_value(row[1]), text_value(row[2]), row[3], row[4]
     ) != ("pending", "pending", "none", None, None):
         raise LockNotAvailable(
             f"Reset {boundary_at.isoformat()} has no open generation for shared results"
@@ -217,9 +217,9 @@ def _inherit_deferred_army_successor_snapshot(
         """,
         (generation_id,),
     ).fetchone()
-    if target is None or _text_value(target[1]) != "pending":
+    if target is None or text_value(target[1]) != "pending":
         return False
-    if [_text_value(value) for value in (target[3] or [])] != ["army"]:
+    if [text_value(value) for value in (target[3] or [])] != ["army"]:
         return False
     if target[0] is None or target[2] is not None:
         return False
@@ -236,7 +236,7 @@ def _inherit_deferred_army_successor_snapshot(
     ).fetchone()
     if (
         source is None
-        or _text_value(source[0]) not in {"published", "superseded"}
+        or text_value(source[0]) not in {"published", "superseded"}
         or any(value is None for value in source[1:5])
     ):
         return False
@@ -368,17 +368,17 @@ def _try_enqueue_boundary_artifacts(
     if member_count != int(generation[4]) or bad_snapshot or bad_army:
         return
     boundary_text = boundary_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    if _text_value(generation[7]) != "boundary-delay-v1":
+    if text_value(generation[7]) != "boundary-delay-v1":
         return
     target = generation[6]
     now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
     if now < target:
         return
-    affected_artifacts = [_text_value(value) for value in (generation[5] or [])]
+    affected_artifacts = [text_value(value) for value in (generation[5] or [])]
     # Settled members move each artifact PENDING to READY.
     for column, pending, state in (("snapshot_state", snapshot_pending, generation[2]),
                                    ("army_state", army_pending, generation[3])):
-        if pending == 0 and _text_value(state) == ArtifactState.PENDING:
+        if pending == 0 and text_value(state) == ArtifactState.PENDING:
             connection.execute(
                 f"UPDATE boundary_publication_generations SET {column} = %s, updated_at = clock_timestamp() WHERE id = %s AND {column} = %s",
                 (ArtifactState.READY.value, generation_id, ArtifactState.PENDING.value),
@@ -390,14 +390,14 @@ def _try_enqueue_boundary_artifacts(
     if (
         snapshot_pending == 0
         and snapshot is not None
-        and _text_value(snapshot[0]) == "ready"
+        and text_value(snapshot[0]) == "ready"
         and (not affected_artifacts or "snapshot" in affected_artifacts)
     ):
         # A board built under an older ordering rule, such as an army-only
         # replacement of one that gains a board rebuild, freezes its inputs
         # under the current rule in a replacement; a generation's rule
         # cannot change once its membership is captured.
-        if _text_value(generation[8]) != SNAPSHOT_ORDERING_RULE_VERSION:
+        if text_value(generation[8]) != SNAPSHOT_ORDERING_RULE_VERSION:
             new_id, _ = _supersede_generation(
                 database,
                 connection,
@@ -456,10 +456,10 @@ def _try_enqueue_boundary_artifacts(
     # the background check (``army``) freezes them, never a job's response slot.
     board_first = (
         not affected_artifacts or "snapshot" in affected_artifacts
-    ) and _text_value(snapshot_state) == "ready"
+    ) and text_value(snapshot_state) == "ready"
     if (
         army_pending == 0
-        and _text_value(army_state) == "ready"
+        and text_value(army_state) == "ready"
         and (not affected_artifacts or "army" in affected_artifacts)
         and army and not board_first
     ):
@@ -532,7 +532,7 @@ def _boundary_snapshot_status(
         "Partial": "partial",
         "Inconsistent": "inconsistent",
         "Malformed": "malformed",
-    }.get(_text_value(ranked[0]) if ranked else "", "pending")
+    }.get(text_value(ranked[0]) if ranked else "", "pending")
     if status != "complete":
         return status
     # Whether any accepted reading is at or before the Reset: stop at the
@@ -641,8 +641,8 @@ def _boundary_army_status(
     # Publication requires daily-log evidence before army readiness.
     if daily_log is None:
         return "pending"
-    daily_state = _text_value(daily_log[1])
-    daily_coverage = _text_value(daily_log[2])
+    daily_state = text_value(daily_log[1])
+    daily_coverage = text_value(daily_log[2])
     if daily_state == "Partial":
         return "partial"
     if daily_state != "Complete" or daily_coverage != "complete":
@@ -756,7 +756,7 @@ def _record_boundary_generation(
         changed = (
             prior_member[0] is None
             or int(prior_member[0]) != int(ranked_day_version_id)
-            or _text_value(prior_member[1]) != ranked_day_input_hash
+            or text_value(prior_member[1]) != ranked_day_input_hash
         )
         frozen_artifacts = [
             kind
@@ -766,9 +766,9 @@ def _record_boundary_generation(
             )
             if manifest_id is not None
         ]
-        correction_active = _text_value(current[4]) == "active"
+        correction_active = text_value(current[4]) == "active"
         if correction_active and current[7] and not (changed and frozen_artifacts):
-            affected = {_text_value(value) for value in current[7]}
+            affected = {text_value(value) for value in current[7]}
             frozen_artifacts = [
                 kind for kind in frozen_artifacts if kind in affected
             ]
@@ -795,8 +795,8 @@ def _record_boundary_generation(
             else None
         )
         fully_published = (
-            _text_value(current[2]) == "published"
-            and _text_value(current[3]) == "published"
+            text_value(current[2]) == "published"
+            and text_value(current[3]) == "published"
             # A correction already waiting, a repair campaign holding this
             # Reset, or a Reset not yet due to rebuild keeps the change
             # queued, so waiting inputs start together.
@@ -1122,7 +1122,7 @@ def queue_board_rebuilds(
                     (snapshot_id,),
                 ).fetchall()
                 late_battles = sum(
-                    (trophies, _text_value(confidence) == "confirmed")
+                    (trophies, text_value(confidence) == "confirmed")
                     != expected.get(int(player_id))
                     for player_id, trophies, confidence in entries
                 )
@@ -1142,7 +1142,7 @@ def queue_board_rebuilds(
                 ).fetchone()
                 reordered = (
                     rule is not None
-                    and _text_value(rule[0]) != SNAPSHOT_ORDERING_RULE_VERSION
+                    and text_value(rule[0]) != SNAPSHOT_ORDERING_RULE_VERSION
                 )
                 left_off = connection.execute(
                     "SELECT player_id, ranked_day_version_id, input_identity->>'snapshot_quality'"
@@ -1344,7 +1344,7 @@ def queue_army_corrections(
                 ).fetchone()
                 # A build not yet published reads the saved armies itself.
                 correction = (
-                    "rebuilding" if _text_value(army_state) != "published"
+                    "rebuilding" if text_value(army_state) != "published"
                     else "already_queued" if queued is not None
                     else "not_queued"
                 )
@@ -1413,7 +1413,7 @@ def _create_boundary_artifact_identity(
         ).fetchone()
         if (
             row is None
-            or _text_value(row[1]) != input_hash
+            or text_value(row[1]) != input_hash
             or dict(row[2]) != source_identity
         ):
             raise ValueError("boundary publication artifact identity conflict")

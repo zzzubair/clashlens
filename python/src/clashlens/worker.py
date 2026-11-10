@@ -31,16 +31,16 @@ from psycopg_pool import PoolTimeout, TooManyRequests
 
 from . import (
     analytics,
-    api_leaderboard,
     army_ingestion,
     army_rank_bands,
     army_types,
     battle_ingestion,
     boundary_publication,
+    claimed_jobs,
     ingestion,
-    job_outcomes,
     late_battle_sweep,
     league_week,
+    live_board,
     projected_place,
     queue_refresh,
     reconciliation_db,
@@ -52,19 +52,20 @@ from .battle import (
     parse_battle_log,
 )
 from .db import (
-    ANALYTICS_RULE_VERSION,
-    ARMY_ANALYTICS_RULE_VERSION,
-    DOMAIN_RULE_VERSION,
-    POPULATION_BUILD_WORK_TYPES,
-    PROCESSING_VERSION,
-    RESPONSE_WORK_TYPES,
-    SUPPORTED_WORK_TYPES,
     Claim,
     Database,
     LeaseLost,
 )
 from .domain import DomainRuleError
 from .evidence_recovery import read_saved_evidence
+from .job_contracts import (
+    DATABASE_CONFLICT_RETRIES,
+    JOB_CONTRACTS,
+    POPULATION_BUILD_WORK_TYPES,
+    RESPONSE_WORK_TYPES,
+    SUPPORTED_WORK_TYPES,
+    claim_contract_error,
+)
 from .league_history import (
     LeagueHistoryParseError,
     complete_league_history,
@@ -77,7 +78,6 @@ from .rankings import (
     RankingParseError,
     parse_global_player_rankings,
 )
-from .source_observation_contract import validate_source_observation_contract
 from .stage_metrics import StageMetrics
 from .worker_claims import ClaimLedger
 from .worker_liveness import progress_file
@@ -87,7 +87,6 @@ MAX_CONCURRENCY = 32
 # at a time: on 8 Oct 2026 one process used about one core and processed 894
 # responses a minute however many lanes it had.
 MAX_PROCESSES = 2
-DATABASE_CONFLICT_RETRIES = 3
 # Keep current leaderboard evidence moving during a backlog while reserving
 # claims for daily results and other derived work. See docs/architecture.md
 # for the queue ordering rules.
@@ -287,14 +286,25 @@ class TimedMaintenance:
                         target=league_week.decide_until, args=(self.database, self.stopping),
                         name="clashlens-worker-league-week", daemon=True)
                     self.league_weeks.start()
-                self.reevaluate()
-                self.late_battles.run_when_due()
-                self.daily_recheck.run_when_due()
-                army_rank_bands.refresh_rank_band_totals(self.database)
-                army_types.refresh_army_types(self.database)
-                projected_place.refresh_remaining_changes(self.database)
-                analytics.refresh_live_attack_tallies(self.database)
-                api_leaderboard.refresh_live_unplayed(self.database)
+                # Each operation commits its own transaction. Keep publication
+                # first so derived refreshes see its committed board when it
+                # succeeds; they can still use the last board if it fails.
+                tasks = (
+                    ("publication", self.reevaluate),
+                    ("late_battles", self.late_battles.run_when_due),
+                    ("daily_recheck", self.daily_recheck.run_when_due),
+                    ("army_rank_bands", lambda: army_rank_bands.refresh_rank_band_totals(self.database)),
+                    ("army_types", lambda: army_types.refresh_army_types(self.database)),
+                    ("projected_place", lambda: projected_place.refresh_remaining_changes(self.database)),
+                    ("live_attacks", lambda: analytics.refresh_live_attack_tallies(self.database)),
+                    ("live_unplayed", lambda: live_board.refresh_live_unplayed(self.database)),
+                )
+                for name, task in tasks:
+                    try:
+                        task()
+                    except Exception as error:  # noqa: BLE001 - independent maintenance task
+                        print(json.dumps({"event": "worker_maintenance", "status": "failed",
+                                          "task": name, "error": type(error).__name__}), flush=True)
             finally:
                 if derived_turns is not None:
                     derived_turns.release()
@@ -889,21 +899,17 @@ class ObservationProcessor:
         # job back without using an attempt. It is lost only if another
         # worker or maintenance took it.
         try:
-            job_outcomes.release_conflicted(self.database, claim, reason)
+            claimed_jobs.release_conflicted(self.database, claim, reason)
         except LeaseLost:
             return ProcessResult(claim.job_id, "lease_lost")
         return ProcessResult(claim.job_id, "retrying", reason)
 
     def _process_claim_once(self, claim: Claim, *, lease_seconds: int) -> ProcessResult:
-        if claim.work_type == "reconcile_ranked_day":
-            if claim.processing_version != PROCESSING_VERSION:
-                return self._fail(
-                    claim, "unsupported_processing_version", retryable=False
-                )
-            if claim.domain_rule_version != DOMAIN_RULE_VERSION:
-                return self._fail(
-                    claim, "unsupported_domain_rule_version", retryable=False
-                )
+        error = claim_contract_error(claim)
+        if error is not None:
+            return self._fail(claim, error, retryable=False)
+        handler = JOB_CONTRACTS[claim.work_type].handler
+        if handler == "reconcile":
             try:
                 self.database.renew_claim(claim, lease_seconds=lease_seconds)
                 reconciliation_db.complete_reconciliation(self.database, claim)
@@ -912,22 +918,10 @@ class ObservationProcessor:
             except DomainRuleError as error:
                 return self._complete_retired(claim, error)
             return ProcessResult(claim.job_id, "processed")
-        if claim.work_type in {"build_snapshot", "build_analytics"}:
-            if claim.processing_version != PROCESSING_VERSION:
-                return self._fail(
-                    claim, "unsupported_processing_version", retryable=False
-                )
-            if claim.domain_rule_version != DOMAIN_RULE_VERSION:
-                return self._fail(
-                    claim, "unsupported_domain_rule_version", retryable=False
-                )
-            if claim.analytics_rule_version != ANALYTICS_RULE_VERSION:
-                return self._fail(
-                    claim, "unsupported_analytics_rule_version", retryable=False
-                )
+        if handler in {"snapshot", "analytics"}:
             try:
                 self.database.renew_claim(claim, lease_seconds=lease_seconds)
-                if claim.work_type == "build_snapshot":
+                if handler == "snapshot":
                     snapshots.complete_snapshot(self.database, claim)
                 else:
                     boundary_publication.complete_analytics(self.database, claim)
@@ -945,22 +939,10 @@ class ObservationProcessor:
                     retryable=False,
                 )
             return ProcessResult(claim.job_id, "processed")
-        if claim.work_type in {"build_army_analytics", "redecode_army"}:
-            if claim.processing_version != PROCESSING_VERSION:
-                return self._fail(
-                    claim, "unsupported_processing_version", retryable=False
-                )
-            if claim.domain_rule_version != DOMAIN_RULE_VERSION:
-                return self._fail(
-                    claim, "unsupported_domain_rule_version", retryable=False
-                )
-            if claim.analytics_rule_version != ARMY_ANALYTICS_RULE_VERSION:
-                return self._fail(
-                    claim, "unsupported_analytics_rule_version", retryable=False
-                )
+        if handler in {"army_analytics", "army_redecode"}:
             try:
                 self.database.renew_claim(claim, lease_seconds=max(lease_seconds, 300))
-                if claim.work_type == "build_army_analytics":
+                if handler == "army_analytics":
                     army_ingestion.complete_army_analytics(self.database, claim)
                 else:
                     army_ingestion.complete_army_redecode(self.database, claim)
@@ -981,30 +963,7 @@ class ObservationProcessor:
                     retryable=is_dependency,
                 )
             return ProcessResult(claim.job_id, "processed")
-        if claim.work_type == "reconcile_pass": return ProcessResult(claim.job_id, queue_refresh.reconcile_pass.run_step(self.database, claim))
-        if claim.work_type not in {"process_observation", "replay_observation"}:
-            return self._fail(claim, "unsupported_work_type", retryable=False)
-        source_contract_error = validate_source_observation_contract(
-            claim.endpoint,
-            claim.endpoint_version,
-            claim.schema_version,
-            claim.parser_version,
-        )
-        if source_contract_error is not None:
-            return self._fail(claim, source_contract_error, retryable=False)
-        checks = (
-            (
-                claim.processing_version == PROCESSING_VERSION,
-                "unsupported_processing_version",
-            ),
-            (
-                claim.domain_rule_version == DOMAIN_RULE_VERSION,
-                "unsupported_domain_rule_version",
-            ),
-        )
-        for valid, category in checks:
-            if not valid:
-                return self._fail(claim, category, retryable=False)
+        if handler == "reconcile_pass": return ProcessResult(claim.job_id, queue_refresh.reconcile_pass.run_step(self.database, claim))
         assert claim.endpoint_version is not None
 
         uses_local_spool = (
@@ -1063,7 +1022,7 @@ class ObservationProcessor:
             self._record_stage("python_lease_renew", renewal_started_at)
         except ArchiveReadError as error:
             try:
-                state = job_outcomes.fail_claim(
+                state = claimed_jobs.fail_claim(
                     self.database,
                     claim,
                     category=error.category,
@@ -1086,7 +1045,7 @@ class ObservationProcessor:
             return self._fail(claim, "missing_http_status", retryable=False)
         if claim.http_status < 200 or claim.http_status >= 300:
             try:
-                job_outcomes.complete_classified(
+                claimed_jobs.complete_classified(
                     self.database, claim, outcome="source_non_success"
                 )
             except LeaseLost:
@@ -1239,7 +1198,7 @@ class ObservationProcessor:
         if error.category != "season_detail_retired":
             raise error
         try:
-            job_outcomes.complete_terminal(
+            claimed_jobs.complete_terminal(
                 self.database, claim, outcome="season_detail_retired"
             )
         except LeaseLost:
@@ -1255,7 +1214,7 @@ class ObservationProcessor:
         retryable: bool,
     ) -> ProcessResult:
         try:
-            state = job_outcomes.fail_claim(
+            state = claimed_jobs.fail_claim(
                 self.database,
                 claim,
                 category=category,

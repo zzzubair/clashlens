@@ -105,6 +105,50 @@ def sign(key: bytes, value: SigningInput) -> str:
     return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
 
+def request_headers(
+    key: bytes,
+    *,
+    caller: str,
+    key_id: str,
+    method: str,
+    raw_target: bytes,
+    body: bytes,
+    issued_at: int,
+    request_id: str,
+    lifetime_seconds: int = 10,
+    provider: str = "",
+    provider_subject: str = "",
+) -> dict[str, str]:
+    value = SigningInput(
+        proof_version=PROOF_VERSION,
+        caller_b64url=_encode_base64url(caller.encode("utf-8")),
+        key_id_b64url=_encode_base64url(key_id.encode("utf-8")),
+        audience=AUDIENCE,
+        method=method,
+        target_b64url=_encode_base64url(raw_target),
+        body_sha256=hashlib.sha256(body).hexdigest(),
+        issued_at=str(issued_at),
+        expires_at=str(issued_at + lifetime_seconds),
+        request_id=request_id,
+        provider_b64url=_encode_base64url(provider.encode("utf-8")),
+        provider_subject_b64url=_encode_base64url(provider_subject.encode("utf-8")),
+    )
+    values = {
+        "proof_version": value.proof_version,
+        "caller": value.caller_b64url,
+        "key_id": value.key_id_b64url,
+        "issued_at": value.issued_at,
+        "expires_at": value.expires_at,
+        "request_id": value.request_id,
+        "provider": value.provider_b64url,
+        "provider_subject": value.provider_subject_b64url,
+        "signature": sign(key, value),
+    }
+    return {
+        header.decode("ascii"): values[field] for field, header in PROOF_HEADERS.items()
+    }
+
+
 def verify_proof(
     *,
     headers: Sequence[tuple[bytes, bytes]],

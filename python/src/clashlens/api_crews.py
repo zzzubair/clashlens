@@ -29,8 +29,6 @@ from .api_db import (
     ApiDatabase,
     OperationResult,
     RequestBinding,
-    _frozen_trophies_sql,
-    _opening_day_battles_sql,
     _text,
 )
 from .api_players import left_legend_i
@@ -53,6 +51,7 @@ from .crew_states import (
     Refused as _Refused,
 )
 from .domain import ranked_day_for, season_opening_reset
+from .season_reset_sql import frozen_trophies_sql, opening_day_battles_sql
 
 MAX_CREW_SIZE = 100
 MIN_CREW_SIZE = 2
@@ -281,8 +280,8 @@ def _players(
         SELECT member.account_id, player.normalized_tag, player.active,
                COALESCE(accepted.name, latest.name), accepted.trophies,
                accepted.current_league_season_id,
-               {_frozen_trophies_sql("player.id", "%s")},
-               {_opening_day_battles_sql("player.id", "%s")},
+               {frozen_trophies_sql("player.id", "%s")},
+               {opening_day_battles_sql("player.id", "%s")},
                EXISTS (
                    SELECT 1 FROM api_player_daily_logs AS day
                    WHERE day.player_id = player.id

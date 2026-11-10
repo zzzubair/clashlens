@@ -66,7 +66,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import db, domain, domain_repair, first_battle_log, job_outcomes, league_days
+from . import claimed_jobs, db, domain, domain_repair, first_battle_log, league_days
 
 WORK_TYPE = "reconcile_pass"
 BATCH_DAYS = 500
@@ -599,7 +599,7 @@ def run_step(database: db.Database, claim: db.Claim) -> str:
                     judgment = judge(connection, day, players) if players else ([], set(), set())
                 with connection.transaction():
                     _limit(connection, WRITE_SECONDS)
-                    job = database._lock_live_claim(connection, claim)
+                    job = claimed_jobs.lock_live_claim(connection, claim)
                     # Under its guard, a Season repair cannot start queueing
                     # days before this step commits.
                     repairing = domain_repair.recalculating_days(
@@ -616,7 +616,7 @@ def run_step(database: db.Database, claim: db.Claim) -> str:
                         _queue_step(connection, following)
                     else:
                         done["finished"] = True
-                    database._finish_claim(connection, claim, job, state="complete",
+                    claimed_jobs.finish_claim(connection, claim, job, state="complete",
                                            outcome="processed")
                     if _quiet(_now(), SAVES_STOP):
                         raise _Stopped
@@ -625,15 +625,15 @@ def run_step(database: db.Database, claim: db.Claim) -> str:
                 # Nothing it read is kept, and nothing more is queued.
                 stopped = True
                 with connection.transaction():
-                    database._finish_claim(
-                        connection, claim, database._lock_live_claim(connection, claim),
+                    claimed_jobs.finish_claim(
+                        connection, claim, claimed_jobs.lock_live_claim(connection, claim),
                         state="complete", outcome="processed")
     except db.LeaseLost:
         return "lease_lost"
     except (AssertionError, KeyError, TypeError, ValueError) as error:
         _log(slot, day, "failed", queued, error=repr(error)[:300])
         try:
-            job_outcomes.fail_claim(database, claim, category="calculation_error",
+            claimed_jobs.fail_claim(database, claim, category="calculation_error",
                                     detail=type(error).__name__, retryable=True)
         except db.LeaseLost:
             return "lease_lost"

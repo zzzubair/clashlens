@@ -13,7 +13,7 @@ from test_api_db_public_ops import NOW, seed_profile
 from bot.commands import Commands
 from bot.replies import Site
 from bot.store import Store
-from clashlens import api_accounts, api_leaderboard
+from clashlens import api_accounts, live_board
 from clashlens.api_db import ApiDatabase, RequestBinding
 
 DISCORD_ID = "100000000000000001"
@@ -367,7 +367,7 @@ def test_bot_finds_a_player_who_has_not_played_yet_by_name(database_url: str) ->
                     "UPDATE players SET current_profile_version_id = NULL"
                     " WHERE normalized_tag = '#8QQ'"
                 )
-                api_leaderboard.save_live_unplayed(connection, NOW)
+                live_board.save_live_unplayed(connection, NOW)
             _account(owner, "discord", DISCORD_ID, "drift")
             store = Store(bot)
             account = store.account(DISCORD_ID)
@@ -418,7 +418,7 @@ def test_bot_names_and_dates_a_player_by_the_profile_their_page_shows(
                     """,
                     (NOW,),
                 )
-                api_leaderboard.save_live_unplayed(connection, NOW)
+                live_board.save_live_unplayed(connection, NOW)
             _account(owner, "discord", DISCORD_ID, "drift")
             store = Store(bot)
             account = store.account(DISCORD_ID)

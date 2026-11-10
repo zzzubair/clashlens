@@ -10,6 +10,7 @@ from psycopg.types.json import Jsonb
 
 from . import (
     boundary,
+    claimed_jobs,
     domain,
     first_battle_log,
     league_days,
@@ -30,9 +31,9 @@ from .db import (
     RESET_LOCK_WAIT,
     Claim,
     Database,
-    _text_value,
     ended_day_priority,
 )
+from .db_rows import text_value
 from .domain import (
     SEASON_ANCHOR_RULE_VERSION,
     DomainRuleError,
@@ -70,7 +71,7 @@ def limit_lock_waits(connection: Any) -> None:
 def complete_reconciliation(database: Database, claim: Claim) -> None:
     with database.pool.connection() as connection:
         with connection.transaction():
-            job = database._lock_live_claim(connection, claim)
+            job = claimed_jobs.lock_live_claim(connection, claim)
             limit_lock_waits(connection)
             player_id = int(claim.input_json["player_id"])
             day_start = datetime.fromisoformat(str(claim.input_json["ranked_day_start"]))
@@ -152,7 +153,7 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
             for member in sorted(members, key=lambda member: member["boundary_at"]):
                 boundary._record_boundary_generation(database, connection, **member)
             reconcile_pass.note_fix_done(connection, claim)
-            database._finish_claim(
+            claimed_jobs.finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
             )
 
@@ -197,7 +198,7 @@ def recalculate_ranked_day(
         """,
         (player_id, ranked_day.start),
     ).fetchone()
-    season_id = _text_value(season_row[0]) if season_row else None
+    season_id = text_value(season_row[0]) if season_row else None
     if season_id is None:
         season_day = _anchored_day(connection, ranked_day.start)[1]
         season_id = season_day.official_season_id if season_day else None
@@ -607,7 +608,7 @@ def recalculate_ranked_day(
         (player_id, ranked_day.start, RECONCILIATION_RULE_VERSION),
     ).fetchone()
     existing = None
-    if previous_version is not None and _text_value(previous_version[2]) in (
+    if previous_version is not None and text_value(previous_version[2]) in (
         result_hash,
         _restored_result_hash(result_hash, previous_version[3]),
     ):
@@ -794,7 +795,7 @@ def recalculate_ranked_day(
             boundary_members.append(member)
     return now >= ranked_day.end and (
         previous_version is None
-        or (_text_value(previous_version[4]), *previous_version[5:7]) != (
+        or (text_value(previous_version[4]), *previous_version[5:7]) != (
             result.state,
             result.final_trophies_before_reset,
             result_data["next_start_trophies"],
@@ -829,7 +830,7 @@ def _anchored_day(connection: Any, day_start: datetime) -> tuple[Any, RankedDay 
         (SEASON_ANCHOR_RULE_VERSION,),
     ).fetchone()
     try:
-        ids = (_text_value(anchor[0]), _text_value(anchor[1])) if anchor else None
+        ids = (text_value(anchor[0]), text_value(anchor[1])) if anchor else None
         return anchor, domain.anchored_ranked_day(day_start, *ids) if ids else None
     except DomainRuleError:
         return anchor, None
@@ -926,10 +927,10 @@ def _publish_player_daily_log(
     ).fetchall()
     adjustments = [
         {
-            "type": _text_value(row[0]),
+            "type": text_value(row[0]),
             "amount": int(row[1]),
-            "evidence_state": _text_value(row[2]),
-            "rule_version": _text_value(row[3]),
+            "evidence_state": text_value(row[2]),
+            "rule_version": text_value(row[3]),
             "evidence": row[4],
         }
         for row in adjustment_rows
@@ -1150,19 +1151,19 @@ def _enqueue_live_reconciliation(
     projection_rows = [
         {
             "battle_id": int(row[0]),
-            "perspective": _text_value(row[1]),
+            "perspective": text_value(row[1]),
             "battle_timestamp": row[2].astimezone(UTC).isoformat(),
             "stars": int(row[3]),
             "destruction_percentage": int(row[4]),
-            "army_share_code": _text_value(row[5]),
+            "army_share_code": text_value(row[5]),
             "reporter_trophies": (None if row[6] is None else int(row[6])),
             "opponent_trophies": (None if row[7] is None else int(row[7])),
             "attacker_gain": int(row[8]),
             "defender_loss": int(row[9]),
-            "trophy_rule_version": _text_value(row[10]),
-            "disagreement_state": _text_value(row[11]),
-            "source_outcome": _text_value(row[12]),
-            "failure_category": (None if row[13] is None else _text_value(row[13])),
+            "trophy_rule_version": text_value(row[10]),
+            "disagreement_state": text_value(row[11]),
+            "source_outcome": text_value(row[12]),
+            "failure_category": (None if row[13] is None else text_value(row[13])),
             "opponent": row[14],
         }
         for row in rows

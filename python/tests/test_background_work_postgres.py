@@ -17,7 +17,7 @@ import psycopg
 from domain_test_support import domain_database, store_observation, text
 from test_army_ingestion_postgres import _live_row, _processor
 
-from clashlens import army_ingestion, background_pacing
+from clashlens import army_ingestion, background_pacing, claimed_jobs
 from clashlens.background_pacing import (
     BACKGROUND_JOB_LIMIT,
     DAY_RECHECK_PRIORITY,
@@ -209,7 +209,8 @@ def test_background_work_waits_while_late_live_work_is_leased_or_waiting(
                                          work_types=["reconcile_ranked_day"])
             assert sorted(claim.job_id for claim in claims) == sorted(live)
             for claim in claims:
-                database.refund_claim_attempt(claim)
+                with database.connection() as connection, connection.transaction():
+                    claimed_jobs.refund_claim_attempt(connection, claim)
             assert database.claim_jobs(owner="lane", work_types=["redecode_army"]) == []
             # Still running past their leases on their last attempts, they pause it too.
             with psycopg.connect(connection_info) as connection:

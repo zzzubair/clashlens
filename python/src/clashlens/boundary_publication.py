@@ -9,7 +9,14 @@ from typing import Any
 from psycopg.errors import LockNotAvailable, QueryCanceled
 from psycopg.types.json import Jsonb
 
-from . import battle, board_deadline, boundary, boundary_members, reset_baselines
+from . import (
+    battle,
+    board_deadline,
+    boundary,
+    boundary_members,
+    claimed_jobs,
+    reset_baselines,
+)
 from .analytics import (
     CLASSIFICATION_CONFIDENCE,
     CLASSIFICATION_VERSION,
@@ -23,8 +30,8 @@ from .db import (
     PROCESSING_VERSION,
     Claim,
     Database,
-    _text_value,
 )
+from .db_rows import text_value
 from .domain import DomainRuleError, battle_window
 from .domain_repair import boundary_held
 from .past_reset_pacing import (
@@ -43,7 +50,7 @@ def _positive_int_input(values: dict[str, Any], name: str) -> int:
 
 
 def _hash_input(value: Any, name: str) -> str:
-    value = _text_value(value)
+    value = text_value(value)
     if (
         not isinstance(value, str)
         or len(value) != 64
@@ -177,7 +184,7 @@ def _reevaluate_boundary(database, connection: Any, boundary_at: datetime) -> in
                 connection,
                 player_id=int(player_id),
                 ranked_day_version_id=int(version_id),
-                snapshot_status=_text_value(snapshot_status),
+                snapshot_status=text_value(snapshot_status),
             )
             if army_status != "pending":
                 connection.execute(
@@ -253,7 +260,7 @@ def _maybe_emit_boundary_signal(
             (%s, 'army', %s, %s)
         )
         """,
-        (row[4], row[7], _text_value(row[3]), row[5], row[8], _text_value(row[10])),
+        (row[4], row[7], text_value(row[3]), row[5], row[8], text_value(row[10])),
     ).fetchone()
     if identities is None or int(identities[0]) != 2:
         return
@@ -272,7 +279,7 @@ def _maybe_emit_boundary_signal(
             row[0],
             int(row[1]),
             int(row[2]),
-            _text_value(row[3]),
+            text_value(row[3]),
             int(row[4]),
             int(row[5]),
             row[6],
@@ -284,15 +291,15 @@ def _maybe_emit_boundary_signal(
             ),
             Jsonb(
                 {
-                    "ordering_rule_version": _text_value(row[13]),
-                    "freshness_rule_version": _text_value(row[14]),
-                    "analytics_rule_version": _text_value(row[11]),
-                    "army_analytics_rule_version": _text_value(row[12]),
+                    "ordering_rule_version": text_value(row[13]),
+                    "freshness_rule_version": text_value(row[14]),
+                    "analytics_rule_version": text_value(row[11]),
+                    "army_analytics_rule_version": text_value(row[12]),
                 }
             ),
         ),
     )
-    if _text_value(row[9]) in {"none", "active", "finalized"}:
+    if text_value(row[9]) in {"none", "active", "finalized"}:
         connection.execute(
             "UPDATE boundary_publication_generations SET correction_state = 'finalized', updated_at = clock_timestamp() WHERE id = %s",
             (generation_id,),
@@ -351,7 +358,7 @@ def _maybe_emit_boundary_signal(
                 move_correction(connection, queued[0], CorrectionState.PENDING_INPUTS)
                 return
             move_correction(connection, queued[0], CorrectionState.ACTIVATION)
-            affected = [_text_value(value) for value in (queued[1] or [])]
+            affected = [text_value(value) for value in (queued[1] or [])]
             new = connection.execute(
                 """
                 INSERT INTO boundary_publication_generations (
@@ -516,7 +523,7 @@ def complete_analytics(database: Database, claim: Claim) -> None:
     """
     with database.pool.connection() as connection:
         with connection.transaction():
-            job = database._lock_live_claim(connection, claim, build=True)
+            job = claimed_jobs.lock_live_claim(connection, claim, build=True)
             # The Reset lock comes before this snapshot's and its
             # generation's row locks; see boundary.lock_boundary_publication.
             snapshot_boundary = connection.execute(
@@ -554,10 +561,10 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                 """,
                 (snapshot_id,),
             ).fetchone()
-            if boundary_generation is not None and _text_value(
+            if boundary_generation is not None and text_value(
                 boundary_generation[2]
             ) in {"superseded", "published"}:
-                database._finish_claim(
+                claimed_jobs.finish_claim(
                     connection,
                     claim,
                     job,
@@ -575,7 +582,7 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                 raise ValueError(
                     "analytics ranked-day source does not match its snapshot"
                 )
-            if _text_value(snapshot[5]) != snapshot_input_hash:
+            if text_value(snapshot[5]) != snapshot_input_hash:
                 raise ValueError(
                     "analytics snapshot input hash does not match its input"
                 )
@@ -598,12 +605,12 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                     _maybe_emit_boundary_signal(
                         database, connection, int(boundary_generation[0])
                     )
-                database._finish_claim(
+                claimed_jobs.finish_claim(
                     connection, claim, job, state="complete", outcome="processed"
                 )
                 return
             # The board's build publishes it, before these statistics.
-            if _text_value(snapshot[3]) not in {"building", "published"}:
+            if text_value(snapshot[3]) not in {"building", "published"}:
                 raise ValueError("frozen snapshot is not available for analytics")
 
             ranked_day = None
@@ -749,7 +756,7 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                 sample_size = len(sample_rows)
                 three_star_count = sum(int(row[2]) == 3 for row in sample_rows)
                 disagreement_count = sum(
-                    _text_value(row[1]) == "disagreement" for row in sample_rows
+                    text_value(row[1]) == "disagreement" for row in sample_rows
                 )
                 sample_payload = [
                     {
@@ -760,8 +767,8 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                         "source_observed_at": row[7].astimezone(UTC).isoformat(),
                         "battle_timestamp": row[8].astimezone(UTC).isoformat(),
                         "stars": int(row[2]),
-                        "army_share_code": _text_value(row[3]),
-                        "disagreement": _text_value(row[1]) == "disagreement",
+                        "army_share_code": text_value(row[3]),
+                        "disagreement": text_value(row[1]) == "disagreement",
                     }
                     for row in sample_rows
                 ]
@@ -888,14 +895,14 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                     ).fetchone()
                     if (
                         summary is None
-                        or _text_value(summary[1]) != analytics_input_hash
+                        or text_value(summary[1]) != analytics_input_hash
                     ):
                         raise ValueError(
                             "analytics replay has an immutable input conflict"
                         )
                 summary_id = int(summary[0])
                 evidence_json = {
-                    "army_share_codes": [_text_value(row[3]) for row in sample_rows],
+                    "army_share_codes": [text_value(row[3]) for row in sample_rows],
                     "battle_ids": [int(row[0]) for row in sample_rows],
                     "evidence_ids": [int(row[4]) for row in sample_rows],
                     "source_row_ids": [int(row[5]) for row in sample_rows],
@@ -973,7 +980,7 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                             (boundary_generation[0],),
                         ).fetchone()[0]
                     ),
-                    input_hash=_text_value(snapshot[5]),
+                    input_hash=text_value(snapshot[5]),
                     source_identity={
                         "snapshot_id": snapshot_id,
                         "summary_ids": summary_ids,
@@ -1000,7 +1007,7 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                 _maybe_emit_boundary_signal(
                     database, connection, int(boundary_generation[0])
                 )
-            database._finish_claim(
+            claimed_jobs.finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
             )
 
@@ -1121,14 +1128,14 @@ def _queue_boundary_army_correction(
         """,
         (generation_id,),
     ).fetchone()
-    if current is None or current[2] is None or _text_value(current[1]) == "superseded":
+    if current is None or current[2] is None or text_value(current[1]) == "superseded":
         return
     # A repair campaign holding this Reset, or a Reset not yet due to
     # rebuild, leaves the published generation and queues the correction,
     # as for one not yet published.
     if (
-        _text_value(current[0]) == "published"
-        and _text_value(current[1]) == "published"
+        text_value(current[0]) == "published"
+        and text_value(current[1]) == "published"
         and not boundary_held(connection, boundary_at)
         and not correction_waits(connection, boundary_at)
     ):
@@ -1153,7 +1160,7 @@ def _queue_boundary_army_correction(
             ),
             generation=int(current[3]) + 1,
             supersedes_id=generation_id,
-            ordering_rule_version=_text_value(current[4]),
+            ordering_rule_version=text_value(current[4]),
         )
         connection.execute(
             "UPDATE boundary_publication_generations SET affected_artifacts = %s WHERE id = %s",
@@ -1262,7 +1269,7 @@ def _enqueue_army_analytics(
         )
 
         seasons = [
-            _text_value(row[0])
+            text_value(row[0])
             for row in connection.execute(
                 """
                 SELECT DISTINCT ranked.official_season_id
@@ -1288,7 +1295,7 @@ def _enqueue_army_analytics(
                 connection,
                 player_id=int(player_id),
                 ranked_day_version_id=int(version_id),
-                snapshot_status=_text_value(snapshot_status),
+                snapshot_status=text_value(snapshot_status),
             )
             connection.execute(
                 """
@@ -1299,7 +1306,7 @@ def _enqueue_army_analytics(
                 (army_status, generation_id, int(player_id)),
             )
         if (
-            _text_value(coordinator[2]) in {"ready", "building", "published"}
+            text_value(coordinator[2]) in {"ready", "building", "published"}
             and coordinator[3] is not None
             and _boundary_army_manifest_needs_correction(
                 connection,
@@ -1340,7 +1347,7 @@ def _enqueue_army_analytics(
     if completed is None:
         return
     ranked_day_version_id = int(completed[0])
-    season_id = _text_value(completed[1])
+    season_id = text_value(completed[1])
     from .season_retirement import (
         acquire_season_lock_shared,
         is_season_detail_retired,

@@ -9,6 +9,7 @@ from typing import Any
 
 import psycopg
 from psycopg.errors import LockNotAvailable, QueryCanceled, UniqueViolation
+from psycopg.rows import dict_row
 
 _INTEGRITY_FAILURES = {
     "archive_catalogue_contradiction",
@@ -25,7 +26,7 @@ _RESTART_AFTER_REPAIR_FAILURES = {
 }
 
 _PROCESSING_JOB = """
-    SELECT job.id, job.work_type, job.endpoint, job.status, job.observation_id,
+    SELECT job.id, job.work_type, job.endpoint, job.status AS state, job.observation_id,
            job.replay_observation_id, job.attempt_count, job.max_attempts,
            job.outcome, job.failure_category, job.due_at, job.updated_at,
            accepted.operator_identity, accepted.reason, accepted.accepted_at,
@@ -64,11 +65,14 @@ class Recovery(StrEnum):
     EVIDENCE_ONLY = "none_evidence_only"
 
 
-def processing_recovery(work_type: str, endpoint: str | None, accepted: bool) -> Recovery:
+def processing_recovery(
+    work_type: str, endpoint: str | None, accepted: bool
+) -> Recovery:
     if accepted:
         return Recovery.ACCEPTED
     if work_type in {"process_observation", "replay_observation"} and endpoint in {
-        "profile", "battle_log"
+        "profile",
+        "battle_log",
     }:
         return Recovery.REPLAY
     return Recovery.INVESTIGATE_ONLY
@@ -76,9 +80,9 @@ def processing_recovery(work_type: str, endpoint: str | None, accepted: bool) ->
 
 def _processing_refusal(row: Any) -> str | None:
     """Why a processing job row may not be accepted or replayed, if it may not."""
-    if _text(row[3]) != "failed":
-        return f"processing_job_is_{_text(row[3])}"
-    if row[12] is not None:
+    if _text(row["state"]) != "failed":
+        return f"processing_job_is_{_text(row['state'])}"
+    if row["operator_identity"] is not None:
         return "processing_job_already_accepted"
     return None
 
@@ -150,8 +154,10 @@ def inspect_failed_items(connection: Any, *, limit: int) -> dict[str, Any]:
         raise ValueError("failed-item limit must be between 1 and 100")
     with connection.transaction():
         connection.execute("SET LOCAL statement_timeout = '30s'")
-        work_rows = connection.execute(
-            """
+        work_rows = (
+            connection.cursor(row_factory=dict_row)
+            .execute(
+                """
             SELECT id, kind, lane, normalized_tag, status,
                    profile_status, battle_log_status, league_history_status,
                    profile_observation_id, battle_log_observation_id,
@@ -162,10 +168,14 @@ def inspect_failed_items(connection: Any, *, limit: int) -> dict[str, Any]:
             ORDER BY updated_at DESC, id DESC
             LIMIT %s
             """,
-            (limit + 1,),
-        ).fetchall()
-        upload_rows = connection.execute(
-            """
+                (limit + 1,),
+            )
+            .fetchall()
+        )
+        upload_rows = (
+            connection.cursor(row_factory=dict_row)
+            .execute(
+                """
             SELECT response_hash, spool_key, byte_size, state, upload_generation,
                    attempt_count, next_attempt_at::text, last_error_category,
                    updated_at
@@ -174,27 +184,37 @@ def inspect_failed_items(connection: Any, *, limit: int) -> dict[str, Any]:
             ORDER BY updated_at DESC, response_hash
             LIMIT %s
             """,
-            (limit + 1,),
-        ).fetchall()
-        processing_rows = connection.execute(
-            f"""
+                (limit + 1,),
+            )
+            .fetchall()
+        )
+        processing_rows = (
+            connection.cursor(row_factory=dict_row)
+            .execute(
+                f"""
             {_PROCESSING_JOB}
             WHERE job.status = 'failed'
             ORDER BY job.updated_at DESC, job.id DESC
             LIMIT %s
             """,
-            (limit + 1,),
-        ).fetchall()
-        transport_rows = connection.execute(
-            """
+                (limit + 1,),
+            )
+            .fetchall()
+        )
+        transport_rows = (
+            connection.cursor(row_factory=dict_row)
+            .execute(
+                """
             SELECT id, scope, endpoint, normalized_tag, retry_state,
                    failure_category, key_label, request_started_at, failed_at
             FROM collector_transport_failures
             ORDER BY failed_at DESC, id DESC
             LIMIT %s
             """,
-            (limit + 1,),
-        ).fetchall()
+                (limit + 1,),
+            )
+            .fetchall()
+        )
     items = [_work_item(row) for row in work_rows]
     items.extend(_upload_item(row) for row in upload_rows)
     items.extend(_processing_item(row) for row in processing_rows)
@@ -259,9 +279,13 @@ def accept_failed_job(
         with connection.transaction():
             connection.execute("SET LOCAL lock_timeout = '1s'")
             connection.execute("SET LOCAL statement_timeout = '30s'")
-            row = connection.execute(
-                f"{_PROCESSING_JOB} WHERE job.id = %s FOR UPDATE OF job", (job_id,)
-            ).fetchone()
+            row = (
+                connection.cursor(row_factory=dict_row)
+                .execute(
+                    f"{_PROCESSING_JOB} WHERE job.id = %s FOR UPDATE OF job", (job_id,)
+                )
+                .fetchone()
+            )
             if row is None:
                 return _refused("processing_job_not_found")
             item = _processing_item(row)
@@ -317,14 +341,18 @@ def replay_failed_jobs(
         with connection.transaction() as transaction:
             connection.execute("SET LOCAL lock_timeout = '1s'")
             connection.execute("SET LOCAL statement_timeout = '30s'")
-            rows = connection.execute(
-                f"""
+            rows = (
+                connection.cursor(row_factory=dict_row)
+                .execute(
+                    f"""
                 {_PROCESSING_JOB} WHERE job.id = ANY(%s)
                 ORDER BY job.id FOR UPDATE OF job
                 """,
-                (ids,),
-            ).fetchall()
-            found = {int(row[0]): row for row in rows}
+                    (ids,),
+                )
+                .fetchall()
+            )
+            found = {int(row["id"]): row for row in rows}
             for job_id in ids:
                 row = found.get(job_id)
                 entry = entries[job_id] = {"processing_job_id": job_id}
@@ -336,10 +364,16 @@ def replay_failed_jobs(
                 if refusal is not None:
                     entry.update(outcome="refused", reason=refusal)
             if all("outcome" not in entry for entry in entries.values()):
-                connection.execute("SET LOCAL SESSION AUTHORIZATION clashlens_replay_request")
+                connection.execute(
+                    "SET LOCAL SESSION AUTHORIZATION clashlens_replay_request"
+                )
                 for job_id in ids:
-                    _request_replay(connection, found[job_id], entries[job_id], operator, reason)
-            if not apply or any(entry.get("outcome") == "refused" for entry in entries.values()):
+                    _request_replay(
+                        connection, found[job_id], entries[job_id], operator, reason
+                    )
+            if not apply or any(
+                entry.get("outcome") == "refused" for entry in entries.values()
+            ):
                 raise psycopg.Rollback(transaction)
     except psycopg.Error as error:
         refusal = _BATCH_REFUSALS.get(error.sqlstate or "")
@@ -356,7 +390,11 @@ def replay_failed_jobs(
             del entry["replay_request_id"], entry["replay_job_id"]
     return {
         "applied": applied,
-        "outcome": "refused" if refused else "replay_enqueued" if applied else "preview",
+        "outcome": "refused"
+        if refused
+        else "replay_enqueued"
+        if applied
+        else "preview",
         "replayed_count": len(ids) if applied else 0,
         "refused_count": refused,
         "items": list(entries.values()),
@@ -373,7 +411,19 @@ def _request_replay(
                 SELECT request_id, job_id, request_status
                 FROM clashlens_request_python_replay_v2(%s, %s, %s, %s, %s, %s, %s)
                 """,
-                (row[4] if row[4] is not None else row[5], operator, reason, *row[15:19]),
+                (
+                    row["observation_id"]
+                    if row["observation_id"] is not None
+                    else row["replay_observation_id"],
+                    operator,
+                    reason,
+                    *(
+                        row["parser_version"],
+                        row["processing_version"],
+                        row["domain_rule_version"],
+                        row["analytics_rule_version"],
+                    ),
+                ),
             ).fetchone()
     except psycopg.Error as error:
         refusal = _REQUEST_REFUSALS.get(error.sqlstate or "")
@@ -397,8 +447,10 @@ def _check_audit(operator: str, reason: str) -> None:
 
 
 def _retry_work(connection: Any, *, work_id: int, apply: bool) -> dict[str, Any]:
-    row = connection.execute(
-        """
+    row = (
+        connection.cursor(row_factory=dict_row)
+        .execute(
+            """
         SELECT id, kind, lane, normalized_tag, status,
                profile_status, battle_log_status, league_history_status,
                profile_observation_id, battle_log_observation_id,
@@ -408,13 +460,15 @@ def _retry_work(connection: Any, *, work_id: int, apply: bool) -> dict[str, Any]
         WHERE id = %s
         FOR UPDATE
         """,
-        (work_id,),
-    ).fetchone()
+            (work_id,),
+        )
+        .fetchone()
+    )
     if row is None:
         return _refused("collector_work_not_found")
-    item = _work_item(row[:14])
-    if _text(row[4]) != "failed":
-        return _refused(f"collector_work_is_{_text(row[4])}", item)
+    item = _work_item(row)
+    if _text(row["status"]) != "failed":
+        return _refused(f"collector_work_is_{_text(row['status'])}", item)
     active = connection.execute(
         """
         SELECT id
@@ -424,7 +478,7 @@ def _retry_work(connection: Any, *, work_id: int, apply: bool) -> dict[str, Any]
         ORDER BY id
         LIMIT 1
         """,
-        (row[14], work_id),
+        (row["coalescing_key"], work_id),
     ).fetchone()
     if active is not None:
         return _refused("matching_collector_work_is_already_active", item)
@@ -445,8 +499,10 @@ def _retry_work(connection: Any, *, work_id: int, apply: bool) -> dict[str, Any]
 
 
 def _retry_upload(connection: Any, *, upload_hash: str, apply: bool) -> dict[str, Any]:
-    row = connection.execute(
-        """
+    row = (
+        connection.cursor(row_factory=dict_row)
+        .execute(
+            """
         SELECT response_hash, spool_key, byte_size, state, upload_generation,
                attempt_count, next_attempt_at::text, last_error_category,
                updated_at, lease_owner, lease_token,
@@ -456,19 +512,31 @@ def _retry_upload(connection: Any, *, upload_hash: str, apply: bool) -> dict[str
         WHERE response_hash = %s
         FOR UPDATE
         """,
-        (upload_hash,),
-    ).fetchone()
+            (upload_hash,),
+        )
+        .fetchone()
+    )
     if row is None:
         return _refused("archive_upload_not_found")
-    item = _upload_item(row[:9])
-    if _text(row[3]) != "failed":
-        return _refused(f"archive_upload_is_{_text(row[3])}", item)
-    if any(value is not None for value in row[9:12]):
+    item = _upload_item(row)
+    if _text(row["state"]) != "failed":
+        return _refused(f"archive_upload_is_{_text(row['state'])}", item)
+    if any(
+        value is not None
+        for value in (row["lease_owner"], row["lease_token"], row["lease_expires_at"])
+    ):
         return _refused("archive_upload_has_an_active_lease", item)
-    failure_category = _text(row[7])
+    failure_category = _text(row["last_error_category"])
     if failure_category in _INTEGRITY_FAILURES:
         return _refused("archive_integrity_repair_required", item)
-    if any(value is not None for value in row[12:15]):
+    if any(
+        value is not None
+        for value in (
+            row["archive_reference"],
+            row["archive_instance_id"],
+            row["completed_at"],
+        )
+    ):
         return _refused("archive_upload_has_completion_metadata", item)
     if not apply:
         report = _preview(item, new_state="pending")
@@ -493,69 +561,83 @@ def _retry_upload(connection: Any, *, upload_hash: str, apply: bool) -> dict[str
 def _work_item(row: Any) -> dict[str, Any]:
     return {
         "item_type": "collector_work",
-        "key": str(row[0]),
-        "work_id": int(row[0]),
-        "kind": _text(row[1]),
-        "lane": _text(row[2]),
-        "normalized_tag": None if row[3] is None else _text(row[3]),
-        "state": _text(row[4]),
+        "key": str(row["id"]),
+        "work_id": int(row["id"]),
+        "kind": _text(row["kind"]),
+        "lane": _text(row["lane"]),
+        "normalized_tag": None
+        if row["normalized_tag"] is None
+        else _text(row["normalized_tag"]),
+        "state": _text(row["status"]),
         "endpoint_states": {
-            "profile": _text(row[5]),
-            "battle_log": _text(row[6]),
-            "league_history": _text(row[7]),
+            "profile": _text(row["profile_status"]),
+            "battle_log": _text(row["battle_log_status"]),
+            "league_history": _text(row["league_history_status"]),
         },
         "observation_ids": {
-            "profile": row[8],
-            "battle_log": row[9],
-            "league_history": row[10],
+            "profile": row["profile_observation_id"],
+            "battle_log": row["battle_log_observation_id"],
+            "league_history": row["league_history_observation_id"],
         },
-        "failure_category": None if row[11] is None else _text(row[11]),
-        "due_at": row[12],
-        "updated_at": row[13],
+        "failure_category": None
+        if row["failure_category"] is None
+        else _text(row["failure_category"]),
+        "due_at": row["due_at"],
+        "updated_at": row["updated_at"],
     }
 
 
 def _upload_item(row: Any) -> dict[str, Any]:
     return {
         "item_type": "archive_upload",
-        "key": _text(row[0]),
-        "response_hash": _text(row[0]),
-        "spool_key": _text(row[1]),
-        "byte_size": int(row[2]),
-        "state": _text(row[3]),
-        "upload_generation": _text(row[4]),
-        "attempt_count": int(row[5]),
-        "next_attempt_at": _text(row[6]),
-        "failure_category": None if row[7] is None else _text(row[7]),
-        "updated_at": row[8],
+        "key": _text(row["response_hash"]),
+        "response_hash": _text(row["response_hash"]),
+        "spool_key": _text(row["spool_key"]),
+        "byte_size": int(row["byte_size"]),
+        "state": _text(row["state"]),
+        "upload_generation": _text(row["upload_generation"]),
+        "attempt_count": int(row["attempt_count"]),
+        "next_attempt_at": _text(row["next_attempt_at"]),
+        "failure_category": None
+        if row["last_error_category"] is None
+        else _text(row["last_error_category"]),
+        "updated_at": row["updated_at"],
     }
 
 
 def _processing_item(row: Any) -> dict[str, Any]:
-    source_observation_id = row[4] if row[4] is not None else row[5]
+    source_observation_id = (
+        row["observation_id"]
+        if row["observation_id"] is not None
+        else row["replay_observation_id"]
+    )
     item = {
         "item_type": "processing_job",
-        "key": str(row[0]),
-        "processing_job_id": int(row[0]),
-        "work_type": _text(row[1]),
-        "endpoint": None if row[2] is None else _text(row[2]),
-        "state": _text(row[3]),
+        "key": str(row["id"]),
+        "processing_job_id": int(row["id"]),
+        "work_type": _text(row["work_type"]),
+        "endpoint": None if row["endpoint"] is None else _text(row["endpoint"]),
+        "state": _text(row["state"]),
         "source_observation_id": source_observation_id,
-        "attempt_count": int(row[6]),
-        "max_attempts": int(row[7]),
-        "outcome": None if row[8] is None else _text(row[8]),
-        "failure_category": None if row[9] is None else _text(row[9]),
-        "due_at": row[10],
-        "updated_at": row[11],
+        "attempt_count": int(row["attempt_count"]),
+        "max_attempts": int(row["max_attempts"]),
+        "outcome": None if row["outcome"] is None else _text(row["outcome"]),
+        "failure_category": None
+        if row["failure_category"] is None
+        else _text(row["failure_category"]),
+        "due_at": row["due_at"],
+        "updated_at": row["updated_at"],
         "recovery": processing_recovery(
-            _text(row[1]), None if row[2] is None else _text(row[2]), row[12] is not None
+            _text(row["work_type"]),
+            None if row["endpoint"] is None else _text(row["endpoint"]),
+            row["operator_identity"] is not None,
         ).value,
     }
-    if row[12] is not None:
+    if row["operator_identity"] is not None:
         item["accepted"] = {
-            "operator": _text(row[12]),
-            "reason": _text(row[13]),
-            "accepted_at": row[14],
+            "operator": _text(row["operator_identity"]),
+            "reason": _text(row["reason"]),
+            "accepted_at": row["accepted_at"],
         }
     return item
 
@@ -563,16 +645,18 @@ def _processing_item(row: Any) -> dict[str, Any]:
 def _transport_item(row: Any) -> dict[str, Any]:
     return {
         "item_type": "transport_failure",
-        "key": str(row[0]),
-        "transport_failure_id": int(row[0]),
-        "scope": _text(row[1]),
-        "endpoint": _text(row[2]),
-        "normalized_tag": None if row[3] is None else _text(row[3]),
-        "state": _text(row[4]),
-        "failure_category": _text(row[5]),
-        "key_label": _text(row[6]),
-        "request_started_at": row[7],
-        "updated_at": row[8],
+        "key": str(row["id"]),
+        "transport_failure_id": int(row["id"]),
+        "scope": _text(row["scope"]),
+        "endpoint": _text(row["endpoint"]),
+        "normalized_tag": None
+        if row["normalized_tag"] is None
+        else _text(row["normalized_tag"]),
+        "state": _text(row["retry_state"]),
+        "failure_category": _text(row["failure_category"]),
+        "key_label": _text(row["key_label"]),
+        "request_started_at": row["request_started_at"],
+        "updated_at": row["failed_at"],
         "recovery": Recovery.EVIDENCE_ONLY.value,
     }
 

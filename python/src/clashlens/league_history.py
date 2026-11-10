@@ -17,17 +17,17 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from .db import Claim, Database
-from .job_outcomes import (
-    _observation_source,
-    _record_parsed_payload,
-    _record_processing_outcome,
-    _upsert_player,
+from . import claimed_jobs
+from .claimed_jobs import (
+    observation_source,
+    record_processing_outcome,
 )
+from .db import Claim, Database
 from .profile import ProfileParseError, normalize_player_tag
 from .source_observation_contract import (
     LEAGUE_HISTORY_SOURCE_OBSERVATION_CONTRACT,
 )
+from .source_storage import record_parsed_payload, upsert_player
 
 LEAGUE_HISTORY_PARSER_VERSION = "supercell-league-history-parser-v1"
 LEAGUE_HISTORY_ENDPOINT_VERSION = (
@@ -202,11 +202,11 @@ def complete_league_history(
         observed_at,
         endpoint,
         schema_version,
-    ) = _observation_source(claim)
+    ) = observation_source(claim)
     with database.pool.connection() as connection:
         with connection.transaction():
-            job = database._lock_live_claim(connection, claim)
-            parsed_payload_id = _record_parsed_payload(
+            job = claimed_jobs.lock_live_claim(connection, claim)
+            parsed_payload_id = record_parsed_payload(
                 connection,
                 endpoint=endpoint,
                 response_hash=response_hash,
@@ -225,7 +225,7 @@ def complete_league_history(
             ).fetchone()
             player_id = None if player_row is None else player_row[0]
             if player_id is None:
-                player_id = _upsert_player(
+                player_id = upsert_player(
                     connection, history.normalized_tag, active=False
                 )
             for entry in history.entries:
@@ -278,8 +278,7 @@ def complete_league_history(
                     ),
                 )
             _recalculate_season_ends(connection, player_id, history, observed_at)
-            _record_processing_outcome(
-                database,
+            record_processing_outcome(
                 connection,
                 claim,
                 outcome=(
@@ -287,7 +286,7 @@ def complete_league_history(
                 ),
                 parsed_payload_id=parsed_payload_id,
             )
-            database._finish_claim(
+            claimed_jobs.finish_claim(
                 connection,
                 claim,
                 job,

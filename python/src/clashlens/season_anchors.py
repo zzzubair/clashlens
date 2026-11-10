@@ -9,7 +9,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from .db import _text_value
+from .db_rows import text_value
 from .domain import (
     SEASON_ANCHOR_RULE_VERSION,
     DomainRuleError,
@@ -101,7 +101,7 @@ def _confirmed(connection: Any, *, for_update: bool) -> ConfirmedAnchor | None:
     if row is None:
         return None
     return ConfirmedAnchor(
-        int(row[0]), _text_value(row[1]), _text_value(row[2]), row[3], row[4])
+        int(row[0]), text_value(row[1]), text_value(row[2]), row[3], row[4])
 
 
 def _profile_anchor(profile: ParsedProfile) -> SeasonAnchor:

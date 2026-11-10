@@ -18,7 +18,7 @@ from test_api_db_public_ops import (
 from test_api_migration import migrated_production_database
 from test_collector_db_postgres import _handoff, _hash
 
-from clashlens import api_leaderboard, api_player_lookup, api_players
+from clashlens import api_leaderboard, api_player_lookup, api_players, live_board
 from clashlens.api_db import ApiDatabase
 from clashlens.collector_db import CollectorDatabase
 from clashlens.domain import ranked_day_for
@@ -735,7 +735,7 @@ def test_season_zero_player_at_5000_has_a_page_and_ranks_until_a_legend_battle(
             def on_board() -> bool:
                 # After the worker saves who the board ranks at 5,000 unplayed.
                 with database.pool.connection() as connection:
-                    api_leaderboard.save_live_unplayed(connection, NOW)
+                    live_board.save_live_unplayed(connection, NOW)
                 board = api_leaderboard.get_live_leaderboard(database, limit=50, now=NOW)
                 return '"tag": "#2PP", "name": "Synthetic Legend I", "trophies": 5000' in json.dumps(board)
 

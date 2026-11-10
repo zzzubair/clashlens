@@ -21,11 +21,10 @@ from .api_db import (
     OperationResult,
     RequestBinding,
     _account_context,
-    _frozen_trophies_sql,
-    _opening_day_battles_sql,
     _text,
 )
 from .domain import awaits_season_reset, ranked_day_for, season_opening_reset
+from .season_reset_sql import frozen_trophies_sql, opening_day_battles_sql
 
 # A public profile shows at most this many verified players.
 PUBLIC_PLAYER_LIMIT = 500
@@ -516,8 +515,8 @@ def list_groups(
             SELECT group_row.public_id, group_row.name, player.normalized_tag,
                    player.active, COALESCE(accepted.name, latest.name),
                    accepted.trophies, accepted.current_league_season_id,
-                   {_frozen_trophies_sql("player.id", "%s")},
-                   {_opening_day_battles_sql("player.id", "%s")},
+                   {frozen_trophies_sql("player.id", "%s")},
+                   {opening_day_battles_sql("player.id", "%s")},
                    group_row.created_at
             FROM account_groups AS group_row
             LEFT JOIN account_group_players AS member ON member.group_id = group_row.id
@@ -937,8 +936,8 @@ def _group_players(
         SELECT player.normalized_tag, player.active,
                COALESCE(accepted.name, latest.name), accepted.trophies,
                accepted.current_league_season_id,
-               {_frozen_trophies_sql("player.id", "%s")},
-               {_opening_day_battles_sql("player.id", "%s")}
+               {frozen_trophies_sql("player.id", "%s")},
+               {opening_day_battles_sql("player.id", "%s")}
         FROM account_group_players AS member
         {_MEMBER_JOINS}
         WHERE member.group_id = %s

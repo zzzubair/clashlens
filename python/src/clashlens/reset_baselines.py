@@ -4,7 +4,7 @@ import hashlib
 import json
 from collections import Counter
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, NamedTuple
 
 from psycopg.types.json import Jsonb
 
@@ -18,9 +18,9 @@ from .db import (
     PYTHON_BACKFILL_PRIORITY,
     Claim,
     Database,
-    _text_value,
     ended_day_priority,
 )
+from .db_rows import text_value
 from .domain import (
     RANKED_DAY_DURATION,
     SEASON_ANCHOR_RULE_VERSION,
@@ -212,11 +212,11 @@ def repair_current_season_reset_baselines(
                     connection,
                     observation_id=int(profile_observation_id),
                     observation_endpoint="profile",
-                    parser_version=_text_value(profile_parser_version),
+                    parser_version=text_value(profile_parser_version),
                     processing_version=PROCESSING_VERSION,
                     ends_day=bool(ends_day),
                     starts_ended_day=bool(starts_ended_day),
-                    recalculate_season=_text_value(official_season_id),
+                    recalculate_season=text_value(official_season_id),
                     season_repair=season_id is not None,
                 )
             job_ids.extend(pair_job_ids)
@@ -425,7 +425,7 @@ def _recover_failed_reset_repairs(
                     "player_id": player_id,
                     "ranked_day_start": input_json["ranked_day_start"],
                     "failure_category": (
-                        _text_value(failure_category) if failure_category else None
+                        text_value(failure_category) if failure_category else None
                     ),
                 }
             )
@@ -541,7 +541,7 @@ def _evaluate_reset_baseline(
     are rebuilt oldest first in one transaction, including later saved days
     in ``recalculate_season``.
     """
-    context = _load_reset_baseline_context(connection, observation_id, work_id)
+    context = load_reset_baseline_context(connection, observation_id, work_id)
     if context is None:
         return [], []
     work_id, player_id, normalized_tag, sweep_id, boundary_at = context
@@ -558,7 +558,7 @@ def _evaluate_reset_baseline(
             endpoint=endpoint,
             work_id=int(work_id),
             player_id=int(player_id),
-            normalized_tag=_text_value(normalized_tag),
+            normalized_tag=text_value(normalized_tag),
             boundary_at=boundary_at,
             parser_version=parser_version,
             processing_version=processing_version,
@@ -774,8 +774,8 @@ def _record_boundary_baseline(
     # published board, and its army results then waited for them for good,
     # holding back the correction with their days.
     if generation[4] is not None or generation[5] is not None or (
-        _text_value(generation[1]) == "superseded"
-        and _text_value(generation[2]) == "superseded"
+        text_value(generation[1]) == "superseded"
+        and text_value(generation[2]) == "superseded"
     ):
         return
 
@@ -834,11 +834,19 @@ def _record_boundary_baseline(
         )
 
 
-def _load_reset_baseline_context(
+class ResetEvidenceContext(NamedTuple):
+    work_id: int
+    player_id: int
+    normalized_tag: str
+    sweep_id: int
+    boundary_at: datetime
+
+
+def load_reset_baseline_context(
     connection: Any,
     observation_id: int | None,
     work_id: int | None = None,
-) -> tuple[Any, ...] | None:
+) -> ResetEvidenceContext | None:
     match = (
         "work.id = %s"
         if work_id is not None
@@ -854,7 +862,8 @@ def _load_reset_baseline_context(
         """,
         (work_id,) if work_id is not None else (observation_id, observation_id),
     ).fetchone()
-    return None if row is None else tuple(row)
+    return None if row is None else ResetEvidenceContext(
+        int(row[0]), int(row[1]), text_value(row[2]), int(row[3]), row[4])
 
 
 def _load_reset_endpoint_evidence(
@@ -936,15 +945,15 @@ def _load_reset_endpoint_evidence(
 
     observation_id = int(row[1]) if row[1] is not None else None
     processing_id = int(row[6]) if row[6] is not None else None
-    processing_outcome = _text_value(row[7]) if row[7] is not None else None
+    processing_outcome = text_value(row[7]) if row[7] is not None else None
     reasons: list[str] = []
     hard_failure = False
     missing = observation_id is None
     if missing:
         reasons.append(f"missing_{endpoint}_observation")
-        hard_failure = _text_value(row[14]) == "failed"
+        hard_failure = text_value(row[14]) == "failed"
     else:
-        if int(row[2]) != player_id or _text_value(row[3]) != normalized_tag:
+        if int(row[2]) != player_id or text_value(row[3]) != normalized_tag:
             reasons.append(f"{endpoint}_wrong_player")
             hard_failure = True
         if row[4] is None or row[4] < boundary_at:
@@ -970,7 +979,7 @@ def _load_reset_endpoint_evidence(
         elif processing_outcome == "non_success":
             # A server error or rate limit is final only once the collector
             # stops retrying; a later response replaces it on the work row.
-            retrying = (row[5] == 429 or row[5] >= 500) and _text_value(
+            retrying = (row[5] == 429 or row[5] >= 500) and text_value(
                 row[14]
             ) in {"pending", "waiting_retry"}
             reasons.append(
@@ -979,7 +988,7 @@ def _load_reset_endpoint_evidence(
             hard_failure = not retrying
         elif processing_outcome != "processed":
             category = (
-                _text_value(row[8]) if row[8] is not None else processing_outcome
+                text_value(row[8]) if row[8] is not None else processing_outcome
             )
             reasons.append(f"{endpoint}_{category}")
             hard_failure = True
@@ -988,8 +997,8 @@ def _load_reset_endpoint_evidence(
             # battle of the Season passes, accepted or naming Season 0.
             if (
                 row[9] is None
-                or _text_value(row[11]) != "eligible"
-                or _text_value(row[10]) != "accepted"
+                or text_value(row[11]) != "eligible"
+                or text_value(row[10]) != "accepted"
                 and not _unplayed(connection, player_id, boundary_at, row[9], row[4])
             ):
                 reasons.append("profile_invalid")
@@ -1011,7 +1020,7 @@ def _load_reset_endpoint_evidence(
     return {
         "observation_id": observation_id,
         "collected_at": row[4],
-        "work_status": _text_value(row[14]),
+        "work_status": text_value(row[14]),
         "processing_outcome_id": processing_id,
         "processing_outcome": processing_outcome,
         "reasons": reasons,
@@ -1088,11 +1097,11 @@ def _load_reset_baseline(
     if row is None:
         return None
 
-    state = _text_value(row[2])
+    state = text_value(row[2])
     profile_valid = bool(row[9])
     battle_log_valid = bool(row[10])
-    profile_accepted = row[15] is not None and _text_value(row[18]) == "accepted"
-    profile_eligible = _text_value(row[17]) == "eligible"
+    profile_accepted = row[15] is not None and text_value(row[18]) == "accepted"
+    profile_eligible = text_value(row[17]) == "eligible"
     battle_log_valid_evidence = row[20] is not None and not bool(row[22])
     # Only an accepted profile that passed the Reset checks can start a day.
     # Any other stays evidence; a rejected one, such as one reporting Season
@@ -1103,7 +1112,7 @@ def _load_reset_baseline(
     # Every Legend I player starts a Season at exactly 5,000, so at a
     # Season-opening Reset a Legend I profile showing anything else is too.
     season_reset_pending = profile_accepted and (
-        not season_is_current(_text_value(row[25]), row[14])
+        not season_is_current(text_value(row[25]), row[14])
         or (
             is_season_boundary(row[14])
             and profile_eligible
@@ -1160,27 +1169,27 @@ def _load_reset_baseline(
         "profile_valid": profile_valid,
         "battle_log_valid": battle_log_valid,
         "failure_reasons": list(failure_reasons),
-        "evidence_key": _text_value(row[13]),
+        "evidence_key": text_value(row[13]),
         "boundary_at": row[14].astimezone(UTC).isoformat(),
         "profile": {
             "id": int(row[15]) if row[15] is not None else None,
             "trophies": int(row[16]) if row[16] is not None else None,
             "eligibility_state": (
-                _text_value(row[17]) if row[17] is not None else None
+                text_value(row[17]) if row[17] is not None else None
             ),
             "source_contract_state": (
-                _text_value(row[18]) if row[18] is not None else None
+                text_value(row[18]) if row[18] is not None else None
             ),
             "observed_at": (
                 row[19].astimezone(UTC).isoformat() if row[19] is not None else None
             ),
-            "response_hash": _text_value(row[23]),
+            "response_hash": text_value(row[23]),
         },
         "battle_log": {
             "id": int(row[20]) if row[20] is not None else None,
             "row_count": int(row[21]) if row[21] is not None else None,
             "has_row_gap": bool(row[22]) if row[22] is not None else None,
-            "response_hash": _text_value(row[24]),
+            "response_hash": text_value(row[24]),
         },
         "stored_evidence": stored_evidence,
     }

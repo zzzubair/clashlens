@@ -19,7 +19,7 @@ from enum import StrEnum
 from typing import Any
 
 from .army_decoder import DecodedArmy, DecodeFailure
-from .db import _text_value
+from .db_rows import text_value
 
 
 class ArtifactState(StrEnum):
@@ -120,7 +120,7 @@ def pending_inputs_settled(connection: Any, pending_inputs: Iterable[Any]) -> bo
         state = connection.execute(
             "SELECT state FROM ranked_day_versions WHERE id = %s", (version,)
         ).fetchone()
-        if state is None or _text_value(state[0]) not in SETTLED_DAY_STATES:
+        if state is None or text_value(state[0]) not in SETTLED_DAY_STATES:
             return False
     return True
 
@@ -183,14 +183,14 @@ def decode_verdict(
         active is None
         or int(active[1]) != int(evidence_id)
         or (active[2] is None) != (raw_code is None)
-        or raw_code is not None and _text_value(active[2]) != _text_value(raw_code)
+        or raw_code is not None and text_value(active[2]) != text_value(raw_code)
     ):
         return DecodeVerdict.MISSING
     if isinstance(decoded, DecodedArmy):
-        status = DecodeStatus(_text_value(active[4]))
+        status = DecodeStatus(text_value(active[4]))
         current = status is DecodeStatus.PARTIAL or (
             status is DecodeStatus.DECODED
-            and _text_value(active[3]) == decoded.identity_hash)
+            and text_value(active[3]) == decoded.identity_hash)
     else:
-        current = _text_value(active[5]) == decoded.category
+        current = text_value(active[5]) == decoded.category
     return DecodeVerdict.CURRENT if current else DecodeVerdict.OUTDATED

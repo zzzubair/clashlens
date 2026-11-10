@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from threading import Event
 from types import SimpleNamespace
 
@@ -11,14 +11,14 @@ import pytest
 from psycopg.errors import DeadlockDetected, QueryCanceled, SerializationFailure
 from psycopg_pool import PoolTimeout
 
-from clashlens import cli, job_outcomes, reconciliation_db, worker_claims
+from clashlens import claimed_jobs, cli, reconciliation_db, worker_claims
 from clashlens.db import (
+    ANALYTICS_RULE_VERSION,
     DOMAIN_RULE_VERSION,
-    POPULATION_BUILD_WORK_TYPES,
     PROCESSING_VERSION,
-    RESPONSE_WORK_TYPES,
     LeaseLost,
 )
+from clashlens.job_contracts import POPULATION_BUILD_WORK_TYPES, RESPONSE_WORK_TYPES
 from clashlens.worker import (
     DERIVED_WITHOUT_BUILDS,
     MAX_CONCURRENCY,
@@ -366,6 +366,7 @@ def test_pool_timeout_during_a_job_retries_that_job(refund_waits, monkeypatch) -
             work_type="reconcile_ranked_day",
             processing_version=PROCESSING_VERSION,
             domain_rule_version=DOMAIN_RULE_VERSION,
+            analytics_rule_version=ANALYTICS_RULE_VERSION,
             attempt_count=1,
             max_attempts=3,
         )
@@ -380,6 +381,10 @@ def test_pool_timeout_during_a_job_retries_that_job(refund_waits, monkeypatch) -
         def renew_claim(self, _claim: object, **_kwargs: object) -> None:
             pass
 
+        @contextmanager
+        def connection(self):
+            yield SimpleNamespace(transaction=nullcontext)
+
         def refund_claim_attempt(self, claim: SimpleNamespace) -> None:
             if refund_waits:
                 raise PoolTimeout("couldn't get a connection after 30.00 sec")
@@ -392,8 +397,11 @@ def test_pool_timeout_during_a_job_retries_that_job(refund_waits, monkeypatch) -
     monkeypatch.setattr(
         reconciliation_db, "complete_reconciliation", complete_reconciliation
     )
+    database = Database()
+    monkeypatch.setattr(claimed_jobs, "refund_claim_attempt",
+                        lambda _connection, claim: database.refund_claim_attempt(claim))
     results = process_concurrently(
-        ObservationProcessor(Database(), archive=object()),
+        ObservationProcessor(database, archive=object()),
         concurrency=1,
         owner="pool-busy",
         max_jobs=2,
@@ -945,7 +953,7 @@ def test_a_buffered_claim_whose_lease_was_lost_is_dropped(monkeypatch) -> None:
 )
 @pytest.mark.parametrize("spent_attempts", [0, 2])
 @pytest.mark.parametrize(
-    ("refund_conflicts", "lose_lease"), [(0, False), (2, False), (3, False), (3, True)]
+    ("refund_conflicts", "lose_lease"), [(0, False), (2, False), (3, False), (2, True), (3, True)]
 )
 def test_failure_write_conflict_keeps_worker_processing(
     conflict, failure_error, spent_attempts, refund_conflicts, lose_lease, monkeypatch
@@ -956,6 +964,7 @@ def test_failure_write_conflict_keeps_worker_processing(
             work_type="reconcile_ranked_day",
             processing_version=PROCESSING_VERSION,
             domain_rule_version=DOMAIN_RULE_VERSION,
+            analytics_rule_version=ANALYTICS_RULE_VERSION,
             attempt_count=spent_attempts if job_id == 17 else 0,
             max_attempts=3,
         )
@@ -980,9 +989,8 @@ def test_failure_write_conflict_keeps_worker_processing(
             pass
 
         @contextmanager
-        def _timed_connection(self):
-            raise failure_error()
-            yield
+        def connection(self):
+            yield SimpleNamespace(transaction=nullcontext)
 
         def refund_claim_attempt(self, claim):
             if self.refund_conflicts:
@@ -1008,8 +1016,13 @@ def test_failure_write_conflict_keeps_worker_processing(
     monkeypatch.setattr(
         reconciliation_db, "complete_reconciliation", complete_reconciliation
     )
-    monkeypatch.setattr(job_outcomes, "fail_claim", fail_claim)
+    monkeypatch.setattr(claimed_jobs, "fail_claim", fail_claim)
     database = Database()
+    monkeypatch.setattr(claimed_jobs, "refund_claim_attempt",
+                        lambda _connection, claim: database.refund_claim_attempt(claim))
+    def reject_deferral(*_args):
+        raise failure_error()
+    monkeypatch.setattr(claimed_jobs, "defer_conflicted", reject_deferral)
     processor = ObservationProcessor(database, archive=object())
     results = process_concurrently(
         processor,
@@ -1020,7 +1033,7 @@ def test_failure_write_conflict_keeps_worker_processing(
 
     assert results == [
         ProcessResult(17, "lease_lost")
-        if lose_lease
+        if lose_lease and refund_conflicts < 3
         else ProcessResult(
             17,
             "retrying",
@@ -1030,7 +1043,8 @@ def test_failure_write_conflict_keeps_worker_processing(
         ),
         ProcessResult(18, "processed"),
     ]
-    if lose_lease:
+    if lose_lease or refund_conflicts == 3:
+        # After bounded refund conflicts, recovery sees the spent budget.
         assert database.spent_attempts == spent_attempts + 1
         return
     reject_transactions = False

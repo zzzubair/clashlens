@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from clashlens.hmac_proof import (
     SigningInput,
     _parse_canonical_unix_time,
     build_signing_bytes,
+    request_headers,
     sign,
     verify_proof,
 )
@@ -127,3 +129,29 @@ def test_verifier_rejects_unknown_proof_version_with_a_valid_signature() -> None
 def test_timestamp_parser_rejects_unbounded_decimal_input_as_invalid_proof() -> None:
     with pytest.raises(InvalidProof):
         _parse_canonical_unix_time("1" * 5000)
+
+
+def test_request_headers_verify_against_shared_vectors() -> None:
+    def decode(value):
+        return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+    for vector in json.loads(VECTORS_PATH.read_text())["vectors"]:
+        caller = decode(vector["caller_b64url"]).decode()
+        key_id = decode(vector["key_id_b64url"]).decode()
+        key = bytes.fromhex(vector["key_hex"])
+        headers = request_headers(
+            key, caller=caller, key_id=key_id, method=vector["method"],
+            raw_target=decode(vector["target_b64url"]), body=bytes.fromhex(vector["body_hex"]),
+            issued_at=int(vector["issued_at"]), request_id=vector["request_id"],
+            lifetime_seconds=int(vector["expires_at"]) - int(vector["issued_at"]),
+            provider=decode(vector["provider_b64url"]).decode(),
+            provider_subject=decode(vector["provider_subject_b64url"]).decode(),
+        )
+        assert headers["x-clashlens-signature"] == vector["signature_b64url"]
+        proof = verify_proof(
+            headers=[(name.encode(), value.encode()) for name, value in headers.items()],
+            method=vector["method"], raw_target=decode(vector["target_b64url"]),
+            body=bytes.fromhex(vector["body_hex"]), keys={(caller, key_id): key},
+            now=int(vector["issued_at"]),
+        )
+        assert proof.caller == caller

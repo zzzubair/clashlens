@@ -12,6 +12,8 @@ from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
+from .job_contracts import JOB_CONTRACTS
+
 LATENCY_BUCKETS_SECONDS = (
     0.0001,
     0.00025,
@@ -60,14 +62,7 @@ WORKER_OUTCOMES = (
     "superseded",
     "other",
 )
-WORKER_JOB_STAGES = {
-    work_type: f"python_{work_type}"
-    for work_type in (
-        "process_observation", "replay_observation", "build_snapshot",
-        "build_analytics", "build_army_analytics", "redecode_army",
-        "reconcile_ranked_day",
-    )
-}
+WORKER_JOB_STAGES = {kind: f"python_{kind}" for kind in JOB_CONTRACTS}
 WORKER_STAGES = (
     *WORKER_JOB_STAGES.values(),
     "python_archive_get_verify",

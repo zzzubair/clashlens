@@ -22,6 +22,7 @@ from clashlens.board_deadline import (
 from clashlens.crew_states import CrewRole
 from clashlens.day_result import Confidence, DayState, ShieldState
 from clashlens.domain_repair import CampaignState
+from clashlens.job_contracts import SUPPORTED_WORK_TYPES
 from clashlens.loss_rule import LossEvidence
 from clashlens.past_reset_pacing import CorrectionPace, correction_pace
 from clashlens.publication_states import (
@@ -41,6 +42,8 @@ RESET = datetime(2026, 10, 12, 5, tzinfo=UTC)
 @pytest.mark.parametrize(
     ("table", "column", "states"),
     [
+        # SQL retains export work for a future worker image; this one leaves it queued.
+        ("python_processing_jobs", "work_type", (*SUPPORTED_WORK_TYPES, "build_export")),
         ("boundary_publication_generations", "snapshot_state", ArtifactState),
         ("boundary_publication_generations", "army_state", ArtifactState),
         ("boundary_publication_generation_members", "snapshot_status", MemberStatus),

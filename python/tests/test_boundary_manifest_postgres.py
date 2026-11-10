@@ -18,7 +18,8 @@ from clashlens.analytics import SNAPSHOT_ORDERING_RULE_VERSION, latest_trophy_ch
 from clashlens.army_decoder import CURRENT_DECODES, DECODER_VERSION
 from clashlens.boundary_manifest import _moved_decode_ids, _moved_side_arrays
 from clashlens.catalog import CATALOG_VERSION
-from clashlens.db import Database, _text_value
+from clashlens.db import Database
+from clashlens.db_rows import text_value
 from clashlens.domain import RANKED_DAY_DURATION, ranked_day_for, season_is_current
 from clashlens.worker import ObservationProcessor
 
@@ -400,8 +401,8 @@ def per_player_inputs(
     for ordinal, row in enumerate(members, start=1):
         player_id = int(row[0])
         version_id = int(row[1]) if row[1] is not None else None
-        input_hash = _text_value(row[2]) if row[2] is not None else None
-        status = _text_value(row[3] if artifact_kind == "snapshot" else row[4])
+        input_hash = text_value(row[2]) if row[2] is not None else None
+        status = text_value(row[3] if artifact_kind == "snapshot" else row[4])
         classification = {
             "complete": "Complete",
             "partial": "Partial",
@@ -440,7 +441,7 @@ def per_player_inputs(
                     (version_id,),
                 ).fetchone()
                 state = (
-                    _text_value(state_row[0])
+                    text_value(state_row[0])
                     if state_row is not None
                     else "Malformed"
                 )
@@ -517,17 +518,17 @@ def per_player_inputs(
                 ).hexdigest()
                 identity["profile_snapshot"] = {
                     "observation_id": int(profile[1]),
-                    "tag": _text_value(profile[4]),
+                    "tag": text_value(profile[4]),
                     "name": profile[5],
                     "trophies": int(profile[6]),
                     "observed_at": profile[2].astimezone(UTC).isoformat(),
-                    "eligibility_state": _text_value(profile[7]),
+                    "eligibility_state": text_value(profile[7]),
                     "profile_json": profile[3],
                 }
-                if _text_value(profile[7]) != "eligible":
+                if text_value(profile[7]) != "eligible":
                     identity["snapshot_quality"] = "invalid"
                 elif season_is_current(
-                    _text_value(profile[8]), generation[0] - RANKED_DAY_DURATION
+                    text_value(profile[8]), generation[0] - RANKED_DAY_DURATION
                 ):
                     identity["snapshot_quality"] = (
                         "unavailable" if classification == "Unavailable" else "eligible")
@@ -565,8 +566,8 @@ def per_player_inputs(
                     """,
                     (player_id, generation[0], player_id, generation[0]),
                 ).fetchone()
-                source_state = _text_value(latest[0]) if latest and latest[0] else None
-                failure = _text_value(latest[1]) if latest and latest[1] else None
+                source_state = text_value(latest[0]) if latest and latest[0] else None
+                failure = text_value(latest[1]) if latest and latest[1] else None
                 if failure in {
                     "malformed_json",
                     "unsupported_profile_schema",

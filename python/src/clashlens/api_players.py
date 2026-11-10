@@ -7,18 +7,15 @@ from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from . import api_leaderboard, api_player_lookup
+from . import api_leaderboard, api_player_lookup, live_board
 from .api_db import (
     PLAYER_SCREEN_READY_VERSION,
     ApiDatabase,
     _daily_log,
-    _frozen_trophies_sql,
     _historical_season_summary,
     _json_array,
-    _opening_day_battles_sql,
     _public_confidence,
     _screen_daily_log_with_events,
-    _season_reset_waiting_sql,
     _text,
     _withhold_unsupported_entries,
 )
@@ -31,6 +28,11 @@ from .domain import (
     ranked_day_for,
     season_opening_reset,
     validate_legend_season_start,
+)
+from .season_reset_sql import (
+    frozen_trophies_sql,
+    opening_day_battles_sql,
+    season_reset_waiting_sql,
 )
 from .season_summaries import reset_board_ranks, season_final_rank
 from .shared_copy import SharedCopy, _start_thread
@@ -169,7 +171,7 @@ def get_player_page(
         # profile that ranks them at 5,000, as the Live Leaderboard does.
         unplayed = connection.execute(
             api_leaderboard.UNPLAYED_PROFILE_SQL,
-            {**api_leaderboard._season_params(now), "tag": normalized_tag},
+            {**live_board.season_params(now), "tag": normalized_tag},
         ).fetchone()
         unplayed_id = None if unplayed is None else int(unplayed[0])
         row = connection.execute(
@@ -181,8 +183,8 @@ def get_player_page(
                    profile.profile_json -> 'clan' ->> 'name',
                    player.current_profile_confirmed_at,
                    profile.current_league_season_id,
-                   {_frozen_trophies_sql("player.id", "%s")},
-                   {_opening_day_battles_sql("player.id", "%s")},
+                   {frozen_trophies_sql("player.id", "%s")},
+                   {opening_day_battles_sql("player.id", "%s")},
                    player.id,
                    -- The Live Leaderboard's rule: a profile check newer than
                    -- the last good one said the game has no such player.
@@ -677,8 +679,8 @@ def player_cards(
         for row in connection.execute(
             f"""
             SELECT player.id, profile.trophies, profile.current_league_season_id,
-                   {_frozen_trophies_sql("player.id", "%s")},
-                   {_opening_day_battles_sql("player.id", "%s")}
+                   {frozen_trophies_sql("player.id", "%s")},
+                   {opening_day_battles_sql("player.id", "%s")}
             FROM players AS player
             JOIN player_profile_versions AS profile
                 ON profile.id = player.current_profile_version_id
@@ -962,11 +964,11 @@ def _known_players_sql(opening_reset: datetime | None, name_filter: str) -> str:
     # Off a Season's first Legend day no profile awaits its Season reset for
     # its trophies alone, so those per-player reads are left out.
     opening = (
-        f"""{_frozen_trophies_sql("player.id", "%(opening_reset)s")}
+        f"""{frozen_trophies_sql("player.id", "%(opening_reset)s")}
                    AS frozen_trophies,
-               {_opening_day_battles_sql("player.id", "%(opening_reset)s")}
+               {opening_day_battles_sql("player.id", "%(opening_reset)s")}
                    AS day_battles,
-               {_season_reset_waiting_sql(
+               {season_reset_waiting_sql(
                    "player.id", "profile.trophies", "%(opening_reset)s"
                )} AS opening_day_waiting"""
         if opening_reset is not None

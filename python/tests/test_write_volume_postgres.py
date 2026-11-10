@@ -23,10 +23,11 @@ from test_collector_uploads_postgres import (
     upload_database,
 )
 
+from clashlens.claimed_jobs import complete_terminal
 from clashlens.collector_db import CollectorDatabase
 from clashlens.collector_uploads import claim_upload, complete_upload
-from clashlens.db import RESPONSE_WORK_TYPES, Database, LeaseLost
-from clashlens.job_outcomes import complete_terminal
+from clashlens.db import Database, LeaseLost
+from clashlens.job_contracts import RESPONSE_WORK_TYPES
 
 DAY = timedelta(days=1)
 

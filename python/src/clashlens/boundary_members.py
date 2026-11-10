@@ -40,8 +40,8 @@ from .db import (
     ARMY_ANALYTICS_RULE_VERSION,
     RESET_LOCK_WAIT,
     Database,
-    _text_value,
 )
+from .db_rows import text_value
 from .domain import RANKED_DAY_DURATION
 from .league_week import week_start
 
@@ -358,7 +358,7 @@ def take_saved_days(
                 snapshot_status = %s, army_status = %s, updated_at = clock_timestamp()
             WHERE generation_id = %s AND player_id = %s
             """,
-            (version_id, _text_value(input_hash),
+            (version_id, text_value(input_hash),
              "terminal" if snapshot_status != "pending" else "pending",
              snapshot_status, army_status, generation_id, player_id),
         )
@@ -396,7 +396,7 @@ def leagues(connection: Any, boundary_at: datetime, player_ids: list[int]) -> di
         """,
         (player_ids, week_start(day)),
     ).fetchall())
-    return {player_id: _text_value(found.get(player_id, "unknown")) for player_id in player_ids}
+    return {player_id: text_value(found.get(player_id, "unknown")) for player_id in player_ids}
 
 
 def leave(database: Database, connection: Any, player_id: int, days: list[datetime]) -> None:
@@ -436,7 +436,7 @@ def leave(database: Database, connection: Any, player_id: int, days: list[dateti
         if current is None or current[3] is None:
             continue
         if current[1] is None and current[2] is None:
-            if _text_value(current[3]) == "pending":
+            if text_value(current[3]) == "pending":
                 connection.execute(
                     """
                     UPDATE boundary_publication_generation_members

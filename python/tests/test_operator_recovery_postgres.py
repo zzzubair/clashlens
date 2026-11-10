@@ -139,36 +139,39 @@ def _seed_processing_and_transport_failures(
 
 def test_failed_item_output_survives_sql_ascii_bytes() -> None:
     class Result:
-        def __init__(self, rows: list[tuple[object, ...]]) -> None:
+        def __init__(self, rows: list[dict[str, object]]) -> None:
             self.rows = rows
 
-        def fetchall(self) -> list[tuple[object, ...]]:
+        def fetchall(self) -> list[dict[str, object]]:
             return self.rows
 
     class Connection:
         def transaction(self):
             return nullcontext()
 
+        def cursor(self, **_kwargs):
+            return self
+
         def execute(self, statement: str, _parameters=()):
             if "FROM collector_work" in statement:
                 return Result(
                     [
-                        (
-                            1,
-                            b"initial_collection",
-                            b"interactive",
-                            b"#\xff",
-                            b"failed",
-                            b"pending",
-                            b"observed",
-                            b"pending",
-                            None,
-                            None,
-                            None,
-                            b"provider_\xff",
-                            "due",
-                            "updated",
-                        )
+                        {
+                            'id': 1,
+                            'kind': b"initial_collection",
+                            'lane': b"interactive",
+                            'normalized_tag': b"#\xff",
+                            'status': b"failed",
+                            'profile_status': b"pending",
+                            'battle_log_status': b"observed",
+                            'league_history_status': b"pending",
+                            'profile_observation_id': None,
+                            'battle_log_observation_id': None,
+                            'league_history_observation_id': None,
+                            'failure_category': b"provider_\xff",
+                            'due_at': "due",
+                            'updated_at': "updated",
+                        }
                     ]
                 )
             return Result([])

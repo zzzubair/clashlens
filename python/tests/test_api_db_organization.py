@@ -15,7 +15,12 @@ from test_api_db_public_ops import NOW, anonymous_binding, seed_profile
 from test_api_db_verification import verification_binding
 from test_api_migration import migrated_production_database
 
-from clashlens import api_accounts, api_player_lookup, api_verification, job_outcomes
+from clashlens import (
+    api_accounts,
+    api_player_lookup,
+    api_verification,
+    source_storage,
+)
 from clashlens.api_db import ApiDatabase, RequestBinding
 from clashlens.profile import PROFILE_PARSER_VERSION
 from clashlens.verification import VerificationOutcome
@@ -328,8 +333,8 @@ def test_group_creation_does_not_queue_behind_a_worker_transaction(
         worker = psycopg.connect(connection_info)
         try:
             owner_id = create_owner(database)
-            job_outcomes._upsert_player(worker, "#2PP", active=True)
-            job_outcomes._upsert_player(worker, "#8PY", active=False)
+            source_storage.upsert_player(worker, "#2PP", active=True)
+            source_storage.upsert_player(worker, "#8PY", active=False)
             worker.commit()
             verifications = [
                 verification_binding(owner_id, "group-owner-subject", "#2PP")
@@ -341,7 +346,7 @@ def test_group_creation_does_not_queue_behind_a_worker_transaction(
                 ).fresh
             # The worker updates one player and saves a row referencing the
             # other, which locks it the way a foreign key check does.
-            job_outcomes._upsert_player(worker, "#2PP", active=True)
+            source_storage.upsert_player(worker, "#2PP", active=True)
             worker.execute(
                 "SELECT 1 FROM players WHERE normalized_tag = '#8PY' FOR KEY SHARE"
             )
@@ -393,7 +398,7 @@ def test_group_creation_does_not_queue_behind_a_worker_transaction(
                 # that need those fill every API connection, and each must
                 # fail at once so a page read still answers.
                 for tag in ("#9QQ", "#LQG", "#RJC"):
-                    job_outcomes._upsert_player(worker, tag, active=True)
+                    source_storage.upsert_player(worker, tag, active=True)
                 worker.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended('#2PP', 0))"
                 )

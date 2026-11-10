@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from . import api_db, api_leaderboard
+from . import api_db, api_leaderboard, live_board
 from .api_db import ApiDatabase, OperationResult, RequestBinding, _text
 from .domain import ranked_day_for
 
@@ -219,7 +219,7 @@ def _why_no_results(
     ):
         if not battles and connection.execute(
             api_leaderboard.UNPLAYED_PROFILE_SQL,
-            {**api_leaderboard._season_params(now), "tag": tag},
+            {**live_board.season_params(now), "tag": tag},
         ).fetchone():
             return {}
         return {

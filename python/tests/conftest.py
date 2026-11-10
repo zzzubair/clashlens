@@ -148,6 +148,6 @@ def worker_maintenance_services(monkeypatch):
         (worker.army_types, "refresh_army_types"),
         (worker.projected_place, "refresh_remaining_changes"),
         (worker.analytics, "refresh_live_attack_tallies"),
-        (worker.api_leaderboard, "refresh_live_unplayed"),
+        (worker.live_board, "refresh_live_unplayed"),
     ):
         monkeypatch.setattr(target, name, lambda *_args, **_kwargs: None)
