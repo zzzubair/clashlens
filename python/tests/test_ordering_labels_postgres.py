@@ -4,14 +4,14 @@ import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from domain_test_support import domain_database, seed_battles, store_observation, text
-from psycopg.types.json import Jsonb
-from test_boundary_publication_postgres import (
+from boundary_publication_postgres_support import (
     BOUNDARY,
     DAY_START,
     _player_and_version,
     _sweep_with_members,
 )
+from domain_test_support import domain_database, seed_battles, store_observation, text
+from psycopg.types.json import Jsonb
 
 from clashlens import (
     army_ingestion,
@@ -22,8 +22,9 @@ from clashlens import (
     snapshots,
 )
 from clashlens.analytics import SNAPSHOT_ORDERING_RULE_VERSION, deterministic_tag_hash
-from clashlens.db import PYTHON_BACKFILL_PRIORITY, Database
+from clashlens.db import Database
 from clashlens.domain import RANKED_DAY_DURATION, ranked_day_for
+from clashlens.job_contracts import PYTHON_BACKFILL_PRIORITY
 
 OLDER = "tracked-player-order-v1"
 SEASON = ranked_day_for(BOUNDARY - RANKED_DAY_DURATION).official_season_id

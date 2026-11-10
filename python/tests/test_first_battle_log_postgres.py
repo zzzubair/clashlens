@@ -20,14 +20,21 @@ from domain_test_support import (
     repair_season,
     store_observation,
 )
-from test_reconciliation_postgres import BATTLE_FIXTURE, _profile
-from test_reset_settlement_state_postgres import (
-    BOUNDARIES,
+from first_battle_log_postgres_support import (
+    DAY_1,
+    DAY_2,
+    LOSS,
+    WIN,
+    _log,
+    _new_season_profile,
+    _queued_priorities,
+)
+from reconciliation_postgres_support import _profile
+from reset_settlement_state_postgres_support import (
     NEW_SEASON,
     TAG,
     _process,
     _reset_work,
-    _season_profile,
 )
 
 from clashlens import (
@@ -37,12 +44,9 @@ from clashlens import (
     loss_rule,
     reconciliation_db,
 )
-from clashlens.db import PYTHON_BACKFILL_PRIORITY, Database
-from clashlens.domain import allocate_trophies
+from clashlens.db import Database
+from clashlens.job_contracts import PYTHON_BACKFILL_PRIORITY
 from clashlens.reconciliation import RECONCILIATION_RULE_VERSION
-
-DAY_1 = BOUNDARIES["season"]
-DAY_2 = DAY_1 + timedelta(days=1)
 
 
 @pytest.fixture(autouse=True)
@@ -50,35 +54,6 @@ def _recorded(monkeypatch) -> None:
     """The weekly league record decides these Seasons, as it does every
     Season from 5 October 2026."""
     record_seasons_to(monkeypatch, DAY_1 + timedelta(days=28))
-WIN = allocate_trophies(3, 100).attacker_gain
-LOSS = allocate_trophies(2, 60).defender_loss
-
-
-def _log(*battles: tuple[datetime, bool], filler: list[datetime] = ()) -> bytes:
-    """A battle log: Legend battles (time, attack) won 3 stars as attacker and
-    lost 2 stars at 60% as defender, plus multiplayer battles at ``filler``."""
-    template = json.loads(BATTLE_FIXTURE.read_bytes())["items"][0]
-    items = [
-        {
-            **template, "attack": attack, "battleTime": 120,
-            "battleTimestamp": at.strftime("%Y%m%dT%H%M%S.000Z"),
-            "stars": 3 if attack else 2, "destructionPercentage": 100 if attack else 60,
-            "opponentPlayerTag": f"#{'89QGRJCUV'[index]}PP",
-        }
-        for index, (at, attack) in enumerate(battles)
-    ] + [
-        {**template, "battleType": "homeVillage", "battleTime": 120,
-         "battleTimestamp": at.strftime("%Y%m%dT%H%M%S.000Z"),
-         "opponentPlayerTag": "#9PP"}
-        for at in filler
-    ]
-    return json.dumps({"items": items}).encode()
-
-
-def _new_season_profile(trophies: int, tag: str = TAG) -> bytes:
-    payload = json.loads(_season_profile(trophies, NEW_SEASON))
-    payload["tag"] = tag
-    return json.dumps(payload).encode()
 
 
 def _first_seen(connection_info, archive_server, at, *, profile, log, tag=TAG):
@@ -167,17 +142,6 @@ def test_player_first_seen_during_day_1_gets_a_season_rule_start(
         assert day[3] == 5000 + gained - automatic
     if not coverage:
         assert "missing_start_battle_log_baseline" in day[5]
-
-
-def _queued_priorities(connection_info: str, key_prefix: str) -> set[int]:
-    with psycopg.connect(connection_info) as connection:
-        return {
-            row[0] for row in connection.execute(
-                "SELECT DISTINCT priority FROM python_processing_jobs"
-                " WHERE deduplication_key LIKE %s",
-                (key_prefix + "%",),
-            )
-        }
 
 
 def test_opponent_found_on_day_2_gets_day_1_and_the_backfill_finds_the_rest(

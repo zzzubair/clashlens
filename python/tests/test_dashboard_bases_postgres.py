@@ -10,13 +10,14 @@ Easy; compared with players near its trophies it reads Average.
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 import pytest
+from dashboard_bases_postgres_support import (
+    Facing,
+)
 from domain_test_support import as_api_role, domain_database
-from test_reset_scenarios_postgres import (
+from reset_scenarios_postgres_support import (
     SEASON,
     Battle,
     Player,
@@ -33,21 +34,6 @@ YOU, TYPICAL, STRONG = "#2PP", "#8PP", "#9PP"
 HELD, TRIPLED = 16, 40
 # The website's Held % band: website/app/lib/dashboard.ts BASE_STRENGTH_BAND.
 BAND = 15
-
-
-@dataclass
-class Facing(Player):
-    """A player whose battles at the given times face the named players."""
-
-    faced: dict[datetime, str] = field(default_factory=dict)
-
-    def log(self, at: datetime) -> bytes:
-        body = json.loads(super().log(at))
-        for item in body["items"]:
-            for when, tag in self.faced.items():
-                if item["battleTimestamp"] == when.strftime("%Y%m%dT%H%M%S.000Z"):
-                    item["opponentPlayerTag"] = tag
-        return json.dumps(body).encode()
 
 
 def _defenses(start: datetime, held: int) -> list[Battle]:

@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from domain_test_support import domain_database
-from test_reset_scenarios_postgres import (
+from reset_scenarios_postgres_support import (
     SEASON,
     THROWER,
     _story,

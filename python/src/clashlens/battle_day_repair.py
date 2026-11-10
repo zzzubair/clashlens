@@ -24,17 +24,15 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from .db import (
+from .db import DEFAULT_PARSER_VERSION, PYTHON_LIVE_PRIORITY, Database
+from .db_rows import text_value
+from .domain import SEASON_DURATION
+from .job_contracts import (
     ANALYTICS_RULE_VERSION,
-    DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
     PYTHON_BACKFILL_PRIORITY,
-    PYTHON_LIVE_PRIORITY,
-    Database,
 )
-from .db_rows import text_value
-from .domain import SEASON_DURATION
 
 
 def merged_battles(

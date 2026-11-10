@@ -1,13 +1,18 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 import pytest
+from army_analytics_publication_seasons_postgres_support import _insert_confirmed_anchor
+from boundary_publication_postgres_support import (
+    BOUNDARY,
+    DAY_START,
+    _board_published,
+    _player_and_version,
+    _sweep_with_members,
+)
 from domain_test_support import domain_database, store_observation, text
 from psycopg.types.json import Jsonb
-from test_army_analytics_publication_seasons_postgres import (
-    _insert_confirmed_anchor,
-)
 
 from clashlens import (
     army_ingestion,
@@ -19,82 +24,11 @@ from clashlens import (
 )
 from clashlens.db import Database
 
-BOUNDARY = datetime(2026, 8, 5, 5, tzinfo=UTC)
-DAY_START = BOUNDARY - timedelta(days=1)
-
 
 @pytest.fixture(autouse=True)
 def _corrections_start_at_once(monkeypatch) -> None:
     # What a correction rebuilds, not when (test_past_reset_pacing_postgres).
     monkeypatch.setattr(past_reset_pacing, "NEWEST_RESET_CORRECTION_INTERVAL", timedelta(0))
-
-
-def _player_and_version(
-    connection, tag: str, version: int, input_hash: str
-) -> tuple[int, int]:
-    player_id = int(
-        connection.execute(
-            "INSERT INTO players (normalized_tag, active) VALUES (%s, true) RETURNING id",
-            (tag,),
-        ).fetchone()[0]
-    )
-    version_id = int(
-        connection.execute(
-            """
-            INSERT INTO ranked_day_versions (
-                player_id, ranked_day_start, ranked_day_end, official_season_id,
-                season_day_number, season_anchor_rule_version,
-                reconciliation_rule_version, result_hash, version, state, confidence,
-                input_hash, evidence_complete, coverage_complete
-            ) VALUES (
-                %s, %s, %s, 'test-season', 1, 'test-anchor', 'test-rules',
-                %s, %s, 'Complete', 'exact', %s, true, true
-            ) RETURNING id
-            """,
-            (player_id, DAY_START, BOUNDARY, input_hash, version, input_hash),
-        ).fetchone()[0]
-    )
-    return player_id, version_id
-
-
-def _sweep_with_members(connection, player_ids: list[int]) -> int:
-    sweep_id = int(
-        connection.execute(
-            """
-            INSERT INTO collector_reset_sweeps
-                (boundary_at, member_ids, membership_captured_at)
-            VALUES (%s, %s, clock_timestamp())
-            RETURNING id
-            """,
-            (BOUNDARY, player_ids),
-        ).fetchone()[0]
-    )
-    connection.execute(
-        """
-        INSERT INTO collector_work (
-            kind, lane, scope, player_id, normalized_tag, sweep_id, due_at,
-            coalescing_key, profile_status, battle_log_status
-        )
-        SELECT 'reset_baseline', 'reset', 'player', player.id,
-               player.normalized_tag, %s, %s,
-               'reset:' || %s || ':' || player.id, 'pending', 'pending'
-        FROM players AS player
-        WHERE player.id = ANY(%s::bigint[])
-        ON CONFLICT DO NOTHING
-        """,
-        (sweep_id, BOUNDARY, sweep_id, player_ids),
-    )
-    return sweep_id
-
-
-def _board_published(database: Database, connection, generation: int = 1) -> None:
-    """The generation's board and statistics publish, and the publication
-    check freezes its army's inputs, which wait for them."""
-    generation_id = connection.execute(
-        "UPDATE boundary_publication_generations SET snapshot_state = 'published'"
-        " WHERE generation = %s RETURNING id", (generation,)).fetchone()[0]
-    boundary._try_enqueue_boundary_artifacts(
-        database, connection, boundary_at=BOUNDARY, generation_id=generation_id, army=True)
 
 
 def test_complete_ranked_day_without_profile_is_not_snapshot_complete(

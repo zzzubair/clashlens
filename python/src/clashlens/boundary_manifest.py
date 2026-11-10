@@ -28,19 +28,19 @@ from . import boundary_members, ranked_day_inputs
 from .analytics import latest_trophy_changes, unplayed_since_sql, unplayed_sql
 from .army_decoder import CURRENT_DECODES, DECODER_VERSION
 from .boundary_battles import moved_decode_ids, moved_side_arrays
-from .db import (
-    ANALYTICS_RULE_VERSION,
-    ARMY_ANALYTICS_RULE_VERSION,
-    DEFAULT_PARSER_VERSION,
-    DOMAIN_RULE_VERSION,
-    PROCESSING_VERSION,
-)
+from .db import DEFAULT_PARSER_VERSION
 from .db_rows import text_value
 from .domain import (
     RANKED_DAY_DURATION,
     SEASON_START_TROPHIES,
     ranked_day_for,
     season_is_current,
+)
+from .job_contracts import (
+    ANALYTICS_RULE_VERSION,
+    ARMY_ANALYTICS_RULE_VERSION,
+    DOMAIN_RULE_VERSION,
+    PROCESSING_VERSION,
 )
 from .league_week import week_start
 from .newest_profiles import ACCEPTED_VERSIONS, ANY_VERSIONS, NEWEST_PROFILES_SQL

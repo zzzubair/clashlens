@@ -7,15 +7,7 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from domain_test_support import (
-    apply_migration,
-    as_api_role,
-    domain_database,
-    store_observation,
-    text,
-)
-from fastapi.testclient import TestClient
-from test_army_analytics_publication_postgres import (
+from army_analytics_publication_postgres_support import (
     DAY_START,
     SEASON_ID,
     _army_job,
@@ -25,10 +17,19 @@ from test_army_analytics_publication_postgres import (
     _row,
     _selection,
 )
-from test_army_analytics_publication_seasons_postgres import (
-    _seed_frozen_snapshot_at,
+from army_analytics_publication_seasons_postgres_support import _seed_frozen_snapshot_at
+from army_types_postgres_support import (
+    NOON,
 )
-from test_private_api import NOW, NOW_SECONDS, TS_CURRENT, signed_headers
+from domain_test_support import (
+    apply_migration,
+    as_api_role,
+    domain_database,
+    store_observation,
+    text,
+)
+from fastapi.testclient import TestClient
+from private_api_support import NOW, NOW_SECONDS, TS_CURRENT, signed_headers
 
 from clashlens import api_analytics, army_rank_bands, army_types
 from clashlens.api import create_app
@@ -42,7 +43,6 @@ THROWER_CODE = "h7p4e60_52u9x132-4x7s2x109"
 OTHER_THROWER_CODE = "h7p4e53_52u10x132-2x7s1x10"
 # 8 Dragons (160) and 6 Dragon Riders (150): Hydra, though neither leads clearly.
 HYDRA_CODE = "u8x8-6x65"
-NOON = datetime(2026, 8, 5, 12, tzinfo=UTC)
 ATTACK_TROPHIES_MIGRATION = (
     Path(__file__).parents[2] / "deploy" / "migrations" / "0114_army_attack_trophies.sql"
 )

@@ -14,8 +14,8 @@ import time
 from datetime import UTC, datetime, timedelta
 
 import psycopg
-from domain_test_support import domain_database, store_observation, text
-from test_army_ingestion_postgres import _live_row, _processor
+from army_ingestion_postgres_support import _live_row
+from domain_test_support import _processor, domain_database, store_observation, text
 
 from clashlens import army_ingestion, background_pacing, claimed_jobs
 from clashlens.background_pacing import (
@@ -25,14 +25,12 @@ from clashlens.background_pacing import (
     BackgroundMode,
     pacing_mode,
 )
-from clashlens.db import (
+from clashlens.db import DEFAULT_PARSER_VERSION, Database, _claim_select_statement
+from clashlens.job_contracts import (
     ANALYTICS_RULE_VERSION,
     ARMY_ANALYTICS_RULE_VERSION,
-    DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
-    Database,
-    _claim_select_statement,
 )
 
 DAY = datetime(2026, 10, 8, 5, tzinfo=UTC)

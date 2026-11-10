@@ -20,16 +20,11 @@ from .past_reset_pacing import (
     past_reset_build_hold,
 )
 
-PROCESSING_VERSION = "clashlens-domain-processing-v1"
 # Label on reconcile, build and Reset-baseline work. It stays at
 # source-parser-v2 when the battle parser moves on, so those jobs keep the
 # claim class older workers already accept.
 DEFAULT_PARSER_VERSION = "supercell-source-parser-v2"
-DOMAIN_RULE_VERSION = "clashlens-domain-rules-v1"
-ANALYTICS_RULE_VERSION = "legend-analytics-v1"
-ARMY_ANALYTICS_RULE_VERSION = "army-analytics-v2"
 CONTRACT_VERSION = 5
-PYTHON_BACKFILL_PRIORITY = 25
 PYTHON_LIVE_PRIORITY = 100
 # Reset readings, ended-day results, board builds; only other work gains 10 a minute,
 # so live jobs in the claim window, retried ones included, pass it at 20 minutes.
@@ -67,8 +62,8 @@ _CLAIM_CANDIDATE_LIMIT = 32
 # The catch-all still claims other operator priorities. Its index also holds
 # Reset work, so each side of Reset priority is its own probe that the index
 # bounds by itself: NOT IN read 6,404 rows a claim at 05:50 on 8 Oct 2026.
-_BACKGROUND = f"{PYTHON_BACKFILL_PRIORITY}, {DAY_RECHECK_PRIORITY}"
-_PYTHON_CLAIM_PRIORITIES = (f"({PYTHON_BACKFILL_PRIORITY}), ({DAY_RECHECK_PRIORITY}),"
+_BACKGROUND = f"{job_contracts.PYTHON_BACKFILL_PRIORITY}, {DAY_RECHECK_PRIORITY}"
+_PYTHON_CLAIM_PRIORITIES = (f"({job_contracts.PYTHON_BACKFILL_PRIORITY}), ({DAY_RECHECK_PRIORITY}),"
                             f" ({PYTHON_LIVE_PRIORITY}), ({PYTHON_RESET_PRIORITY})")
 _PYTHON_OTHER_CLAIM_PRIORITIES = (
     f"job.priority NOT IN ({_BACKGROUND}, {PYTHON_LIVE_PRIORITY}) AND job.priority < {PYTHON_RESET_PRIORITY}",

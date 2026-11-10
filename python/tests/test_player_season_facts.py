@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from test_player_presentation_facts import saved_day
+from player_presentation_facts_support import saved_day
 
 from clashlens.api_player_presentation import display_starts
 from clashlens.api_player_season_facts import (
@@ -247,7 +247,7 @@ def test_history_filter_and_bot_membership_keep_different_missing_days():
 
 
 def test_start_groups_are_calculated_independently():
-    from test_player_presentation_facts import start_day
+    from player_presentation_facts_support import start_day
 
     current = start_day(21, [40, 40, 40, 30])
     current["completeness"] = {"state": "complete"}

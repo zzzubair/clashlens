@@ -15,10 +15,10 @@ from dataclasses import replace
 from datetime import timedelta
 
 import psycopg
-import test_reset_scenarios_postgres as scenarios
+import reset_scenarios_postgres_support as scenarios
 from domain_test_support import domain_database
-from test_reconciliation_postgres import _processor
-from test_reset_scenarios_postgres import (
+from reconciliation_postgres_support import _processor
+from reset_scenarios_postgres_support import (
     PREVIOUS_SEASON,
     _ranked,
     _saturday,
@@ -27,7 +27,7 @@ from test_reset_scenarios_postgres import (
     day,
     defenses,
 )
-from test_weekly_raise_postgres import LATE_RAISE, LOSS_TOO, _instant_raise
+from weekly_raise_postgres_support import LATE_RAISE, LOSS_TOO, _instant_raise
 
 from clashlens import reading_rule, reconciliation, reconciliation_db
 from clashlens.db import Database

@@ -10,10 +10,10 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import psycopg
+from discord_alerts_postgres_support import SITE, FakeDiscord, _summary_switch, _switch
+from discord_bot_postgres_support import DISCORD_ID, _account, _verify
 from domain_test_support import as_api_role, domain_database
-from test_discord_alerts_postgres import SITE, FakeDiscord, _summary_switch, _switch
-from test_discord_bot_postgres import DISCORD_ID, _account, _verify
-from test_reset_scenarios_postgres import (
+from reset_scenarios_postgres_support import (
     PREVIOUS_SEASON,
     SEASON,
     Battle,

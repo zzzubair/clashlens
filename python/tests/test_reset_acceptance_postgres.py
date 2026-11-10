@@ -8,19 +8,14 @@ from types import SimpleNamespace
 
 import psycopg
 from domain_test_support import domain_database
-from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from reset_acceptance_postgres_support import (
+    _as_worker,
+)
 
 from clashlens import alerts, reset_acceptance
 from clashlens.collector_db import CollectorDatabase
 
 RESET = datetime(2026, 10, 8, 5, tzinfo=UTC)
-
-
-def _as_worker(connection_info: str) -> str:
-    options = conninfo_to_dict(connection_info).get("options", "")
-    return make_conninfo(
-        connection_info, options=f"{options} -c role=clashlens_python_worker".strip()
-    )
 
 
 def _seed_reset(connection: psycopg.Connection, reset: datetime) -> list[int]:

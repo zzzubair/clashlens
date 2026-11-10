@@ -8,9 +8,10 @@ from typing import Any
 
 from . import battle, domain, reading_rule
 from .day_result import shield_run_length
-from .db import PROCESSING_VERSION, Database
+from .db import Database
 from .db_rows import text_value
 from .domain import CHAIN_BREAK_REASONS, MAX_DAILY_DEFENSES, RankedDay
+from .job_contracts import PROCESSING_VERSION
 from .reconciliation import (
     BATTLE_LOG_MAX_ROWS,
     DISPUTED_BATTLE_REASONS,

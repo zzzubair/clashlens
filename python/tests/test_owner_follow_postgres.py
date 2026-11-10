@@ -14,18 +14,19 @@ from uuid import uuid4
 
 import psycopg
 import pytest
-from domain_test_support import as_api_role, domain_database
-from fastapi.testclient import TestClient
-from test_discord_alerts_postgres import (
+from discord_alerts_postgres_support import (
     SITE,
     FakeDiscord,
     _defend,
     _summary_switch,
     _switch,
 )
-from test_discord_bot_postgres import _account, _verify
-from test_private_api import NOW, NOW_SECONDS, TS_CURRENT, json_body, signed_headers
-from test_reset_scenarios_postgres import (
+from discord_bot_postgres_support import _account, _verify
+from domain_test_support import as_api_role, domain_database
+from fastapi.testclient import TestClient
+from owner_test_support import _record_owner
+from private_api_support import NOW, NOW_SECONDS, TS_CURRENT, json_body, signed_headers
+from reset_scenarios_postgres_support import (
     SEASON,
     Battle,
     Player,
@@ -66,14 +67,6 @@ def _post(client: TestClient, who: tuple[str, str] | None, target: str, body: di
 def _ask(client: TestClient, who: tuple[str, str], tag: str | None = None):
     target = "/v1/account/view-as" + ("" if tag is None else f"?tag={tag.replace('#', '%23')}")
     return client.get(target, headers=signed_headers(target, provider=who[0], subject=who[1]))
-
-
-def _record_owner(connection_info: str, account_id: int) -> None:
-    """The one-time production step, run by the operator outside the app."""
-    with psycopg.connect(connection_info, autocommit=True) as connection:
-        connection.execute(
-            "INSERT INTO site_owner_accounts (account_id) VALUES (%s)", (account_id,)
-        )
 
 
 def _remove_owner(connection_info: str, account_id: int) -> None:

@@ -12,10 +12,10 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from api_db_organization_support import create_owner
 from domain_test_support import as_api_role, domain_database
-from test_api_db_organization import create_owner
-from test_group_comparison_postgres import link_player
-from test_reset_scenarios_postgres import (
+from group_comparison_postgres_support import link_player
+from reset_scenarios_postgres_support import (
     SEASON,
     Battle,
     _ranked,

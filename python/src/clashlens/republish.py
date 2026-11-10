@@ -17,15 +17,14 @@ from . import (
     first_battle_log,
     reset_baselines,
 )
-from .db import (
-    ANALYTICS_RULE_VERSION,
-    DEFAULT_PARSER_VERSION,
-    DOMAIN_RULE_VERSION,
-    PROCESSING_VERSION,
-    Database,
-)
+from .db import DEFAULT_PARSER_VERSION, Database
 from .db_rows import text_value
 from .domain import SEASON_ANCHOR_RULE_VERSION
+from .job_contracts import (
+    ANALYTICS_RULE_VERSION,
+    DOMAIN_RULE_VERSION,
+    PROCESSING_VERSION,
+)
 from .reconciliation import RECONCILIATION_RULE_VERSION
 
 

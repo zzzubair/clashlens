@@ -324,8 +324,8 @@ def queue_season_end(connection: Any, player_id: int, season_end: datetime) -> N
     accept, is left as saved. The
     day's calculation lock makes the two meet: a calculation either reads
     this total or has saved before this reads it."""
-    from .db import PYTHON_BACKFILL_PRIORITY
     from .domain import ranked_day_for
+    from .job_contracts import PYTHON_BACKFILL_PRIORITY
     from .profile import LEGEND_I_TIER_ID
     from .ranked_day_inputs import lock_ranked_day
     from .reconciliation import RECONCILIATION_RULE_VERSION

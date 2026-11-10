@@ -16,22 +16,24 @@ from datetime import timedelta
 import psycopg
 import pytest
 from domain_test_support import domain_database, repair_season, store_observation
-from test_first_battle_log_postgres import LOSS, WIN, _log, _queued_priorities
-from test_reconciliation_postgres import DAY_START, _profile
-from test_reset_settlement_state_postgres import (
-    BOUNDARIES,
+from first_battle_log_postgres_support import LOSS, WIN, _log, _queued_priorities
+from reconciliation_postgres_support import _profile
+from reset_reading_before_loss_postgres_support import (
+    DAY_A,
+    DAY_B,
+    DAY_C,
+    DAY_D,
+)
+from reset_settlement_state_postgres_support import (
     TAG,
     _process,
     _reset_work,
 )
 
 from clashlens import queue_refresh, ranked_day_inputs, reconciliation_db
-from clashlens.db import PYTHON_BACKFILL_PRIORITY, Database
+from clashlens.db import Database
 from clashlens.domain import ranked_day_for
-
-# Three ordinary days: Monday 3 August to Thursday 6 August 2026.
-DAY_A, DAY_B, DAY_C = BOUNDARIES["monday"], DAY_START, BOUNDARIES["ordinary"]
-DAY_D = DAY_C + timedelta(days=1)
+from clashlens.job_contracts import PYTHON_BACKFILL_PRIORITY
 
 
 def _latest_days(connection_info: str, days: tuple = (DAY_B, DAY_C)) -> list[tuple]:

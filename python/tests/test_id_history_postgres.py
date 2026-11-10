@@ -6,14 +6,7 @@ from datetime import timedelta
 
 import psycopg
 import pytest
-from domain_test_support import (
-    domain_database,
-    enable_direct_army_fixture,
-    store_observation,
-)
-from fastapi.testclient import TestClient
-from psycopg.types.json import Jsonb
-from test_army_analytics_publication_postgres import (
+from army_analytics_publication_postgres_support import (
     DAY_START,
     SEASON_ID,
     _event,
@@ -21,18 +14,24 @@ from test_army_analytics_publication_postgres import (
     _publish_day,
     _row,
 )
-from test_army_history import fact
-from test_army_season_summaries_postgres import DAY0 as MEASURE_DAY_START
-from test_army_season_summaries_postgres import SEASON as MEASURE_SEASON
-from test_army_season_summaries_postgres import _seed
-from test_private_api import NOW, NOW_SECONDS, TS_CURRENT, signed_headers
-from test_reconciliation_postgres import _processor as _real_processor
-from test_reconciliation_postgres import _store_baseline_pair
-from test_season_detail_retirement_postgres import (  # noqa: F401 - autouse history substitution
-    _assume_expanded_history,
+from army_history_support import fact
+from army_season_summaries_postgres_support import DAY0 as MEASURE_DAY_START
+from army_season_summaries_postgres_support import SEASON as MEASURE_SEASON
+from army_season_summaries_postgres_support import _seed
+from domain_test_support import (
+    domain_database,
+    store_observation,
+)
+from fastapi.testclient import TestClient
+from player_season_summaries_postgres_support import _player
+from private_api_support import NOW, NOW_SECONDS, TS_CURRENT, signed_headers
+from psycopg.types.json import Jsonb
+from reconciliation_postgres_support import _processor as _real_processor
+from reconciliation_postgres_support import _store_baseline_pair
+from season_detail_retirement_postgres_support import (
+    _assume_expanded_history,  # noqa: F401 - pytest fixture registration
     _ensure_canonical_anchor,
     _full_season,
-    _player,
     _seed_army,
 )
 
@@ -114,16 +113,19 @@ def test_raw_battle_reconciles_to_both_player_pages_and_analytics(database_url, 
             assert logs[0]["state"] == "Complete"
             assert logs[1]["state"] == "Partial"
             assert logs[1]["uncertainty_reasons"] == ["automatic_defense_basis_unavailable"]
-            # Use the existing completed-day fixture publication seam. It reads
-            # the real reconciled logs and decodes above, without changing them.
-            enable_direct_army_fixture(database, monkeypatch)
+            # Publish through the actual Reset board and its frozen army job.
+            boundary_publication.reevaluate_boundary_publications(database)
+            for _ in range(4):
+                processor.process_until_idle(owner="trace-publication", max_jobs=100)
+                boundary_publication.reevaluate_boundary_publications(database)
             with database.pool.connection() as connection:
-                boundary_publication._enqueue_army_analytics(database, connection, ranked_day_start=DAY_START)
-                jobs = connection.execute("SELECT id FROM python_processing_jobs WHERE work_type='build_army_analytics' AND status='pending' AND input_json ? 'ranked_day_start' ORDER BY id").fetchall()
+                jobs = connection.execute(
+                    "SELECT input_json, outcome FROM python_processing_jobs"
+                    " WHERE work_type = 'build_army_analytics' AND status = 'complete'"
+                ).fetchall()
             assert jobs
-            for (job,) in jobs:
-                result = processor.process_job(job, owner="trace-analytics")
-                assert result.outcome == "processed", result
+            assert all(job[0].get("manifest_digest") for job in jobs)
+            assert all(job[1] == "processed" for job in jobs)
             with database.pool.connection() as connection:
                 for lens in ("offense", "defense"):
                     materialize_army_season(connection, SEASON_ID, lens)

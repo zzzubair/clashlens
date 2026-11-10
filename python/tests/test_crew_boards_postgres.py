@@ -7,9 +7,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from domain_test_support import domain_database
+from crews_postgres_support import Site
 from psycopg.types.json import Jsonb
-from test_crews_postgres import Site
 
 from clashlens import api_crew_boards, live_board
 from clashlens.domain import ranked_day_for
@@ -22,16 +21,6 @@ PARITY = json.loads(
 NOW = datetime.fromisoformat(PARITY["now"])
 TODAY = NOW.replace(hour=5)
 DAY = timedelta(days=1)
-
-
-@pytest.fixture
-def site(database_url: str):
-    with domain_database(database_url) as connection_info:
-        built = Site(connection_info)
-        try:
-            yield built
-        finally:
-            built.close()
 
 
 def battle(lens: str, battle_id: str, at: datetime, stars: int, trophies: int) -> dict:

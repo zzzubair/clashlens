@@ -19,9 +19,9 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import psycopg
+from board_later_reading_postgres_support import _hold
 from domain_test_support import domain_database, text
-from test_board_later_reading_postgres import _hold
-from test_reset_scenarios_postgres import (
+from reset_scenarios_postgres_support import (
     SEASON,
     Battle,
     _ranked,

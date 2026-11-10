@@ -5,10 +5,10 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
+from api_security_support import FakeDatabase, _app, _signed_headers
+from collector_support import _Client, _collector, _Spool, _Store
 from fastapi.testclient import TestClient
-from test_api_security import FakeDatabase, _app, _signed_headers
-from test_collector import _Client, _collector, _Spool, _Store
-from test_private_api import NOW_SECONDS, TS_CURRENT, signed_headers
+from private_api_support import NOW_SECONDS, TS_CURRENT, signed_headers
 
 from clashlens import api_player_lookup
 from clashlens.api import create_app

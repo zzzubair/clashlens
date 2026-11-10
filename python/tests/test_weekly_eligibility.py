@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
-from test_collector import _Client, _collector, _Spool, _Store
+from collector_support import _Client, _collector, _Spool, _Store
 
 from clashlens import cli, weekly_eligibility
 from clashlens.collector_db import CollectorIntent

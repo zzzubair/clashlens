@@ -11,15 +11,16 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from domain_test_support import domain_database
-from test_collector import _collector
-from test_collector_uploads_postgres import (
+from collector_db_postgres_support import _player
+from collector_support import _collector
+from collector_uploads_postgres_support import (
     NOW,
     _archive_instance,
     _handoff,
-    _player,
     upload_database,
 )
+from collector_uploads_postgres_support import NOW as _PLAYER_NOW
+from domain_test_support import domain_database
 
 from clashlens import league_week, response_novelty
 from clashlens.collector_db import CollectorDatabase, CollectorWork, ResponseHandoff
@@ -73,7 +74,7 @@ def test_unchanged_profile_is_recorded_without_saving_its_bytes(
     # Only the ignored rank differs, so the second body is an unchanged poll.
     first, ignored, changed = _profile(1), _profile(2), _profile(2, trophies=5032)
     with domain_database(database_url) as connection_info:
-        player_id = _player(connection_info)
+        player_id = _player(connection_info, now=_PLAYER_NOW)
         database = CollectorDatabase(connection_info)
         spool = Spool(tmp_path / "spool", max_body_bytes=4 << 20)
         client = _Profiles([first, ignored, changed])
@@ -112,7 +113,7 @@ def test_timed_out_unchanged_check_still_saves_the_response(
 ) -> None:
     first, ignored = _profile(1), _profile(2)
     with domain_database(database_url) as connection_info:
-        player_id = _player(connection_info)
+        player_id = _player(connection_info, now=_PLAYER_NOW)
         database = CollectorDatabase(connection_info)
         spool = Spool(tmp_path / "spool", max_body_bytes=4 << 20)
         collector = _collector(spool, database, _Profiles([first, ignored]))  # type: ignore[arg-type]
@@ -165,7 +166,7 @@ def test_saving_never_waits_on_worker_rows_that_point_at_the_observation(
     # it built a Reset publication, and collection stopped for 4 minutes.
     with domain_database(database_url) as connection_info:
         database = CollectorDatabase(connection_info)
-        player_id = _player(connection_info)
+        player_id = _player(connection_info, now=_PLAYER_NOW)
 
         def poll(key: str, days: int) -> ResponseHandoff:
             return _handoff(
@@ -195,7 +196,7 @@ def test_collection_moves_on_while_the_worker_holds_its_player(
     hold = "SELECT 1 FROM players FOR NO KEY UPDATE"
     first, ignored = _profile(1), _profile(2)
     with domain_database(database_url) as connection_info:
-        player_id = _player(connection_info)
+        player_id = _player(connection_info, now=_PLAYER_NOW)
         database = CollectorDatabase(connection_info)
         spool = Spool(tmp_path / "spool", max_body_bytes=4 << 20)
         collector = _collector(spool, database, _Profiles([first, ignored]))  # type: ignore[arg-type]
@@ -253,7 +254,7 @@ def test_full_regular_check_moves_on_while_the_worker_holds_its_player(
     # A Clasher who finished the Legend day is checked less often; that
     # scheduling update must not wait for the worker either.
     with domain_database(database_url) as connection_info:
-        player_id = _player(connection_info)
+        player_id = _player(connection_info, now=_PLAYER_NOW)
         database = CollectorDatabase(connection_info)
         spool = Spool(tmp_path / "spool", max_body_bytes=4 << 20)
         collector = _collector(spool, database, _Profiles([_profile(1), _profile(2)]))  # type: ignore[arg-type]
@@ -322,7 +323,7 @@ def test_unchanged_check_skips_a_shared_body_another_sighting_holds(
     # so a held upload row must never make the sighting wait.
     with domain_database(database_url) as connection_info:
         database = CollectorDatabase(connection_info)
-        player_id = _player(connection_info)
+        player_id = _player(connection_info, now=_PLAYER_NOW)
 
         def poll(key: str, at: datetime) -> ResponseHandoff:
             return _handoff(
@@ -359,7 +360,7 @@ def test_a_mondays_first_answer_after_the_league_display_window_is_saved(
     monday, window = datetime(2026, 10, 12, 5, tzinfo=UTC), league_week.LEAGUE_DISPLAY_WINDOW
     with domain_database(database_url) as connection_info:
         database = CollectorDatabase(connection_info)
-        player_id = _player(connection_info)
+        player_id = _player(connection_info, now=_PLAYER_NOW)
 
         def saved(key: str, at: datetime) -> bool:
             return database.record_response(_handoff(
@@ -385,7 +386,7 @@ def test_recent_sighting_of_a_marked_response_is_not_recorded_unchanged(
 ) -> None:
     with upload_database(database_url) as connection_info:
         database = CollectorDatabase(connection_info)
-        player_id = _player(connection_info)
+        player_id = _player(connection_info, now=_PLAYER_NOW)
         _archive_instance(connection_info)
 
         def poll(key: str, at: datetime) -> ResponseHandoff:
@@ -421,7 +422,7 @@ def test_unsaved_sighting_keeps_a_saved_refresh_recoverable(database_url: str) -
         first = _handoff(
             occurrence_key="first",
             response_hash="a" * 64,
-            player_id=_player(connection_info),
+            player_id=_player(connection_info, now=_PLAYER_NOW),
             content_fingerprint="f" * 64,
         )
 
@@ -465,7 +466,7 @@ def test_a_response_is_new_needs_its_own_proof_or_confirms_the_saved_one(
         database = CollectorDatabase(connection_info)
         first = _handoff(
             occurrence_key="first", response_hash="a" * 64,
-            player_id=_player(connection_info), content_fingerprint="f" * 64,
+            player_id=_player(connection_info, now=_PLAYER_NOW), content_fingerprint="f" * 64,
         )
 
         def poll(key: str, digest: str, minutes: int, fields: str = "f") -> ResponseHandoff:

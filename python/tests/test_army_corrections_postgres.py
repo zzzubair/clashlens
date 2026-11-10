@@ -3,8 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 
-from domain_test_support import domain_database, store_observation, text
-from test_army_analytics_publication_postgres import (
+from army_analytics_publication_postgres_support import (
     DAY_START,
     FIXTURE_CODE,
     SEASON_ID,
@@ -14,6 +13,7 @@ from test_army_analytics_publication_postgres import (
     _publish_day,
     _row,
 )
+from domain_test_support import domain_database, store_observation, text
 
 from clashlens import boundary, past_reset_pacing
 

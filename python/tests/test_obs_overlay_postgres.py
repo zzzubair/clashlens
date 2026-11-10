@@ -10,9 +10,9 @@ from typing import Any
 
 import psycopg
 import pytest
+from discord_bot_postgres_support import DISCORD_ID, _account, _verify
 from domain_test_support import as_api_role, domain_database
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
-from test_discord_bot_postgres import DISCORD_ID, _account, _verify
 
 from clashlens import api_overlays, collector_overlays
 from clashlens.api_db import ApiDatabase

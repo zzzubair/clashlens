@@ -19,7 +19,7 @@ from urllib.parse import unquote
 import psycopg
 import pytest
 from domain_test_support import domain_database, store_observation
-from test_reset_settlement_collection_postgres import _collector
+from reset_settlement_collection_postgres_support import _collector
 
 from clashlens import promotion_recheck
 from clashlens.collector_db import CollectorDatabase

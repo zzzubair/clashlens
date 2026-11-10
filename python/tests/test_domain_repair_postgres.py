@@ -650,14 +650,14 @@ def test_season_repair_recalculates_days_then_rebuilds_boards_with_a_receipt(
     """The first queue saves the Season as it was; each player's days are
     queued once; only once they have all run, none failed, are the boards
     the rules now change rebuilt; the receipt shows before beside now."""
-    from domain_test_support import repair_season
-    from test_boundary_manifest_postgres import (
+    from boundary_manifest_postgres_support import (
         DAY_2_RESET,
         _build_board,
         _october,
         _seed_board,
         _seed_days,
     )
+    from domain_test_support import repair_season
 
     with domain_database(database_url) as connection_info:
         generation_id = _seed_board(
@@ -782,7 +782,7 @@ def test_season_repair_stores_again_a_summary_a_board_correction_changed(
     After the first player's run, a correction of the Season's last board
     moves it from first to second: the repair stores its summary again
     before it reports done, and the receipt finds none differing."""
-    from test_player_season_summaries_postgres import (
+    from player_season_summaries_postgres_support import (
         _frozen_board,
         _log,
         _player,
@@ -878,8 +878,8 @@ def test_season_repair_recalculates_days_saved_before_their_season_was_known(
     profile named it. The repair's one job for the player recalculates both,
     oldest first, though the first comes out the same."""
     from domain_test_support import repair_season
-    from test_player_season_summaries_postgres import _log, _player, _ranked
-    from test_reconciliation_postgres import _processor
+    from player_season_summaries_postgres_support import _log, _player, _ranked
+    from reconciliation_postgres_support import _processor
 
     from clashlens import reconciliation_db
     from clashlens.domain import ranked_day_for
@@ -925,7 +925,7 @@ def test_season_repair_rebuilds_moved_battle_days_of_its_season_only(
     Repairing September's moved battle in the Season repair recalculates
     every September day and leaves October's as saved; the batch for every
     Season still follows the moved day's saved Season."""
-    from test_reconciliation_postgres import _processor
+    from reconciliation_postgres_support import _processor
 
     from clashlens import battle_day_repair, reconciliation_db
 
@@ -1245,8 +1245,8 @@ def test_scoped_season_repair_recalculates_only_the_players_a_rule_change_affect
     oldest first while the ordinary player's saved days stay as they were.
     The full repair of the same rules still has both players to
     recalculate."""
-    from test_player_season_summaries_postgres import _log, _ranked
-    from test_reconciliation_postgres import _processor
+    from player_season_summaries_postgres_support import _log, _ranked
+    from reconciliation_postgres_support import _processor
 
     from clashlens import reconciliation_db
 
@@ -1344,7 +1344,7 @@ def test_scoped_season_repair_keeps_its_players_after_their_day_is_saved_again(
     day and the scheduled compaction deletes the old one, so choosing again
     would leave the player out. The repair still counts that player and
     their unfinished job, and does not move on to the boards."""
-    from test_player_season_summaries_postgres import _log, _ranked
+    from player_season_summaries_postgres_support import _log, _ranked
 
     scope, monday, chosen = "day-1-or-unplayed", START + 7 * DAY, START
     with _campaign_database(database_url) as (connection_info, worker):

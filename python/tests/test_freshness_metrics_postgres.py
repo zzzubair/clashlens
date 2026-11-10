@@ -5,34 +5,20 @@ from datetime import UTC, datetime, timedelta
 
 import psycopg
 import pytest
+from api_db_public_ops_support import seed_profile
+from api_security_support import KEY, NOW, _signed_headers
+from collector_support import _Client, _collector, _Spool
 from domain_test_support import as_api_role, domain_database
 from fastapi.testclient import TestClient
+from freshness_metrics_postgres_support import (
+    seed_check,
+)
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
-from test_api_db_public_ops import seed_profile
-from test_api_security import KEY, NOW, _signed_headers
-from test_collector import _Client, _collector, _Spool
 
 from clashlens import api_leaderboard, api_players
 from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
 from clashlens.collector_db import CollectorDatabase
-
-
-def seed_check(connection, tag, endpoint, at, *, not_found=None):
-    connection.execute(
-        """
-        INSERT INTO collector_response_state (
-            scope, identity_key, endpoint, player_id, normalized_tag,
-            last_response_hash, last_content_fingerprint,
-            last_occurrence_key, last_applied_occurrence_key,
-            last_seen_at, last_success_at, last_not_found_at
-        ) SELECT 'player', normalized_tag, %s, id, normalized_tag,
-                 repeat('a', 64), repeat('a', 64), normalized_tag || %s, 'seed',
-                 COALESCE(%s, clock_timestamp()), %s, %s
-          FROM players WHERE normalized_tag = %s
-        """,
-        (endpoint, endpoint, at, at, not_found, tag),
-    )
 
 
 def test_collector_exports_population_check_ages_with_missing_history(database_url):

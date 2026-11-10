@@ -244,7 +244,8 @@ def background_floor(
     their limits, so one-job claims run both. Holding the permit, it counts
     every background claim committed before this one.
     """
-    from .db import PYTHON_BACKFILL_PRIORITY, PYTHON_LIVE_PRIORITY
+    from .db import PYTHON_LIVE_PRIORITY
+    from .job_contracts import PYTHON_BACKFILL_PRIORITY
 
     priorities = [PYTHON_BACKFILL_PRIORITY, DAY_RECHECK_PRIORITY]
     if random.random() * (BACKGROUND_JOB_LIMIT + DAY_RECHECK_JOB_LIMIT) >= BACKGROUND_JOB_LIMIT:
@@ -279,12 +280,8 @@ def background_allowance(
     maintenance moves dead ones out. The lease count is its own statement, so
     it reads every background claim committed before this one took the permit.
     """
-    from .db import (
-        PYTHON_BACKFILL_PRIORITY,
-        PYTHON_LIVE_PRIORITY,
-        PYTHON_RESET_PRIORITY,
-    )
-    from .job_contracts import supported_job_filter
+    from .db import PYTHON_LIVE_PRIORITY, PYTHON_RESET_PRIORITY
+    from .job_contracts import PYTHON_BACKFILL_PRIORITY, supported_job_filter
 
     supported_filter, params = supported_job_filter("job", claim=True)
     tries = "job.attempt_count < job.max_attempts"

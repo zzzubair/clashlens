@@ -9,12 +9,9 @@ import os
 from datetime import UTC, datetime
 
 import pytest
-import test_alerts
-from test_alerts import reset_at
+from alerts_support import reset_at
 
 from clashlens import alerts
-
-runtime = test_alerts.runtime
 
 PREFIX = "clashlens_collector_"
 

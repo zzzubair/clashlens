@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 import psycopg
 import pytest
@@ -22,23 +22,32 @@ from domain_test_support import (
     domain_database,
     store_observation,
 )
-from test_league_history import _entry, _payload
+from late_battle_sweep_postgres_support import (
+    ANCHOR,
+    DAY,
+    OPPONENT,
+    TAG,
+    _finish_reset_sweep,
+    _late_defense,
+    _previous_day_version,
+    _process,
+    _published,
+    _save_log,
+    _saved_disagreement,
+    _store_log,
+)
+from league_history_support import _entry, _payload
 
 from clashlens import boundary, claimed_jobs, late_battle_sweep, reconciliation_db
-from clashlens.db import (
+from clashlens.db import DEFAULT_PARSER_VERSION
+from clashlens.job_contracts import (
     ANALYTICS_RULE_VERSION,
-    DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
 )
 from clashlens.late_battle_sweep import LateBattleSweep, SweepState, sweep_late_battles
 from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
 from clashlens.reconciliation import RECONCILIATION_RULE_VERSION
-
-ANCHOR = datetime(2026, 8, 3, 5, tzinfo=UTC)
-DAY = ANCHOR + timedelta(days=1)
-TAG = "#8PP"
-OPPONENT = "#2PP"
 
 
 def _on_time_defense() -> dict:
@@ -47,50 +56,6 @@ def _on_time_defense() -> dict:
         battle_timestamp=DAY + timedelta(hours=1),
         opponent_tag="#QPP",
         opponent_name="Earlier Attacker",
-    )
-
-
-def _late_defense() -> dict:
-    # 0 stars at 49%: the attacker gains trophies, the defender loses none.
-    return _live_battle_row(
-        attack=False,
-        battle_timestamp=DAY + timedelta(days=1, seconds=-10),
-        opponent_tag="#2PP",
-        opponent_name="Zero Star Attacker",
-        stars=0,
-        destruction_percentage=49,
-    )
-
-
-def _store_log(connection_info, archive_server, *, key, rows, observed_at):
-    return store_observation(
-        connection_info,
-        archive_server,
-        occurrence_key=key,
-        endpoint="battle_log",
-        body=json.dumps({"items": rows}).encode(),
-        observed_at=observed_at,
-        normalized_tag=TAG,
-        parser_version=LIVE_BATTLE_PARSER_VERSION,
-    )[1]
-
-
-def _process(processor, *job_ids: int) -> None:
-    for job_id in job_ids:
-        result = processor.process_job(job_id, owner=f"test-{job_id}")
-        assert result is not None and result.outcome == "processed"
-
-
-def _save_log(connection_info, archive_server, processor, *, key, rows, observed_at):
-    _process(
-        processor,
-        _store_log(
-            connection_info,
-            archive_server,
-            key=key,
-            rows=rows,
-            observed_at=observed_at,
-        ),
     )
 
 
@@ -105,58 +70,6 @@ def _publish(database, processor, day: datetime) -> None:
             request_key="published-before-late-battle",
         ),
     )
-
-
-def _finish_reset_sweep(connection_info: str, boundary: datetime) -> None:
-    with psycopg.connect(connection_info) as connection:
-        connection.execute(
-            "INSERT INTO collector_reset_sweeps (boundary_at) VALUES (%s)",
-            (boundary,),
-        )
-        connection.commit()
-
-
-def _published(
-    connection_info: str, day: datetime, tag: str = TAG
-) -> tuple[list, int] | None:
-    """The defenses on the player's latest published log, and its version id."""
-    with psycopg.connect(connection_info) as connection:
-        row = connection.execute(
-            """
-            SELECT log.battles, log.ranked_day_version_id
-            FROM api_player_daily_logs AS log
-            JOIN players AS player ON player.id = log.player_id
-            WHERE player.normalized_tag = %s AND log.ranked_day_start = %s
-            ORDER BY log.version DESC
-            LIMIT 1
-            """,
-            (tag, day),
-        ).fetchone()
-    if row is None:
-        return None
-    defenses = sorted(
-        (item["opponent_tag"], item["stars"], item["trophy_change"])
-        for item in row[0]
-        if item["lens"] == "defense"
-    )
-    return defenses, int(row[1])
-
-
-def _previous_day_version(connection_info: str, day: datetime, tag: str = TAG) -> int:
-    with psycopg.connect(connection_info) as connection:
-        return int(
-            connection.execute(
-                """
-                SELECT input_evidence -> 'previous_day' ->> 'version_id'
-                FROM ranked_day_versions AS version
-                JOIN players AS player ON player.id = version.player_id
-                WHERE player.normalized_tag = %s AND version.ranked_day_start = %s
-                ORDER BY version.version DESC
-                LIMIT 1
-                """,
-                (tag, day),
-            ).fetchone()[0]
-        )
 
 
 def _published_with_late_battle(connection_info, archive_server, processor, database):
@@ -198,25 +111,6 @@ def _sweep_lines(capsys) -> list[dict]:
         for line in capsys.readouterr().out.splitlines()
         if '"late_battle_sweep"' in line
     ]
-
-
-def _saved_disagreement(connection_info: str, tag: str) -> list[bool]:
-    """The disagreement flag of each battle on the player's latest saved result."""
-    with psycopg.connect(connection_info) as connection:
-        row = connection.execute(
-            """
-            SELECT version.input_evidence -> 'contributions'
-            FROM api_player_daily_logs AS log
-            JOIN players AS player ON player.id = log.player_id
-            JOIN ranked_day_versions AS version
-              ON version.id = log.ranked_day_version_id
-            WHERE player.normalized_tag = %s AND log.ranked_day_start = %s
-            ORDER BY log.version DESC
-            LIMIT 1
-            """,
-            (tag, DAY),
-        ).fetchone()
-    return [item["disagreement"] for item in row[0]]
 
 
 def test_late_battle_corrects_its_day_then_later_days_in_order(

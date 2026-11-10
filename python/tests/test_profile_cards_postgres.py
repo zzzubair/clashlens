@@ -6,10 +6,10 @@ from contextlib import contextmanager
 from itertools import product
 from typing import Any
 
-from test_api_db_organization import create_owner
-from test_api_db_public_ops import NOW, seed_profile
-from test_api_migration import migrated_production_database
-from test_group_comparison_postgres import battle, link_player, seed_day
+from api_db_organization_support import create_owner
+from api_db_public_ops_support import NOW, seed_profile
+from api_migration_support import migrated_production_database
+from group_comparison_postgres_support import battle, link_player, seed_day
 
 from clashlens import api_accounts, api_leaderboard
 from clashlens.api_db import ApiDatabase
@@ -393,8 +393,7 @@ def test_profile_days_read_every_linked_player_at_once_up_to_the_cards_limit(
 
     assert days is not None
     print(f"public user days: players={len(days['players'])}, bytes={len(json.dumps(days, separators=(',', ':')).encode())}, statements={counted.reads}")
-    # The account, its players, their days and Reset places, and their weeks:
-    # the same four reads for any number of players.
+    # The 500-player response takes four reads, including their weeks.
     assert counted.reads == 4
     players = days["players"]
     assert [player["tag"] for player in players] == sorted(["#2PP", *more])[:500]

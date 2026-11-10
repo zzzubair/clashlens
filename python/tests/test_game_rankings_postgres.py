@@ -16,8 +16,8 @@ from typing import ClassVar
 import psycopg
 from domain_test_support import domain_database, store_observation
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
-from test_reconciliation_postgres import _processor, _profile
-from test_reset_settlement_collection_postgres import _collector
+from reconciliation_postgres_support import _processor, _profile
+from reset_settlement_collection_postgres_support import _collector
 
 from clashlens import game_rankings
 from clashlens.collector_db import CollectorDatabase

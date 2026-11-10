@@ -144,8 +144,6 @@ def test_reset_outage_stays_retryable_and_collects_once_the_api_returns(
 ) -> None:
     now = datetime.now(UTC)
     boundary = _latest_reset(now)
-    if now - boundary > timedelta(hours=23, minutes=50):
-        pytest.skip("this Legend day ends before the retry could be checked")
     with (
         domain_database(database_url) as connection_info,
         _provider() as origin,
@@ -220,8 +218,6 @@ def test_reset_recovery_reaches_later_work_past_rows_waiting_on_processing(
 ) -> None:
     now = datetime.now(UTC)
     boundary = _latest_reset(now)
-    if now - boundary > timedelta(hours=23, minutes=50):
-        pytest.skip("this Legend day ends before its responses could be collected")
     with (
         domain_database(database_url) as connection_info,
         _provider() as origin,
@@ -273,8 +269,6 @@ def test_reset_retry_keeps_the_profile_that_already_answered(
 ) -> None:
     now = datetime.now(UTC)
     boundary = _latest_reset(now)
-    if now - boundary > timedelta(hours=23, minutes=50):
-        pytest.skip("this Legend day ends before the retry could be checked")
     with (
         domain_database(database_url) as connection_info,
         _provider() as origin,
@@ -304,8 +298,6 @@ def test_retried_reset_profile_brings_a_battle_log_collected_after_it(
 ) -> None:
     now = datetime.now(UTC)
     boundary = _latest_reset(now)
-    if now - boundary > timedelta(hours=23, minutes=50):
-        pytest.skip("this Legend day ends before the retry could be checked")
     with (
         domain_database(database_url) as connection_info,
         _provider() as origin,
@@ -341,8 +333,6 @@ def test_interrupted_reset_retry_fetches_the_battle_log_again_after_restart(
 ) -> None:
     now = datetime.now(UTC)
     boundary = _latest_reset(now)
-    if now - boundary > timedelta(hours=23, minutes=50):
-        pytest.skip("this Legend day ends before the retry could be checked")
     with (
         domain_database(database_url) as connection_info,
         _provider() as origin,
@@ -382,8 +372,6 @@ def test_reset_server_error_is_not_final_while_the_collector_retries(
 ) -> None:
     now = datetime.now(UTC)
     boundary = _latest_reset(now)
-    if now - boundary > timedelta(hours=23, minutes=50):
-        pytest.skip("this Legend day ends before the retry could be checked")
     with (
         domain_database(database_url) as connection_info,
         _provider() as origin,
@@ -484,8 +472,6 @@ def test_reset_failing_while_the_api_answers_settles_after_three_retries(
 ) -> None:
     now = datetime.now(UTC)
     boundary = _latest_reset(now)
-    if now - boundary > timedelta(hours=23, minutes=50):
-        pytest.skip("this Legend day ends before the retry could be checked")
     with (
         domain_database(database_url) as connection_info,
         _provider() as origin,
@@ -529,3 +515,12 @@ def test_reset_failing_while_the_api_answers_settles_after_three_retries(
         assert [
             work.normalized_tag for work in database.claim_due_players(limit=10)
         ] == [TAG]
+
+
+@pytest.fixture(autouse=True)
+def _fixed_wall_clock(fixed_clock, monkeypatch):
+    import sys
+    from functools import partial
+
+    monkeypatch.setattr(sys.modules[__name__], "domain_database",
+                        partial(domain_database, clock=fixed_clock))

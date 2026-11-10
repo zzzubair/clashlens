@@ -3,8 +3,7 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 
-from domain_test_support import as_api_role, domain_database, store_observation, text
-from test_army_analytics_publication_postgres import (
+from army_analytics_publication_postgres_support import (
     DAY_NUMBER,
     DAY_START,
     _army_job,
@@ -14,10 +13,9 @@ from test_army_analytics_publication_postgres import (
     _row,
     _selection,
 )
-from test_army_analytics_publication_seasons_postgres import (
-    _seed_frozen_snapshot_at,
-)
-from test_army_types_postgres import NOON
+from army_analytics_publication_seasons_postgres_support import _seed_frozen_snapshot_at
+from army_types_postgres_support import NOON
+from domain_test_support import as_api_role, domain_database, store_observation, text
 
 from clashlens import api_analytics, army_rank_bands, army_types
 from clashlens.api_db import ApiDatabase

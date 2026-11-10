@@ -10,13 +10,13 @@ from pathlib import Path
 import psycopg
 import pytest
 from domain_test_support import domain_database, store_observation
-from test_season_detail_retirement_postgres import (
+from player_season_summaries_postgres_support import _player
+from season_detail_retirement_postgres_support import (
     DAY0,
     SEASON,
     SEASON_END,
     _full_season,
     _materialize_all,
-    _player,
     _seed_army,
 )
 

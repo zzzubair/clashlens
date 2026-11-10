@@ -8,8 +8,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from collector_support import _Client, _collector, _Spool, _Store
 from psycopg_pool import PoolTimeout
-from test_collector import _Client, _collector, _Spool, _Store
 
 from clashlens import collector_liveness
 from clashlens.collector_liveness import LOOPS, STUCK_SECONDS

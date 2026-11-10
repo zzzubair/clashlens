@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -9,10 +8,16 @@ from types import SimpleNamespace
 
 import psycopg
 import pytest
-from domain_test_support import domain_database
-from psycopg import sql
+from collector_db_postgres_support import _hash, _player
+from collector_uploads_postgres_support import (
+    NOW,
+    _archive_instance,
+    _handoff,
+    upload_database,
+)
+from collector_uploads_postgres_support import NOW as _PLAYER_NOW
 
-from clashlens.collector_db import CollectorDatabase, ResponseHandoff
+from clashlens.collector_db import CollectorDatabase
 from clashlens.collector_uploads import (
     NEXT_DUE_UPLOAD_SQL,
     RELEASE_EXPIRED_UPLOADS_SQL,
@@ -25,95 +30,10 @@ from clashlens.collector_uploads import (
 )
 from clashlens.raw_body import RECORDED_SQL
 
-NOW = datetime(2020, 9, 13, 4, 0, tzinfo=UTC)
-
-
-@contextmanager
-def upload_database(database_url: str) -> Iterator[str]:
-    with domain_database(database_url) as connection_info:
-        # Upload admission normally uses the database clock. Seed its due time
-        # on the same controlled timeline as claim/renew/complete below, even
-        # when the real clock has passed every date in this test file.
-        with psycopg.connect(connection_info) as connection:
-            connection.execute(
-                sql.SQL(
-                    "ALTER TABLE collector_response_uploads "
-                    "ALTER COLUMN next_attempt_at SET DEFAULT {}"
-                ).format(sql.Literal(NOW))
-            )
-        yield connection_info
-
 
 def _kept_until(seen: datetime) -> datetime:
     """A raw response is kept to the end of its sighting's UTC day, plus 86 days."""
     return seen.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=87)
-
-
-def _hash(byte: str) -> str:
-    import hashlib
-
-    return hashlib.sha256(byte.encode("ascii")).hexdigest()
-
-
-def _player(connection_info: str, tag: str = "#2PP") -> int:
-    with psycopg.connect(connection_info) as connection:
-        return int(
-            connection.execute(
-                """
-                INSERT INTO players (normalized_tag, active, next_due_at)
-                VALUES (%s, true, %s)
-                RETURNING id
-                """,
-                (tag, NOW - timedelta(seconds=1)),
-            ).fetchone()[0]
-        )
-
-
-def _archive_instance(connection_info: str) -> None:
-    with psycopg.connect(connection_info) as connection:
-        connection.execute(
-            """
-            INSERT INTO archive_instances (
-                instance_id, endpoint, region, bucket, marker_key,
-                marker_hash, marker_payload_version
-            ) VALUES ('fixture-instance', 'archive.test:443', 'us-east-1',
-                      'evidence', 'clashlens/archive-instance.json',
-                      repeat('f', 64), 'v1')
-            ON CONFLICT (instance_id) DO NOTHING
-            """
-        )
-
-
-def _handoff(
-    *,
-    occurrence_key: str,
-    response_hash: str,
-    player_id: int,
-    tag: str = "#2PP",
-    endpoint: str = "profile",
-    completed_at: datetime = NOW,
-    collector_work_id: int | None = None,
-    content_fingerprint: str | None = None,
-) -> ResponseHandoff:
-    return ResponseHandoff(
-        occurrence_key=occurrence_key,
-        scope="player",
-        identity_key=tag,
-        endpoint=endpoint,
-        player_id=player_id,
-        normalized_tag=tag,
-        request_started_at=completed_at - timedelta(seconds=1),
-        response_completed_at=completed_at,
-        http_status=200,
-        response_hash=response_hash,
-        content_fingerprint=content_fingerprint or response_hash,
-        byte_size=1,
-        spool_key=f"sha256/{response_hash[:2]}/{response_hash}",
-        collector_version="python-collector-test",
-        key_label="regular-a",
-        evidence_headers={"content-type": "application/json"},
-        collector_work_id=collector_work_id,
-    )
 
 
 def test_cleanup_batch_marks_only_deleted_eligible_copies(database_url: str) -> None:
@@ -128,7 +48,7 @@ def test_cleanup_batch_marks_only_deleted_eligible_copies(database_url: str) -> 
                 _handoff(
                     occurrence_key=f"batch-{index}",
                     response_hash=response_hash,
-                    player_id=_player(connection_info, tag),
+                    player_id=_player(connection_info, tag, now=_PLAYER_NOW),
                     tag=tag,
                 )
             ).observation_id
@@ -165,7 +85,7 @@ def test_upload_claim_is_fenced_and_cleanup_waits_for_processing(
     database_url: str,
 ) -> None:
     with upload_database(database_url) as connection_info:
-        player_id = _player(connection_info)
+        player_id = _player(connection_info, now=_PLAYER_NOW)
         database = CollectorDatabase(connection_info)
         response_hash = _hash("a")
         result = database.record_response(
@@ -242,9 +162,9 @@ def test_cleanup_prioritizes_oldest_last_use_over_a_reused_upload(
     database_url: str,
 ) -> None:
     with upload_database(database_url) as connection_info:
-        first_player = _player(connection_info)
-        second_player = _player(connection_info, "#8VV")
-        cold_player = _player(connection_info, "#9YY")
+        first_player = _player(connection_info, now=_PLAYER_NOW)
+        second_player = _player(connection_info, "#8VV", now=_PLAYER_NOW)
+        cold_player = _player(connection_info, "#9YY", now=_PLAYER_NOW)
         database = CollectorDatabase(connection_info)
         _archive_instance(connection_info)
         hot_hash = _hash("shared-history")
@@ -314,7 +234,7 @@ def test_cleanup_lookup_checks_a_slice_of_a_resets_unprocessed_uploads(
     # again. Each lookup checks the next slice, so every one is still found.
     with upload_database(database_url) as connection_info:
         _archive_instance(connection_info)
-        player_id = _player(connection_info)
+        player_id = _player(connection_info, now=_PLAYER_NOW)
         database = CollectorDatabase(connection_info)
         hashes = [_hash(f"reset-{n}") for n in range(300)]
         for n, response_hash in enumerate(hashes):
@@ -372,7 +292,7 @@ def _kept_uploads_read(plan: dict) -> int:
 
 def test_upload_renewal_requires_the_same_live_claim(database_url: str) -> None:
     with upload_database(database_url) as connection_info:
-        player_id = _player(connection_info)
+        player_id = _player(connection_info, now=_PLAYER_NOW)
         database = CollectorDatabase(connection_info)
         database.record_response(
             _handoff(
@@ -409,7 +329,7 @@ def test_complete_upload_reconciles_only_the_exact_settled_claim(
     database_url: str,
 ) -> None:
     with upload_database(database_url) as connection_info:
-        player_id = _player(connection_info)
+        player_id = _player(connection_info, now=_PLAYER_NOW)
         database = CollectorDatabase(connection_info)
         response_hash = _hash("complete-retry")
         database.record_response(
@@ -475,7 +395,7 @@ def test_fail_upload_reconciles_exact_retry_but_fences_an_old_owner(
     database_url: str,
 ) -> None:
     with upload_database(database_url) as connection_info:
-        player_id = _player(connection_info)
+        player_id = _player(connection_info, now=_PLAYER_NOW)
         database = CollectorDatabase(connection_info)
         database.record_response(
             _handoff(
@@ -535,7 +455,7 @@ def test_late_upload_counts_86_days_from_its_latest_sighting(
     response_at = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
     uploaded_later = response_at + timedelta(days=40)
     with upload_database(database_url) as connection_info:
-        player_id = _player(connection_info)
+        player_id = _player(connection_info, now=_PLAYER_NOW)
         database = CollectorDatabase(connection_info)
         response_hash = _hash("season-dated")
         database.record_response(
@@ -587,7 +507,7 @@ def test_pending_upload_uses_later_ignored_hash_sighting_for_retention(
     seen_next_season = response_at + timedelta(days=29)
     upload_at = response_at + timedelta(days=2)
     with upload_database(database_url) as connection_info:
-        player_id = _player(connection_info)
+        player_id = _player(connection_info, now=_PLAYER_NOW)
         database = CollectorDatabase(connection_info)
         response_hash = _hash("pending-next-season")
         fingerprint = _hash("pending-used-fields")
@@ -658,7 +578,7 @@ def test_retryable_upload_failure_returns_to_pending_with_a_fence(
     database_url: str,
 ) -> None:
     with upload_database(database_url) as connection_info:
-        player_id = _player(connection_info)
+        player_id = _player(connection_info, now=_PLAYER_NOW)
         database = CollectorDatabase(connection_info)
         database.record_response(
             _handoff(
@@ -686,7 +606,7 @@ def test_retired_archive_location_reuploads_under_a_generation(
     database_url: str,
 ) -> None:
     with upload_database(database_url) as connection_info:
-        player_id = _player(connection_info)
+        player_id = _player(connection_info, now=_PLAYER_NOW)
         database = CollectorDatabase(connection_info)
         hash_a, hash_b = _hash("retired-a"), _hash("retired-b")
         database.record_response(
@@ -797,7 +717,7 @@ def test_identical_response_reuploads_when_its_location_is_tombstoned(
     database_url: str, availability: str
 ) -> None:
     with upload_database(database_url) as connection_info:
-        player_id = _player(connection_info)
+        player_id = _player(connection_info, now=_PLAYER_NOW)
         database = CollectorDatabase(connection_info)
         response_hash = _hash("identical-retired")
         database.record_response(
@@ -872,7 +792,7 @@ def test_upload_never_reuses_a_tombstoned_legacy_location(
     # A location catalogued before upload rows existed has no upload row, so
     # its bytes seen again would upload to the same key without a generation.
     with upload_database(database_url) as connection_info:
-        player_id = _player(connection_info)
+        player_id = _player(connection_info, now=_PLAYER_NOW)
         database = CollectorDatabase(connection_info)
         response_hash = _hash("legacy-location")
         reference = f"s3://evidence/sha256/{response_hash[:2]}/{response_hash}"
@@ -945,7 +865,7 @@ def test_ignored_raw_change_follows_the_retained_observation_archive(
     database_url: str,
 ) -> None:
     with upload_database(database_url) as connection_info:
-        player_id = _player(connection_info)
+        player_id = _player(connection_info, now=_PLAYER_NOW)
         database = CollectorDatabase(connection_info)
         hash_a, hash_b = _hash("retained-a"), _hash("ignored-b")
         fingerprint = _hash("used-fields")
@@ -1014,7 +934,7 @@ def test_hash_reuse_attaches_existing_archive_without_second_upload(
     database_url: str,
 ) -> None:
     with upload_database(database_url) as connection_info:
-        player_id = _player(connection_info)
+        player_id = _player(connection_info, now=_PLAYER_NOW)
         database = CollectorDatabase(connection_info)
         hash_a, hash_b = _hash("a"), _hash("b")
         first = database.record_response(

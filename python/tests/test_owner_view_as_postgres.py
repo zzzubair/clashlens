@@ -10,10 +10,11 @@ from urllib.parse import quote
 
 import psycopg
 import pytest
+from discord_bot_postgres_support import _account, _verify
 from domain_test_support import as_api_role, domain_database
 from fastapi.testclient import TestClient
-from test_discord_bot_postgres import _account, _verify
-from test_private_api import NOW, NOW_SECONDS, TS_CURRENT, signed_headers
+from owner_test_support import _record_owner
+from private_api_support import NOW, NOW_SECONDS, TS_CURRENT, signed_headers
 
 from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
@@ -70,14 +71,6 @@ def site(database_url: str):
         finally:
             admin.close()
             api.close()
-
-
-def _record_owner(connection_info: str, account_id: int) -> None:
-    """The one-time production step, run by the operator outside the app."""
-    with psycopg.connect(connection_info, autocommit=True) as connection:
-        connection.execute(
-            "INSERT INTO site_owner_accounts (account_id) VALUES (%s)", (account_id,)
-        )
 
 
 NOT_OWNER = {"kind": "view-as", "owner": False, "player": None}

@@ -2,13 +2,13 @@ from datetime import UTC, datetime
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation
-from test_claim_jobs_postgres import (
+from claim_jobs_postgres_support import (
     CURRENT_ANALYTICS_INPUT,
     _insert_job,
     _processor,
     _production_database,
 )
+from domain_test_support import domain_database, store_observation
 
 from clashlens import claimed_jobs, ingestion, reset_baselines
 from clashlens.db import Database

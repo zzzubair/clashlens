@@ -14,14 +14,14 @@ from datetime import timedelta
 
 import psycopg
 import pytest
-from test_collector_uploads_postgres import (
+from collector_db_postgres_support import _hash, _player
+from collector_uploads_postgres_support import (
     NOW,
     _archive_instance,
     _handoff,
-    _hash,
-    _player,
     upload_database,
 )
+from collector_uploads_postgres_support import NOW as _PLAYER_NOW
 
 from clashlens.claimed_jobs import complete_terminal
 from clashlens.collector_db import CollectorDatabase
@@ -54,7 +54,7 @@ def _archived_body(connection_info: str, name: str):
     database = CollectorDatabase(connection_info)
     first = _handoff(
         occurrence_key=f"{name}-0", response_hash=_hash(name),
-        player_id=_player(connection_info), completed_at=NOW,
+        player_id=_player(connection_info, now=_PLAYER_NOW), completed_at=NOW,
     )
     assert database.record_response(first).changed
     claim = claim_upload(database, owner="uploader", now=NOW)

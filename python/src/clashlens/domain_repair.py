@@ -91,7 +91,7 @@ from psycopg.types.json import Jsonb
 
 from . import day_recalculation, domain, league_week
 from .army_decoder import DECODER_VERSION
-from .db import PYTHON_BACKFILL_PRIORITY, Database
+from .db import Database
 from .db_rows import text_value
 from .domain import (
     BATTLE_DAY_GRACE,
@@ -102,6 +102,7 @@ from .domain import (
     SEASON_START_TROPHIES,
     TROPHY_ALLOCATION_RULE_VERSION,
 )
+from .job_contracts import PYTHON_BACKFILL_PRIORITY
 from .reconciliation import RECONCILIATION_RULE_VERSION
 from .season_lifecycle import SEASON_CLOSE_WAIT
 from .source_observation_contract import BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT
