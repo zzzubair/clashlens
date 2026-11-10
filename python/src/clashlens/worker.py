@@ -154,7 +154,6 @@ MAINTENANCE_POOL_SIZE = 2
 # process exits and the database rolls back its open transaction. On 24 Oct
 # 2026 waiting for one held a stop until systemd killed the worker at 70 s.
 MAINTENANCE_STOP_SECONDS = 5.0
-# Lane connections one worker process may open.
 MAX_WORKER_POOL_SIZE = 16
 # Connections all worker processes together may open: each process's lane
 # pool, maintenance pool and maintenance permit. docs/architecture.md owns how
@@ -1160,7 +1159,6 @@ class ObservationProcessor:
         return ProcessResult(claim.job_id, "retrying", "database_rejected")
 
     def _saved_result(self, claim: Claim, reason: str) -> ProcessResult | None:
-        # None while nothing committed this attempt's outcome.
         try:
             saved = self.database.finished_attempt(claim)
         except (*SESSION_ENDED, QueryCanceled, *POOL_BUSY):
@@ -1169,7 +1167,6 @@ class ObservationProcessor:
             return ProcessResult(claim.job_id, "retrying", reason)
         if saved is None:
             return None
-        # Report what the normal path returns for the saved attempt.
         state, outcome, category = saved
         if state == "stale":
             return ProcessResult(claim.job_id, "lease_lost")

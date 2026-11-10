@@ -58,7 +58,6 @@ START_DELAY = timedelta(hours=1)
 BATCH_SIZE = 200
 IN_FLIGHT = 2
 IDLE_SECONDS = 60.0
-# How long a reading of the database's spare-time checks is reused.
 GUARD_SECONDS = 1.0
 _WEEK = timedelta(days=7)
 _WEEK_ANCHOR = datetime(2000, 1, 3, 5, tzinfo=UTC)  # a Monday Reset

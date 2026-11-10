@@ -16,7 +16,6 @@ OVERLAY_GAP = timedelta(seconds=30)
 OPEN_FOR = timedelta(minutes=5)
 # A read through the link writes the time it was seen at most this often.
 MARK_EVERY = timedelta(minutes=1)
-# How often the collector reads the list again.
 REFRESH_SECONDS = 10.0
 
 

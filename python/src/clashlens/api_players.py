@@ -598,8 +598,9 @@ def player_cards(
     ranks: bool = True,
 ) -> list[dict[str, Any]]:
     """Each player's current trophies, Live Leaderboard position and today's
-    battles so far, read for every player at once. Without ``ranks`` the
-    caller fills the positions with ``rank_cards``.
+    battles so far. Initial profile and day reads are batched; lookup evidence
+    is read separately for each player. Without ``ranks`` the caller fills
+    the positions with ``rank_cards``.
 
     ``players`` holds (player id, tag, name, clan, league). Every card carries the
     lookup state and reason its own page explains, and the player's Live
@@ -665,7 +666,6 @@ def player_cards(
         if lookup["state"] in ("not_in_legend", "uncertain"):
             # Off the board, the newest saved profile's trophies, as on its page.
             card["trophies"] = lookup["profile"]["trophies"]
-            # And this Season's Legend I part, when the player left it.
             card["left_legend_i"] = left.get(player_id)
         elif reason is None and profile is not None:
             # As on the player page: an earlier Season's trophies are no total.
@@ -1060,7 +1060,6 @@ def search_known_players(
         earlier_season = read_season != season_id
 
         def order(row: tuple[Any, ...]) -> tuple[Any, ...]:
-            # An exact name match first, then the strongest players, then by name.
             ranked = row[2] is not None and not _waits(row, now, earlier_season)
             return (row[11] != needle, -row[2] if ranked else math.inf, row[10])
 
@@ -1110,7 +1109,6 @@ def _current_profile_metadata() -> tuple[str, str]:
     )
 
 
-# A public profile shows at most this many verified players.
 PUBLIC_PLAYER_LIMIT = 500
 
 # Trophies come only from accepted Legend statistics. The name comes from the

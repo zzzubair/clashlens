@@ -243,7 +243,6 @@ class Spool:
         self._capacity_mutex = threading.RLock()
         self._capacity_depth = 0
         self._barrier = PublicationBarrier()
-        # Granted reservations: those not ReservationState.UNRESERVED.
         self._reservations: dict[int, SpoolReservation] = {}
         self._actual_counts = {key: 0 for key in self._COUNT_KEYS}
         self._temporary_sizes: dict[str, int | None] = {}

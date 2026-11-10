@@ -555,7 +555,6 @@ class CollectorDatabase:
 
         intents = []
         for row in rows:
-            # A Reset pair's requests follow its proof (collector_handover.PairProof).
             profile, battle_log, league_history = collector_handover.required_endpoints(
                 row[1], str(row[7]), *row[8:14], intent_time
             )

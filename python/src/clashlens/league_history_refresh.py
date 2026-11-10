@@ -63,7 +63,6 @@ def schedule_refresh(
 def add_command(
     subparsers: Any, database_argument: Callable[[argparse.ArgumentParser], None]
 ) -> None:
-    """Add the ``refresh-league-history`` command to the CLI."""
     command = subparsers.add_parser(
         "refresh-league-history",
         help="fetch league history again for every tracked player for the latest ended Season (collector database role)",

@@ -122,7 +122,6 @@ class LiveClans:
             remembered = self._answers.get(normalized_tag)
             if remembered is not None and remembered[0] > now:
                 return remembered[1]
-            # A view while the same player is being read waits for that answer.
             reading = self._reading.get(normalized_tag)
             if reading is None:
                 self._reading[normalized_tag] = Future()

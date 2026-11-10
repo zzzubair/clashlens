@@ -258,7 +258,6 @@ def season_repair(
                 "days": {"before": receipt.before_days, "now": _day_counts(connection, start)},
                 "boards": {"before": receipt.before_boards,
                            "now": _board_counts(connection, start)},
-                # Checks that every published view now agrees with the days.
                 "boards_disagreeing": [
                     board for board in boundary.queue_board_rebuilds(
                         database, season_id, queue=False

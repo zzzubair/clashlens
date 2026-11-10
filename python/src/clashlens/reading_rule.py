@@ -452,7 +452,6 @@ def decide(
             "verified", guessed.reading, max(shown, shows(guessed)), False,
             guessed.missed, guessed.new_day_change, lagged=lagged,
         )
-    # Its evidence keeps the last reading that showed the lag, when one did.
     lagging = [item.reading for item in judged if item.lagged]
     return Verdict("unverified", lagging[-1] if lagging else None, lagged=lagged)
 

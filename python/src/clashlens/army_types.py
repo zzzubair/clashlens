@@ -526,7 +526,6 @@ def _facts(lens: str) -> str:
 """
 
 
-# The Armies page counts attacks only.
 _FACTS = _facts("offense")
 # Per lens: the counts table, its battle column, its counted-days table, how
 # many recent days are counted whatever their Season, and its trophies column.
@@ -538,7 +537,6 @@ _COUNTS = {
 }
 # Every 3-star wins these; a miss wins fewer.
 THREE_STAR_TROPHIES = allocate_trophies(3, 100).attacker_gain
-# Joins a battle's stars and destruction to the trophies it moved (_trophies).
 _TROPHIES_JOIN = """
     LEFT JOIN unnest(%s::integer[], %s::integer[], %s::integer[])
         AS moved (stars, destruction, trophies)
@@ -887,7 +885,6 @@ def variant_examples(
         group = groups.setdefault(group_keys[composition], [0, 0, None, 0])
         group[0] += attacks
         group[1] += 1
-        # The most used distinct army is the example, the first in order on a tie.
         if group[2] is None or (-attacks, composition) < (-group[3], group[2]):
             group[2], group[3] = composition, attacks
     top = sorted(groups.values(), key=lambda group: (-group[0], group[2]))[:EXAMPLE_GROUPS]
@@ -1195,7 +1192,6 @@ def _result_row(
         "average_stars": (one + 2 * two + 3 * three) / attacks if attacks else 0,
         "average_destruction": destruction / attacks if attacks else 0,
         "average_trophies": trophies / attacks if attacks else 0,
-        # What a miss wins on average, None without a miss.
         "average_miss_trophies": (trophies - THREE_STAR_TROPHIES * three)
         / (attacks - three) if attacks > three else None,
         "unknown_excluded_attacks": 0,

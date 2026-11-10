@@ -359,7 +359,6 @@ def _try_enqueue_boundary_artifacts(
     if now < target:
         return
     affected_artifacts = [text_value(value) for value in (generation[5] or [])]
-    # Settled members move each artifact PENDING to READY.
     for column, pending, state in (("snapshot_state", snapshot_pending, generation[2]),
                                    ("army_state", army_pending, generation[3])):
         if pending == 0 and text_value(state) == ArtifactState.PENDING:

@@ -1093,7 +1093,6 @@ def _army_rows(
             (version_ids,),
         ).fetchall()
     }
-    # Each ranked day's newest daily log.
     daily_logs = {
         int(row[0]): row[1:]
         for row in connection.execute(

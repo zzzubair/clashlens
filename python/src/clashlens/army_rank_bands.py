@@ -42,7 +42,6 @@ from .army_analytics import (
 
 BANDS = tuple(sorted(RANK_BANDS))
 _LAST_POSITION = BANDS[-1][1]
-# A counted day has one row per lens, category and band.
 DAY_ROWS = len(LENSES) * len(CATEGORIES) * len(BANDS)
 # A count reads one day's facts for the top 10,000, about a minute, so a
 # failed one waits before trying again.

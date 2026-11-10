@@ -217,7 +217,6 @@ class Uploader:
         if self.gate() in {UploadGate.NO_ARCHIVE, UploadGate.ARCHIVE_STOPPED}:
             return False
         if time.monotonic() >= self._next_release:
-            # One owner returns expired leases each half lease.
             self._next_release = time.monotonic() + LEASE_SECONDS / 2
             await self._database_call(
                 "release", collector_uploads.release_expired_uploads, self.database
@@ -564,7 +563,6 @@ class UploaderProcess:
         self._reported_at = time.monotonic()
         collector.archive_health = str(report.get("archive_health", "unknown"))
         if report.get("spool_io_failed") and not collector.spool_health.io_failed:
-            # The same pause a failed spool read in the collector causes.
             collector.spool_health.record_io_failure()
 
     def metric_lines(self) -> list[str]:

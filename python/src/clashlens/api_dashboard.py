@@ -110,7 +110,6 @@ PAST_DAY_WAIT_SECONDS = 8
 # on offense offers only these, "season" being this Season's finished days.
 MAX_ARMY_DAYS = 28
 OFFENSE_ARMY_DAYS = (3, army_types.OFFENSE_CARD_DAYS, "season")
-# The bases a player attacked: at most one row per attack.
 _MAX_OPPONENTS = MAX_DAILY_ATTACKS
 
 # Each active player's latest log for one Legend day, with its start
@@ -134,7 +133,6 @@ LEFT JOIN ranked_day_versions AS ranked_day
     ON ranked_day.id = day.ranked_day_version_id
 WHERE player.active
 """
-# A saved day's "no opponent, no battle" attack and defense slots.
 _ZERO_SLOTS_SQL = """
 SELECT id,
        COALESCE((input_evidence ->> 'zero_result_attack_slots')::int, 0),
@@ -143,23 +141,18 @@ FROM ranked_day_versions
 WHERE id = ANY(%s)
 """
 
-# Each player's id and attacks on the three Legend days before
-# %(day_start)s, for their projected place.
 _PROJECTION_PLAYERS_SQL = f"""
 SELECT player.normalized_tag, player.id, recent.yesterday, recent.before
 FROM players AS player
 {projected_place.RECENT_ATTACKS_SQL}WHERE player.normalized_tag = ANY(%(tags)s)
 """
 
-# Each player's newest published log of the Legend day %(day_start)s.
 _NEWEST_LOGS_SQL = """
 SELECT DISTINCT ON (daily.player_id) daily.player_id, daily.id
 FROM api_player_daily_logs AS daily
 WHERE daily.ranked_day_start = %(day_start)s
 ORDER BY daily.player_id, daily.version DESC
 """
-# The battles the given logs keep with a report time: each report's side,
-# battle, time and whether it moved the player's trophies.
 _LOG_REPORTS_SQL = """
 SELECT daily.id, event ->> 'lens', event ->> 'battle_identity',
        (event ->> 'battle_timestamp')::timestamptz,
@@ -633,7 +626,6 @@ class DashboardBoard:
             similar = _similar(by_start)
             with self._lock:
                 self._past[day_start] = (self._clock(), similar)
-                # Only a Season's worth, the newest.
                 for old in sorted(self._past)[:-(SEASON_DURATION // RANKED_DAY_DURATION)]:
                     del self._past[old]
             return similar
@@ -1110,12 +1102,9 @@ def get_player_armies(
         for type_id, counts in mine.items()
         if type_id not in _UNNAMED
     ]
-    # Defenses: the armies that cost the most trophies first; attacks: the
-    # armies used most.
     rows.sort(key=lambda row: (
         -row["trophies"] if lens == "defense" else 0, -row["battles"], row["type_id"]
     ))
-    # Every tracked player's battles with each type over the same days.
     width = 2 if lens == "offense" else 3
     legends: dict[int, list[int]] = {}
     for day in legend_days:
