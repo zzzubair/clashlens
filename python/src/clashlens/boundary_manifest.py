@@ -860,26 +860,30 @@ def reset_trophies(
     weekly Reset reading taken before the raise landed matched the day.
     Unproven, the Complete day's total still stands: on 12 October 2026
     #VRU8LVG2's board showed its 04:11 reading, 5,007, not its 4,967 end.
+    So does an unproven day's, whose only fault is that no reading has
+    proven its end yet, uncertain: on 9 November 2026 #2JLY0P2U0's board
+    showed its 02:44 reading, 4,807, not its 5,085 end.
 
-    Otherwise the total is the reading plus the day's battles stamped after
-    it, which needs the day's continuous battle logs, a reading taken at
-    least 15 minutes into that day, after the previous day's last reports
-    and automatic defense loss, a time on every battle the day counts, none
-    stamped between the reading's request and its response, no defense
-    stamped in the 4 minutes before that request, since its attack can end
-    up to 4 minutes after the defender's report, and no battle amount the
-    two players' logs disagree on. A reading proves no battle stamped before
-    it, and a Partial or inferred day's start and end are calculations or
-    readings no rule judged, so that total is proven only when a reading
-    from the Reset on, before the next, shows it (``reading_rule``). A day whose
+    Otherwise, or once a later reading proves it for an unproven day, the
+    total is the reading plus the day's battles stamped after it, which
+    needs the day's continuous battle logs, a reading taken at least 15
+    minutes into that day, after the previous day's last reports and
+    automatic defense loss, a time on every battle the day counts, and no
+    battle amount the two players' logs disagree on; without them the total
+    is the reading alone. A reading proves no battle stamped before it, and
+    a Partial or inferred day's start and end are calculations or readings
+    no rule judged, so that total is proven only when a reading from the
+    Reset on, before the next, shows it (``reading_rule``). A day whose
     trophies don't add up still counts the battles after the reading: on
     11 October 2026 #PVVQPGRQL's reading of 5,232 missed a later defense
     for 30, and the reading plus it, 5,202, matched the game's order, where
     the reading alone broke 31 country order pairs with three other such
-    players. A defense or attack stamped too near the reading may or may
-    not show in it: such a reading counts only when a reading from the
-    Reset on shows it did, as no other way to read it fits. Without the
-    battles' proof the total is the reading alone; any total not proven is
+    players. A battle stamped between the reading's request and its
+    response, or a defense stamped in the 4 minutes before that request, as
+    its attack can end up to 4 minutes after the defender's report, may or
+    may not show in it: that reading proves its total only when a reading
+    from the Reset on shows it did, as no other way to read it fits, but
+    the battles stamped after it still count. Any total not proven is
     marked uncertain.
 
     The total is taken at exactly the Reset, as the game's own Reset rank
@@ -905,7 +909,8 @@ def reset_trophies(
     Reset, and less those battles for none. A day saved with that official
     total shows it, proven, whatever its state: on 2 November 2026, 17 not
     Complete kept readings 1 to 168 above it. Otherwise the EOD is proven as
-    the total before the loss is."""
+    the total before the loss is, and any other day, unproven or read while
+    a battle may or may not show, keeps the reading alone."""
     if not readings:
         return {}
     season_end = ranked_day_for(boundary_at - RANKED_DAY_DURATION).season_end == boundary_at
@@ -926,6 +931,7 @@ def reset_trophies(
                    battles.ambiguous,
                    battles.after_reading, battles.after_reset,
                    battles.after_reset_after_reading, battles.end_unknown,
+                   ranked.failure_reasons = '["end_reading_unverified"]'::jsonb,
                    (ranked.input_evidence -> 'end_baseline_evidence'
                     ->> 'official_final_trophies')::integer
             FROM unnest(
@@ -1051,7 +1057,7 @@ def _reset_total(
     (
         state, confidence, read_clean, final, automatic_loss, boundary_kind,
         battles_usable, ambiguous, after_reading, after_reset,
-        after_reset_after_reading, end_unknown, official,
+        after_reset_after_reading, end_unknown, unproven, official,
     ) = day
     battles_proven = battles_usable and not ambiguous
     total = reading + int(after_reading) if battles_proven or later else None
@@ -1073,9 +1079,11 @@ def _reset_total(
         return settled - int(after_reset), (not end_reset or total == settled) and (
             text_value(confidence) == "exact" or bool(read_clean)
         ) and not end_unknown
-    if total is None:
+    if unproven and final is not None and not (later or season_end):
+        return int(final) + int(automatic_loss or 0) - int(after_reset), False
+    if not battles_usable or (season_end and ambiguous):
         return reading, False
-    return total - int(after_reset_after_reading), later
+    return reading + int(after_reading) - int(after_reset_after_reading), later
 
 
 def _army_rows(

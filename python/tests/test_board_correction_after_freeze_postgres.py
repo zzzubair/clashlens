@@ -71,7 +71,9 @@ def test_a_board_frozen_without_late_days_takes_them_and_a_later_proof(
     03:53:36 reading, after a defense for 21 at 03:49:59, then 4,859 after a
     defense for 40 at 04:53:04. LATE and ON_TIME each attack once for 40.
     LATE's Reset responses wait in the worker until the board has frozen
-    without it at 05:30; SWEDE's Reset reading is seen again at 05:50:38."""
+    without it at 05:30; SWEDE's Reset reading is seen again at 05:50:38.
+    SWEDE's day is unproven until then, so the board shows its calculated
+    end, uncertain, and the proof confirms it."""
     start, end = day(2), day(3)
     with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, SWEDE, LATE, ON_TIME)
@@ -115,8 +117,8 @@ def test_a_board_frozen_without_late_days_takes_them_and_a_later_proof(
 
     assert (frozen["state"], frozen["end"]) == ("Partial", 4859)
     assert first == {
-        ON_TIME: (5141, "confirmed"), SWEDE: (4899, "uncertain"), LATE: "unavailable"}
-    assert _ranked(arrived) == {ON_TIME: 5141, LATE: 5140, SWEDE: 4899}
+        ON_TIME: (5141, "confirmed"), SWEDE: (4859, "uncertain"), LATE: "unavailable"}
+    assert _ranked(arrived) == {ON_TIME: 5141, LATE: 5140, SWEDE: 4859}
     assert unfinished == []
     assert (day_after["state"], day_after["end"]) == ("Complete", 4859)
     assert _ranked(corrected) == {ON_TIME: 5141, LATE: 5140, SWEDE: 4859}

@@ -344,13 +344,14 @@ def test_board_adds_the_battles_after_each_reading(database_url: str) -> None:
             database.close()
 
 
-def test_board_keeps_a_reading_its_later_battles_cannot_prove(
+def test_board_marks_uncertain_a_total_its_battles_cannot_prove(
     database_url: str,
 ) -> None:
     """A reading answered at 04:54:59 for a request sent a second earlier may
-    or may not hold an attack stamped 04:54:58, and a battle whose trophies
-    the two players' logs disagree on proves nothing; each such entry keeps
-    its reading and is marked uncertain."""
+    or may not hold an attack stamped 04:54:58, so its entry is uncertain,
+    but the attack stamped after it still counts. A battle whose trophies
+    the two players' logs disagree on proves nothing: such an entry keeps
+    its reading, uncertain."""
     readings = [
         ("#PYLQ0", 5088, datetime(2026, 10, 7, 4, 54, 59, tzinfo=UTC)),  # inflight
         ("#PYLQ2", 5100, _october(7, 4, 40)),  # disputed
@@ -387,9 +388,9 @@ def test_board_keeps_a_reading_its_later_battles_cannot_prove(
         database = Database(connection_info)
         try:
             assert _build_board(connection_info, database, generation_id) == [
+                ("#PYLQ0", 5128, "uncertain"),  # inflight
                 ("#PYLQ2", 5100, "uncertain"),  # disputed
                 ("#PYLQ8", 5090, "uncertain"),  # disputedday
-                ("#PYLQ0", 5088, "uncertain"),  # inflight
             ]
             season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
             assert boundary.queue_board_rebuilds(database, season, queue=False)[
