@@ -10,6 +10,8 @@
  */
 
 import { mapLinkedPlayerCard, type LinkedPlayerCard } from "../lib/account-contracts";
+import { parseCalendar } from "../lib/calendar";
+import type { Calendar } from "../lib/contracts";
 import { VIEW_AS_PARAM } from "../lib/dashboard";
 import { normalizePlayerTag } from "../lib/player-tag";
 import { isRecord } from "../services/python-response.server";
@@ -28,6 +30,8 @@ export type ViewAsAccess =
       /** The player a plain load of the owner's dashboard opens, if pinned. */
       pinned: string | null;
       follow: OwnerFollow;
+      /** The request's Legend day, which bounds the viewed card's today numbers. */
+      calendar: Calendar;
     };
 
 /** What anyone the owner check cannot confirm gets: the normal dashboard. */
@@ -61,8 +65,11 @@ export async function readViewAs(
     const pinned =
       typeof payload.pinned === "string" ? normalizePlayerTag(payload.pinned) : null;
     const follow = isRecord(payload.follow) ? payload.follow : {};
+    const calendar = parseCalendar(payload.calendar);
+    if (calendar === null) return NOT_OWNER;
     const owner = {
       owner: true,
+      calendar,
       pinned,
       follow: { attack: follow.attack === true, daySummary: follow.day_summary === true },
     } as const;

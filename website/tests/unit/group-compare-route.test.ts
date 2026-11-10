@@ -1,3 +1,4 @@
+import { CALENDAR } from "../fixtures/player-route-data";
 vi.mock("../../app/services/python-transport.server", () => ({
   requestJson: mocks.requestJson,
 }));
@@ -79,6 +80,7 @@ function player(overrides: Record<string, unknown> = {}) {
 function payload(players = [player()]) {
   return {
     kind: "group-comparison",
+    calendar: CALENDAR,
     group_id: GROUP_ID,
     name: "Rivals",
     days: 3,

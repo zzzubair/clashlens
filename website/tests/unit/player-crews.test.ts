@@ -1,3 +1,4 @@
+import { EMPTY_PLAYER_FACTS } from "../fixtures/player-route-data";
 vi.mock("../../app/services/leaderboard.server", () => ({
   getTrackedLeaderboard: async () => {
     throw new Error("board unavailable");
@@ -69,6 +70,7 @@ const crest = (letter: string) =>
 
 const PLAYER = {
   kind: "player-page",
+  ...EMPTY_PLAYER_FACTS,
   tag: TAG,
   trackingState: "tracking",
   profile: {
@@ -86,14 +88,6 @@ const PLAYER = {
   recentDays: [],
   seasonDays: [],
   dataQuality: [],
-  provenance: {
-    source: "api_player_daily_logs",
-    observedAt: "2026-10-04T12:00:00Z",
-    freshness: "fresh",
-    confidence: "high",
-    coverage: "complete",
-    version: "v1",
-  },
 } satisfies PlayerPage;
 
 // Only the first HTML sent, which is all a browser without JavaScript shows.

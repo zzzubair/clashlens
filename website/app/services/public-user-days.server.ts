@@ -1,3 +1,5 @@
+import { parseCalendar } from "../lib/calendar";
+import type { Calendar } from "../lib/contracts";
 import type { SeasonWeek } from "../lib/contracts";
 import { mapSeasonWeeks } from "./player-response.server";
 import {
@@ -5,7 +7,7 @@ import {
   isCanonicalPlayerTag,
   isInteger,
   isRecord,
-  isResetTimestamp,
+  isUtcTimestamp,
 } from "./python-response.server";
 import { requestJson } from "./python-transport.server";
 
@@ -29,10 +31,12 @@ export interface LinkedSeasonDay {
 
 /** What a public profile's player cards add to their numbers. */
 export interface PublicUserDays {
+  calendar: Calendar;
   /** The current Season's first Reset. */
   seasonStart: string;
   players: Array<{
     tag: string;
+    heatmapDayNumbers: number[];
     /** The place on the last Reset's Daily board this Season; null off it,
      *  and on a Season's first Legend day. */
     resetRank: number | null;
@@ -61,22 +65,36 @@ export async function getPublicUserDays(username: string): Promise<PublicUserDay
   const malformed = () => new PythonApiError(502, { error: "malformed" });
   if (
     !isRecord(payload) ||
-    !isResetTimestamp(payload.season_start) ||
+    !isUtcTimestamp(payload.season_start) ||
     !Array.isArray(payload.players)
   )
     throw malformed();
+  const calendar = parseCalendar(payload.calendar);
+  if (calendar === null) throw malformed();
   return {
     seasonStart: payload.season_start,
+    calendar,
     players: payload.players.map((player) => {
       if (
         !isRecord(player) ||
         !isCanonicalPlayerTag(player.tag) ||
         !(player.reset_position === null || isInteger(player.reset_position)) ||
-        !Array.isArray(player.days)
+        !Array.isArray(player.heatmap_day_numbers) ||
+        !player.heatmap_day_numbers.every(isInteger) ||
+        !Array.isArray(player.days) ||
+        new Set(player.heatmap_day_numbers).size !== player.heatmap_day_numbers.length
+      )
+        throw malformed();
+      const tuples = player.days;
+      if (
+        !player.heatmap_day_numbers.every((number) =>
+          tuples.some((day) => Array.isArray(day) && day[0] === number),
+        )
       )
         throw malformed();
       return {
         tag: player.tag,
+        heatmapDayNumbers: player.heatmap_day_numbers,
         resetRank: player.reset_position,
         seasonWeeks: mapSeasonWeeks(player.season_weeks),
         days: player.days.map((day): LinkedSeasonDay => {
@@ -85,7 +103,7 @@ export async function getPublicUserDays(username: string): Promise<PublicUserDay
             day.length !== 6 ||
             !isInteger(day[0]) ||
             day[0] < 1 ||
-            day[0] > 28 ||
+            day[0] > calendar.day_count ||
             !nullableCount(day[1]) ||
             !nullableCount(day[2]) ||
             !(day[3] === null || isInteger(day[3])) ||

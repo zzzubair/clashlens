@@ -1,3 +1,9 @@
+import {
+  EMPTY_SUMMARY_FACTS,
+  RAW_DAY_FACTS,
+  RAW_PLAYER_FACTS,
+  RAW_SUMMARY_FACTS,
+} from "../fixtures/player-route-data";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
@@ -5,6 +11,8 @@ const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 function seasonPayload() {
   return {
     kind: "player-season-summary",
+    ...RAW_SUMMARY_FACTS,
+    ...EMPTY_SUMMARY_FACTS,
     tag: "#2PP",
     official_season_id: "1785714000",
     season_start: "2026-05-01T05:00:00+00:00",
@@ -31,6 +39,7 @@ function seasonPayload() {
     daily_entries: [
       {
         season_day_number: 1,
+        ...RAW_DAY_FACTS,
         ranked_day_start: "2026-05-01T05:00:00+00:00",
         ranked_day_end: "2026-05-02T05:00:00+00:00",
         start_trophies: 6000,
@@ -97,6 +106,10 @@ function seasonsPayload() {
     seasons: [
       {
         official_season_id: "1785714000",
+        day_count: 28,
+        season_start: "2026-05-01T05:00:00+00:00",
+        season_end: "2026-05-29T05:00:00+00:00",
+        last_day_start: "2026-05-28T05:00:00+00:00",
         coverage_state: "partial",
         days_observed: 28,
         days_missing: 0,
@@ -150,6 +163,7 @@ describe("historical player-season client boundary", () => {
         eligibility,
         observed_at: "2026-08-06T12:00:00Z",
         screen_ready: {
+          ...RAW_PLAYER_FACTS,
           days: [],
           current_day_start: null,
           recent_day_starts: [],
@@ -202,181 +216,6 @@ describe("historical player-season client boundary", () => {
     },
   );
 
-  it.each([
-    // October day 1 after the player's Season reset.
-    ["2026-10-05", 1, "1791176400", false, "2026-10-05T20:00:00Z", 5000, null, 5000],
-    // October day 1 still read from a September profile.
-    ["2026-10-05", 1, "1788757200", true, "2026-10-05T20:00:00Z", 5000, null, null],
-    // October day 1 from an October profile still showing pre-Reset trophies.
-    ["2026-10-05", 1, "1791176400", true, "2026-10-05T20:00:00Z", 5000, null, null],
-    // A day 1 start other than 5,000 is not one, calculated or saved.
-    ["2026-10-05", 1, "1791176400", false, "2026-10-05T20:00:00Z", 5957, null, null],
-    ["2026-10-05", 1, "1791176400", false, "2026-10-06T06:00:00Z", 5000, 5957, null],
-    ["2026-10-05", 1, "1791176400", false, "2026-10-06T06:00:00Z", 5000, 5000, 5000],
-    // September day 28 read from a September profile, seen at October 5 05:10.
-    ["2026-10-04", 28, "1788757200", true, "2026-10-04T23:00:00Z", 5000, null, 5000],
-  ])(
-    "uses an in-day profile as a day total only for its own Season: %s day %s",
-    async (date, dayNumber, seasonId, pending, observedAt, trophies, saved, expected) => {
-      // A day with all sixteen battles, read before any stored starting total.
-      const event = (id: string, change: number) => ({
-        battle_id: id,
-        battle_timestamp: `${date}T13:00:00Z`,
-        opponent: { tag: "#2PY", name: "Opponent" },
-        stars: 3,
-        destruction_percentage: 100,
-        trophy_change: change,
-      });
-      const day = {
-        ranked_day_start: `${date}T05:00:00Z`,
-        ranked_day_end: new Date(Date.parse(`${date}T05:00:00Z`) + 86_400_000)
-          .toISOString()
-          .replace(".000Z", "Z"),
-        season_day_number: dayNumber,
-        state: "Live",
-        confidence: "partial",
-        completeness: { state: "partial", reason: "No saved reset total." },
-        public_confidence: "partial",
-        uncertainty_reasons: [],
-        start_trophies: saved,
-        attack_count: 8,
-        attack_three_star_count: 8,
-        attack_gain: 320,
-        defense_count: 8,
-        defense_three_star_count: 8,
-        defense_loss: 320,
-        net_trophy_change: null,
-        offense_events: Array.from({ length: 8 }, (_, i) => event(`a${i}`, 40)),
-        defense_events: Array.from({ length: 8 }, (_, i) => event(`d${i}`, -40)),
-      };
-      const payload = {
-        tag: "#2PP",
-        name: "Nova",
-        clan_tag: "#2CLAN",
-        trophies,
-        season_reset_pending: pending,
-        current_league_season_id: seasonId,
-        observed_at: observedAt,
-        screen_ready: {
-          days: [day],
-          current_day_start: day.ranked_day_start,
-          recent_day_starts: [day.ranked_day_start],
-          season_day_starts: [day.ranked_day_start],
-          season: null,
-          data_quality: [],
-          provenance: {
-            source: "test",
-            observed_at: observedAt,
-            freshness: "fresh",
-            confidence: "partial",
-            coverage: "partial",
-            version: "test",
-          },
-        },
-      };
-      vi.stubGlobal(
-        "fetch",
-        vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), { status: 200 })),
-      );
-      process.env.NODE_ENV = "test";
-      process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-      const player = await (
-        await import("../../app/services/players.server")
-      ).getPlayer("#2PP");
-      expect(player.profile.seasonResetPending).toBe(pending);
-      expect(player.profile.clanTag).toBe("#2CLAN");
-      expect(player.currentDay?.startTrophies).toBe(expected);
-      expect(player.seasonDays[0].startTrophies).toBe(expected);
-      expect(player.recentDays[0].startTrophies).toBe(expected);
-    },
-  );
-
-  it.each([
-    [5957, null],
-    [5000, 5000],
-  ])(
-    "works back to a day 1 start from day 2's saved %s only when it gives 5,000",
-    async (dayTwoStart, expected) => {
-      const event = (id: string, change: number) => ({
-        battle_id: id,
-        battle_timestamp: "2026-10-05T13:00:00Z",
-        opponent: { tag: "#2PY", name: "Opponent" },
-        stars: 3,
-        destruction_percentage: 100,
-        trophy_change: change,
-      });
-      const day = (start: string, end: string, dayNumber: number) => ({
-        ranked_day_start: start,
-        ranked_day_end: end,
-        season_day_number: dayNumber,
-        state: "Partial",
-        confidence: "partial",
-        completeness: { state: "partial", reason: "No saved reset total." },
-        public_confidence: "partial",
-        uncertainty_reasons: [],
-        start_trophies: dayNumber === 2 ? dayTwoStart : null,
-        attack_count: dayNumber === 1 ? 8 : 0,
-        attack_three_star_count: dayNumber === 1 ? 8 : 0,
-        attack_gain: dayNumber === 1 ? 320 : 0,
-        defense_count: dayNumber === 1 ? 8 : 0,
-        defense_three_star_count: dayNumber === 1 ? 8 : 0,
-        defense_loss: dayNumber === 1 ? 320 : 0,
-        net_trophy_change: null,
-        reset_rank: dayNumber === 1 ? 7 : null,
-        offense_events:
-          dayNumber === 1 ? Array.from({ length: 8 }, (_, i) => event(`a${i}`, 40)) : [],
-        defense_events:
-          dayNumber === 1 ? Array.from({ length: 8 }, (_, i) => event(`d${i}`, -40)) : [],
-      });
-      const days = [
-        day("2026-10-05T05:00:00Z", "2026-10-06T05:00:00Z", 1),
-        day("2026-10-06T05:00:00Z", "2026-10-07T05:00:00Z", 2),
-      ];
-      const observedAt = "2026-10-07T06:00:00Z";
-      const payload = {
-        tag: "#2PP",
-        name: "Nova",
-        trophies: dayTwoStart,
-        season_reset_pending: false,
-        current_league_season_id: "1791176400",
-        observed_at: observedAt,
-        screen_ready: {
-          days,
-          current_day_start: null,
-          recent_day_starts: days.map((d) => d.ranked_day_start),
-          season_day_starts: days.map((d) => d.ranked_day_start),
-          season: null,
-          data_quality: [],
-          provenance: {
-            source: "test",
-            observed_at: observedAt,
-            freshness: "fresh",
-            confidence: "partial",
-            coverage: "partial",
-            version: "test",
-          },
-        },
-      };
-      vi.stubGlobal(
-        "fetch",
-        vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), { status: 200 })),
-      );
-      process.env.NODE_ENV = "test";
-      process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-      const player = await (
-        await import("../../app/services/players.server")
-      ).getPlayer("#2PP");
-      expect(player.seasonDays[0].startTrophies).toBe(expected);
-      expect(player.recentDays[0].startTrophies).toBe(expected);
-      expect(player.recentDays.map((d) => [d.dayNumber, d.resetRank])).toEqual(
-        expect.arrayContaining([
-          [1, 7],
-          [2, null],
-        ]),
-      );
-    },
-  );
-
   it("maps summarized seasons and one compact season without battle drilldown", async () => {
     const fetchMock = vi
       .fn()
@@ -396,6 +235,10 @@ describe("historical player-season client boundary", () => {
     expect(seasons).toEqual([
       {
         seasonId: "1785714000",
+        dayCount: 28,
+        seasonStart: "2026-05-01T05:00:00+00:00",
+        seasonEnd: "2026-05-29T05:00:00+00:00",
+        lastDayStart: "2026-05-28T05:00:00+00:00",
         coverageState: "partial",
         daysObserved: 28,
         daysMissing: 0,
@@ -438,6 +281,7 @@ describe("historical player-season client boundary", () => {
         {
           ...clean,
           season_day_number: 2,
+          ...RAW_DAY_FACTS,
           ranked_day_start: "2026-05-02T05:00:00+00:00",
           ranked_day_end: "2026-05-03T05:00:00+00:00",
           state: "Partial",
@@ -622,9 +466,7 @@ describe("historical player-season client boundary", () => {
       )
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify(
-            officialSeasonPayload({ season_end: "2026-06-16T05:00:00+00:00" }),
-          ),
+          JSON.stringify(officialSeasonPayload({ season_end: "not a timestamp" })),
           { status: 200 },
         ),
       )
@@ -635,6 +477,7 @@ describe("historical player-season client boundary", () => {
             seasons: [
               {
                 ...seasonsPayload().seasons[0],
+                season_start: "not a timestamp",
                 source: "official_league_history",
                 days_observed: 0,
                 days_missing: 28,

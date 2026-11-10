@@ -1,3 +1,4 @@
+import type { ArmySeason } from "../services/army-analytics.server";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import {
   data,
@@ -39,7 +40,7 @@ import {
 } from "../lib/army-stats";
 import { publicPageMeta } from "../lib/blog";
 import type { WebsiteErrorResponse } from "../lib/contracts";
-import { seasonDates } from "../lib/season-end";
+import { seasonDates, unavailableSeasonDates } from "../lib/season-end";
 import type { Route } from "./+types/army-analytics";
 
 export function links() {
@@ -114,7 +115,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
           seasonEmpty: null,
           historicalSummary: false,
           requestedSeason: "current",
-          pastSeasons: [] as string[],
+          pastSeasons: [] as ArmySeason[],
         },
         { status: 422 },
       );
@@ -126,13 +127,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
       seasonEmpty: null,
       historicalSummary: false,
       requestedSeason: "current",
-      pastSeasons: [] as string[],
+      pastSeasons: [] as ArmySeason[],
     };
   }
   // Attacks only, over the whole Season: the API's defaults are the attack
   // view and every finished Legend day from Day 1.
   const sort = source.get("sort") ?? "usage-rate";
-  let pastSeasonsRead: Promise<string[]> = Promise.resolve([]);
+  let pastSeasonsRead: Promise<ArmySeason[]> = Promise.resolve([]);
   try {
     pastSeasonsRead = armySeasons();
     if (season !== "current") {
@@ -759,10 +760,12 @@ export default function ArmyAnalyticsRoute() {
     historicalSummary !== true &&
     !("snapshot" in result) &&
     result.analytics
-      ? (Number(result.analytics.selection.season) + 28 * 86400) * 1000
+      ? Date.parse(result.analytics.seasonBounds?.end ?? "")
       : NaN;
   const seasonEnded = Date.now() >= currentSeasonEnd;
   const analytics = seasonEnded ? null : result.analytics;
+  const dayCount =
+    analytics?.seasonBounds?.day_count ?? analytics?.calendar?.day_count ?? null;
   const seasonEmpty = seasonEnded
     ? { previousSeasonId: result.analytics!.selection.season }
     : result.seasonEmpty;
@@ -1081,14 +1084,24 @@ export default function ArmyAnalyticsRoute() {
               <select name="season" defaultValue={requestedSeason}>
                 <option value="current">This Season</option>
                 {[
-                  ...pastSeasons,
+                  ...pastSeasons.map((bounds) => bounds.id),
                   ...(requestedSeason !== "current" &&
-                  !pastSeasons.includes(requestedSeason)
+                  !pastSeasons.some((bounds) => bounds.id === requestedSeason)
                     ? [requestedSeason]
                     : []),
                 ].map((season) => (
                   <option key={season} value={season}>
-                    {seasonDates(season)}
+                    {(() => {
+                      const bounds =
+                        pastSeasons.find((bounds) => bounds.id === season) ??
+                        result.analytics?.seasonBounds;
+                      return bounds?.start && bounds.end
+                        ? seasonDates({
+                            seasonStart: bounds.start,
+                            seasonEnd: bounds.end,
+                          })
+                        : unavailableSeasonDates(season);
+                    })()}
                   </option>
                 ))}
               </select>
@@ -1127,7 +1140,7 @@ export default function ArmyAnalyticsRoute() {
                 "We don’t have the complete daily records needed for this selection. Try a different player group.")}
           </p>
           {seasonEmpty?.previousSeasonId &&
-          pastSeasons.includes(seasonEmpty.previousSeasonId) ? (
+          pastSeasons.some((bounds) => bounds.id === seasonEmpty.previousSeasonId) ? (
             <Link
               className="button button-secondary"
               to={`?season=${encodeURIComponent(seasonEmpty.previousSeasonId)}&category=troops&sort=usage-rate`}
@@ -1159,9 +1172,11 @@ export default function ArmyAnalyticsRoute() {
               {snapshot ? (
                 `${shortDate(snapshot.battleFrom)} – ${shortDate(snapshot.battleTo)} (UTC)`
               ) : coveredDays.length ? (
-                <span>Days {dayList(coveredDays)} of 28</span>
+                <span>
+                  Days {dayList(coveredDays)} of {dayCount ?? "unknown"}
+                </span>
               ) : (
-                `${analytics.selection.endDay - analytics.selection.startDay + 1} of 28 days`
+                `${analytics.selection.endDay - analytics.selection.startDay + 1} of ${dayCount ?? "unknown"} days`
               )}
               {/* What the differences are against, said once for the table;
                   the averages and the one colouring rule a tap away. */}

@@ -1,3 +1,5 @@
+import { parseCalendar } from "../lib/calendar";
+import { mapSeasonBounds } from "./player-facts.server";
 import type { ArmyAnalytics } from "../lib/contracts";
 import {
   PythonApiError,
@@ -28,11 +30,15 @@ export async function getArmyAnalytics(query: URLSearchParams): Promise<ArmyAnal
         isString(cause.payload.previous_season_id)
           ? cause.payload.previous_season_id
           : null,
+        parseCalendar(cause.payload.calendar) ??
+          (() => {
+            throw new PythonApiError(502, { error: "malformed" });
+          })(),
       );
     }
     throw cause;
   }
-  return mapArmyAnalytics(payload);
+  return mapArmyAnalytics(payload, true);
 }
 
 export async function getArmySeasonSummary(
@@ -45,11 +51,17 @@ export async function getArmySeasonSummary(
     `/v1/analytics/armies/seasons/${encodeURIComponent(season)}?${query.toString()}`,
     { method: "GET" },
   );
-  return mapArmyAnalytics(payload);
+  return mapArmyAnalytics(payload, false);
 }
 
 // Finished seasons with saved attack summaries, newest first.
-export async function getArmySeasons(): Promise<string[]> {
+export interface ArmySeason {
+  id: string;
+  start: string | null;
+  end: string | null;
+}
+
+export async function getArmySeasons(): Promise<ArmySeason[]> {
   const payload = await requestJson<unknown>("/v1/analytics/armies/seasons", {
     method: "GET",
   });
@@ -60,20 +72,30 @@ export async function getArmySeasons(): Promise<string[]> {
   ) {
     throw new PythonApiError(502, { error: "malformed" });
   }
-  return payload.seasons;
+  if (!Array.isArray(payload.season_details))
+    throw new PythonApiError(502, { error: "malformed" });
+  const details = payload.season_details.map(mapSeasonBounds);
+  if (details.some((detail) => detail === null))
+    throw new PythonApiError(502, { error: "malformed" });
+  return payload.seasons.map(
+    (id) => details.find((detail) => detail?.id === id) ?? { id, start: null, end: null },
+  );
 }
 
 export class NoCompletedLegendDaysError extends Error {
   readonly previousSeasonId: string | null;
 
-  constructor(previousSeasonId: string | null) {
+  constructor(
+    previousSeasonId: string | null,
+    readonly calendar: import("../lib/contracts").Calendar,
+  ) {
     super("no completed Legend days this season");
     this.name = "NoCompletedLegendDaysError";
     this.previousSeasonId = previousSeasonId;
   }
 }
 
-function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
+function mapArmyAnalytics(payload: unknown, requireCalendar: boolean): ArmyAnalytics {
   if (
     !isRecord(payload) ||
     payload.kind !== "army-analytics" ||
@@ -190,6 +212,9 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
     }),
   );
   const pagination = payload.pagination;
+  const calendar = parseCalendar(payload.calendar);
+  if (requireCalendar && calendar === null)
+    throw new PythonApiError(502, { error: "malformed" });
   if (
     pagination !== undefined &&
     (!isRecord(pagination) ||
@@ -207,6 +232,8 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
         }
       : undefined,
     kind: "army-analytics",
+    calendar,
+    seasonBounds: mapSeasonBounds(payload.season_bounds),
     selection: {
       lens: selection.lens,
       season: selection.season,

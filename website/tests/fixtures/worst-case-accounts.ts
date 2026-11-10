@@ -1,3 +1,4 @@
+import { CALENDAR } from "./player-route-data";
 /**
  * Worst-case but realistic account data for groups, the group comparison and
  * public user pages: names at their limits, right-to-left and styled scripts,
@@ -141,6 +142,7 @@ function comparedPlayer(index: number, days: number): ComparedPlayer {
 /** A full 20-player comparison over 14 days, plus the signed-in player outside it. */
 export function worstComparison(days: 3 | 7 | 14 = 14): GroupComparison {
   return {
+    calendar: CALENDAR,
     groupId: "6c1e3f8a-2a44-4b7d-9c0e-1f2a3b4c5d6e",
     name: WORST_GROUP_NAME,
     days,
@@ -173,6 +175,7 @@ export function worstGroups(): ListedGroup[] {
     state: index < 7 ? PLAYER_STATES[index] : ("tracking" as const),
   }));
   const group = (groupId: string, name: string, members: typeof players) => ({
+    calendar: CALENDAR,
     groupId,
     name,
     tags: members.map((player) => player.tag),
@@ -210,6 +213,7 @@ export function worstPublicUser(): PublicUser {
   return {
     username: WORST_USERNAME,
     displayName: WORST_DISPLAY_NAME,
+    calendar: CALENDAR,
     verifiedPlayers: [
       card(0, {}),
       card(1, {

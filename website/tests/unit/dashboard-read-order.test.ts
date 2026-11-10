@@ -1,7 +1,12 @@
+import { CALENDAR } from "../fixtures/player-route-data";
 const reads = vi.hoisted(() => ({
   getPlayer: vi.fn(),
   getTrackedLeaderboard: vi.fn(),
   getPlayerSeasons: vi.fn(),
+  requestJson: vi.fn(),
+}));
+vi.mock("../../app/services/python-transport.server", () => ({
+  requestJson: reads.requestJson,
 }));
 vi.mock("../../app/services/players.server", () => ({
   getPlayer: reads.getPlayer,
@@ -19,6 +24,26 @@ import type { PythonClient } from "../../app/services/python.server";
 
 const TAG = "#LQ2V8PJ0";
 const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" } as const;
+
+it("serves an army-only layout from its army reply even when Today is down", async () => {
+  const { ctx } = slowPageContext();
+  reads.requestJson.mockReset().mockImplementation(async (path: string) => {
+    if (path.includes("/today")) throw new Error("Today down");
+    return {
+      tag: TAG,
+      lens: "defense",
+      days: 7,
+      calendar: CALENDAR,
+      covered_days: [],
+      rows: [],
+      total: { battles: 0, three_stars: 0, trophies: 0 },
+      legends_total: null,
+    };
+  });
+  const card = await readCards(["armies-defense"], ctx, IDENTITY)["armies-defense"];
+  expect(card).toMatchObject({ tag: TAG, calendar: CALENDAR, armies: { rows: [] } });
+  expect(reads.requestJson).toHaveBeenCalledTimes(1);
+});
 
 /**
  * A client whose player page never answers, so any other read seen must have
@@ -58,7 +83,7 @@ it("reads the Cutoffs card's live lines without waiting for the player page", as
       undefined,
     ),
   );
-  expect(client.getPlayer).toHaveBeenCalledWith(TAG);
+  expect(client.getPlayer).toHaveBeenCalledWith(TAG, true, true);
 });
 
 it("reads the Rivals card's live board without waiting for the player page", async () => {
@@ -104,6 +129,7 @@ it("reads other players' pages for Rivals and Watchlist once each, without their
       .mockReset()
       .mockImplementation(async () => board),
     listGroups: vi.fn(async () => ({
+      calendar: CALENDAR,
       groups: [{ groupId: "mates", name: "Mates", tags: ["#P1", "#Q9"], players: [] }],
       season: "1793595600",
     })),
@@ -117,13 +143,25 @@ it("reads other players' pages for Rivals and Watchlist once each, without their
   await Promise.all(Object.values(cards));
   const calls = client.getPlayer.mock.calls.map((call) => call.join(" "));
   expect(calls.sort()).toEqual([
-    "#LQ2V8PJ0",
-    "#P1 false",
-    "#P2 false",
-    "#P3 false",
-    "#P5 false",
-    "#P6 false",
-    "#P7 false",
-    "#Q9 false",
+    "#LQ2V8PJ0 true true",
+    "#P1 false true",
+    "#P2 false true",
+    "#P3 false true",
+    "#P5 false true",
+    "#P6 false true",
+    "#P7 false true",
+    "#Q9 false true",
   ]);
+});
+
+it("keeps the supplied Live calendar on Cutoffs when the player page is missing", async () => {
+  const { client, ctx } = slowPageContext();
+  ctx.settings.cutoffs = [1];
+  client.getPlayer.mockResolvedValue(null as never);
+  client.getTrackedLeaderboard.mockResolvedValue({
+    calendar: CALENDAR,
+    entries: [{ rank: 1, trophies: 5400, freshness: { observedAt: CALENDAR.as_of } }],
+  } as never);
+  const cards = readCards(["cutoffs"], ctx, IDENTITY);
+  expect((await cards.cutoffs)?.calendar).toEqual(CALENDAR);
 });

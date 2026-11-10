@@ -1,3 +1,4 @@
+import { CALENDAR } from "../fixtures/player-route-data";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
@@ -278,6 +279,7 @@ describe("server-only Python account client", () => {
       .fn()
       .mockResolvedValueOnce(
         jsonResponse({
+          calendar: CALENDAR,
           season: "1791176400",
           groups: [
             {
@@ -301,6 +303,7 @@ describe("server-only Python account client", () => {
     const client = await importClient();
 
     await expect(client.listGroups()).resolves.toEqual({
+      calendar: CALENDAR,
       season: "1791176400",
       groups: [
         {
@@ -438,6 +441,7 @@ describe("server-only Python account client", () => {
         username: "nova88",
         display_name: "Nova",
         verified_players: [],
+        calendar: CALENDAR,
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -448,6 +452,7 @@ describe("server-only Python account client", () => {
       username: "nova88",
       displayName: "Nova",
       verifiedPlayers: [],
+      calendar: CALENDAR,
     });
     const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
     expect(url).toEqual(new URL("/v1/users/nova88", "http://python-fixture.test/"));

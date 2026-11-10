@@ -1,3 +1,4 @@
+import { EMPTY_PLAYER_FACTS, UNKNOWN_END, VERIFIED } from "../fixtures/player-route-data";
 vi.mock("../../app/services/leaderboard.server", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../app/services/leaderboard.server")>();
@@ -75,6 +76,7 @@ const CLAN_LINK =
 const page = (clan: string, clanTag: string | null) =>
   ({
     kind: "player-page",
+    ...EMPTY_PLAYER_FACTS,
     tag: TAG,
     trackingState: "tracking",
     profile: {
@@ -93,14 +95,6 @@ const page = (clan: string, clanTag: string | null) =>
     recentDays: [],
     seasonDays: [],
     dataQuality: [],
-    provenance: {
-      source: "api_player_daily_logs",
-      observedAt: "2026-10-23T12:00:00Z",
-      freshness: "fresh",
-      confidence: "high",
-      coverage: "complete",
-      version: "v1",
-    },
   }) satisfies PlayerPage;
 
 // Only the first HTML sent, which is all a browser without JavaScript shows,
@@ -303,7 +297,11 @@ describe("the player page header", () => {
         {
           dayNumber: 18,
           label: "Day 18",
-          period: "2026-10-22T05:00:00Z – 2026-10-23T05:00:00Z",
+          start: "2026-10-22T05:00:00Z",
+          end: "2026-10-23T05:00:00Z",
+          seasonId: null,
+          presentation: VERIFIED,
+          displayEnd: UNKNOWN_END,
           state: "Complete",
           resetRank: 173,
           offense: { attacks: 8, threeStars: 6, trophyGain: 300 },
@@ -312,7 +310,6 @@ describe("the player page header", () => {
           offenseEvents: [],
           defenseEvents: [],
           completeness: { state: "complete", reason: "" },
-          uncertainty: [],
         },
       ],
     } satisfies PlayerPage;
@@ -373,15 +370,13 @@ describe("the player page header", () => {
     const dayOne = {
       ...page("Titans2.0", "#2CLAN"),
       profile: { ...page("Titans2.0", "#2CLAN").profile, freshness: fresh },
-      provenance: {
-        ...page("Titans2.0", "#2CLAN").provenance,
-        observedAt: fresh.observedAt,
-      },
       season: {
         id: "2026-11",
         anchor: "2026-11-02T05:00:00Z",
         currentDayNumber: 1,
         dayCount: 28,
+        end: "2026-11-02T05:00:00Z",
+        initialTrophies: 5000,
         anchorSource: "daily_publication",
         anchorObservedAt: "2026-11-02T05:10:00Z",
       },
@@ -389,7 +384,11 @@ describe("the player page header", () => {
         {
           dayNumber: 28,
           label: "Day 28",
-          period: "2026-11-01T05:00:00Z – 2026-11-02T05:00:00Z",
+          start: "2026-11-01T05:00:00Z",
+          end: "2026-11-02T05:00:00Z",
+          seasonId: null,
+          presentation: VERIFIED,
+          displayEnd: UNKNOWN_END,
           state: "Complete",
           resetRank: 173,
           offense: { attacks: 8, threeStars: 6, trophyGain: 300 },
@@ -398,7 +397,6 @@ describe("the player page header", () => {
           offenseEvents: [],
           defenseEvents: [],
           completeness: { state: "complete", reason: "" },
-          uncertainty: [],
         },
       ],
     } satisfies PlayerPage;

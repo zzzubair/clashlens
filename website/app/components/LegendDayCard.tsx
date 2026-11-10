@@ -105,7 +105,8 @@ export function LegendDayCard({
   const defenseCount = complete ? defenses.length : (day?.defenses ?? null);
   const net = day?.net ?? null;
   const trophies = day ? day.trophies : player.trophies;
-  const countdown = nowMs === null ? null : resetCountdown(nowMs);
+  const countdown =
+    nowMs === null || day === null ? null : resetCountdown(nowMs, day.dayEndMs);
   const fresh = updatedAgo(dayReadAt(day, rangeAtMs), nowMs);
   return (
     <div className="legend-day-card">

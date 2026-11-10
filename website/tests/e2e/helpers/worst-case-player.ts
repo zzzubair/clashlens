@@ -6,6 +6,7 @@ import {
   WORST_SEASONS,
   worstCasePlayer,
 } from "../../fixtures/player-worst-case";
+import { decodePageData, encodePageData } from "./player-page";
 
 // Sends Refresh submissions with an invalid key, so the server refuses them
 // before they spend either per-visitor allowance.
@@ -18,45 +19,6 @@ export async function refuseRefreshes(page: Page, allowNext = () => false) {
     await route.continue({ postData: "idempotencyKey=invalid" });
   });
   return submissions;
-}
-
-// React Router page data is a flat list of values: objects map "_<key index>"
-// to value indexes, arrays list value indexes, -5 is null and -7 undefined.
-// A streamed value is ["P", its own index], resolved by a later "P<index>:"
-// line; it decodes to undefined, so past Seasons are left out.
-export function decodePageData(text: string) {
-  const values: unknown[] = JSON.parse(text.split("\n")[0]);
-  const decode = (index: number): unknown => {
-    if (index < 0) return index === -5 ? null : undefined;
-    const value = values[index];
-    if (Array.isArray(value)) return value[0] === "P" ? undefined : value.map(decode);
-    if (value === null || typeof value !== "object") return value;
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [
-        values[Number(key.slice(1))],
-        decode(item as number),
-      ]),
-    );
-  };
-  return decode(0) as Record<string, { data?: { player?: PlayerPage } }>;
-}
-
-export function encodePageData(data: unknown) {
-  const values: unknown[] = [];
-  const encode = (value: unknown): number => {
-    if (value === null) return -5;
-    if (value === undefined) return -7;
-    if (typeof value !== "object") return values.push(value) - 1;
-    const index = values.push(null) - 1;
-    values[index] = Array.isArray(value)
-      ? value.map(encode)
-      : Object.fromEntries(
-          Object.entries(value).map(([key, item]) => [`_${encode(key)}`, encode(item)]),
-        );
-    return index;
-  };
-  encode(data);
-  return `${JSON.stringify(values)}\n`;
 }
 
 // Opens #2PP from search with worst-case saved data and one past Season.

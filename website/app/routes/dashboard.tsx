@@ -23,14 +23,13 @@ import { SeasonStory } from "../components/SeasonStory";
 import { ViewAsBar, ViewAsForm } from "../components/ViewAs";
 import type { LinkedPlayerCard } from "../lib/account-contracts";
 import { publicPageMeta } from "../lib/blog";
-import type { PlayerPage, WebsiteErrorResponse } from "../lib/contracts";
+import type { Calendar, PlayerPage, WebsiteErrorResponse } from "../lib/contracts";
 import type { DashboardSettings } from "../lib/dashboard";
 import {
   ACCOUNT_CARDS,
   CARD_IDS,
   VIEW_AS_PARAM,
   isDashboardSave,
-  nextResetMs,
   parsePostedSettings,
   readSettings,
   serializeSettings,
@@ -40,7 +39,6 @@ import type { CardReads } from "../lib/dashboard-cards";
 import { leftDate, leftLine, type LeftLegendI } from "../lib/left-legend";
 import { LOOKUP_MESSAGES } from "../lib/player-lookup-text";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
-import { seasonShape } from "../lib/season-shape";
 import type { Route } from "./+types/dashboard";
 import "../dashboard.css";
 import "../dashboard-cards.css";
@@ -117,15 +115,17 @@ export async function loader({ request }: Route.LoaderArgs) {
     );
   }
 
-  const dayEndsMs = nextResetMs(Date.now());
   // Asked on every signed-in load, whatever the address says, alongside the
   // linked players: a non-owner's page is the same with or without view_as.
   const { readViewAs } = await import("../server/view-as.server");
   const access = readViewAs(identity, query.get(VIEW_AS_PARAM));
   let players: LinkedPlayerCard[] = [];
   let playersUnavailable = false;
+  let playersCalendar: Calendar | null = null;
   try {
-    players = (await getPublicUser(account.username)).verifiedPlayers;
+    const publicUser = await getPublicUser(account.username);
+    players = publicUser.verifiedPlayers;
+    playersCalendar = publicUser.calendar;
   } catch {
     playersUnavailable = true;
   }
@@ -143,8 +143,9 @@ export async function loader({ request }: Route.LoaderArgs) {
     });
   }
   const viewing = owner.owner && query.has(VIEW_AS_PARAM) ? owner.player : undefined;
-  if (viewing !== undefined) {
+  if (viewing !== undefined && owner.owner) {
     players = viewing === null ? [] : [viewing];
+    playersCalendar = owner.calendar;
     playersUnavailable = false;
   }
 
@@ -196,7 +197,22 @@ export async function loader({ request }: Route.LoaderArgs) {
       selectedTag: selected?.tag ?? null,
       settings,
       cards,
-      dayEndsMs,
+      // The earliest Reset among the reads shown: each was read for its own
+      // Legend day, and the page must not show any of them past theirs.
+      dayEndsMs: (() => {
+        const ends: number[] = [];
+        for (const value of Object.values(cards)) {
+          if (!value || value instanceof Promise) continue;
+          if ("calendar" in value && value.calendar)
+            ends.push(Date.parse(value.calendar.day_end));
+          else if ("dayEndMs" in value && typeof value.dayEndMs === "number")
+            ends.push(value.dayEndMs);
+          else if ("day" in value && value.day) ends.push(value.day.dayEndMs);
+        }
+        if (leftPlayer) ends.push(Date.parse(leftPlayer.calendar.day_end));
+        if (playersCalendar) ends.push(Date.parse(playersCalendar.day_end));
+        return Math.min(Number.POSITIVE_INFINITY, ...ends);
+      })(),
       leftPlayer,
       idempotencyKey,
       canViewAs: owner.owner,
@@ -457,6 +473,7 @@ export default function DashboardRoute() {
   const loaderData = useLoaderData<typeof loader>();
   const dayOver = useDayOver(
     loaderData.kind === "signed-in" ? loaderData.dayEndsMs : Number.POSITIVE_INFINITY,
+    loaderData.kind === "signed-in" ? loaderData.cards : null,
   );
   if (loaderData.kind === "signed-out") return <FrontPage data={loaderData} />;
   if (loaderData.kind === "error") {
@@ -596,7 +613,7 @@ function LeftLegendPanel({
       </p>
       {player ? (
         <>
-          <SeasonStory shape={seasonShape(player, now)} />
+          {player.seasonShape ? <SeasonStory shape={player.seasonShape} /> : null}
           <BattleStatistics player={player} now={now} />
         </>
       ) : null}
@@ -621,7 +638,22 @@ function NewDayNotice() {
 }
 
 /** Whether the Legend day the page was read for has ended, checked every 30 seconds. */
-function useDayOver(dayEndsMs: number): boolean {
+function useDayOver(dayEndsMs: number, cards: CardReads | null): boolean {
+  const [readEnd, setReadEnd] = useState(dayEndsMs);
+  useEffect(() => {
+    let active = true;
+    for (const value of Object.values(cards ?? {}))
+      void Promise.resolve(value).then(
+        (read) => {
+          if (active && read?.calendar) setReadEnd(Date.parse(read.calendar.day_end));
+        },
+        () => {},
+      );
+    return () => {
+      active = false;
+    };
+  }, [cards]);
+  dayEndsMs = Number.isFinite(dayEndsMs) ? dayEndsMs : readEnd;
   const [, setTick] = useState(0);
   const over = Date.now() >= dayEndsMs;
   useEffect(() => {

@@ -26,10 +26,21 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   const tag = normalizePlayerTag(params.tag);
   const day = Number(new URL(request.url).searchParams.get("day"));
-  if (!tag || !Number.isInteger(day) || day < 1 || day > 28)
+  if (!tag || !Number.isInteger(day) || day < 1)
     return data<BasesResponse>({ bases: null }, { status: 400, headers: NO_STORE });
 
   const { getPlayerBases } = await import("../services/dashboard.server");
-  const bases = await getPlayerBases(tag, day).catch(() => null);
-  return data<BasesResponse>({ bases }, { headers: NO_STORE });
+  try {
+    const bases = await getPlayerBases(tag, day);
+    return data<BasesResponse>({ bases }, { headers: NO_STORE });
+  } catch (cause) {
+    const { PythonApiError } = await import("../services/python-response.server");
+    return data<BasesResponse>(
+      { bases: null },
+      {
+        status: cause instanceof PythonApiError && cause.status === 422 ? 400 : 200,
+        headers: NO_STORE,
+      },
+    );
+  }
 }

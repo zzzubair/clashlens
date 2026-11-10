@@ -1,3 +1,5 @@
+import { parseCalendar } from "./calendar";
+import type { Calendar } from "./contracts";
 /**
  * Response contracts for the private Python account API.
  *
@@ -63,6 +65,7 @@ export interface ListedGroup extends PrivateGroup {
 }
 
 export interface GroupList {
+  calendar: Calendar;
   groups: ListedGroup[];
   /** The Season the trophies were read in: its first Reset, in Unix seconds. */
   season: string;
@@ -98,6 +101,8 @@ export interface PublicUser {
   username: string;
   displayName: string;
   verifiedPlayers: LinkedPlayerCard[];
+  /** The request's Legend day, which bounds the cards' today numbers. */
+  calendar: Calendar;
 }
 
 export interface PublicUserResult {
@@ -336,7 +341,9 @@ export function mapGroups(value: unknown): GroupList | null {
       createdAt: (entry.created_at as string | undefined) ?? null,
     });
   }
-  return { groups, season: value.season };
+  const calendar = parseCalendar(value.calendar);
+  if (calendar === null) return null;
+  return { groups, season: value.season, calendar };
 }
 
 export function mapGroupResult(value: unknown): PrivateGroup | null {
@@ -368,10 +375,13 @@ export function mapPublicUser(value: unknown): PublicUser | null {
     if (card === null) return null;
     cards.push(card);
   }
+  const calendar = parseCalendar(value.calendar);
+  if (calendar === null) return null;
   return {
     username: payload.username,
     displayName: payload.display_name,
     verifiedPlayers: cards,
+    calendar,
   };
 }
 

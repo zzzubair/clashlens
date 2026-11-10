@@ -1,3 +1,11 @@
+import {
+  CALENDAR,
+  EMPTY_PLAYER_FACTS,
+  EMPTY_SUMMARY_FACTS,
+  RAW_SUMMARY_FACTS,
+  UNKNOWN_END,
+  VERIFIED,
+} from "./player-route-data";
 import type {
   HistoricalSeasonDayEntry,
   HistoricalSeasonSummary,
@@ -40,10 +48,6 @@ function dayStart(now: number, offset: number): Date {
   return new Date(start.getTime() - offset * DAY_MS);
 }
 
-function period(start: Date): string {
-  return `${start.toISOString()} – ${new Date(start.getTime() + DAY_MS).toISOString()}`;
-}
-
 function battles(start: Date, count: number, kind: "a" | "d"): RankedBattleEvent[] {
   return Array.from({ length: count }, (_, index) => ({
     battleId: `worst-${kind}-${start.getTime()}-${index}`,
@@ -78,7 +82,11 @@ function day(
   return {
     dayNumber,
     label: `Day ${dayNumber ?? "unknown"}`,
-    period: period(start),
+    start: start.toISOString(),
+    end: new Date(start.getTime() + DAY_MS).toISOString(),
+    seasonId: null,
+    presentation: VERIFIED,
+    displayEnd: UNKNOWN_END,
     state: "Complete",
     startTrophies: 6460,
     offense: { attacks, threeStars: 3, trophyGain: gain },
@@ -87,7 +95,6 @@ function day(
     offenseEvents,
     defenseEvents,
     completeness: { state: "complete", reason: "" },
-    uncertainty: [],
     ...overrides,
   };
 }
@@ -98,9 +105,14 @@ const LONG_DETAIL =
 export function worstCasePlayer(tag = WORST_TAG, now = Date.now()): PlayerPage {
   const currentDay = day(now, 0, 28, 9, 1, {
     state: "Live",
+    presentation: {
+      ...VERIFIED,
+      status: "in_progress",
+      is_current: true,
+      live_routine: true,
+    },
     trophyChange: null,
     completeness: { state: "partial", reason: LONG_DETAIL },
-    uncertainty: LONG_DETAIL.split("; "),
     startTrophiesCalculation: { trophies: 6512, netChange: 52 },
   });
   const seasonDays = [
@@ -112,13 +124,42 @@ export function worstCasePlayer(tag = WORST_TAG, now = Date.now()): PlayerPage {
       defense: { defenses: null, threeStarsAgainst: null, trophyLoss: null },
       state: "Uncertain",
       completeness: { state: "uncertain", reason: "malformed_evidence" },
-      uncertainty: ["malformed_evidence", "season_anchor_conflict", "truncated_reasons"],
     }),
     day(now, 3, 25, 1, 1, { startTrophies: 4812, trophyChange: -1288 }),
     day(now, 4, null, 12, 8),
   ];
   return {
     kind: "player-page",
+    ...EMPTY_PLAYER_FACTS,
+    calendar: {
+      ...CALENDAR,
+      as_of: new Date(now).toISOString(),
+      day_start: currentDay.start,
+      day_end: currentDay.end!,
+      day_number: 6,
+    },
+    historyDays: [currentDay, ...seasonDays],
+    historyDayNumbers: Object.fromEntries(
+      [currentDay, ...seasonDays].map((day, index) => [day.start, 6 - index]),
+    ),
+    seasonShape: {
+      seasonStart: dayStart(now, 5).getTime(),
+      today: 6,
+      kinds: [
+        "unrecorded",
+        "legend",
+        "legend",
+        "legend",
+        "legend",
+        "legend",
+        ...Array<"ahead">(22).fill("ahead"),
+      ],
+      runs: [{ first: 2, last: 6, signedUp: 2, promoted: false, dropped: false }],
+      partial: false,
+      outsideNow: false,
+      legendDays: { expected: 4, saved: 4 },
+      lastLegendDay: seasonDays[0],
+    },
     tag,
     trackingState: "tracking",
     profile: {
@@ -148,14 +189,6 @@ export function worstCasePlayer(tag = WORST_TAG, now = Date.now()): PlayerPage {
         detail: "Clash of Clans has not answered for this player since it was saved.",
       },
     ],
-    provenance: {
-      source: "api_player_daily_logs",
-      observedAt: null,
-      freshness: "stale",
-      confidence: "uncertain",
-      coverage: "partial",
-      version: "v1",
-    },
   };
 }
 
@@ -163,6 +196,10 @@ export const WORST_SEASONS: SummarizedSeasonRef[] = Array.from(
   { length: 14 },
   (_, index) => ({
     seasonId: String(1785714000 - index * 28 * 86400),
+    seasonStart: new Date((1785714000 - index * 28 * 86400) * 1000).toISOString(),
+    seasonEnd: new Date((1785714000 + (1 - index) * 28 * 86400) * 1000).toISOString(),
+    lastDayStart: null,
+    dayCount: 28,
     coverageState: index % 2 ? "partial" : "complete",
     daysObserved: index % 2 ? 1 : 28,
     daysMissing: index % 2 ? 27 : 0,
@@ -175,7 +212,10 @@ function seasonDay(dayNumber: number): HistoricalSeasonDayEntry {
   const unknown = dayNumber % 5 === 0;
   return {
     dayNumber: dayNumber === 28 ? null : dayNumber,
-    period: new Date(Date.UTC(2026, 7, dayNumber + 1, 5)).toISOString(),
+    start: new Date(Date.UTC(2026, 7, dayNumber + 1, 5)).toISOString(),
+    end: null,
+    seasonId: null,
+    presentation: VERIFIED,
     startTrophies: unknown ? null : 4812 + dayNumber * 60,
     endTrophies: unknown ? null : 4852 + dayNumber * 60,
     eodState: dayNumber % 2 ? "accepted" : "provisional",
@@ -196,6 +236,22 @@ function seasonDay(dayNumber: number): HistoricalSeasonDayEntry {
 
 export const WORST_SEASON_SUMMARY: HistoricalSeasonSummary = {
   kind: "player-season-summary",
+  ...RAW_SUMMARY_FACTS,
+  ...EMPTY_SUMMARY_FACTS,
+  seasonShape: {
+    seasonStart: Date.UTC(2026, 7, 2, 5),
+    today: 29,
+    kinds: [...Array<"legend">(27).fill("legend"), "unrecorded"],
+    runs: [{ first: 1, last: 27, signedUp: 1, promoted: false, dropped: false }],
+    partial: false,
+    outsideNow: false,
+    legendDays: { expected: 27, saved: 27 },
+    lastLegendDay: seasonDay(27),
+  },
+  summaryStatistics: {
+    attack: { perDay: 11040 / 27, perBattle: 11040 },
+    defense: { perDay: null, perBattle: null },
+  },
   tag: WORST_TAG,
   seasonId: WORST_SEASONS[0].seasonId,
   seasonStart: "2026-08-02T05:00:00+00:00",

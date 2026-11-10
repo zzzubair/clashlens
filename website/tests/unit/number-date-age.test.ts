@@ -41,7 +41,7 @@ it("keeps the different signs, missing-value words and precision used by each vi
 it("keeps UTC labels, September spelling and same-month and cross-month ranges", () => {
   expect(utcDate("2026-09-01T00:30:00+02:00")).toBe("31 Aug");
   expect(utcDate("2026-09-01", { weekday: true })).toBe("Tue 1 Sep");
-  expect(legendDayDate("2026-09-01 – 2026-09-02")).toBe("1 Sep 2026");
+  expect(legendDayDate("2026-09-01")).toBe("1 Sep 2026");
   expect(legendDayDate("invalid")).toBe("Date unavailable");
   expect(dayRange(["2026-09-22", "2026-09-28"])).toBe("22–28 Sep");
   expect(dayRange(["2026-09-29", "2026-10-05"])).toBe("29 Sep – 5 Oct");

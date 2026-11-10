@@ -49,6 +49,8 @@ export interface SeasonData {
 }
 
 export interface ClockData {
+  dayStartMs: number;
+  dayEndMs: number;
   battles: ClockBattle[];
   observedAtMs: number | null;
 }
@@ -84,6 +86,7 @@ export interface CutoffLine {
 }
 
 export interface CutoffsData {
+  calendar?: import("./contracts").Calendar | null;
   name: string;
   live: { lines: CutoffLine[]; you: number | null; observedAtMs: number | null };
   /**
@@ -109,6 +112,7 @@ export interface RivalRow {
 }
 
 export interface RivalsData {
+  calendar?: import("./contracts").Calendar | null;
   live: { rows: RivalRow[]; observedAtMs: number | null } | null;
   season: { rows: RivalRow[]; days: number } | null;
 }
@@ -126,13 +130,14 @@ export interface GroupRow {
 }
 
 export interface GroupWatchData {
+  calendar?: import("./contracts").Calendar | null;
   /** Your groups, oldest first. */
   groups: { id: string; name: string; members: number }[];
   /** The group shown; null when you have none. */
   groupId: string | null;
   window: "7" | "season";
-  /** Days the numbers cover. */
-  days: number;
+  /** Days the numbers cover; null without Season context. */
+  days: number | null;
   /** Best average gain first. */
   rows: GroupRow[];
 }
@@ -438,6 +443,7 @@ export function around<T>(rows: T[], index: number, before: number, after: numbe
 
 /** The data each built card is drawn from. A card added later adds its entry here. */
 export interface LegendDayData {
+  calendar: import("./contracts").Calendar | null;
   player: LinkedPlayerCard;
   /** Null when the player page could not be read. */
   day: PlayerDay | null;
@@ -491,10 +497,17 @@ export interface CardDataMap {
 }
 
 /** Null when the card's data could not be read this time. */
-export type CardDataSet = { [Card in keyof CardDataMap]?: CardDataMap[Card] | null };
+export type CardDataSet = {
+  [Card in keyof CardDataMap]?:
+    (CardDataMap[Card] & { calendar?: import("./contracts").Calendar | null }) | null;
+};
 
 /** Each card's data, or its read still on the way. */
 export type CardReads = {
   [Card in keyof CardDataMap]?:
-    CardDataMap[Card] | null | Promise<CardDataMap[Card] | null>;
+    | (CardDataMap[Card] & { calendar?: import("./contracts").Calendar | null })
+    | null
+    | Promise<
+        (CardDataMap[Card] & { calendar?: import("./contracts").Calendar | null }) | null
+      >;
 };

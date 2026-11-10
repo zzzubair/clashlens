@@ -1,3 +1,4 @@
+import { RAW_PLAYER_FACTS } from "../fixtures/player-route-data";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -147,6 +148,7 @@ describe("army unit names from Python", () => {
       name: "Clasher",
       trophies: 5000,
       screen_ready: {
+        ...RAW_PLAYER_FACTS,
         days: [],
         current_day_start: null,
         recent_day_starts: [],

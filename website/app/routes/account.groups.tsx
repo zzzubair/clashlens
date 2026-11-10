@@ -61,6 +61,7 @@ export interface GroupsLoaderData {
   previewDays?: string | null;
   /** The Season the members' trophies were read in, once loaded. */
   season: string | null;
+  seasonEnd: string | null;
   /** Fresh idempotency key for the create form. */
   createIdempotencyKey: string;
   /** Fresh per-group idempotency keys for the rename forms. */
@@ -106,6 +107,7 @@ export async function loader({ request }: Route.LoaderArgs): Promise<GroupsLoade
     groups: [],
     previews: {},
     season: null,
+    seasonEnd: null,
     createIdempotencyKey: freshIdempotencyKey(),
     updateIdempotencyKeys: {},
     deleteIdempotencyKeys: {},
@@ -115,7 +117,7 @@ export async function loader({ request }: Route.LoaderArgs): Promise<GroupsLoade
   };
   try {
     const { createPythonClient } = await import("../services/python.server");
-    const { groups, season } = await createPythonClient(identity).listGroups();
+    const { groups, season, calendar } = await createPythonClient(identity).listGroups();
     const { getGroupComparison } = await import("../services/group-comparison.server");
     // Each card shows today and the last 7 days without opening it: every
     // list's comparison is read at once, and one that fails only loses its bars.
@@ -140,6 +142,7 @@ export async function loader({ request }: Route.LoaderArgs): Promise<GroupsLoade
         comparisons.find((comparison) => comparison != null)?.dayStarts ?? [],
       ),
       season,
+      seasonEnd: calendar.season_end,
     };
     for (const group of groups) {
       loaded.updateIdempotencyKeys[group.groupId] = freshIdempotencyKey();
@@ -388,7 +391,7 @@ export function headers() {
 export default function GroupsRoute() {
   const loaderData = useLoaderData<typeof loader>();
   const actionData = useActionData<GroupsActionData>();
-  const seasonEnded = useSeasonEnded(loaderData.season);
+  const seasonEnded = useSeasonEnded(loaderData.seasonEnd);
   const groups = seasonEnded
     ? loaderData.groups.map((group) => ({
         ...group,

@@ -1,3 +1,4 @@
+import { EMPTY_PLAYER_FACTS, VERIFIED } from "../fixtures/player-route-data";
 vi.mock("../../app/services/leaderboard-search.server", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../app/services/leaderboard-search.server")>();
@@ -55,12 +56,14 @@ function playerWith(tag: string, battlesComplete: boolean): PlayerPage {
     offense: { attacks: 3, threeStars: 3, trophyGain: 120 },
     defense: { defenses: 2, threeStarsAgainst: 2, trophyLoss: 80 },
     trophyChange: null,
+    presentation: { ...VERIFIED, battle_net_complete: battlesComplete ? 40 : null },
     battlesComplete,
     offenseEvents: [event("a", 40), event("aa", 40), event("aaa", 40)],
     defenseEvents: [event("d", -40), event("dd", -40)],
   } as unknown as RankedDaySummary;
   return {
     kind: "player-page",
+    ...EMPTY_PLAYER_FACTS,
     tag,
     trackingState: "tracking",
     profile: {

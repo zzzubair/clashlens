@@ -7,10 +7,10 @@ import { useRevalidator } from "react-router";
  * open re-renders at that moment and reloads its data before showing current
  * trophies again.
  */
-export function useSeasonEnded(season: string | null): boolean {
+export function useSeasonEnded(end: string | null): boolean {
   const [clock, setClock] = useState(0);
   const revalidator = useRevalidator();
-  const seasonEnd = season === null ? NaN : (Number(season) + 28 * 86400) * 1000;
+  const seasonEnd = end === null ? NaN : Date.parse(end);
   const seasonEnded = Date.now() >= seasonEnd;
   useEffect(() => {
     if (seasonEnded) {
@@ -55,10 +55,12 @@ const SEASON_DATE = new Intl.DateTimeFormat("en-GB", {
  * or "29 Dec 2025 – 25 Jan 2026" across a new year. `season` is its first
  * Reset in Unix seconds, as Season IDs are.
  */
-export function seasonDates(season: string | number): string {
-  const start = new Date(Number(season) * 1000);
-  const end = new Date(start.getTime() + 28 * 86_400_000);
-  return Number.isNaN(end.getTime()) ? "Past Season" : seasonRange(start, end);
+export function seasonDates(
+  bounds: { seasonStart: string | null; seasonEnd: string | null } | null,
+): string {
+  return bounds?.seasonStart && bounds.seasonEnd
+    ? seasonRange(new Date(bounds.seasonStart), new Date(bounds.seasonEnd))
+    : "Past Season";
 }
 
 /**
@@ -71,4 +73,13 @@ export function seasonRange(start: Date, end: Date): string {
   const first =
     start.getUTCFullYear() === last.getUTCFullYear() ? SEASON_DAY : SEASON_DATE;
   return `${first.format(start)} – ${SEASON_DATE.format(last)}`.replaceAll("Sept", "Sep");
+}
+
+// Kept for wording only, where Python has no dates for a Season: the error when
+// both Season reads fail, and an older army Season it could not date. Never a fact or decision.
+export function unavailableSeasonDates(id: string): string {
+  const start = new Date(Number(id) * 1000);
+  return Number.isFinite(start.getTime())
+    ? seasonRange(start, new Date(start.getTime() + 28 * 86_400_000))
+    : "Past Season";
 }

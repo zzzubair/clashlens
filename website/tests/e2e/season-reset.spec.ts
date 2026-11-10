@@ -3,6 +3,7 @@ import type { FrontPageData } from "../../app/components/FrontPage";
 import type { GroupsLoaderData } from "../../app/routes/account.groups";
 import type { GroupCompareLoaderData } from "../../app/routes/account.groups.$groupId";
 import type { PlayerLoaderData } from "../../app/routes/player";
+import { CALENDAR } from "../fixtures/player-route-data";
 import { worstComparison } from "../fixtures/worst-case-accounts";
 import { expectNoPageErrors, trackPageErrors } from "./helpers/account";
 
@@ -33,6 +34,7 @@ test("Live keeps its way to page 1 when Reset makes the open page unavailable", 
   const saved = decode(await response.text());
   const route = Object.values(saved).find(({ data }) => data?.leaderboard)!;
   route.data.leaderboard!.generatedAt = BEFORE;
+  route.data.leaderboard!.calendar = beforeCalendar;
   route.data.leaderboard!.entries = [
     { ...route.data.leaderboard!.entries[0], trophies: 6400 },
   ];
@@ -100,6 +102,23 @@ function encode(data: unknown) {
 
 const BEFORE = "2026-10-05T04:59:30Z";
 const AFTER = "2026-10-05T05:00:30Z";
+const beforeCalendar = {
+  ...CALENDAR,
+  as_of: BEFORE,
+  day_start: "2026-10-04T05:00:00Z",
+  day_end: "2026-10-05T05:00:00Z",
+  season_start: "2026-09-07T05:00:00Z",
+  season_end: "2026-10-05T05:00:00Z",
+  season_id: "1788757200",
+  day_number: 28,
+};
+const afterCalendar = {
+  ...CALENDAR,
+  as_of: AFTER,
+  day_start: "2026-10-05T05:00:00Z",
+  day_end: "2026-10-06T05:00:00Z",
+  day_number: 1,
+};
 
 for (const view of ["list", "comparison"] as const) {
   test(`an open group ${view} stops showing trophies when their Season ends`, async ({
@@ -107,6 +126,7 @@ for (const view of ["list", "comparison"] as const) {
   }) => {
     const errors = trackPageErrors(page);
     const comparison = worstComparison(7);
+    comparison.calendar = beforeCalendar;
     comparison.season = String(Date.parse("2026-09-07T05:00:00Z") / 1000);
     comparison.players = [
       {
@@ -127,6 +147,7 @@ for (const view of ["list", "comparison"] as const) {
       view === "list"
         ? {
             season: comparison.season,
+            seasonEnd: comparison.calendar.season_end,
             groups: [
               {
                 groupId: comparison.groupId,
@@ -220,6 +241,7 @@ for (const path of ["/", "/leaderboards/tracked?view=live&page=1", "/players/%23
     const board = data.leaderboard;
     const originalEntry = board?.entries[0];
     if (player) {
+      player.calendar = beforeCalendar;
       player.profile.trophies = 6400;
       player.profile.freshness = { state: "fresh", observedAt: BEFORE, ageSeconds: 0 };
       player.profile.seasonResetPending = false;
@@ -227,6 +249,7 @@ for (const path of ["/", "/leaderboards/tracked?view=live&page=1", "/players/%23
       data.refreshStatus = null;
     } else {
       expect(board?.entries.length).toBeGreaterThan(0);
+      board!.calendar = beforeCalendar;
       board!.generatedAt = BEFORE;
       board!.entries = [board!.entries[0]];
       board!.entries[0].trophies = 6400;
@@ -246,10 +269,12 @@ for (const path of ["/", "/leaderboards/tracked?view=live&page=1", "/players/%23
       if (stage === "held") await held;
       const waiting = stage !== "recovered";
       if (player) {
+        player.calendar = afterCalendar;
         player.profile.freshness.observedAt = AFTER;
         player.profile.seasonResetPending = waiting;
         player.profile.trophies = waiting ? 6400 : 5000;
       } else {
+        board!.calendar = afterCalendar;
         board!.generatedAt = AFTER;
         board!.seasonResetPending = waiting ? 1 : 0;
         board!.entries = waiting ? [] : [{ ...originalEntry!, trophies: 5000 }];

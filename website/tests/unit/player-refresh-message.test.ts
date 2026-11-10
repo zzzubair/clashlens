@@ -1,3 +1,4 @@
+import { EMPTY_PLAYER_FACTS } from "../fixtures/player-route-data";
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
@@ -18,6 +19,7 @@ const TAG = "#2PP";
 const OBSERVED_AT = "2026-08-06T12:00:00Z";
 const PLAYER = {
   kind: "player-page",
+  ...EMPTY_PLAYER_FACTS,
   tag: TAG,
   trackingState: "tracking",
   profile: {
@@ -35,14 +37,6 @@ const PLAYER = {
   recentDays: [],
   seasonDays: [],
   dataQuality: [],
-  provenance: {
-    source: "api_player_daily_logs",
-    observedAt: OBSERVED_AT,
-    freshness: "fresh",
-    confidence: "high",
-    coverage: "complete",
-    version: "v1",
-  },
 } satisfies PlayerPage;
 
 async function refreshMessage(

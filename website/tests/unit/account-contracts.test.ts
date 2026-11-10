@@ -1,3 +1,4 @@
+import { CALENDAR } from "../fixtures/player-route-data";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -123,12 +124,13 @@ describe("Python account response mappers", () => {
         trophies: 4684,
       },
     };
-    const user = { username: "nova", display_name: "Nova" };
+    const user = { username: "nova", display_name: "Nova", calendar: CALENDAR };
     expect(
       mapPublicUser({ ...user, verified_players: [card, season0, notInLegend] }),
     ).toEqual({
       username: "nova",
       displayName: "Nova",
+      calendar: CALENDAR,
       verifiedPlayers: [
         {
           tag: "#2PP",
@@ -186,6 +188,10 @@ describe("Python account response mappers", () => {
     ]) {
       expect(mapPublicUser({ ...user, verified_players: [broken] })).toBeNull();
     }
+    // The cards' today numbers need the day they were read in.
+    expect(
+      mapPublicUser({ ...user, calendar: undefined, verified_players: [] }),
+    ).toBeNull();
   });
 
   it("rejects malformed summary and public user payloads", () => {
@@ -218,8 +224,13 @@ describe("Python account response mappers", () => {
     const season = "1791176400";
     const createdAt = "2026-10-01T10:00:00+00:00";
     expect(
-      mapGroups({ season, groups: [{ ...group, players, created_at: createdAt }] }),
+      mapGroups({
+        calendar: CALENDAR,
+        season,
+        groups: [{ ...group, players, created_at: createdAt }],
+      }),
     ).toEqual({
+      calendar: CALENDAR,
       season,
       groups: [
         {
@@ -233,18 +244,24 @@ describe("Python account response mappers", () => {
     });
     // A Python from before groups said when they were made still lists them.
     expect(
-      mapGroups({ season, groups: [{ ...group, players }] })?.groups[0],
+      mapGroups({ calendar: CALENDAR, season, groups: [{ ...group, players }] })
+        ?.groups[0],
     ).toMatchObject({
       createdAt: null,
     });
     expect(
-      mapGroups({ season, groups: [{ ...group, players, created_at: "soon" }] }),
+      mapGroups({
+        calendar: CALENDAR,
+        season,
+        groups: [{ ...group, players, created_at: "soon" }],
+      }),
     ).toBeNull();
     // Without the Season, an open page could not tell when its trophies expire.
     expect(mapGroups({ groups: [{ ...group, players }] })).toBeNull();
-    expect(mapGroups({ season, groups: [group] })).toBeNull();
+    expect(mapGroups({ calendar: CALENDAR, season, groups: [group] })).toBeNull();
     expect(
       mapGroups({
+        calendar: CALENDAR,
         season,
         groups: [{ ...group, players: [{ ...players[0], state: "gone" }] }],
       }),
@@ -259,12 +276,20 @@ describe("Python account response mappers", () => {
       groupId: group.group_id,
     });
     expect(
-      mapGroups({ season, groups: [{ ...group, players, group_id: "not-a-uuid" }] }),
+      mapGroups({
+        calendar: CALENDAR,
+        season,
+        groups: [{ ...group, players, group_id: "not-a-uuid" }],
+      }),
     ).toBeNull();
     expect(
-      mapGroups({ season, groups: [{ ...group, players, tags: ["#bad"] }] }),
+      mapGroups({
+        calendar: CALENDAR,
+        season,
+        groups: [{ ...group, players, tags: ["#bad"] }],
+      }),
     ).toBeNull();
-    expect(mapGroups({ season, groups: "x" })).toBeNull();
+    expect(mapGroups({ calendar: CALENDAR, season, groups: "x" })).toBeNull();
     expect(mapGroupResult({ ...group, name: "" })).toBeNull();
     expect(mapGroupDeleteResult({ deleted: true, group_id: "x" })).toBeNull();
     expect(mapGroupDeleteResult({ deleted: "yes", group_id: group.group_id })).toBeNull();

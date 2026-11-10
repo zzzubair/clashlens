@@ -1,3 +1,4 @@
+import { CALENDAR } from "../fixtures/player-route-data";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 beforeEach(() => {
@@ -114,6 +115,7 @@ const liveEntry = (position: number, tag: string) => ({
 const livePage = (entries: unknown[]) =>
   Response.json({
     kind: "live",
+    calendar: CALENDAR,
     generated_at: "2026-08-06T12:00:00+00:00",
     source_observations: {
       oldest_observed_at: "2026-08-06T11:59:00+00:00",

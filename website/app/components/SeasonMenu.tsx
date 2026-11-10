@@ -22,10 +22,17 @@ export function SeasonMenu({
   // Older finishes without Clash Lens days are in the separate Older history table.
   const past = seasons
     .filter((season) => season.source === "tracked_summary")
-    .map((season) => season.seasonId);
+    .map(({ seasonId, seasonStart, seasonEnd }) => ({
+      seasonId,
+      seasonStart,
+      seasonEnd,
+    }));
   // A selected past Season always keeps its way back, even if the list failed.
-  if (selectedSeason !== null && !past.includes(selectedSeason))
-    past.push(selectedSeason);
+  if (
+    selectedSeason !== null &&
+    !past.some((season) => season.seasonId === selectedSeason)
+  )
+    past.push({ seasonId: selectedSeason, seasonStart: null, seasonEnd: null });
   if (past.length === 0 && !currentAvailable) return null;
   return (
     <Form method="get" action={path} className="season-menu">
@@ -53,7 +60,7 @@ export function SeasonMenu({
             </option>
           )}
           {past.map((season) => (
-            <option key={season} value={season}>
+            <option key={season.seasonId} value={season.seasonId}>
               {seasonDates(season)}
             </option>
           ))}

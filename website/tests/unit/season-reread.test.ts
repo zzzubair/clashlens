@@ -25,11 +25,7 @@ vi.mock("react-router", () => ({
   useNavigation: () => ({ state: "idle" }),
 }));
 
-import {
-  nextSeasonReset,
-  seasonCheckReads,
-  useSeasonReread,
-} from "../../app/components/SeasonReread";
+import { seasonCheckReads, useSeasonReread } from "../../app/components/SeasonReread";
 
 let cleanup: (() => void) | undefined;
 let tab: EventTarget & { hidden: boolean };
@@ -44,7 +40,13 @@ function start(
 ) {
   cleanup?.();
   mocks.refIndex = 0;
-  const expired = useSeasonReread(loadedAt, waiting, enabled, finalAnswer);
+  const expired = useSeasonReread(
+    loadedAt,
+    waiting,
+    enabled,
+    finalAnswer,
+    loadedAt && loadedAt >= AFTER ? "2026-11-02T05:00:00Z" : AFTER,
+  );
   cleanup = mocks.effects.pop()?.();
   return expired;
 }
@@ -160,8 +162,9 @@ it("keeps existing explained-player minute checks without a saved profile", asyn
 });
 
 it("uses the next 28-day Season boundary, never the following daily Reset", () => {
-  expect(nextSeasonReset(BEFORE)).toBe(Date.parse(AFTER));
-  expect(nextSeasonReset(AFTER)).toBe(Date.parse("2026-11-02T05:00:00Z"));
+  vi.setSystemTime(new Date(BEFORE));
+  expect(start(BEFORE)).toBe(false);
+  expect(start(AFTER)).toBe(false);
 });
 
 it("expires and rereads on wake when the elapsed clock paused during sleep", () => {

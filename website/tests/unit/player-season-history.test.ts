@@ -1,3 +1,11 @@
+import {
+  EMPTY_PLAYER_FACTS,
+  logFacts,
+  EMPTY_SUMMARY_FACTS,
+  RAW_SUMMARY_FACTS,
+  UNKNOWN_END,
+  VERIFIED,
+} from "../fixtures/player-route-data";
 vi.mock("../../app/services/players.server", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../app/services/players.server")>();
@@ -51,7 +59,10 @@ const SEASON = "1788757200";
 
 const DAY: HistoricalSeasonDayEntry = {
   dayNumber: 24,
-  period: "2026-09-30T05:00:00Z",
+  start: "2026-09-30T05:00:00Z",
+  end: "2026-10-01T05:00:00Z",
+  seasonId: null,
+  presentation: { ...VERIFIED, status: "calculated", battle_net: 10 },
   state: "Complete",
   coverage: "complete",
   startTrophies: 5500,
@@ -72,9 +83,25 @@ const DAY: HistoricalSeasonDayEntry = {
 // Five of 28 days; the -30 daily change includes a 40-trophy automatic loss.
 const SUMMARY: HistoricalSeasonSummary = {
   kind: "player-season-summary",
+  ...RAW_SUMMARY_FACTS,
+  ...EMPTY_SUMMARY_FACTS,
   tag: TAG,
   seasonId: SEASON,
-  seasonStart: null,
+  summaryStatistics: {
+    attack: { perDay: 320, perBattle: 40 },
+    defense: { perDay: 260, perBattle: 32.5 },
+  },
+  seasonShape: {
+    seasonStart: Date.parse("2026-09-07T05:00:00Z"),
+    today: 29,
+    kinds: Array(28).fill("legend"),
+    runs: [{ first: 1, last: 28, signedUp: 1, promoted: false, dropped: false }],
+    partial: false,
+    outsideNow: false,
+    legendDays: { expected: 28, saved: 5 },
+    lastLegendDay: DAY,
+  },
+  seasonStart: "2026-09-07T05:00:00Z",
   seasonEnd: "2026-10-05T05:00:00Z",
   startTrophies: null,
   endTrophies: 5800,
@@ -100,6 +127,7 @@ const SUMMARY: HistoricalSeasonSummary = {
 
 const PLAYER = {
   kind: "player-page",
+  ...EMPTY_PLAYER_FACTS,
   tag: TAG,
   trackingState: "tracking",
   profile: {
@@ -117,14 +145,6 @@ const PLAYER = {
   recentDays: [],
   seasonDays: [],
   dataQuality: [],
-  provenance: {
-    source: "api_player_daily_logs",
-    observedAt: "2026-10-05T05:10:00Z",
-    freshness: "fresh",
-    confidence: "high",
-    coverage: "complete",
-    version: "v1",
-  },
 } satisfies PlayerPage;
 
 const CURRENT_LINK = '<option value="">This Season</option>';
@@ -168,7 +188,11 @@ const legendDay = (number: number): RankedDaySummary => {
   return {
     dayNumber: number > 28 ? number - 28 : number,
     label: "Ranked day",
-    period: `${new Date(start).toISOString()} – ${new Date(start + 86_400_000).toISOString()}`,
+    start: `${new Date(start).toISOString()}`,
+    end: `${new Date(start + 86_400_000).toISOString()}`,
+    seasonId: null,
+    presentation: VERIFIED,
+    displayEnd: UNKNOWN_END,
     state: number > 28 ? "Live" : "Complete",
     offense: { attacks: 0, threeStars: 0, trophyGain: 0 },
     defense: { defenses: 0, threeStarsAgainst: 0, trophyLoss: 0 },
@@ -176,7 +200,6 @@ const legendDay = (number: number): RankedDaySummary => {
     offenseEvents: [],
     defenseEvents: [],
     completeness: { state: "complete", reason: "Complete" },
-    uncertainty: [],
   };
 };
 
@@ -187,34 +210,40 @@ describe("Daily Legend log days", () => {
     anchor: "2026-09-07T05:00:00Z",
     currentDayNumber: 28,
     dayCount: 28,
+    end: "2026-10-05T05:00:00Z",
+    initialTrophies: 5000,
     anchorSource: "official_league_history",
     anchorObservedAt: "2026-09-07T05:10:00Z",
   } as const;
-  const afterReset = Date.parse("2026-10-05T05:10:00Z");
 
   it.each([
     ["no saved Season", null, [legendDay(29), ...ended]],
     ["an expired Season anchor", septemberSeason, ended],
   ])("keeps only the current Season's days with %s", (_, season, recentDays) => {
-    const history = selectPlayerHistory(
-      { ...PLAYER, season, currentDay: null, recentDays, seasonDays: [] },
-      afterReset,
-    );
+    const history = selectPlayerHistory({
+      ...PLAYER,
+      season,
+      currentDay: null,
+      recentDays,
+      seasonDays: [],
+      ...logFacts(season === null ? [legendDay(29)] : [], season === null ? [1] : []),
+    });
     expect(history.map(({ seasonDay }) => seasonDay)).toEqual(
       season === null ? ["Day 1"] : [],
     );
   });
 
   it("keeps the saved Season's days before its Reset", () => {
-    const history = selectPlayerHistory(
-      {
-        ...PLAYER,
-        season: septemberSeason,
-        currentDay: null,
-        recentDays: ended,
-      },
-      afterReset - 60 * 60 * 1000,
-    );
+    const history = selectPlayerHistory({
+      ...PLAYER,
+      season: septemberSeason,
+      currentDay: null,
+      recentDays: ended,
+      ...logFacts(
+        ended,
+        ended.map((day) => day.dayNumber!),
+      ),
+    });
     expect(history.map(({ seasonDay }) => seasonDay)).toEqual([
       "Day 28",
       "Day 27",
@@ -224,34 +253,58 @@ describe("Daily Legend log days", () => {
     ]);
   });
 
-  it("drops the ended Season's days once the device clock passes Reset", async () => {
-    const loadedAt = "2026-10-05T04:00:00Z";
-    mocks.getPlayerLookup.mockReset().mockResolvedValue({ tag: TAG, state: "tracking" });
-    const client = {
-      getPlayer: vi.fn().mockResolvedValue({
-        ...PLAYER,
-        profile: {
-          ...PLAYER.profile,
-          freshness: { ...PLAYER.profile.freshness, observedAt: loadedAt },
-        },
-        season: septemberSeason,
-        recentDays: ended,
-      }),
-      getPlayerSeasons: vi.fn().mockResolvedValue([]),
-    };
-    expect(await loadAndRender(client, null)).toContain("Day 28");
+  it.each([
+    ["on its last day", "2026-10-05T04:00:00Z", "2026-10-04T05:00:00Z", 28],
+    ["the day before", "2026-10-04T04:00:00Z", "2026-10-03T05:00:00Z", 27],
+  ])(
+    "drops the ended Season's days once the device clock passes Reset, loaded %s",
+    async (_, loadedAt, dayStart, dayNumber) => {
+      mocks.getPlayerLookup
+        .mockReset()
+        .mockResolvedValue({ tag: TAG, state: "tracking" });
+      const client = {
+        getPlayer: vi.fn().mockResolvedValue({
+          ...PLAYER,
+          calendar: {
+            ...PLAYER.calendar,
+            as_of: loadedAt,
+            day_start: dayStart,
+            day_end: new Date(Date.parse(dayStart) + 86_400_000)
+              .toISOString()
+              .replace(".000Z", "Z"),
+            season_start: "2026-09-07T05:00:00Z",
+            season_end: "2026-10-05T05:00:00Z",
+            day_number: dayNumber,
+          },
+          profile: {
+            ...PLAYER.profile,
+            freshness: { ...PLAYER.profile.freshness, observedAt: loadedAt },
+          },
+          season: septemberSeason,
+          recentDays: ended,
+          ...logFacts(
+            ended,
+            ended.map((day) => day.dayNumber!),
+          ),
+        }),
+        getPlayerSeasons: vi.fn().mockResolvedValue([]),
+      };
+      expect(await loadAndRender(client, null)).toContain("Day 28");
 
-    // A sleeping device wakes after Reset, before the page's data is reread.
-    let wall = Date.parse(loadedAt);
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => (wall += 5 * 3_600_000));
-    try {
-      const html = await loadAndRender(client, null);
-      for (const number of [24, 25, 26, 27, 28])
-        expect(html).not.toContain(`Day ${number}`);
-    } finally {
-      clock.mockRestore();
-    }
-  });
+      // A sleeping device wakes after Reset, before the page's data is reread.
+      let wall = Date.parse(loadedAt);
+      const clock = vi
+        .spyOn(Date, "now")
+        .mockImplementation(() => (wall += 30 * 3_600_000));
+      try {
+        const html = await loadAndRender(client, null);
+        for (const number of [24, 25, 26, 27, 28])
+          expect(html).not.toContain(`Day ${number}`);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
 });
 
 describe("Daily Legend log fold", () => {
@@ -273,10 +326,16 @@ describe("Daily Legend log fold", () => {
           anchor: "2026-09-07T05:00:00Z",
           currentDayNumber: 28,
           dayCount: 28,
+          end: "2026-11-02T05:00:00Z",
+          initialTrophies: 5000,
           anchorSource: "official_league_history",
           anchorObservedAt: "2026-09-07T05:10:00Z",
         },
         recentDays: Array.from({ length: 14 }, (_, index) => legendDay(28 - index)),
+        ...logFacts(
+          Array.from({ length: 14 }, (_, index) => legendDay(28 - index)),
+          Array.from({ length: 14 }, (_, index) => 28 - index),
+        ),
       }),
       getPlayerSeasons: vi.fn().mockResolvedValue([]),
     };
@@ -404,7 +463,7 @@ describe("past-Season view", () => {
     const entries = Array.from({ length: 14 }, (_, index) => ({
       ...DAY,
       dayNumber: index + 1,
-      period: new Date(start + index * 86_400_000).toISOString(),
+      start: new Date(start + index * 86_400_000).toISOString(),
       startTrophies: 5000 - index * 6,
       endTrophies: 4994 - index * 6,
       netChange: -6,
@@ -424,6 +483,16 @@ describe("past-Season view", () => {
           daysMissing: Array.from({ length: 14 }, (_, index) => index + 15),
           endTrophies: null,
           dailyEntries: entries,
+          seasonShape: {
+            seasonStart: start,
+            today: 29,
+            kinds: [...Array(14).fill("legend"), ...Array(14).fill("outside")],
+            runs: [{ first: 1, last: 14, signedUp: 1, promoted: false, dropped: true }],
+            partial: true,
+            outsideNow: false,
+            legendDays: { expected: 14, saved: 14 },
+            lastLegendDay: entries[13],
+          },
           seasonWeeks: [
             week(0, "legend_i"),
             week(1, "legend_i"),
@@ -461,6 +530,10 @@ describe("past-Season view", () => {
         getPlayerSeason: vi.fn().mockResolvedValue({
           ...SUMMARY,
           daysObserved: 6,
+          summaryStatistics: {
+            attack: { perDay: 1600 / 3, perBattle: 40 },
+            defense: { perDay: 1300 / 3, perBattle: 32.5 },
+          },
           dailyEntries: [
             { ...quiet, dayNumber: 23, flags: ["not_enrolled"] },
             DAY,
@@ -519,7 +592,13 @@ describe("past-Season view", () => {
         getPlayerSeasons: vi.fn().mockResolvedValue([]),
         getPlayerSeason: vi.fn().mockResolvedValue({
           ...SUMMARY,
-          dailyEntries: [{ ...DAY, confidence: "exact" }],
+          dailyEntries: [
+            {
+              ...DAY,
+              confidence: "exact",
+              presentation: { ...VERIFIED, battle_net: 10 },
+            },
+          ],
         }),
       },
       SEASON,
@@ -565,6 +644,31 @@ describe("past-Season view", () => {
     );
     expect(html).not.toContain("days recorded");
     expect(html).not.toContain("Partial Season history");
+  });
+
+  it("uses the supplied Season-list bounds in a summary error", async () => {
+    const html = await loadAndRender(
+      {
+        getPlayer: vi.fn().mockResolvedValue(PLAYER),
+        getPlayerSeasons: vi.fn().mockResolvedValue([
+          {
+            seasonId: SEASON,
+            seasonStart: "2025-12-29T05:00:00Z",
+            seasonEnd: "2026-01-26T05:00:00Z",
+            dayCount: 28,
+            lastDayStart: "2026-01-25T05:00:00Z",
+            coverageState: "partial",
+            daysObserved: 0,
+            daysMissing: 28,
+            source: "tracked_summary",
+            officialHistory: null,
+          },
+        ]),
+        getPlayerSeason: vi.fn(failed),
+      },
+      SEASON,
+    );
+    expect(html).toContain("Results for 29 Dec 2025 – 25 Jan 2026 are unavailable.");
   });
 
   it("keeps the current Season when the Season list fails", async () => {
@@ -647,12 +751,15 @@ describe("past-Season view", () => {
           anchor: "2026-10-05T05:00:00Z",
           currentDayNumber: 1,
           dayCount: 28,
+          end: "2026-11-02T05:00:00Z",
+          initialTrophies: 5000,
           anchorSource: "official_league_history",
           anchorObservedAt: "2026-10-05T05:10:00Z",
         },
         currentDay: today,
         recentDays: [today, ...ended],
         seasonDays: [today],
+        ...logFacts([today], [1]),
       }),
       getPlayerSeasons: vi.fn().mockResolvedValue([
         // The Season ending 7 Sep has only the game's result, no Clash Lens days.
@@ -667,6 +774,10 @@ describe("past-Season view", () => {
         {
           ...ref,
           seasonId: SEASON,
+          seasonStart: "2026-09-07T05:00:00Z",
+          seasonEnd: "2026-10-05T05:00:00Z",
+          dayCount: 28,
+          lastDayStart: "2026-10-04T05:00:00Z",
           source: "tracked_summary",
           officialHistory: null,
         },
@@ -676,7 +787,7 @@ describe("past-Season view", () => {
         dailyEntries: ended.map((day) => ({
           ...DAY,
           dayNumber: day.dayNumber,
-          period: day.period,
+          start: day.start,
         })),
       }),
     };
@@ -767,7 +878,7 @@ describe("past-Season view", () => {
     client.getPlayer.mockResolvedValue({
       ...player,
       recentDays: player.recentDays.filter(
-        ({ period }) => !period.startsWith("2026-10-03"),
+        ({ start }) => !start.startsWith("2026-10-03"),
       ),
     });
     const html = await loadAndRender(client, null, "2026-10-03");

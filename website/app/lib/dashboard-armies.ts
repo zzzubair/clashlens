@@ -36,6 +36,7 @@ export interface ArmyRow extends ArmyOutcome {
 }
 
 export interface PlayerArmies {
+  calendar: import("./contracts").Calendar;
   lens: ArmyLens;
   /** Finished Legend days in the window; with `season`, this Season's so far. */
   days: number;

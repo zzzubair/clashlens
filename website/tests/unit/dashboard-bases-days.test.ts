@@ -1,3 +1,5 @@
+import { PythonApiError } from "../../app/services/python-response.server";
+import { RAW_DAY_FACTS } from "../fixtures/player-route-data";
 vi.mock("../../app/services/python-transport.server", () => ({
   requestJson: mocks.requestJson,
 }));
@@ -39,6 +41,7 @@ const TAG = "#2PP";
 const DAY_3 = {
   tag: TAG,
   season_day_number: 3,
+  ...RAW_DAY_FACTS,
   ranked_day_start: "2026-08-03T05:00:00+00:00",
   opponents: [
     {
@@ -203,8 +206,17 @@ describe("earlier day read", () => {
       bases: null,
     });
 
-    for (const query of ["day=0", "day=29", "day=2.5", ""])
+    for (const query of ["day=0", "day=2.5", ""])
       expect((await status(`/resources/players/%232PP/bases?${query}`)).status).toBe(400);
+
+    mocks.requestJson.mockRejectedValueOnce(
+      new PythonApiError(422, { detail: "Day outside the supplied Season" }),
+    );
+    expect((await status("/resources/players/%232PP/bases?day=29")).status).toBe(400);
+    expect(mocks.requestJson).toHaveBeenLastCalledWith(
+      "/v1/players/%232PP/bases?day=29",
+      expect.objectContaining({ method: "GET" }),
+    );
 
     mocks.readLoginIdentity.mockResolvedValueOnce(null);
     expect((await status("/resources/players/%232PP/bases?day=3")).status).toBe(401);

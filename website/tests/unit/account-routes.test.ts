@@ -1,3 +1,4 @@
+import { CALENDAR } from "../fixtures/player-route-data";
 vi.mock("../../app/services/public-user.server", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../app/services/public-user.server")>();
@@ -136,7 +137,11 @@ function fakeClient(overrides: Partial<PythonClient> = {}): PythonClient {
     getAccount: vi.fn(async () => ({ ...ACCOUNT })),
     createAccount: vi.fn(async () => ({ ...ACCOUNT })),
     updateAccount: vi.fn(async () => ({ ...ACCOUNT })),
-    listGroups: vi.fn(async () => ({ groups: [], season: "1791176400" })),
+    listGroups: vi.fn(async () => ({
+      calendar: CALENDAR,
+      groups: [],
+      season: "1791176400",
+    })),
     createGroup: vi.fn(async () => ({
       groupId: GROUP_ID,
       name: "Clanmates",
@@ -259,6 +264,7 @@ describe("account routes", () => {
       async (route, Component, loader, action, write, fields, savedContent) => {
         client.listGroups = vi.fn(async () => ({
           season: "1791176400",
+          calendar: CALENDAR,
           groups: [{ groupId: GROUP_ID, name: "Clanmates", tags: [], players: [] }],
         }));
         client[write] = vi
@@ -528,6 +534,7 @@ describe("account routes", () => {
     it("loads watchlists with fresh per-group update and delete keys", async () => {
       client.listGroups = vi.fn(async () => ({
         season: "1791176400",
+        calendar: CALENDAR,
         groups: [
           {
             groupId: GROUP_ID,
@@ -601,6 +608,7 @@ describe("account routes", () => {
     it("stops a Clasher at ten watchlists and says why", async () => {
       client.listGroups = vi.fn(async () => ({
         season: "1791176400",
+        calendar: CALENDAR,
         groups: Array.from({ length: 10 }, (_, index) => ({
           groupId: `${GROUP_ID.slice(0, -2)}${String(index).padStart(2, "0")}`,
           name: `Watchlist ${index}`,

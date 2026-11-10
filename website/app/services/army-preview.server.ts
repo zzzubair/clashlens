@@ -53,6 +53,8 @@ export function recentArmyAnalytics(source: URLSearchParams) {
   const analytics: ArmyAnalytics = {
     ...summary,
     kind: "army-analytics",
+    calendar: null,
+    seasonBounds: null,
     selection: {
       lens,
       season: "recent",

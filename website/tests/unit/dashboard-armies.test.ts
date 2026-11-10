@@ -2,6 +2,7 @@ vi.mock("../../app/services/python-transport.server", () => ({
   requestJson: mocks.requestJson,
 }));
 import { createElement } from "react";
+import { CALENDAR } from "../fixtures/player-route-data";
 import { renderToString } from "react-dom/server";
 import {
   createStaticHandler,
@@ -50,6 +51,7 @@ const hits = (battles: number, three_stars: number) => ({
 /** What GET /v1/players/{tag}/armies returned for the saved battles in
  * python/tests/test_dashboard_armies_postgres.py. */
 const DEFENSE = {
+  calendar: CALENDAR,
   tag: TAG,
   lens: "defense",
   days: 3,
@@ -62,6 +64,7 @@ const DEFENSE = {
   legends_total: outcome(5, 2, 145),
 };
 const OFFENSE = {
+  calendar: CALENDAR,
   tag: TAG,
   lens: "offense",
   days: 7,

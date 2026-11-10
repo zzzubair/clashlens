@@ -1,3 +1,4 @@
+import { EMPTY_PLAYER_FACTS } from "../fixtures/player-route-data";
 vi.mock("../../app/services/players.server", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../app/services/players.server")>();
@@ -71,6 +72,7 @@ const FINISHES: PastSeasonFinish[] = [
 
 const PLAYER = {
   kind: "player-page",
+  ...EMPTY_PLAYER_FACTS,
   tag: TAG,
   trackingState: "tracking",
   profile: {
@@ -88,14 +90,6 @@ const PLAYER = {
   recentDays: [],
   seasonDays: [],
   dataQuality: [],
-  provenance: {
-    source: "api_player_daily_logs",
-    observedAt: "2026-10-04T12:00:00Z",
-    freshness: "fresh",
-    confidence: "high",
-    coverage: "complete",
-    version: "v1",
-  },
 } satisfies PlayerPage;
 
 function loadPage() {

@@ -3,7 +3,7 @@ import {
   PythonApiError,
   isInteger,
   isRecord,
-  isResetTimestamp,
+  isUtcTimestamp,
   isString,
 } from "./python-response.server";
 import { requestJson } from "./python-transport.server";
@@ -23,8 +23,9 @@ export async function getPastSeasons(tag: string): Promise<PastSeasonFinish[]> {
       isRecord(item) &&
       isString(item.season_id) &&
       /^\d+$/.test(item.season_id) &&
-      isResetTimestamp(item.season_start) &&
-      isResetTimestamp(item.season_end);
+      isUtcTimestamp(item.season_start) &&
+      isUtcTimestamp(item.season_end) &&
+      Date.parse(item.season_end) > Date.parse(item.season_start);
     const monthly =
       isRecord(item) &&
       isString(item.season_id) &&

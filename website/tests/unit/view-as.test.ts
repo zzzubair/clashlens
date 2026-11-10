@@ -1,3 +1,4 @@
+import { CALENDAR } from "../fixtures/player-route-data";
 vi.mock("../../app/services/python-transport.server", () => ({
   requestJson: mocks.requestJson,
 }));
@@ -45,7 +46,7 @@ import {
   StaticRouterProvider,
   type ServerBuild,
 } from "react-router";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LinkedPlayerCard } from "../../app/lib/account-contracts";
 import { sanitizeEvent } from "../../app/lib/analytics";
 import { middleware as rootMiddleware } from "../../app/root";
@@ -136,7 +137,13 @@ let pinnedTag: string | null;
 let follow: { attack: boolean; day_summary: boolean };
 let client: Record<string, ReturnType<typeof vi.fn>>;
 
+// Pages are read inside the fixtures' Legend day, so none shows yesterday as over.
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"], now: Date.parse(CALENDAR.as_of) });
   vi.stubEnv("CLASHLENS_DASHBOARD_ENABLED", "true");
   mocks.getWebsiteConfig.mockReturnValue(
     loadWebsiteConfig({
@@ -180,6 +187,7 @@ beforeEach(() => {
         player: tag === VIEWED ? VIEWED_PAYLOAD : null,
         pinned: pinnedTag,
         follow: tag === VIEWED ? follow : { attack: false, day_summary: false },
+        calendar: CALENDAR,
       };
     },
   );
@@ -197,6 +205,7 @@ beforeEach(() => {
       username: "nova88",
       displayName: "Nova",
       verifiedPlayers: [card(MINE, "Lens Main")],
+      calendar: CALENDAR,
     })),
     updateAccount: vi.fn(async () => ({})),
     getPlayer: vi.fn(unavailable),
@@ -277,7 +286,7 @@ describe("who can View as", () => {
     ];
     for (const init of channels)
       expect((await load(`${ORIGIN}/`, init)).data).toEqual(plain.data);
-    expect(client.getPlayer).not.toHaveBeenCalledWith(VIEWED);
+    expect(client.getPlayer.mock.calls.map(([tag]) => tag)).not.toContain(VIEWED);
   });
 
   it("saves a posted view_as field only as the signed-in account's own settings", async () => {
@@ -329,6 +338,14 @@ describe("who can View as", () => {
         player: { ...VIEWED_PAYLOAD, tag: MINE },
       },
       { kind: "view-as", owner: true, player: { tag: VIEWED } },
+      // An owner answer without the day it was read in.
+      {
+        kind: "view-as",
+        owner: true,
+        player: VIEWED_PAYLOAD,
+        pinned: null,
+        follow: { attack: false, day_summary: false },
+      },
     ]) {
       mocks.requestJson.mockResolvedValue(payload);
       expect(await readViewAs(OWNER, VIEWED)).toEqual({ owner: false });
@@ -372,12 +389,22 @@ describe("the owner's View as", () => {
     if (data.kind !== "signed-in") throw new Error("expected signed in");
     expect(Object.keys(data.cards)).toEqual(["goal"]);
     await Promise.all(Object.values(data.cards));
-    expect(client.getPlayer).toHaveBeenCalledWith(VIEWED);
-    expect(client.getPlayer).not.toHaveBeenCalledWith(MINE);
+    expect(client.getPlayer).toHaveBeenCalledWith(VIEWED, true, true);
+    expect(client.getPlayer.mock.calls.map(([tag]) => tag)).not.toContain(MINE);
     expect(client.listGroups).not.toHaveBeenCalled();
     // Python is asked as the owner's own account.
     expect(mocks.createPythonClient).toHaveBeenCalledWith(OWNER);
     expect(headers.get("Cache-Control")).toBe("private, no-store");
+  });
+
+  it("expires the viewed card at View as's own Reset when the owner's players read fails", async () => {
+    client.getPublicUser.mockRejectedValue(
+      new PythonApiError(503, { error: "unavailable" }),
+    );
+    const { data } = await load(viewUrl(VIEWED));
+    expect(data).toMatchObject({ selectedTag: VIEWED });
+    if (data.kind !== "signed-in") throw new Error("expected the dashboard");
+    expect(data.dayEndsMs).toBe(Date.parse(CALENDAR.day_end));
   });
 
   it("says a plain Player not found for an unknown or malformed tag", async () => {

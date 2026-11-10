@@ -1,5 +1,7 @@
+import { CALENDAR } from "../fixtures/player-route-data";
+import { resetCountdown } from "../../app/lib/clock-format";
 import { createElement } from "react";
-import { renderToStaticMarkup, renderToString } from "react-dom/server";
+import { renderToString } from "react-dom/server";
 import {
   StaticRouterProvider,
   createMemoryRouter,
@@ -8,8 +10,7 @@ import {
   data as dataWithStatus,
 } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readAt } from "../../app/components/DashboardGrid";
-import { emptyDay, fight, linked } from "../fixtures/dashboard-data";
+import { linked } from "../fixtures/dashboard-data";
 vi.mock("../../app/services/python-transport.server", () => ({
   requestJson: mocks.requestJson,
 }));
@@ -74,16 +75,8 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
   };
 });
 
-import { updatedAgo } from "../../app/lib/age-format";
-import { LegendClock, clockMarks } from "../../app/components/LegendClock";
-import { LegendDayCard } from "../../app/components/LegendDayCard";
 import { OpponentsCard } from "../../app/components/OpponentsCard";
-import type {
-  CardId,
-  DashboardSettings,
-  OpponentRow,
-  PlayerDay,
-} from "../../app/lib/dashboard";
+import type { CardId, DashboardSettings, OpponentRow } from "../../app/lib/dashboard";
 import {
   BASE_TROPHY_BAND,
   DEFAULT_LAYOUT,
@@ -91,7 +84,6 @@ import {
   baseStrength,
   cardPlaces,
   defaultSettings,
-  nextResetMs,
   parsePostedSettings,
   readSettings,
   serializeSettings,
@@ -293,10 +285,14 @@ describe("dashboard settings", () => {
     }
   });
 
-  it("finds the next 05:00 UTC Reset", () => {
-    expect(nextResetMs(Date.UTC(2026, 9, 7, 1, 48))).toBe(Date.UTC(2026, 9, 7, 5));
-    expect(nextResetMs(Date.UTC(2026, 9, 7, 5))).toBe(Date.UTC(2026, 9, 8, 5));
-    expect(nextResetMs(Date.UTC(2026, 9, 7, 23, 59))).toBe(Date.UTC(2026, 9, 8, 5));
+  it("counts down to the supplied Reset without advancing it", () => {
+    const end = Date.UTC(2026, 9, 8, 5);
+    expect(resetCountdown(Date.UTC(2026, 9, 8, 4, 59), end)).toEqual({
+      left: 1,
+      text: "0h 01m",
+    });
+    expect(resetCountdown(end, end)).toEqual({ left: 0, text: "0h 00m" });
+    expect(resetCountdown(end + 60000, end).left).toBe(0);
   });
 
   it("rates a base within 15 points of today's Legends held share as Average", () => {
@@ -388,190 +384,6 @@ describe("dashboard grid", () => {
       "1@2",
     ]);
     expect(places(["goal", "bases", "heat-map"], 3)).toEqual(["3@0", "3@1", "3@2"]);
-  });
-});
-
-describe("Legend clock", () => {
-  const dayStart = Date.UTC(2026, 9, 7, 5);
-
-  it("puts each battle on its track at its own time, grouping those too close for two dots", () => {
-    const marks = clockMarks(
-      [
-        fight("attack", 7, 10, 3, 40),
-        fight("attack", 7, 25, 3, 40),
-        fight("attack", 7, 44, 2, 31),
-        fight("attack", 12, 6, 2, 29),
-        fight("attack", 12, 50, 3, 40),
-        fight("attack", 14, 0, 3, 40),
-        fight("defense", 7, 30, 3, -40),
-        fight("defense", 8, 20, 2, -24),
-        fight("defense", 11, 0, 3, -40),
-        fight("defense", 4, 0, 1, -16),
-      ],
-      dayStart,
-    );
-    // Minutes after the Reset, and how many battles each mark holds: the
-    // three attacks round 07:25 share one mark at their middle time, as do
-    // the 12:06 and 12:50 attacks and the 07:30 and 08:20 defenses; 14:00
-    // and 11:00 keep their own time; the 04:00 defense is before this
-    // Legend day began.
-    const at = (kind: string) =>
-      marks
-        .filter((mark) => mark.kind === kind)
-        .map((mark) => `${Math.round(mark.minutes)}×${mark.battles.length}`);
-    expect(at("attack")).toEqual(["146×3", "448×2", "540×1"]);
-    expect(at("defense")).toEqual(["175×2", "360×1"]);
-  });
-
-  it("names each mark's battles on it, and the Reset's time under the countdown", () => {
-    const battles = [fight("attack", 7, 10, 3, 40), fight("attack", 7, 25, 2, 28)];
-    const html = renderToStaticMarkup(
-      createElement(LegendClock, {
-        battles: [...battles, fight("defense", 11, 0, 1, -16)],
-        nowMs: Date.UTC(2026, 9, 7, 9),
-        timeZone: "UTC",
-      }),
-    );
-    // Each mark names its battles: when, who, stars, % and trophies; two
-    // attacks too close for two marks share one mark, drawn as two ticks.
-    expect(html).toContain('title="Defense at 11:00 against Opponent: 1 star, 80%, −16');
-    expect(html).toContain(":\n07:10 on Opponent: 3 stars, 100%, +40 trophies\n07:25");
-    expect(html.match(/class="clock-tick clock-tick-attack"/g)).toHaveLength(2);
-    expect(text(html)).toContain("05:00 11:00 17:00 23:00 Now 20h 00m to Reset at 05:00");
-  });
-
-  it("names the upcoming Reset in local time across a clock change", () => {
-    const html = renderToStaticMarkup(
-      createElement(LegendClock, {
-        battles: [],
-        nowMs: Date.UTC(2026, 9, 25, 2),
-        timeZone: "Europe/London",
-      }),
-    );
-    // The day began at 06:00 summer time; its Reset falls at 05:00 winter time.
-    expect(html).toContain('aria-label="Legend clock: 3h 00m to Reset at 05:00"');
-    expect(text(html)).toContain("3h 00m to Reset at 05:00");
-  });
-});
-
-describe("Legend day card", () => {
-  it("says once, in its header, how old the older of its two reads is", () => {
-    const at = (minutes: number) => Date.UTC(2026, 9, 7, 9, 0) - minutes * 60_000;
-    const range = { best: 95, worst: 760 };
-    const data = (day: PlayerDay | null) =>
-      ({
-        player: linked(MAIN),
-        day,
-        range,
-        rangeAtMs: at(9),
-        nowMs: at(0),
-      }) as const;
-    const updated = (day: PlayerDay | null) =>
-      updatedAgo(readAt("legend-day", { ...data(day), projected: null }), at(0));
-    expect(updated(null)).toBe("updated 9 min ago");
-    expect(updated(emptyDay({ observedAtMs: at(2) }))).toBe("updated 9 min ago");
-    expect(updated(emptyDay({ observedAtMs: at(12) }))).toBe("updated 12 min ago");
-    // 09:00 UTC is 20 hours before the 05:00 Reset; the title's name is for screen readers.
-    const card = text(
-      renderToStaticMarkup(
-        createElement(LegendDayCard, data(emptyDay({ dayNumber: 9 }))),
-      ),
-    );
-    expect(card).toContain("Legend day 9 , Lens Main Updated 9 min ago Trophies");
-    expect(card).toContain("20h 00m to Reset");
-  });
-
-  const render = (
-    day: PlayerDay | null,
-    range = { best: 95, worst: 760 },
-    projected: number | null = null,
-  ) =>
-    text(
-      renderToStaticMarkup(
-        createElement(LegendDayCard, {
-          player: linked(MAIN),
-          day,
-          range,
-          projected,
-        }),
-      ),
-    );
-
-  it("shows the projected place beside the outer range, labelled its range", () => {
-    const html = render(emptyDay({}), { best: 1, worst: 12_270 }, 3000);
-    expect(html).toContain("Projected place #3,000 at Reset. ");
-    expect(html).toContain(
-      "left, and gets closer through the day. Next Reset range best #1 worst #12,270",
-    );
-    expect(html).toContain(
-      "An estimate from how players in your spot finished on recent days. It can be hundreds of places out while battles are left, and gets closer through the day.",
-    );
-    // Before any day's examples are saved, only the outer range shows.
-    expect(render(emptyDay({}))).not.toContain("Projected");
-  });
-
-  it("shows trophies, net, the ranks and the next Reset range as an estimate", () => {
-    const html = render(
-      emptyDay({
-        trophies: 5702,
-        complete: true,
-        net: 66,
-        attacks: 2,
-        defenses: 1,
-        lastResetRank: 331,
-        openDefenses: 7,
-        autoDefenseEach: 21,
-        battles: [
-          fight("attack", 7, 0, 3, 40),
-          fight("attack", 8, 0, 2, 31),
-          fight("defense", 9, 0, 1, -5),
-        ],
-      }),
-    );
-    expect(html).toContain("Trophies 5,702");
-    // The change is marked "today" on screen, not left as a bare number.
-    expect(html).toContain("Net today +66 today");
-    expect(html).toContain("Last Reset #331");
-    expect(html).toContain("Now #318");
-    expect(html).toContain("Next Reset best #95 – worst #760 estimate");
-    expect(html).toContain("Attacks 2/8 +71");
-    expect(html).toContain("Defenses 1/8 −5");
-    // The defenses still to come and their automatic loss stay off the card.
-    expect(html).not.toContain("defenses remain");
-    expect(html).not.toContain("auto defense");
-  });
-
-  it("leaves totals and the automatic loss out until they are known", () => {
-    const html = render(
-      emptyDay({ attacks: 3, defenses: 2, openDefenses: 6, battles: [] }),
-    );
-    expect(html).toContain("Attacks 3/8 Defenses 2/8 ");
-    expect(html).not.toContain("3/8 –");
-    // A screen reader hears each row's count with its noun.
-    const markup = renderToStaticMarkup(
-      createElement(LegendDayCard, {
-        player: linked(MAIN),
-        day: emptyDay({ attacks: 3, defenses: 2, battles: [] }),
-        range: null,
-        projected: null,
-      }),
-    );
-    expect(markup).toContain('aria-label="3 of 8 attacks"');
-    expect(markup).toContain('aria-label="2 of 8 defenses"');
-    expect(render(null)).toContain("Trophies 5,696 Net today –");
-  });
-
-  it("shows – for attack and defense counts it does not know, not 0", () => {
-    // Today's battles not saved yet, or the player page not read at all.
-    for (const day of [emptyDay({ lastResetRank: 331 }), null]) {
-      const html = render(day);
-      expect(html).toContain("Attacks –/8");
-      expect(html).toContain("Defenses –/8");
-      expect(html).not.toContain("0/8");
-      expect(html).toContain("Trophies 5,696");
-      expect(html).toContain("Now #318");
-      expect(html).toContain("Next Reset best #95 – worst #760");
-    }
   });
 });
 
@@ -734,6 +546,7 @@ describe("today read for the Legend day and Bases cards", () => {
   it("reads the Next Reset range and the bases attacked with their Legends held", async () => {
     mocks.requestJson.mockResolvedValue({
       tag: MAIN,
+      calendar: CALENDAR,
       season_day_number: 9,
       rank_range: { best: 95, worst: 760 },
       open_defenses: 7,
@@ -757,6 +570,7 @@ describe("today read for the Legend day and Bases cards", () => {
       ],
     });
     expect(await getPlayerToday(MAIN)).toEqual({
+      calendar: CALENDAR,
       dayNumber: 9,
       rankRange: { best: 95, worst: 760 },
       projectedRank: null,
@@ -790,6 +604,7 @@ describe("today read for the Legend day and Bases cards", () => {
   it("reads the projected place inside the Next Reset range, and whether it is still worked out", async () => {
     const today = {
       tag: MAIN,
+      calendar: CALENDAR,
       rank_range: { best: 95, worst: 760 },
       projected_rank: 240,
       projected_rank_pending: false,
@@ -823,6 +638,7 @@ describe("today read for the Legend day and Bases cards", () => {
   it("keeps a today read without saved battles apart from one with no attacks", async () => {
     mocks.requestJson.mockResolvedValue({
       tag: MAIN,
+      calendar: CALENDAR,
       rank_range: { best: 95, worst: 760 },
       open_defenses: null,
       automatic_defense_each: null,
@@ -839,6 +655,7 @@ describe("today read for the Legend day and Bases cards", () => {
   it("refuses a today read whose range is impossible", async () => {
     mocks.requestJson.mockResolvedValue({
       tag: MAIN,
+      calendar: CALENDAR,
       rank_range: { best: 9, worst: 3 },
       open_defenses: null,
       automatic_defense_each: null,
@@ -907,6 +724,7 @@ describe("dashboard route", () => {
           linked(ALT, { name: "Lens Alt", state: "not_in_legend", trophies: null }),
           linked(MAIN),
         ],
+        calendar: CALENDAR,
       })),
       getPlayer: vi.fn(unavailable),
       getPlayerSeasons: vi.fn(unavailable),
@@ -938,6 +756,7 @@ describe("dashboard route", () => {
     expect(data.cards).toEqual({
       "legend-day": {
         player: linked(MAIN),
+        calendar: null,
         day: null,
         range: null,
         rangeAtMs: null,
@@ -950,7 +769,7 @@ describe("dashboard route", () => {
       "rivals-watch": null,
       "heat-map": null,
     });
-    expect(client.getPlayer).toHaveBeenCalledWith(MAIN);
+    expect(client.getPlayer).toHaveBeenCalledWith(MAIN, true, true);
   });
 
   it("marks Legend day and Bases read before the shared board, and waits for it when asked again", async () => {
@@ -964,6 +783,7 @@ describe("dashboard route", () => {
       if (waited) waits += 1;
       return {
         tag: MAIN,
+        calendar: CALENDAR,
         rank_range: waited ? { best: 95, worst: 760 } : null,
         projected_rank: waits === 2 ? 240 : null,
         projected_rank_pending: waits === 1,
@@ -992,13 +812,19 @@ describe("dashboard route", () => {
     expect(again.cards).toEqual({
       "legend-day": {
         player: linked(MAIN),
+        calendar: CALENDAR,
         day: null,
         range: { best: 95, worst: 760 },
         rangeAtMs: Date.parse(boardAt),
         projected: null,
         boardPending: true,
       },
-      bases: { dayNumber: null, rows: [], comparedAtMs: Date.parse(boardAt) },
+      bases: {
+        calendar: CALENDAR,
+        dayNumber: null,
+        rows: [],
+        comparedAtMs: Date.parse(boardAt),
+      },
     });
     const last = await load(
       `${ORIGIN}/?${new URLSearchParams({ player: MAIN, cards: "legend-day", board: "wait" })}`,
@@ -1006,6 +832,7 @@ describe("dashboard route", () => {
     expect(last.cards).toEqual({
       "legend-day": {
         player: linked(MAIN),
+        calendar: CALENDAR,
         day: null,
         range: { best: 95, worst: 760 },
         rangeAtMs: Date.parse(boardAt),
@@ -1046,7 +873,32 @@ describe("dashboard route", () => {
     expect(client.listGroups).not.toHaveBeenCalled();
   });
 
-  it("ends the day at the Reset after the first read starts, even if it lands after", async () => {
+  it("expires player tabs at the players read's Reset, with no other read, when no cards are requested", async () => {
+    const data = await load(`${ORIGIN}/?cards=`);
+    expect(data.cards).toEqual({});
+    expect(data.dayEndsMs).toBe(Date.parse(CALENDAR.day_end));
+    // Only the View as check every signed-in load makes; no Today read.
+    expect(mocks.requestJson.mock.calls.map(([path]) => path)).toEqual([
+      "/v1/account/view-as",
+    ]);
+  });
+
+  it("expires the day at Python's supplied Reset even when its reply arrives after", async () => {
+    mocks.requestJson.mockResolvedValue({
+      calendar: {
+        ...CALENDAR,
+        as_of: "2026-10-07T04:59:59Z",
+        day_start: "2026-10-06T05:00:00Z",
+        day_end: "2026-10-07T05:00:00Z",
+        day_number: 2,
+      },
+      tag: MAIN,
+      rank_range: null,
+      open_defenses: null,
+      automatic_defense_each: null,
+      opponents: null,
+      board_computed_at: null,
+    });
     vi.useFakeTimers({ toFake: ["Date"], now: Date.UTC(2026, 9, 7, 4, 59, 59) });
     client.getPublicUser.mockImplementation(async () => {
       vi.setSystemTime(Date.UTC(2026, 9, 7, 5, 0, 1));
@@ -1054,7 +906,40 @@ describe("dashboard route", () => {
         username: "nova88",
         displayName: "Nova",
         verifiedPlayers: [linked(MAIN)],
+        calendar: CALENDAR,
       };
+    });
+    expect((await load()).dayEndsMs).toBe(Date.UTC(2026, 9, 7, 5));
+  });
+
+  it("expires at the players read's Reset when a card was read after it", async () => {
+    // The tabs were read at 04:59:59; Today answered at 05:00:01, for the new day.
+    mocks.requestJson.mockResolvedValue({
+      calendar: {
+        ...CALENDAR,
+        as_of: "2026-10-07T05:00:01Z",
+        day_start: "2026-10-07T05:00:00Z",
+        day_end: "2026-10-08T05:00:00Z",
+        day_number: 3,
+      },
+      tag: MAIN,
+      rank_range: null,
+      open_defenses: null,
+      automatic_defense_each: null,
+      opponents: null,
+      board_computed_at: null,
+    });
+    client.getPublicUser.mockResolvedValue({
+      username: "nova88",
+      displayName: "Nova",
+      verifiedPlayers: [linked(MAIN)],
+      calendar: {
+        ...CALENDAR,
+        as_of: "2026-10-07T04:59:59Z",
+        day_start: "2026-10-06T05:00:00Z",
+        day_end: "2026-10-07T05:00:00Z",
+        day_number: 2,
+      },
     });
     expect((await load()).dayEndsMs).toBe(Date.UTC(2026, 9, 7, 5));
   });
@@ -1309,6 +1194,7 @@ describe("dashboard page", () => {
         cards: {
           "legend-day": {
             player: linked(MAIN),
+            calendar: null,
             day: null,
             range: null,
             rangeAtMs: null,

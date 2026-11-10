@@ -1,10 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigation, useRevalidator } from "react-router";
 
-const SEASON_MS = 28 * 24 * 60 * 60 * 1000;
-// The same confirmed 28-day phase used by the server's Season validation.
-const SEASON_ANCHOR_MS = 1_783_918_800_000;
-
 /**
  * How far the page's clock can be trusted when it decides that Season Reset
  * has passed:
@@ -26,6 +22,7 @@ export type ClockTrust = "settled" | "slipped" | "asked";
 
 type Clock = {
   loadedAt?: string;
+  end?: string;
   now: number;
   elapsed: number;
   wall: number;
@@ -47,14 +44,6 @@ function advanceClock(clock: Clock) {
   return clock.now;
 }
 
-export function seasonStartAt(time: number) {
-  return SEASON_ANCHOR_MS + Math.floor((time - SEASON_ANCHOR_MS) / SEASON_MS) * SEASON_MS;
-}
-
-export function nextSeasonReset(loadedAt: string) {
-  return seasonStartAt(Date.parse(loadedAt)) + SEASON_MS;
-}
-
 /**
  * Whether a check reads the page again: never while hidden or while a read or
  * navigation runs; when Reset passed, a recovery is awaited or the clock is
@@ -72,12 +61,18 @@ export function seasonCheckReads(check: {
   return check.trust === "slipped" || check.sinceRead >= 60_000;
 }
 
-/** Reread saved data at Season Reset and once a minute while awaiting recovery. */
+/**
+ * Reread saved data at Season Reset (or at `seasonEnd`, the time the data stops
+ * holding) and once a minute while awaiting recovery. Returns whether the
+ * trusted clock has passed `expiresAt`, which defaults to that reread time.
+ */
 export function useSeasonReread(
   loadedAt: string | undefined,
   waiting: boolean,
   enabled = true,
   finalAnswer = false,
+  seasonEnd?: string,
+  expiresAt?: string,
 ) {
   const revalidator = useRevalidator();
   const navigation = useNavigation();
@@ -87,6 +82,7 @@ export function useSeasonReread(
   const inFlight = useRef(false);
   const clock = useRef<Clock>({
     loadedAt,
+    end: seasonEnd,
     now: loadedAt ? Date.parse(loadedAt) : 0,
     elapsed: performance.now(),
     wall: Date.now(),
@@ -104,8 +100,10 @@ export function useSeasonReread(
       clock.current.now = Math.max(clock.current.now, served);
     }
     clock.current.loadedAt = loadedAt;
+    clock.current.end = seasonEnd;
   }
   const sourceTime = clock.current.loadedAt;
+  const reset = clock.current.end ? Date.parse(clock.current.end) : Infinity;
   const lastWaiting = useRef(waiting);
   if (loadedAt || waiting || finalAnswer) lastWaiting.current = waiting;
   const recoveryWaiting = lastWaiting.current;
@@ -114,7 +112,6 @@ export function useSeasonReread(
 
   useEffect(() => {
     if (!enabled || (!sourceTime && !recoveryWaiting)) return;
-    const reset = sourceTime ? nextSeasonReset(sourceTime) : Infinity;
     const check = () => {
       const elapsed = advanceClock(clock.current);
       const expired = elapsed >= reset;
@@ -169,7 +166,8 @@ export function useSeasonReread(
       document.removeEventListener("visibilitychange", visible);
       window.removeEventListener("pageshow", restored);
     };
-  }, [enabled, sourceTime, recoveryWaiting, revalidate]);
+  }, [enabled, sourceTime, reset, recoveryWaiting, revalidate]);
 
-  return enabled && !!sourceTime && clock.current.now >= nextSeasonReset(sourceTime);
+  const expiry = expiresAt ? Date.parse(expiresAt) : reset;
+  return enabled && !!sourceTime && clock.current.now >= expiry;
 }

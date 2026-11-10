@@ -1,5 +1,6 @@
-import { seasonStartAt } from "../components/SeasonReread";
 import type {
+  DayPresentation,
+  DayStatus,
   PlayerLookup,
   PlayerPage,
   RankedDaySummary,
@@ -7,7 +8,6 @@ import type {
   RefreshWork,
   SummarizedSeasonRef,
 } from "./contracts";
-import { leftAfter } from "./season-shape";
 
 /** What a player page says about a tag without current results. */
 export const LOOKUP_MESSAGES: Record<PlayerLookup["state"], string> = {
@@ -96,8 +96,10 @@ export function showsCurrentSeason(
   history: { day: RankedDaySummary }[],
 ) {
   return (
-    history.some(({ day }) =>
-      isLegendDay(day.uncertainty, day.offenseEvents.length + day.defenseEvents.length),
+    history.some(
+      ({ day }) =>
+        day.presentation?.status !== "not_enrolled" ||
+        day.offenseEvents.length + day.defenseEvents.length > 0,
     ) || !["not_in_legend", "uncertain"].includes(lookup?.state ?? "")
   );
 }
@@ -125,106 +127,55 @@ export function lookupExplanation(
   }
 }
 
-export interface DayEvidence {
-  net: number | null;
+const STATUS_LABELS: Record<DayStatus, string> = {
+  in_progress: "In progress",
+  verified: "Verified",
+  calculated: "Calculated",
+  uncertain: "Uncertain",
+  not_enrolled: "Not enrolled",
+};
+
+export function dayPresentation(day: {
+  presentation: DayPresentation | null;
   state: string;
-  confidence?: string | null;
-  coverage: string;
-  codes: string[];
-  attackGain: number | null;
-  defenseLoss: number | null;
-  attacks: number | null;
-  defenses: number | null;
-  battlesComplete?: boolean;
-}
-
-export function dayEvidence(day: RankedDaySummary): DayEvidence {
-  return {
-    net: day.trophyChange,
-    state: day.state,
-    confidence: day.confidence ?? null,
-    coverage: day.logCoverage ?? day.completeness.state,
-    codes: day.uncertainty,
-    attackGain: day.offense.trophyGain,
-    defenseLoss: day.defense.trophyLoss,
-    attacks: day.offenseEvents.length,
-    defenses: day.defenseEvents.length,
-    battlesComplete: day.battlesComplete,
-  };
-}
-
-// Codes that leave a day's 8 attacks and 8 defenses in doubt, or may hide such a code.
-const BATTLE_DOUBT_CODES = new Set([
-  "perspective_disagreement",
-  "duplicate_contribution_disagreement",
-  "trophy_equation_mismatch",
-  "ranked_version_mismatch",
-  "attack_star_total_mismatch",
-  "defense_star_total_mismatch",
-  "truncated_reasons",
-  "attack_count_exceeds_eight",
-  "defense_count_exceeds_eight",
-]);
-
-// Codes that mean a battle may be missing from the day's logs.
-const GAP_CODES = new Set([
-  "missing_start_battle_log_baseline",
-  "missing_end_battle_log_baseline",
-  "battle_log_row_gap",
-  "battle_log_overlap_gap",
-  "battle_log_stale_window",
-  "battle_log_row_count_exceeds_fifty",
-  "unclassified_rows",
-]);
-
-// Only Python's calendar check makes a day current; a saved "Live" state can
-// outlast its day. A finished day with every battle recorded (all 8 of each)
-// has nothing missing from its number. Python marks this for recent days;
-// saved Season entries carry only their counts, codes and confidence.
-export function presentDay(day: DayEvidence, isCurrentDay: boolean) {
-  // Saved profiles prove the player had not signed up for the Season yet.
-  if (!isCurrentDay && day.codes.includes("not_enrolled"))
-    return {
-      status: "Not enrolled",
-      reasons: [REASON_TEXT.not_enrolled],
-      battleNet: null,
-    };
-  const battlesComplete =
-    day.battlesComplete ??
-    (day.attacks === 8 &&
-      day.defenses === 8 &&
-      !day.codes.some((code) => BATTLE_DOUBT_CODES.has(code)));
-  // Three labels. Verified: the Reset reading matched every part of the
-  // calculation. Calculated: the battles add up with no gap, but a reading
-  // has not confirmed every part (or any part) of the number yet. Uncertain:
-  // no number, a disputed or 9th battle, or a possible gap without all 8 of each.
-  const doubtful =
-    day.codes.some((code) => BATTLE_DOUBT_CODES.has(code)) ||
-    (!battlesComplete &&
-      (day.coverage !== "complete" || day.codes.some((code) => GAP_CODES.has(code))));
-  const status = isCurrentDay
-    ? "In progress"
-    : day.net === null || doubtful
-      ? "Uncertain"
-      : day.state === "Complete" && day.confidence === "exact" && day.codes.length === 0
-        ? "Verified"
-        : "Calculated";
-  const reasons = isCurrentDay ? liveDay(day).reasons : dayReasons(day.codes, false, day);
-  if (
+  attacks?: number | null;
+  defenses?: number | null;
+  offenseEvents?: unknown[];
+  defenseEvents?: unknown[];
+}) {
+  const fact = day.presentation!;
+  const reasons = dayReasons(
+    fact.status === "not_enrolled" ? ["not_enrolled"] : fact.reason_codes,
+    fact.is_current,
+    {
+      attacks: day.attacks ?? day.offenseEvents?.length ?? null,
+      defenses: day.defenses ?? day.defenseEvents?.length ?? null,
+    },
+  );
+  const cautions = dayReasons(fact.caution_codes, true, {
+    attacks: day.attacks ?? day.offenseEvents?.length ?? null,
+    defenses: day.defenses ?? day.defenseEvents?.length ?? null,
+  });
+  if (fact.is_current && !fact.live_routine && cautions.length === 0)
+    cautions.push("Some daily evidence is unavailable.");
+  if (fact.is_current)
+    reasons.push(...cautions.filter((reason) => !reasons.includes(reason)));
+  else if (
     reasons.length === 0 &&
-    status !== "Verified" &&
-    (status !== "Calculated" || day.state === "Live")
+    fact.status !== "verified" &&
+    (fact.status !== "calculated" || day.state === "Live")
   )
     reasons.push(
       day.state === "Live"
         ? "Final evidence for this day has not been processed yet."
         : "Some daily evidence is unavailable.",
     );
-  const battleNet =
-    day.attackGain === null || day.defenseLoss === null
-      ? null
-      : day.attackGain - day.defenseLoss;
-  return { status, reasons, battleNet };
+  return {
+    status: STATUS_LABELS[fact.status],
+    reasons,
+    battleNet: fact.battle_net,
+    cautions,
+  };
 }
 
 // The checks after Reset, which a Legend day in progress cannot have yet. The
@@ -236,35 +187,15 @@ const WAITING_REASONS = new Set([
 const AUTOMATIC_DEFENSE = "automatic_defense_basis_unavailable";
 
 /**
- * Today's Legend day. It is only waiting for Reset when every reason is one
- * it cannot avoid before then; any other reason is a caution to keep visible.
- */
-export function liveDay(day: DayEvidence) {
-  const cautions = dayReasons(
-    day.codes.filter((code) => !WAITING_REASONS.has(code) && code !== AUTOMATIC_DEFENSE),
-    true,
-    day,
-  );
-  const routine =
-    day.state === "Live" && day.coverage === "partial" && cautions.length === 0;
-  if (!routine && cautions.length === 0)
-    cautions.push("Some daily evidence is unavailable.");
-  return {
-    routine,
-    cautions,
-    reasons: [...new Set([...dayReasons(day.codes, true, day), ...cautions])],
-  };
-}
-
-/**
  * The note above the daily log for today's Legend day, or null when there is
  * nothing to add: a routine wait in progress is already shown by the day's
  * In progress badge. Once the page's clock passes Reset, a routine wait is no
  * longer in progress, even before the page rereads it; a caution stays.
  */
-export function liveDayNotice(day: DayEvidence, ended: boolean, label: string) {
-  const { routine, cautions } = liveDay(day);
-  if (!routine) return { heading: label, text: cautions.join(" ") };
+export function liveDayNotice(day: RankedDaySummary, ended: boolean, label: string) {
+  const { cautions } = dayPresentation(day);
+  if (!day.presentation!.live_routine)
+    return { heading: label, text: cautions.join(" ") };
   return ended
     ? {
         heading: "Day ended",
@@ -347,10 +278,8 @@ function excessNote(count: number | null, kind: "attacks" | "defenses"): string 
 }
 
 export function legendDayKey(period: string): string {
-  return period.split(" – ")[0].slice(0, 10);
+  return period.slice(0, 10);
 }
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Every saved record of a player, in the order the log prefers them.
 export function savedDays(player: PlayerPage) {
@@ -361,89 +290,47 @@ export function savedDays(player: PlayerPage) {
   ];
 }
 
-// A saved day is not a Legend day only when saved profiles prove the player
-// had not signed up yet and it has no battles. Not eligible is no such proof:
-// a missing Reset reading alone sets it.
-export function isLegendDay(codes: string[], battles: number) {
-  return battles > 0 || !codes.includes("not_enrolled");
-}
-
-// A finished day's end-of-day trophies: the next day's start, from any saved
-// record of that day, shown in the log or not. Only the latest finished day,
-// ended at the latest Reset, can fall back to its start plus its trophy change
-// and any weekly or Season reset at its closing Reset; an older day without
-// the next day's start has none, unless the player left Legend I at that
-// Reset: no Legend day follows it, and no weekly raise applies. When both exist and disagree the whole day is
-// Uncertain and its reasons lead with the gap.
-export function dayEnd(day: RankedDaySummary, player: PlayerPage, now: number) {
-  const ended = Date.parse(day.period.split(" – ")[1]);
-  const battles =
-    day.startTrophies != null && day.trophyChange !== null
-      ? day.startTrophies + day.trophyChange
-      : null;
-  const reset = day.resetAdjustment?.amount ? day.resetAdjustment : null;
-  const own = battles === null ? null : battles + (reset?.amount ?? 0);
-  const following =
-    savedDays(player).find((saved) => Date.parse(saved.period.split(" – ")[0]) === ended)
-      ?.startTrophies ?? null;
-  // The battles' own total first, then what the game's reset made of it.
-  const conflict =
-    battles !== null && own !== null && following !== null && own !== following
-      ? `Battles add up to ${battles.toLocaleString("en-GB")}${
-          reset
-            ? `, which the ${reset.kind} reset takes to ${own.toLocaleString("en-GB")}`
-            : ""
-        }; next day started at ${following.toLocaleString("en-GB")}.`
-      : null;
-  const evidence = presentDay(dayEvidence(day), false);
+// Python supplies the end and its disagreement; only wording belongs here.
+export function dayEnd(day: RankedDaySummary) {
+  const end = day.displayEnd!;
+  const c = end.conflict;
+  const own = end.after_reset;
+  const conflict = c
+    ? `Battles add up to ${c.battle_end.toLocaleString("en-GB")}${c.reset_kind ? `, which the ${c.reset_kind === "season" ? "Season" : "weekly"} reset takes to ${own!.toLocaleString("en-GB")}` : ""}; next day started at ${c.next_start.toLocaleString("en-GB")}.`
+    : null;
+  const evidence = dayPresentation(
+    day.presentation!.is_current
+      ? {
+          ...day,
+          presentation: { ...day.presentation!, status: end.status, is_current: false },
+        }
+      : day,
+  );
   return {
-    trophies:
-      following ??
-      (ended <= now && (now - ended < DAY_MS || leftAfter(player, day)) ? own : null),
-    status: conflict ? "Uncertain" : evidence.status,
+    trophies: end.player_log,
+    status: STATUS_LABELS[end.status],
     reasons: conflict ? [conflict, ...evidence.reasons] : evidence.reasons,
     conflict,
   };
 }
 
-// The log keeps only the current Season's days at the server time, numbered
-// from its start; an ended Season's days are under that Season in Seasons.
-export function selectPlayerHistory(player: PlayerPage | null, now: number) {
-  const anchor = player?.season ? Date.parse(player.season.anchor) : null;
-  const seasonStart =
-    anchor !== null && now < anchor + 28 * DAY_MS ? anchor : seasonStartAt(now);
-  const seasonDay = (day: RankedDaySummary) =>
-    Math.floor((Date.parse(day.period.split(" – ")[0]) - seasonStart) / DAY_MS) + 1;
-  const days = (player ? savedDays(player) : []).filter(
-    (day) =>
-      seasonDay(day) >= 1 &&
-      seasonDay(day) <= 28 &&
-      (!day.uncertainty.includes("player_not_eligible") ||
-        day.uncertainty.includes("not_enrolled") ||
-        day.offenseEvents.length > 0 ||
-        day.defenseEvents.length > 0),
-  );
-  return days
-    .filter(
-      (day, index) =>
-        days.findIndex(
-          (saved) => legendDayKey(saved.period) === legendDayKey(day.period),
-        ) === index,
-    )
-    .sort((a, b) => legendDayKey(b.period).localeCompare(legendDayKey(a.period)))
-    .map((day) => ({ day, seasonDay: `Day ${seasonDay(day)}` }));
+export function selectPlayerHistory(player: PlayerPage | null) {
+  return (player?.historyDays ?? []).map((day) => ({
+    day,
+    dayNumber: player!.historyDayNumbers[day.start],
+    seasonDay: `Day ${player!.historyDayNumbers[day.start]}`,
+  }));
 }
 
 // The ended Season whose saved days include this Legend day (YYYY-MM-DD).
 export function seasonForDay(seasons: SummarizedSeasonRef[], day: string): string | null {
-  const start = Date.parse(`${day}T05:00:00Z`);
-  const season = seasons.find(({ seasonId, source }) => {
-    const seasonStart = Number(seasonId) * 1000;
-    return (
+  const season = seasons.find(
+    ({ seasonStart, seasonEnd, source }) =>
       source === "tracked_summary" &&
-      seasonStart <= start &&
-      start < seasonStart + 28 * DAY_MS
-    );
-  });
+      seasonStart !== null &&
+      seasonEnd !== null &&
+      seasonStart.slice(0, 10) <= day &&
+      day < seasonEnd.slice(0, 10),
+  );
   return season?.seasonId ?? null;
 }
