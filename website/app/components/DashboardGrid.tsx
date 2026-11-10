@@ -747,16 +747,23 @@ export function Dashboard({
   const reads = cardReads(data, cardData);
 
   // Saved settings read again only the cards whose numbers follow them or
-  // that have no data yet. A new load's cards follow its own settings.
+  // that have no data yet. A new load's cards follow its own settings, except
+  // in View as, where the load follows the default layout and cards added
+  // here are read again.
   useEffect(() => {
     const before = readWith.current;
     readWith.current = { data, settings };
-    if (before.data !== data) dispatchCards({ type: "newLoad" });
-    else if (reads !== null && before.settings !== settings) {
+    if (before.data !== data) {
+      dispatchCards({ type: "newLoad" });
+      if (viewAs !== null && data !== null) {
+        const cards = outdatedCards(settings, settings, data, hasView);
+        dispatchCards({ type: "outdated", cards });
+      }
+    } else if (reads !== null && before.settings !== settings) {
       const cards = outdatedCards(before.settings, settings, reads, hasView);
       dispatchCards({ type: "outdated", cards });
     }
-  }, [data, settings, reads]);
+  }, [data, settings, reads, viewAs]);
   // One read for every out-of-date card; a newer one replaces it.
   const { load } = refresher;
   const loading = data === null;
