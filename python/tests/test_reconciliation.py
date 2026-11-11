@@ -962,3 +962,48 @@ def test_incomplete_coverage_withholds_the_final_total_and_net() -> None:
         )
     )
     assert (full.final_trophies_before_reset, full.net_trophy_change) == (6040, 40)
+
+
+def test_a_monday_after_an_unfinished_day_starts_at_5000_when_its_readings_prove_the_raise() -> None:
+    # The Legend day from Monday 9 November 2026's weekly Reset, after a
+    # Sunday left Inconsistent, so it gave no next start to raise. Monday's
+    # Reset reading, 4,884, came before the game raised the player to 5,000.
+    # 8 attacks for 320 and 7 defenses for 210, after 8 defenses for 240,
+    # lose floor(450 / 15) = 30 for the missing defense: 5,080 from 5,000,
+    # 4,964 from the reading, 116 short.
+    monday = ranked_day_for(datetime(2026, 11, 9, 12, tzinfo=UTC))
+    sunday = PreviousRankedDay(
+        complete=False, observed_defense_count=8, observed_defense_loss=240,
+        shield_run_length=0, state="Inconsistent", end_baseline_id=10, battles_known=True)
+    day = _input(
+        ranked_day=monday, now=monday.end + timedelta(minutes=5), start_trophies=4884,
+        contributions=(*_counted_battles("a", "offense", 8, 320),
+                       *_counted_battles("d", "defense", 7, 210)),
+        previous_day=sunday)
+
+    raised = reconcile_ranked_day(replace(day, next_start_trophies=5080))
+    as_read = reconcile_ranked_day(replace(day, next_start_trophies=4964))
+    neither = reconcile_ranked_day(replace(day, next_start_trophies=5070))
+    tuesday = ranked_day_for(datetime(2026, 11, 10, 12, tzinfo=UTC))
+    not_monday = reconcile_ranked_day(replace(
+        day, ranked_day=tuesday, now=tuesday.end + timedelta(minutes=5), next_start_trophies=5080))
+    expected = reconcile_ranked_day(replace(
+        day, next_start_trophies=5080, previous_day=replace(sunday, expected_next_start=4884)))
+
+    assert (raised.state, raised.confidence) == ("Complete", "exact")
+    assert (raised.start_trophies, raised.final_trophies_before_reset) == (5000, 5080)
+    assert raised.unexplained_residual == 0
+    assert raised.formula_components["start_reading_trophies"] == 4884
+    assert raised.formula_components["start_reading_correction"] == 116
+    assert raised.formula_components["start_weekly_raise_proven"] is True
+    # A reading that fits the start as read keeps it.
+    assert (as_read.state, as_read.start_trophies) == ("Complete", 4884)
+    assert "start_weekly_raise_proven" not in as_read.formula_components
+    # One that fits neither proves no raise: the day stays as read.
+    assert (neither.state, neither.start_trophies) == ("Inconsistent", 4884)
+    assert neither.unexplained_residual == 106
+    assert "start_weekly_raise_proven" not in neither.formula_components
+    # Only a weekly Reset raises, and a day before with a next start says
+    # what it is.
+    assert (not_monday.state, not_monday.start_trophies) == ("Inconsistent", 4884)
+    assert (expected.state, expected.start_trophies) == ("Inconsistent", 4884)

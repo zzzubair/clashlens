@@ -191,6 +191,9 @@ class ReconciliationInput:
     # the day before's result says (``_settled_start``), else the other way
     # (``loss_rule.other_start``).
     start_charged: StartCharge = StartCharge.AS_RESULT_SAYS
+    # Whether the day starts from the weekly raise to 5,000 that the day
+    # before's result could not give (``reconcile_ranked_day``).
+    weekly_raise: bool = False
     # The next day's saved start, when that day ended proven from this day's
     # end Reset reading (``loss_rule.next_day_landing``).
     next_day_start: int | None = None
@@ -301,19 +304,37 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     fits every reading of a day as still to land, so only the day's end can
     tell. A stale reading (``reading_rule.judge``) is set aside only when,
     without that, a reading fits neither start: in simulated days, setting
-    it aside first proved some from the wrong start."""
+    it aside first proved some from the wrong start. A day from a Monday
+    Reset whose day before gave no next start, as an unfinished one does,
+    that fails from every start below 5,000 is tried from the weekly raise
+    to it too (``_raise_untried``), taken only if its readings prove it: 27
+    such days on 10 November 2026 missed exactly the raise."""
     other = loss_rule.other_start(data)
-    starts = (StartCharge.AS_RESULT_SAYS,) if other is None else (StartCharge.AS_RESULT_SAYS, other)
-    tried: list[ReconciliationResult] = []
+    starts = [replace(data, start_charged=start)
+              for start in (StartCharge.AS_RESULT_SAYS, other) if start is not None]
+    raises = [replace(item, weekly_raise=True) for item in starts if _raise_untried(item)]
     for stale in (False, True):
-        for start in starts:
-            result = _reconcile(replace(data, start_charged=start), stale=stale)
+        tried: list[ReconciliationResult] = []
+        for item in (*starts, *raises):
+            if item.weekly_raise and not any(result.state is DayState.INCONSISTENT for result in tried):
+                break
+            result = _reconcile(item, stale=stale)
             if _proven(result):
                 return result
             tried.append(result)
-        if not any(result.state is DayState.INCONSISTENT for result in tried):
+        if not stale and not any(result.state is DayState.INCONSISTENT for result in tried):
             return tried[0]
-    return tried[len(starts)]
+    return tried[0]
+
+
+def _raise_untried(data: ReconciliationInput) -> bool:
+    """Whether an ended day from a Monday Reset, not a Season's first,
+    starts below 5,000 with no next start from the day before to raise
+    (``_settled_start``): the game raised it if it stayed in Legend I."""
+    previous, start = data.previous_day, _settled_start(data)[0]
+    return data.now >= data.ranked_day.end and data.ranked_day.start.weekday() == 0 and not (
+        data.season_first_day or previous and previous.expected_next_start is not None
+    ) and start is not None and start < 5000
 
 
 def _proven(result: ReconciliationResult) -> bool:
@@ -437,10 +458,11 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
     reset = data.season_first_day and (data.start_baseline_evidence.get("official_final_trophies")
                                        or data.previous_day and data.previous_day.final_trophies)
     raised = previous and (previous.final_trophies or 5000) < 5000 == start_trophies
+    unraised = _settled_start(replace(data, weekly_raise=False))[0] if data.weekly_raise else None
     earlier = _deduplicate_contributions(data.previous_day_contributions)[0] if previous else ()
     during, history, proof = reading_rule.contradiction_during_day(
         data.readings, day_start=data.ranked_day.start, reset_at=data.ranked_day.end,
-        start=previous.final_trophies if raised else reset or start_trophies,
+        start=unraised if unraised is not None else previous.final_trophies if raised else reset or start_trophies,
         pending_loss=previous.automatic_loss if previous and data.start_charged is not StartCharge.NOT_CHARGED else 0,
         reset=bool(reset),
         day_effects=_effects(contributions), earlier=_effects(earlier),
@@ -798,7 +820,8 @@ def _settled_start(data: ReconciliationInput) -> tuple[int | None, int, int]:
     reading; the day then starts from that. ``start_charged`` takes the loss
     off, or not, whatever it says. A start taken from the day before's
     calculated end already has both. A Monday after a day the weekly raise
-    takes to 5,000 starts there, whatever its Reset reading shows.
+    takes to 5,000 starts there, whatever its Reset reading shows, as does
+    one tried from the raise (``weekly_raise``).
     """
     previous = data.previous_day
     start, loss, correction = data.start_trophies, 0, 0
@@ -809,7 +832,7 @@ def _settled_start(data: ReconciliationInput) -> tuple[int | None, int, int]:
                 StartCharge.NOT_CHARGED: 0}[data.start_charged]
         correction = previous.reset_reading_correction
         start = data.start_trophies - loss + correction
-    if start is not None and previous and previous.expected_next_start == 5000 and (
+    if start is not None and (data.weekly_raise or previous and previous.expected_next_start == 5000) and (
             data.ranked_day.start.weekday() == 0 and not data.season_first_day):
         start, correction = 5000, correction + 5000 - start
     return start, loss, correction
@@ -1222,6 +1245,8 @@ def _formula_components(
     # other saved result keeps its hash.
     if data.start_charged is not StartCharge.AS_RESULT_SAYS:
         components["start_automatic_loss_charged"] = data.start_charged is StartCharge.CHARGED
+    if data.weekly_raise:
+        components["start_weekly_raise_proven"] = True
     if start_unsettled_loss or start_correction:
         components["start_reading_trophies"] = data.start_trophies
     if start_unsettled_loss:

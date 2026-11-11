@@ -179,6 +179,55 @@ def test_monday_reset_reading_before_the_weekly_raise(
             (RAISE_UNDONE, LATE_CREDIT, QUIET, DEFENDED), "uncertain")}
 
 
+def test_a_monday_after_an_unfinished_sunday_starts_at_5000_when_tuesday_proves_it(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """On 10 November 2026, 27 Mondays started from a Reset reading taken
+    before the weekly raise, because their Sundays were left Inconsistent
+    and gave no next start to raise; each missed exactly the raise. Both
+    players' Sundays, 8 defenses of 32 from 5,138, end at 4,882, but their
+    Monday Reset readings, taken before the raise, show 4,884, as
+    #PLL22J2U's did on 9 November 2026. On Monday, 8 attacks of 40 and 7
+    defenses of 30 lose floor(466 / 15) = 31 for the missing defense at
+    Tuesday's Reset.
+    RAISED's Tuesday readings, 5,110 before that loss and 5,079 after, fit
+    only a start of 5,000; AS_READ's, 4,994 and 4,963, fit 4,884, so it keeps
+    that start. Before the fix RAISED's Monday was Inconsistent with a
+    leftover of 116 and its Tuesday entry uncertain."""
+    season = PREVIOUS_SEASON
+    saturday, sunday, monday, tuesday = (day(number, season) for number in (20, 21, 22, 23))
+    raised, as_read = LATE_RAISE, LOSS_TOO
+    with domain_database(database_url) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, raised, as_read)
+        for player in story.players.values():
+            player.battles = (
+                _saturday(saturday) + defenses(sunday, *[32] * 8)
+                + attacks(monday, *[40] * 8) + defenses(monday, *[30] * 7))
+        story.reset(saturday, dict.fromkeys(story.players, (5298, season)))
+        story.reset(sunday, dict.fromkeys(story.players, (5138, season)))
+        story.reset(monday, dict.fromkeys(story.players, (4884, season)))
+        story.reads(monday + timedelta(minutes=20), {raised: 5000}, season)
+        story.reset(tuesday, {raised: (5110, season), as_read: (4994, season)})
+        story.reads(tuesday + timedelta(minutes=20), {raised: 5079, as_read: 4963}, season)
+        story.wait(timedelta(hours=1))
+        sundays = {tag: story.saved_day(tag, sunday)["state"] for tag in story.players}
+        mondays = {tag: story.saved_day(tag, monday) for tag in story.players}
+        unfinished = story.unfinished_jobs()
+        board = story.served_board(tuesday)
+
+    assert unfinished == []
+    assert sundays == dict.fromkeys(story.players, "Inconsistent")
+    monday_day = {
+        "state": "Complete", "start": 5000, "end": 5079, "next_start": 5079,
+        "automatic_loss": 31, "raise": 0, "attacks": 8, "defenses": 7, "residual": 0,
+    }
+    assert mondays == {raised: monday_day, as_read: {
+        **monday_day, "start": 4884, "end": 4963, "next_start": 4963}}
+    assert _ranked(board) == {raised: 5110, as_read: 4994}
+    assert {entry["tag"]: entry["confidence"] for entry in board["entries"]} == {
+        raised: "confirmed", as_read: "confirmed"}
+
+
 def _saved_before_the_fix(connection_info: str, archive_server, monkeypatch):
     """LATE_RAISE's and LOSS_TOO's Saturday to Tuesday Resets, their Sunday
     and Monday saved as on 12 October 2026, before the fix: Sunday
