@@ -74,7 +74,8 @@ def test_worker_finishes_a_claim_call_despite_rejected_newest_jobs(
         def newest_job_plan(self, *, limit):
             return list(planned_jobs[:limit])
 
-        def claim_job(self, *, owner, lease_seconds, job_id=None, planned=False, reset_first=False):
+        def claim_job(self, *, owner, lease_seconds, job_id=None, planned=False, reset_first=False,
+                      reset_rush=False):
             if job_id is None:
                 if not fallback_available:
                     return None
@@ -116,7 +117,8 @@ def test_worker_keeps_every_fourth_claim_oldest_first(monkeypatch) -> None:
         def newest_job_plan(self, *, limit):
             return [8, 9, 10, 11][:limit]
 
-        def claim_job(self, *, owner, lease_seconds, job_id=None, planned=False, reset_first=False):
+        def claim_job(self, *, owner, lease_seconds, job_id=None, planned=False, reset_first=False,
+                      reset_rush=False):
             job_id = queued[0] if job_id is None else job_id
             if job_id not in queued:
                 return None
@@ -150,7 +152,7 @@ def test_build_claims_take_reset_work_first_on_every_turn() -> None:
     calls = []
 
     class Database:
-        def claim_job(self, *, owner, lease_seconds, work_types, reset_first):
+        def claim_job(self, *, owner, lease_seconds, work_types, reset_first, reset_rush):
             calls.append((work_types, reset_first))
             return SimpleNamespace(job_id=len(calls))
 

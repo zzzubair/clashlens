@@ -101,6 +101,12 @@ OLDEST_FIRST_CLAIM_EVERY = 4
 # 20 minutes, and live responses waited 21 minutes behind the Reset backlog.
 # Until the Reset's board publishes, or 05:45 UTC, derived lanes always do (background_pacing).
 RESET_FIRST_CLAIM_EVERY = 2
+# Until the Reset's board publishes, or 05:30 UTC, response lanes take Reset
+# work first on every claim but one in this many (background_pacing). On
+# 10 Nov 2026 the Reset's battle logs got about 440 of the worker's 1,040
+# responses a minute from 05:17, the last finished at 05:34, and the first
+# board published after 05:30.
+RESET_RUSH_OTHER_EVERY = 4
 # A continuous worker with two or more lanes keeps about two thirds of them
 # (8 of 12) for responses unless told how many. The rest run derived work:
 # daily results, builds, redecodes and nightly re-check steps. Only one of
@@ -717,6 +723,7 @@ class ObservationProcessor:
         reset_turn = turn % RESET_FIRST_CLAIM_EVERY == 0
         # The board's build and checks always go before a slower army build.
         limit["reset_first"] = reset_turn or work_types == POPULATION_BUILD_WORK_TYPES
+        limit["reset_rush"] = turn % RESET_RUSH_OTHER_EVERY != RESET_RUSH_OTHER_EVERY - 1
         planned = False
         if work_types is None or "process_observation" in work_types:
             with self._plan_lock:
@@ -756,16 +763,18 @@ class ObservationProcessor:
     ) -> list[Claim]:
         """One batch of claims, taking turns like a lane's single claims do.
 
-        Every other batch takes Reset-priority work first, every derived one
-        in the Reset-first window, and three batches of responses in four
-        start from the newest-first plan; see ``_claim_next``.
+        Every other batch takes Reset-priority work first, three in four
+        until the Reset's board publishes or 05:30 UTC, every derived one in
+        the Reset-first window, and three batches of responses in four start
+        from the newest-first plan; see ``_claim_next``.
         """
         turn = self._batch_turns[work_types]
         self._batch_turns[work_types] = turn + 1
         reset_turn = turn % RESET_FIRST_CLAIM_EVERY == 0
         size = max(1, min(self.claim_batch, self.claims.free_lanes(work_types)))
         limit = {"owner": owner, "lease_seconds": lease_seconds, "limit": size,
-                 "work_types": work_types, "reset_first": reset_turn}
+                 "work_types": work_types, "reset_first": reset_turn,
+                 "reset_rush": turn % RESET_RUSH_OTHER_EVERY != RESET_RUSH_OTHER_EVERY - 1}
         claims: list[Claim] = []
         if work_types == RESPONSE_WORK_TYPES and turn % OLDEST_FIRST_CLAIM_EVERY != 0:
             planned = self._next_planned_job()

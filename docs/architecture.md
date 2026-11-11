@@ -184,8 +184,10 @@ falls back to the existing order without refreshing the plan again. On a
 thread that processes responses, every other job it claims takes Reset-priority
 work first, so on that turn its planned claim yields to Reset work it could take;
 on the other turn the planned claim goes ahead, so live pages keep moving
-during a Reset backlog; see [`deployment.md`](deployment.md) for this and the
-other threads' turns.
+during a Reset backlog. From each swept Reset until its Daily board first
+publishes, and never past 05:30 UTC, it takes Reset-priority work first on 3
+claims in 4 instead, so the Reset's battle logs finish sooner; see
+[`deployment.md`](deployment.md) for this and the other threads' turns.
 
 Worker threads share the newest-job plan. With `--run-forever` and more than
 one thread, response threads also share claims: one database transaction

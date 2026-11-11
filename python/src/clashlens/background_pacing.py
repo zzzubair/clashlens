@@ -63,7 +63,11 @@ keep taking it first on every other claim (``reset_first_claim``, owner
 decision, 13 Oct 2026). On 13 Oct the Reset's day results got 52% of those
 lanes, live day results 41% and background work 7%, and the board published
 at 05:46. The cap means a board that never publishes holds live day results
-and background work back for at most 45 minutes.
+and background work back for at most 45 minutes. Until ``RESET_RUSH_CAP``,
+05:30, response lanes take it first on 3 claims in 4 instead, so the
+Reset's battle logs finish sooner (owner decision, 10 Nov 2026): on 10 Nov
+the last finished at 05:34. Only the sweep's own responses are Reset work,
+so the 05:20 settlement checks and live updates share the fourth claim.
 """
 
 from __future__ import annotations
@@ -105,6 +109,8 @@ LOCK_STRAIN_SECONDS = 1
 LIVE_WORK_TYPES = ("process_observation", "replay_observation", "reconcile_ranked_day")
 # The Reset-first window ends at the latest this long after the Reset, 05:45 UTC.
 RESET_FIRST_CAP = timedelta(minutes=45)
+# Response lanes' rush turns take Reset work first until this long after it, 05:30 UTC.
+RESET_RUSH_CAP = timedelta(minutes=30)
 # The Reset whose window this process last saw open, to log when it ends.
 _open_window: list[datetime] = []
 _window_lock = Lock()
@@ -188,14 +194,25 @@ def _now() -> datetime:
 
 def reset_first_claim(
     connection: Any, work_types: Collection[str] | None, reset_first: bool | None,
+    *, rush: bool = False,
 ) -> tuple[bool, bool | None]:
     """Whether this claim holds background work back, and its ``reset_first``:
-    in the Reset-first window, True for a lane that claims no responses."""
+    in the Reset-first window, True for a lane that claims no responses, and
+    for a ``rush`` turn under ``RESET_RUSH_CAP`` after the Reset."""
     from .job_contracts import RESPONSE_WORK_TYPES
 
     if not reset_first_window(connection):
         return False, reset_first
-    return True, reset_first or not set(work_types or RESPONSE_WORK_TYPES) & set(RESPONSE_WORK_TYPES)
+    now = _now()
+    rushed = rush and now < _newest_reset(now) + RESET_RUSH_CAP
+    return True, reset_first or rushed or not (
+        set(work_types or RESPONSE_WORK_TYPES) & set(RESPONSE_WORK_TYPES))
+
+
+def _newest_reset(now: datetime) -> datetime:
+    """The newest 05:00 UTC Reset at ``now``."""
+    boundary = now.replace(hour=5, minute=0, second=0, microsecond=0)
+    return boundary - (timedelta(days=1) if boundary > now else timedelta(0))
 
 
 def reset_first_window(connection: Any) -> bool:
@@ -203,8 +220,7 @@ def reset_first_window(connection: Any) -> bool:
     Daily board and is under ``RESET_FIRST_CAP`` old. Logs once a process
     when it sees a window start and end."""
     now = _now()
-    boundary = now.replace(hour=5, minute=0, second=0, microsecond=0)
-    boundary -= timedelta(days=1) if boundary > now else timedelta(0)
+    boundary = _newest_reset(now)
     # A correction can replace a published board, so its event counts too.
     is_open = now < boundary + RESET_FIRST_CAP and connection.execute(
         """
