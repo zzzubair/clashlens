@@ -3,7 +3,7 @@
 With ``CLASHLENS_GAME_RANKINGS_ENABLED=true`` the collector pulls, for each
 Reset R, the global top 200 at R+30 s, then every 3 minutes until its
 ``previousRank`` differs from that early pull's, then every country's top 200
-(migration 0099). An early pull that already holds R's ranks is R's list. Untracked Legend I players in country lists are saved as due
+(migration 0099), each again until it too has switched. An early pull that already holds R's ranks is R's list. Untracked Legend I players in country lists are saved as due
 a discovery check. From R+2 h each newly published frozen Daily board for R is
 scored against the pulls: S1-S6 from the 11 Oct 2026 blind review, ``unknown``
 whenever a pull failed or is missing. Schedule, storage and the score's
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import dataclasses
 import gzip
 import hashlib
 import json
@@ -47,6 +48,13 @@ EARLY_RETRY_AFTER = timedelta(minutes=1)
 LOCATIONS_EVERY = timedelta(days=7)
 KEEP_PULLS = timedelta(days=28)
 SWITCHED_SHARE = 0.25
+# A country list with fewer rows to compare than this is too small to tell
+# whether it has switched; it is scored as it comes.
+MIN_SWITCH_ROWS = 10
+# A country pull's failure when its previousRank still holds the Reset before.
+NOT_SWITCHED = "not_switched"
+# A readable pull's failure when a player in it could not go to discovery.
+NOT_HANDED = "discovery_not_handed"
 REQUEST_SECONDS = 0.5
 TICK_SECONDS = 15.0
 SCORE_SECONDS = 600.0
@@ -125,6 +133,30 @@ def holds_reset_ranks(rows: list[Row]) -> bool:
     return bool(ranked) and moved < SWITCHED_SHARE * len(ranked)
 
 
+def country_switched(rows: list[Row], before: list[Row] | None) -> bool | None:
+    """Whether a country list gives this Reset's ranks as ``previousRank``,
+    judged against ``before``, the same country's list from the Reset before;
+    None when fewer than MIN_SWITCH_ROWS rows can be compared.
+
+    The game switches countries one by one after the Reset: on 10 Nov 2026
+    Austria (05:00:38) and Bangladesh (05:00:40) still gave every player
+    the 9 November rank, and on 11 Nov the ten lists pulled first did. A list
+    that has not switched gives the ranks ``before`` gave, or, when ``before``
+    had not switched either, the order ``before`` was in.
+    """
+    ranked = [row for row in rows if row.previous_rank]
+    if len(ranked) < MIN_SWITCH_ROWS:
+        return None
+    if holds_reset_ranks(rows):
+        return True
+    known = {row.tag for row in before or [] if row.previous_rank}
+    if sum(row.tag in known for row in ranked) < MIN_SWITCH_ROWS:
+        return None
+    by_position = [dataclasses.replace(row, previous_rank=position)
+                   for position, row in enumerate(before, 1)]
+    return switched(rows, before) and switched(rows, by_position)
+
+
 def _reset_pull(pulls: list[Pull]) -> Pull | None:
     """R's global list: the poll seen to switch, or the early pull when it
     already holds R's ranks."""
@@ -146,7 +178,9 @@ class RankingStep(StrEnum):
       ``global_reset``), or the early list already holds R's ranks.
     - ``countries``: R's list seen, before R+2 h: pull the countries (at
       most weekly) and each country's list, a failed one again after 2
-      minutes; a country list's untracked Legend I players go to discovery.
+      minutes, and one not yet switched (``country_switched``) again after
+      2 minutes until R+1 h; a country list's untracked Legend I players go
+      to discovery.
     - ``missed``: before R+2 h, R's list never seen and its window passed:
       nothing more is pulled.
     - ``scoring``: from R+2 h each newly published Daily board version of R
@@ -198,15 +232,23 @@ def score(
     stuck: set[str],
     readings: dict[str, int],
     received: dict[str, int],
+    unswitched: set[int],
+    first: dict[int, list[Row]],
+    battles: dict[str, int],
 ) -> dict[str, Any]:
     """Score one board, ``{tag: (position, trophies, confidence)}``, against the pulls.
 
     ``stuck`` are the game's stuck 5,000 rows; they and tags in two country
     lists are left out of every number and listed instead. Rank comparisons
-    still use the published positions and trophies of the whole board.
+    still use the published positions and trophies of the whole board,
+    except in the ``unswitched`` country lists, whose ``previousRank``
+    still holds the Reset before.
     ``readings`` are our newest trophies the worker had saved when each
     country list was requested; ``received``, S5's definition until 6
     November 2026, the newest whose response had arrived by then.
+    ``first`` is each country's first list read after the Reset, compared
+    with the board's trophies; ``battles``, for a player it differs on, the
+    trophies their battles moved from the Reset to that list's request.
     """
     value = {tag: entry[1] for tag, entry in board.items()}
     position = {tag: entry[0] for tag, entry in board.items()}
@@ -220,7 +262,9 @@ def score(
     reset = [row for row in reset or [] if row.tag not in faults]
     pairs = breaks = tied = tie_agree = 0
     contradicted: set[str] = set()
-    for rows in countries.values():
+    for location, rows in countries.items():
+        if location in unswitched:
+            continue
         ranked = sorted(
             (row for row in rows if row.legend_i and row.tag in board and row.previous_rank),
             key=lambda row: row.previous_rank,
@@ -262,6 +306,10 @@ def score(
         exact += position[row.tag] == row.previous_rank
     counted = board.keys() - faults
     uncertain = len(counted - confirmed)
+    daily = [row for rows in first.values() for row in rows
+             if row.legend_i and row.tag in board and row.tag not in faults]
+    unexplained = sorted(row.tag for row in daily if row.trophies != value[row.tag]
+                         and battles.get(row.tag) != row.trophies - value[row.tag])
     return {
         "s1_country_order_breaks_per_100k": round(1e5 * breaks / pairs, 1) if pairs else None,
         "country_pairs": pairs,
@@ -289,6 +337,10 @@ def score(
             row.tag in board and row.trophies == value[row.tag] for row in early
         ),
         "game_faults": {"stuck_5000": sorted(stuck), "tag_in_two_countries": sorted(twice)},
+        "daily_trophies_compared": len(daily),
+        "daily_trophies_equal": sum(row.trophies == value[row.tag] for row in daily),
+        "daily_trophies_equal_after_battles": len(daily) - len(unexplained),
+        "daily_trophies_unexplained_tags": unexplained,
     }
 
 
@@ -335,6 +387,36 @@ def _latest(pulls: list[Pull], purpose: str, location_id: int | None = None) -> 
     return found[-1] if found else None
 
 
+def _country_pulls(pulls: list[Pull], location_id: int) -> tuple[Pull, Pull] | None:
+    """A country's list to score, the latest that switched or else the latest
+    not yet switched, and its first list read; None when neither was read."""
+    read = [pull for pull in pulls if pull.purpose == "country"
+            and pull.location_id == location_id
+            and pull.failure in (None, NOT_SWITCHED, NOT_HANDED)]
+    scored = [pull for pull in read if pull.failure != NOT_HANDED]
+    return ((_latest(pulls, "country", location_id) or scored[-1]), read[0]) if scored else None
+
+
+def previous_lists(
+    database: CollectorDatabase, boundary: datetime, location_id: int | None = None
+) -> dict[int, list[Row]]:
+    """Each country's list to score (``_country_pulls``) from the Reset
+    before ``boundary``, or only ``location_id``'s."""
+    with database.connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT DISTINCT ON (location_id) location_id, body_gzip
+            FROM game_ranking_pulls
+            WHERE boundary_at = %(before)s AND purpose = 'country'
+              AND (failure IS NULL OR failure = %(not_switched)s)
+              AND (%(location)s::integer IS NULL OR location_id = %(location)s)
+            ORDER BY location_id, failure IS NOT NULL, requested_at DESC
+            """,
+            {"before": boundary - _DAY, "not_switched": NOT_SWITCHED, "location": location_id},
+        ).fetchall()
+    return {location: read_rows(gzip.decompress(body)) for location, body in rows}
+
+
 def _last_try(pulls: list[Pull], purpose: str, location_id: int | None = None) -> datetime | None:
     tries = [pull.requested_at for pull in pulls
              if pull.purpose == purpose and pull.location_id == location_id]
@@ -374,7 +456,7 @@ def save_pull(
                 ).fetchone()
                 added += new
                 if not handed:
-                    failure = failure or "discovery_not_handed"
+                    failure = failure or NOT_HANDED
         connection.execute(
             """
             INSERT INTO game_ranking_pulls (
@@ -442,12 +524,22 @@ def score_day(database: CollectorDatabase, boundary: datetime) -> dict[str, Any]
     expected = [] if locations is None else read_countries(locations.body)
     if locations is None:
         reasons.append("locations_missing")
-    countries, pulled_at = {}, {}
-    for location_id, _code in expected:
-        pull = _latest(pulls, "country", location_id)
-        if pull is not None:
-            countries[location_id] = read_rows(pull.body)
-            pulled_at[location_id] = pull.requested_at
+    before = previous_lists(database, boundary)
+    countries, pulled_at, first, first_at = {}, {}, {}, {}
+    unswitched, too_small = {}, 0
+    for location_id, code in expected:
+        found = _country_pulls(pulls, location_id)
+        if found is None:
+            continue
+        pull, earliest = found
+        countries[location_id] = rows = read_rows(pull.body)
+        pulled_at[location_id] = pull.requested_at
+        first[location_id] = rows if earliest is pull else read_rows(earliest.body)
+        first_at[location_id] = earliest.requested_at
+        verdict = country_switched(rows, before.get(location_id))
+        if verdict is False:
+            unswitched[location_id] = code
+        too_small += verdict is None
     if len(countries) < len(expected):
         reasons.append(f"countries_missing:{len(expected) - len(countries)}")
     board = {str(row.normalized_tag): (int(row.board_position), int(row.trophies), str(row.confidence))
@@ -459,6 +551,10 @@ def score_day(database: CollectorDatabase, boundary: datetime) -> dict[str, Any]
     # Our newest saved trophies when each board player's country list was requested.
     live = [(row.tag, pulled_at[location]) for location, rows in countries.items()
             for row in rows if row.legend_i and row.tag in board]
+    # Board players whose trophies differ from their country's first list.
+    differ = [(row.tag, first_at[location]) for location, rows in first.items()
+              for row in rows if row.legend_i and row.tag in board
+              and row.trophies != board[row.tag][1]]
     with database.connection() as connection:
         stuck = {str(tag) for (tag,) in connection.execute(
             "SELECT * FROM clashlens_game_ranking_season_battlers(%s, %s, %s)",
@@ -472,6 +568,12 @@ def score_day(database: CollectorDatabase, boundary: datetime) -> dict[str, Any]
             for lookup in ("clashlens_game_ranking_processed_readings",
                            "clashlens_game_ranking_readings")
         )
+        # A battle that may have ended inside the window, known only from
+        # the defender's side, leaves the difference unexplained.
+        battles = {str(tag): int(change) for tag, change, unsure in connection.execute(
+            "SELECT * FROM clashlens_game_ranking_battles(%s, %s, %s)",
+            ([tag for tag, _at in differ], boundary, [at for _tag, at in differ]),
+        ) if unsure == 0}
     country_times = [pull.requested_at for pull in pulls if pull.purpose == "country"]
     result = {
         "unknown_reasons": reasons,
@@ -480,6 +582,8 @@ def score_day(database: CollectorDatabase, boundary: datetime) -> dict[str, Any]
         "global_reset_at": None if reset is None else _utc(reset.requested_at),
         "countries_expected": len(expected),
         "countries_pulled": len(countries),
+        "countries_not_switched": sorted(unswitched.values()),
+        "countries_too_small_to_tell": too_small,
         "first_country_at": _utc(min(country_times)) if country_times else None,
         "last_country_at": _utc(max(country_times)) if country_times else None,
         **score(
@@ -490,6 +594,9 @@ def score_day(database: CollectorDatabase, boundary: datetime) -> dict[str, Any]
             stuck,
             readings,
             received,
+            set(unswitched),
+            first,
+            battles,
         ),
     }
     with database.connection() as connection, connection.transaction():
@@ -568,12 +675,17 @@ async def pull_due(collector: Collector, puller: _Puller) -> Counter[str]:
         rows = None if failure or target is None else read_rows(response.body)
         if judge is not None and rows is not None and judge(rows):
             purpose = "global_reset"
+        if purpose == "country" and rows is not None:
+            before = await collector.database_call(previous_lists, database, boundary, location[0])
+            if country_switched(rows, before.get(location[0])) is False:
+                failure = NOT_SWITCHED
         added, failure = await collector.database_call(
             save_pull, database, boundary, purpose, location, requested_at, response, failure,
             discover=rows if purpose == "country" and rows else [],
         )
         counts["added_to_discovery"] += added
-        counts[purpose if failure is None else "failed"] += 1
+        counts[purpose if failure is None else NOT_SWITCHED if failure == NOT_SWITCHED
+               else "failed"] += 1
         pulls.append(Pull(purpose, None if location is None else location[0], requested_at,
                           failure, None if response is None else response.body))
 
@@ -612,7 +724,12 @@ async def pull_due(collector: Collector, puller: _Puller) -> Counter[str]:
     for location in read_countries(locations.body):
         if collector.stopping.is_set():
             break
-        if due("country", location[0], RETRY_AFTER):
+        tries = [tried for tried in pulls
+                 if tried.purpose == "country" and tried.location_id == location[0]]
+        # A list not yet switched is pulled again until R+1 h.
+        given_up = (bool(tries) and tries[-1].failure == NOT_SWITCHED
+                    and now >= boundary + POLL_UNTIL)
+        if due("country", location[0], RETRY_AFTER) and not given_up:
             await pull("country", location)
     return counts
 
