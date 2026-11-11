@@ -170,8 +170,23 @@ regular keys, one request at a time and at most two a second
   later, until 07:00. A location list already over 7 days old at the Reset
   is never used: while it can't be refreshed no country list is pulled, and
   the day scores `unknown`.
+- each country list is checked on its own for having switched
+  (`country_switched`), because the game switches countries one by one after
+  the global list: on 10 Nov 2026 Austria and Bangladesh, pulled at 05:00:38
+  and 05:00:40, still gave every player the 9 November rank, and on 11 Nov
+  the ten lists pulled first did. A list has switched when fewer than a
+  quarter of its players with a known `previousRank` have moved from it, or
+  when at least a quarter of those also in the same country's list from the
+  Reset before show a rank that differs both from that list's
+  `previousRank` and from that list's order (its order is the right yardstick
+  when that list had not switched either). With fewer than 10 such players
+  the list is too small to tell and is used as it is: 25 to 28 a day on 9 to
+  11 Nov, none with a Legend I player. A list not yet switched is saved with
+  the failure `not_switched` and pulled again 2 minutes after its last try,
+  until 06:00; 2 lists on 10 Nov and 10 on 11 Nov.
 
-That is about 258 requests a day plus up to 19 polls. Each pull keeps its raw
+That is about 258 requests a day plus up to 19 polls and a few country
+re-pulls. Each pull keeps its raw
 bytes gzip-compressed, its request time and location in `game_ranking_pulls`,
 deleted 28 days after its Reset: about 4 MB a day compressed (43 MB raw), so
 about 115 MB at most. Every Legend I player in a country list who is not
@@ -205,6 +220,30 @@ missing from our board. S5 compares each board player's trophies in a country li
 our newest profile reading the worker had saved when that list was
 requested, through one read-only lookup the collector's login may call
 (migration 0140); a player with no such reading is not compared.
+
+A country list still not switched when it is scored, by 06:00, is named in
+`countries_not_switched`, not counted as missing, and left out of S1, S3 and
+the tie counts, which read its `previousRank`; its trophies still count. The
+lists too small to tell are counted in `countries_too_small_to_tell`.
+
+The score also compares the Daily board with the game's trophies, as the
+morning check did by hand. For each board player in a country's first list
+read after the Reset, faults left out, `daily_trophies_equal` counts those
+whose list trophies equal the board's, of `daily_trophies_compared`.
+`daily_trophies_equal_after_battles` also counts a difference that equals
+the trophies the player's battles moved from 05:00 to that list's request,
+each battle counted when its attacker's report, stamped when the attack
+ends, falls between the two, through one more read-only lookup (migration
+0142). A battle known only from the defender's report, stamped from 4
+minutes before the Reset to the request, may or may not have ended in
+between, so the difference stays unexplained. The players still unexplained
+are listed in `daily_trophies_unexplained_tags`. On the 10 November 2026
+board, version 50, that is 7,365 and then 7,387 of 7,387; on 11 November,
+version 15, 7,354 and then 7,365 of 7,367. The two left, in Korea and
+Turkmenistan, are 26 and 32 above the board at 05:02 because the game had
+not yet taken off a loss left unsettled from the day before, which the
+board already had; Reset readings at 05:10 matched the board. Without the not-switched lists, the same boards' order breaks
+fall from 4,376 to 0 and from 907 to 54.
 
 | score | meaning | 11 Oct 2026 board |
 |---|---|---:|

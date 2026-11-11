@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import ClassVar
 
 import psycopg
-from domain_test_support import domain_database, store_observation
+from domain_test_support import domain_database, seed_battles, store_observation
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from reconciliation_postgres_support import _processor, _profile
 from reset_settlement_collection_postgres_support import _collector
@@ -311,6 +311,17 @@ def test_a_reset_morning_of_game_lists_ends_in_a_stored_score(
             # later: the newest reading by the pull is still 5,100.
             ("#2UU", timedelta(minutes=7), 5130, timedelta(seconds=10)),
         ])
+        with psycopg.connect(info) as connection:
+            ids = dict(connection.execute(
+                "SELECT normalized_tag, id FROM players WHERE normalized_tag IN ('#2QQ', '#2PP')"
+            ).fetchall())
+            # #2QQ's attack ended at 05:05, before France's 05:07:02 request:
+            # France's 5,310 is the board's 5,300 plus its 10. #2PP's defense
+            # is known only from #2PP's own log, stamped 05:02, so whether its
+            # attack ended before or after 05:00 is unknown, and France's 5,390
+            # against the board's 5,400 stays unexplained.
+            seed_battles(connection, ids["#2QQ"], [(RESET + timedelta(minutes=5), 10)])
+            seed_battles(connection, ids["#2PP"], [(RESET + timedelta(minutes=2), -10)])
         # 05:00:40 early pull; 05:03 poll still shows yesterday's ranks.
         early, still_yesterday = _day(
             info, origin, tmp_path, [timedelta(seconds=40), timedelta(minutes=3)]
@@ -365,6 +376,10 @@ def test_a_reset_morning_of_game_lists_ends_in_a_stored_score(
     assert printed["global_early_at"] == (RESET + timedelta(seconds=40) + SENT_AFTER).isoformat()
     assert printed["global_reset_at"] == (RESET + timedelta(minutes=7) + SENT_AFTER).isoformat()
     assert (printed["countries_expected"], printed["countries_pulled"]) == (2, 2)
+    # Each list has 4 players with a known rank, too few to tell whether it
+    # has switched, so both are scored as they are.
+    assert printed["countries_not_switched"] == []
+    assert printed["countries_too_small_to_tell"] == 2
     # The stuck rows #2LL and #2VV are left out of every number.
     # France: one pair, and it breaks. US: one pair, and it breaks too.
     assert (printed["country_pairs"], printed["country_order_breaks"]) == (2, 2)
@@ -389,6 +404,11 @@ def test_a_reset_morning_of_game_lists_ends_in_a_stored_score(
     assert printed["game_faults"] == {
         "stuck_5000": ["#2LL", "#2VV"], "tag_in_two_countries": [],
     }
+    # Against the board: #2GG and #2UU equal their list; #2QQ's attack after
+    # 05:00 explains its difference; #2PP's does not.
+    assert (printed["daily_trophies_compared"], printed["daily_trophies_equal"],
+            printed["daily_trophies_equal_after_battles"]) == (4, 2, 3)
+    assert printed["daily_trophies_unexplained_tags"] == ["#2PP"]
 
 
 def test_an_early_pull_already_switched_still_pulls_every_country_once(
@@ -572,3 +592,133 @@ def test_a_resets_ranking_check_steps_from_its_saved_pulls() -> None:
     assert step(RESET, RESET + timedelta(minutes=61), [early]) is steps.MISSED
     assert step(RESET, RESET + timedelta(hours=2), [early]) is steps.SCORING
     assert step(RESET, RESET + timedelta(hours=2), [early, seen]) is steps.SCORING
+
+
+# Two countries of 10 board players each, below the six of BOARD.
+GERMANY = [f"#9{char}{char}" for char in "PYLQGRJCUV"]
+AUSTRIA = [f"#8{char}{char}" for char in "PYLQGRJCUV"]
+TWO_COUNTRIES = json.dumps({"items": [
+    {"id": 32000094, "name": "Germany", "isCountry": True, "countryCode": "DE"},
+    {"id": 32000017, "name": "Austria", "isCountry": True, "countryCode": "AT"},
+], "paging": {"cursors": {}}}).encode()
+# The ranks each list gave at the Reset before: neighbours swapped.
+BEFORE_RANKS = [2, 1, 4, 3, 6, 5, 8, 7, 10, 9]
+
+
+def _country(tags: list[str], first_trophies: int, ranks: list[int]) -> bytes:
+    """A country list in the game's order, 10 trophies apart, with ``ranks`` as previousRank."""
+    return _list([(tag, first_trophies - 10 * index, 40, rank, LEGEND_I)
+                  for index, (tag, rank) in enumerate(zip(tags, ranks, strict=True))])
+
+
+def test_a_country_list_not_yet_switched_is_pulled_again_and_left_out_of_the_order_score(
+    database_url: str, tmp_path, capsys, monkeypatch
+) -> None:
+    # On 10 Nov 2026 the Austria and Bangladesh lists pulled at 05:00:38 and
+    # 05:00:40 still gave every player the 9 November rank: 4,376 of the
+    # score's 4,379 order breaks and all 250 contradicted entries.
+    monkeypatch.setattr(game_rankings, "REQUEST_SECONDS", 0.0)
+    answers = {
+        "/v1/locations": (200, TWO_COUNTRIES),
+        "/v1/locations/global/rankings/players": (200, _global(TODAY_RANKS)),
+        "/v1/locations/32000094/rankings/players": (200, _country(GERMANY, 4990, BEFORE_RANKS)),
+        "/v1/locations/32000017/rankings/players": (200, _country(AUSTRIA, 4890, BEFORE_RANKS)),
+    }
+    with domain_database(database_url) as info, _game(answers) as origin:
+        _seed(info)
+        with psycopg.connect(info) as connection:
+            snapshot, observation = connection.execute(
+                "SELECT (SELECT id FROM leaderboard_snapshots),"
+                " (SELECT id FROM collector_observations WHERE occurrence_key = 'seed')"
+            ).fetchone()
+            # Our board agrees with the game's trophies in both countries.
+            for position, tag in enumerate(GERMANY + AUSTRIA, len(BOARD) + 1):
+                connection.execute(
+                    """
+                    WITH player AS (
+                        INSERT INTO players (normalized_tag, active) VALUES (%s, true) RETURNING id
+                    )
+                    INSERT INTO leaderboard_snapshot_entries (
+                        snapshot_id, position, player_id, trophies, trophy_observation_id,
+                        trophy_observed_at, observation_age_seconds, freshness, confidence,
+                        tie_hash
+                    ) SELECT %s, %s, id, %s, %s, %s, 0, 'fresh', 'confirmed', repeat('c', 64)
+                    FROM player
+                    """,
+                    (tag, snapshot, position, 4990 - 10 * (position - len(BOARD) - 1),
+                     observation, RESET),
+                )
+            # Each country's list from the Reset before, which had switched.
+            for location, code, body in ((32000094, "DE", _country(GERMANY, 4950, BEFORE_RANKS)),
+                                         (32000017, "AT", _country(AUSTRIA, 4850, BEFORE_RANKS))):
+                pulled = RESET - timedelta(days=1) + timedelta(seconds=50)
+                connection.execute(
+                    """
+                    INSERT INTO game_ranking_pulls (boundary_at, purpose, location_id,
+                        country_code, requested_at, completed_at, http_status, body_gzip)
+                    VALUES (%s, 'country', %s, %s, %s, %s, 200, %s)
+                    """,
+                    (RESET - timedelta(days=1), location, code, pulled, pulled,
+                     gzip.compress(body)),
+                )
+        # 05:00:40: the global list has switched, both countries not yet.
+        [first] = _day(info, origin, tmp_path, [timedelta(seconds=40)])
+        # By 05:03 Germany has switched; Austria never does before 06:00.
+        answers["/v1/locations/32000094/rankings/players"] = (
+            200, _country(GERMANY, 4990, list(range(1, 11))),
+        )
+        retries = _day(info, origin, tmp_path, [timedelta(minutes=minute)
+                                               for minute in (2, 3, 5.5, 59, 61, 90)])
+        printed = _printed_score(info, capsys)
+        with psycopg.connect(info) as connection:
+            saved = connection.execute(
+                "SELECT country_code, failure FROM game_ranking_pulls"
+                " WHERE purpose = 'country' AND boundary_at = %s ORDER BY requested_at, country_code",
+                (RESET,),
+            ).fetchall()
+    assert first == Counter(global_early=1, locations=1, not_switched=2, added_to_discovery=0)
+    # Each not yet switched list again 2 minutes after its last try, Austria
+    # until 06:00.
+    assert retries == [Counter(), Counter(country=1, not_switched=1, added_to_discovery=0),
+                       Counter(not_switched=1, added_to_discovery=0),
+                       Counter(not_switched=1, added_to_discovery=0), Counter(), Counter()]
+    assert saved == [("AT", "not_switched"), ("DE", "not_switched"), ("AT", "not_switched"),
+                     ("DE", None), ("AT", "not_switched"), ("AT", "not_switched")]
+    assert printed["status"] == "scored" and printed["unknown_reasons"] == []
+    assert (printed["countries_expected"], printed["countries_pulled"]) == (2, 2)
+    # Austria is named, and its yesterday's ranks count no pairs; Germany's
+    # switched list agrees with the board in all 45 of its pairs.
+    assert printed["countries_not_switched"] == ["AT"]
+    assert printed["countries_too_small_to_tell"] == 0
+    assert (printed["country_pairs"], printed["country_order_breaks"]) == (45, 0)
+    assert printed["s3_confirmed_entries_contradicted"] == 0
+    # Its trophies were the game's at the Reset all along, so they still count.
+    assert (printed["daily_trophies_compared"], printed["daily_trophies_equal"],
+            printed["daily_trophies_equal_after_battles"]) == (20, 20, 20)
+
+
+def test_a_country_list_is_judged_switched_against_the_reset_before() -> None:
+    """A list is switched when its ranks moved from both the ranks and the
+    order of the same country's list from the Reset before; too few rows to
+    compare can't tell."""
+    judge = game_rankings.country_switched
+
+    def rows(ranks: list[int], tags: list[str] = GERMANY) -> list[game_rankings.Row]:
+        return game_rankings.read_rows(_country(tags, 4990, ranks))
+
+    switched_before = rows(BEFORE_RANKS)
+    # The list from the Reset before had not switched either: its order was
+    # that Reset's ranks, its ranks the Reset's before.
+    in_that_order = [tag for _rank, tag in sorted(zip(BEFORE_RANKS, GERMANY, strict=True))]
+    stale_before = rows([3, 4, 1, 2, 7, 8, 5, 6, 9, 10], in_that_order)
+    assert judge(rows(BEFORE_RANKS), switched_before) is False
+    assert judge(rows(list(range(1, 11))), switched_before) is True
+    assert judge(rows([3, 4, 1, 2, 7, 8, 5, 6, 9, 10]), switched_before) is True
+    assert judge(rows(BEFORE_RANKS), stale_before) is False
+    assert judge(rows([3, 4, 1, 2, 7, 8, 5, 6, 9, 10]), stale_before) is True
+    # In its own order already: switched, with nothing to compare.
+    assert judge(rows(list(range(1, 11))), None) is True
+    assert judge(rows(BEFORE_RANKS), None) is None
+    # Nine players with a known rank are too few.
+    assert judge(rows([*BEFORE_RANKS[:9], 0]), switched_before) is None
+    assert judge(rows(BEFORE_RANKS), rows(BEFORE_RANKS, AUSTRIA)) is None
