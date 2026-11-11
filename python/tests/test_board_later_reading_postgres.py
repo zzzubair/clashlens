@@ -11,9 +11,11 @@ reading plus the 8 attacks. See docs/testing.md.
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
+import psycopg
 from board_later_reading_postgres_support import (
     _hold,
 )
@@ -107,7 +109,7 @@ CONTRADICTED, CONTRADICTED_FAR = "#LQQ", "#GQQ"
 
 
 def test_an_unproven_day_shows_its_calculated_end(
-    database_url: str, archive_server, monkeypatch
+    database_url: str, archive_server, monkeypatch, capsys
 ) -> None:
     """A day nothing contradicts that no reading proves yet shows its own
     calculated end, uncertain, not its newest reading before the Reset,
@@ -173,6 +175,9 @@ def test_an_unproven_day_shows_its_calculated_end(
         story.reads(_at(5, 44, 56), {SINGAPORE: 4939, NEVER_CREDITED: 4640})
         story.wait(timedelta(hours=1))
         later_days = {tag: story.saved_day(tag, start)["state"] for tag in battles}
+        with psycopg.connect(connection_info) as connection:
+            singapore = connection.execute(
+                "SELECT id FROM players WHERE normalized_tag = %s", (SINGAPORE,)).fetchone()[0]
         later = story.served_board(end)
         unfinished = story.unfinished_jobs()
 
@@ -181,6 +186,14 @@ def test_an_unproven_day_shows_its_calculated_end(
         **dict.fromkeys((SWEDEN, KOREA, IRAQ, NEVER_CREDITED), "Partial"),
         SINGAPORE: "Complete", CONTRADICTED: "Inconsistent", CONTRADICTED_FAR: "Inconsistent"}
     assert later_days == {**first_days, SINGAPORE: "Partial"}
+    # SINGAPORE's proof lost to its 05:44:56 reading is logged once: same
+    # end, same battles. Proof only gained, as NEVER_CREDITED's, is not.
+    lost = [event for event in map(json.loads, capsys.readouterr().out.splitlines())
+            if event.get("event") == "day_proof_lost"]
+    assert [(event["player_id"], event["old_state"], event["new_state"], event["end_changed"],
+             event["battles_changed"], datetime.fromisoformat(event["reading_at"]))
+            for event in lost] == [(singapore, "Complete", "Partial", False, False,
+                                    _at(5, 44, 56))]
     shown = {SWEDEN: (4859, "uncertain"), KOREA: (5085, "uncertain"),
              IRAQ: (5087, "uncertain"), SINGAPORE: (4939, "uncertain"),
              NEVER_CREDITED: (4680, "uncertain"), CONTRADICTED: (5020, "uncertain"),

@@ -244,6 +244,7 @@ def sweep_late_battles(database: Database, *, now: datetime) -> tuple[int, int] 
         )
     failed = 0
     for player_id, first_day in first_days.items():
+        saved_again: list[str | dict[str, Any]] = []
         try:
             with database.pool.connection() as connection, connection.transaction():
                 reconciliation_db.limit_lock_waits(connection)
@@ -268,7 +269,10 @@ def sweep_late_battles(database: Database, *, now: datetime) -> tuple[int, int] 
                         processing_version=PROCESSING_VERSION,
                         domain_rule_version=DOMAIN_RULE_VERSION,
                         analytics_rule_version=ANALYTICS_RULE_VERSION,
+                        trigger="late_battle_sweep",
+                        saved_again=saved_again,
                     )
+            reconciliation_db.report_saved_again(saved_again)
         except Exception as error:  # noqa: BLE001 - rolled back, retried next run
             failed += 1
             print(

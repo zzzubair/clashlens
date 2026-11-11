@@ -55,7 +55,7 @@ def cut_due(connection: Any, boundary_at: datetime) -> bool:
         """,
         (boundary_at,),
     ).fetchone()
-    return generation is not None and _cut_due(connection, boundary_at, generation[0])
+    return generation is not None and _stage(connection, boundary_at, generation[0])[0] in _CUTS
 
 
 class DeadlineStage(StrEnum):
@@ -95,7 +95,14 @@ def deadline_stage(
     return DeadlineStage.HOLDING
 
 
-def _cut_due(connection: Any, boundary_at: datetime, generation_id: int) -> bool:
+_CUTS = {DeadlineStage.CUT_FEW, DeadlineStage.CUT_ALL}
+
+
+def _stage(
+    connection: Any, boundary_at: datetime, generation_id: int
+) -> tuple[DeadlineStage, datetime, int]:
+    """The generation's stage, the database's clock, and how many members
+    wait, up to ``MAX_UNFINISHED`` + 1."""
     now, unpublished, waiting = connection.execute(
         """
         SELECT clock_timestamp(), NOT EXISTS (
@@ -110,7 +117,7 @@ def _cut_due(connection: Any, boundary_at: datetime, generation_id: int) -> bool
     ).fetchone()
     return deadline_stage(
         now=now, boundary_at=boundary_at, published=not unpublished, waiting=waiting
-    ) in {DeadlineStage.CUT_FEW, DeadlineStage.CUT_ALL}
+    ), now, waiting
 
 
 def overdue(connection: Any, boundary_at: datetime) -> bool:
@@ -164,7 +171,8 @@ def settle_waiting_members(
         {"generation": generation_id, "boundary": boundary_at, "day": day},
     ).rowcount
     unfinished = 0
-    if _cut_due(connection, boundary_at, generation_id):
+    stage, now, waiting = _stage(connection, boundary_at, generation_id)
+    if stage in _CUTS:
         unfinished = connection.execute(
             """
             UPDATE boundary_publication_generation_members
@@ -178,6 +186,24 @@ def settle_waiting_members(
         print(json.dumps({
             "event": "board_members_settled", "boundary_at": boundary_at.isoformat(),
             "generation_id": generation_id, "failed": failed, "unfinished": unfinished,
+        }), flush=True)
+    if stage is not DeadlineStage.PUBLISHED and now >= boundary_at + BOARD_DEADLINE:
+        # From 05:30 until the Reset's first board: how many members wait,
+        # and whether this check left them out (its stage says why).
+        if stage is DeadlineStage.HOLDING:
+            waiting = connection.execute(
+                """
+                SELECT count(*) FROM boundary_publication_generation_members
+                WHERE generation_id = %s AND snapshot_status = 'pending'
+                """,
+                (generation_id,),
+            ).fetchone()[0]
+        print(json.dumps({
+            "event": "board_deadline_check", "boundary_at": boundary_at.isoformat(),
+            "generation_id": generation_id,
+            "seconds_after_reset": round((now - boundary_at).total_seconds()),
+            "stage": stage, "waiting": unfinished if stage in _CUTS else waiting,
+            "failed": failed, "left_out": unfinished,
         }), flush=True)
 
 

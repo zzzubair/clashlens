@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from threading import Lock
@@ -106,3 +107,34 @@ class StageMetrics:
                 "p99_upper_ms": percentile(0.99),
             }
         return report
+
+
+class Laps:
+    """Times consecutive parts of one piece of work, each as its own stage:
+    ``lap`` records the time since the last lap, or since this started."""
+
+    def __init__(self, metrics: StageMetrics | None) -> None:
+        self._metrics, self._started = metrics, monotonic()
+
+    def lap(self, stage: str) -> None:
+        now = monotonic()
+        if self._metrics is not None:
+            self._metrics.record(stage, now - self._started)
+        self._started = now
+
+
+class Counts:
+    """Thread-safe counts by key since the process started, reported whole
+    in the worker's ``worker_health`` event."""
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._counts: Counter[str] = Counter()
+
+    def add(self, key: str) -> None:
+        with self._lock:
+            self._counts[key] += 1
+
+    def snapshot(self) -> dict[str, int]:
+        with self._lock:
+            return dict(sorted(self._counts.items()))

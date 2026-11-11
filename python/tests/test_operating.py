@@ -11,6 +11,7 @@ from clashlens.operating import (
     database_pool_health,
     write_private_snapshot,
 )
+from clashlens.stage_metrics import Laps, StageMetrics
 
 
 @pytest.mark.parametrize(
@@ -88,3 +89,16 @@ def test_pool_health_keeps_measures_and_zero_fills_only_counters() -> None:
         "requests_wait_ms": 0,
         "usage_ms": 0,
     }
+
+
+def test_the_battle_log_stage_reports_each_of_its_parts() -> None:
+    stages = StageMetrics()
+    laps = Laps(stages)
+    for part in ("save_battles", "army_check", "reset_evidence", "queue_recalculations"):
+        laps.lap(f"python_battle_log_{part}")
+    snapshot = WorkerMetrics().snapshot(
+        stages=stages.snapshot(), database_pool={}, queue={}, spool={})
+    assert {stage: values["count"] for stage, values in snapshot["stages"].items()
+            if stage.startswith("python_battle_log_")} == {
+        "python_battle_log_save_battles": 1, "python_battle_log_army_check": 1,
+        "python_battle_log_reset_evidence": 1, "python_battle_log_queue_recalculations": 1}

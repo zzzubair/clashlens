@@ -47,6 +47,7 @@ from clashlens import (
 from clashlens.api_db import ApiDatabase
 from clashlens.collector_metrics import health_metrics
 from clashlens.db import WORKER_STATEMENT_TIMEOUT_SECONDS, Database
+from clashlens.stage_metrics import StageMetrics
 
 PLAYERS = ("#2PP", "#8PP")
 LATE = "#8PP"
@@ -235,8 +236,17 @@ def _members(database: Database) -> tuple[int, dict[str, str]]:
     return int(rows[0][0]), {text(tag): text(state) for _, tag, state in rows}
 
 
+def _deadline_checks(capsys) -> list[tuple[str, int, int]]:
+    """Each ``board_deadline_check`` for DAY_END logged since the last call:
+    its stage, how many members waited and how many it left out."""
+    return [(event["stage"], event["waiting"], event["left_out"])
+            for event in map(json.loads, capsys.readouterr().out.splitlines())
+            if event.get("event") == "board_deadline_check"
+            and datetime.fromisoformat(event["boundary_at"]) == DAY_END]
+
+
 def test_board_publishes_at_0530_without_an_unfinished_player_and_adds_them_once_done(
-    database_url: str, archive_server, monkeypatch
+    database_url: str, archive_server, monkeypatch, capsys
 ) -> None:
     with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
@@ -245,8 +255,10 @@ def test_board_publishes_at_0530_without_an_unfinished_player_and_adds_them_once
             _calculate(database, processor, "#2PP")
             # Before 05:30 the board waits for the player still unfinished.
             monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
+            capsys.readouterr()
             boundary_publication.reevaluate_boundary_publications(database)
             assert _members(database) == (1, {"#2PP": "complete", LATE: "pending"})
+            assert _deadline_checks(capsys) == []
             # From 05:30 until 06:00, more unfinished than it may publish
             # without means something bigger is broken: it keeps waiting.
             monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(minutes=30))
@@ -255,10 +267,13 @@ def test_board_publishes_at_0530_without_an_unfinished_player_and_adds_them_once
             boundary_publication.reevaluate_boundary_publications(database)
             assert _members(database)[1][LATE] == "pending"
             assert _waiting(database, BUILDS) == []
+            # Each check from 05:30 logs why it did or did not leave them out.
+            assert _deadline_checks(capsys) == [("holding", 1, 0)]
 
             monkeypatch.setattr(board_deadline, "MAX_UNFINISHED", 50)
             boundary_publication.reevaluate_boundary_publications(database)
             assert _members(database) == (1, {"#2PP": "complete", LATE: "unavailable"})
+            assert _deadline_checks(capsys) == [("cut_few", 1, 1)]
             _build(database, processor)
             assert _board(database) == (1, ["#2PP"])
             # Its accepted reading from the Reset before never ranks it here;
@@ -271,6 +286,8 @@ def test_board_publishes_at_0530_without_an_unfinished_player_and_adds_them_once
             assert _members(database) == (2, {"#2PP": "complete", LATE: "complete"})
             _build(database, processor)
             assert _board(database) == (2, ["#2PP", LATE])
+            # Not after the first board.
+            assert _deadline_checks(capsys) == []
 
             # Any other change waits for the hourly rebuild, then starts.
             _observation, job = store_observation(
@@ -278,7 +295,15 @@ def test_board_publishes_at_0530_without_an_unfinished_player_and_adds_them_once
                 endpoint="battle_log", body=_attack(DAY_END - timedelta(minutes=10)),
                 observed_at=DAY_END + timedelta(minutes=40), normalized_tag="#2PP",
             )
+            database.stage_metrics = stages = StageMetrics()
             assert processor.process_job(job, owner="late-attack").outcome == "processed"
+            # The battle log's save, timed by its parts.
+            assert {stage: values["count"] for stage, values in stages.snapshot().items()
+                    if stage.startswith("python_battle_log_")} == dict.fromkeys((
+                        "python_battle_log_save_battles", "python_battle_log_army_check",
+                        "python_battle_log_reset_evidence",
+                        "python_battle_log_queue_recalculations"), 1)
+            database.stage_metrics = None
             assert set(_calculate(database, processor, "#2PP")) == {"processed"}
             boundary_publication.reevaluate_boundary_publications(database)
             assert _members(database)[0] == 2

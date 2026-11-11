@@ -32,6 +32,7 @@ from . import (
     population,
     promotion_candidates,
     provider_membership,
+    reconciliation_db,
     republish,
 )
 from . import db as _db
@@ -956,6 +957,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                         "queue": process_snapshot["queue"],
                         "database_pool": process_snapshot["database_pool"],
                         "stages": process_snapshot["stages"],
+                        "day_results_saved_again": reconciliation_db.SAVED_AGAIN.snapshot(),
                         "archive": {
                             "spool": process_snapshot["spool"],
                             **process_snapshot["archive"],
