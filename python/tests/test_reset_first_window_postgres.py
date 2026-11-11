@@ -205,8 +205,9 @@ def _board_after_a_response_budget(
 ) -> tuple[list[int], bool, dict[str, int] | None, dict[str, int]]:
     """At ``at``, each player's Reset profile and battle log wait at Reset
     priority, beside their live profile and battle log read at 05:08 and
-    05:09. The response thread makes ``RESPONSE_BUDGET`` claims, alone or
-    in batches as a continuous worker does when ``batch`` is over 1, then the
+    05:09. The response thread makes ``RESPONSE_BUDGET`` claims, alone or,
+    when ``batch`` is over 1, through a continuous worker's batched claims
+    (one free thread, so one job a batch), then the
     day-result and build threads run until idle. Returns the responses'
     priorities in claim order, whether the board published, the board then
     served, and the board served once all the work is done."""

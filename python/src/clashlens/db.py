@@ -624,8 +624,8 @@ class Database:
                     return []
             hold, first = background_pacing.reset_first_claim(
                 connection, work_types, reset_first, rush=reset_rush)
-            # In the window, planned responses yield to Reset work on every Reset-first turn.
-            planned = planned or (hold and first is True and job_ids is not None)
+            # In the window, planned responses yield to Reset work on a rush turn too.
+            planned = planned or (reset_rush and hold and first is True and job_ids is not None)
             reset_first = first
             options = {
                 "work_types": work_types,
