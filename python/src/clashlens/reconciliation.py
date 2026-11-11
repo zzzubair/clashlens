@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 from typing import Any
 
-from . import loss_rule, reading_rule
+from . import loss_rule, reading_rule, reset_total
 from .day_result import (
     TROPHY_RECONCILIATION_TOLERANCE,
     Confidence,
@@ -194,6 +194,12 @@ class ReconciliationInput:
     # The next day's saved start, when that day ended proven from this day's
     # end Reset reading (``loss_rule.next_day_landing``).
     next_day_start: int | None = None
+    # The attacker's report, the attack's end, of each defense reported in
+    # the last minutes before the day's end, by battle (``reset_total``).
+    attack_ends: Mapping[str, datetime] = field(default_factory=dict)
+    # The newest reading at or before the day's start Reset, when none from
+    # the day can be its old reading (``reset_total``).
+    older_reading: reading_rule.Reading | None = None
 
     def __post_init__(self) -> None:
         if self.boundary_kind not in {None, "weekly", "season"}:
@@ -449,6 +455,24 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
     ) if ended and coverage_complete and start_trophies is not None and start_available and not (
         malformed_evidence or inconsistent_evidence) else (None, None, None)
     automatic_value_known = automatic_state is not LossEvidence.UNKNOWN
+    # What a reading may show from the end Reset on: the day's end before its loss, or
+    # after it raised to 5,000 on a Monday or reset to it at a Season's end, either of
+    # which can land after the Reset; the official Season-end total shows only the end.
+    possible = loss_rule.possible_losses(data, attack_count, defense_count, defense_loss)
+    ledger: dict[str, Any] = {
+        "loss_candidates": () if official_end and automatic_loss else
+        loss_rule.loss_candidates(automatic_loss, automatic_state, possible),
+        "loss_certain": automatic_state is LossEvidence.CALCULATED and bool(automatic_loss) and not official_end,
+        "day_effects": () if official_end else _effects(contributions),
+        "new_day_effects": () if official_end else _effects(
+            _deduplicate_contributions(data.new_day_contributions)[0]),
+        "floor": 5000 if data.boundary_kind in {"weekly", "season"} else None,
+        "reset": data.boundary_kind == "season",
+    }
+    # Every reading from the end Reset on judges a clean, ended day (reading_rule).
+    judged = ended and coverage_complete and not (malformed_evidence or inconsistent_evidence) and all(
+        reason == "missing_end_baseline" for reason in failures)
+    proof_rule: dict[str, Any] | None = None
     if start_available and automatic_value_known:
         assert start_trophies is not None
         final_trophies = (
@@ -468,35 +492,18 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
         )
         expected_next = final_trophies + boundary_adjustment
 
-        # What a reading may show from the end Reset on: the day's end before its loss, or
-        # after it raised to 5,000 on a Monday or reset to it at a Season's end, either of
-        # which can land after the Reset; the official Season-end total shows only the end.
-        possible = loss_rule.possible_losses(data, attack_count, defense_count, defense_loss)
-        rule: dict[str, Any] = {
-            "end_before_loss": expected_next if official_end else final_trophies + (automatic_loss or 0),
-            "loss_candidates": () if official_end and automatic_loss else
-            loss_rule.loss_candidates(automatic_loss, automatic_state, possible),
-            "loss_certain": automatic_state is LossEvidence.CALCULATED and bool(automatic_loss) and not official_end,
-            "day_effects": () if official_end else _effects(contributions),
-            "new_day_effects": () if official_end else _effects(
-                _deduplicate_contributions(data.new_day_contributions)[0]),
-            "floor": 5000 if data.boundary_kind in {"weekly", "season"} else None,
-            "reset": data.boundary_kind == "season",
-        }
-        # Every reading from the end Reset on judges a clean, ended day
-        # (reading_rule); one hidden by a reset it can only contradict.
-        verdict = (
-            reading_rule.decide(
-                _readings(replace(data, readings=(), unreadable_from=None, covered_until=None) if official_end else data),
-                reset_at=data.ranked_day.end, start_proven=start_proven, **rule, history=history,
-                unknown_from=None if official_end else data.first_unshown_report, proof=proof,
-                stale=stale,
-            )
-            if ended and coverage_complete
-            and not (malformed_evidence or inconsistent_evidence)
-            and all(reason == "missing_end_baseline" for reason in failures)
-            else None
-        )
+        rule = {"end_before_loss": expected_next if official_end else final_trophies + (automatic_loss or 0),
+                **ledger}
+        # One hidden by a reset a reading can only contradict.
+        proof_rule = {
+            "readings": _readings(replace(data, readings=(), unreadable_from=None, covered_until=None)
+                                  if official_end else data),
+            "reset_at": data.ranked_day.end, "start_proven": start_proven, **ledger, "history": history,
+            "unknown_from": None if official_end else data.first_unshown_report, "proof": proof,
+            "stale": stale,
+        } if judged else None
+        verdict = reading_rule.decide(end_before_loss=rule["end_before_loss"], **proof_rule) if (
+            proof_rule is not None) else None
         if verdict is not None and verdict.outcome == "verified" and verdict.loss in possible and (
                 data.boundary_kind == "weekly" and final_trophies - verdict.loss <= 5000):
             automatic_loss, automatic_state, final_trophies = verdict.loss, LossEvidence.CALCULATED, final_trophies - verdict.loss
@@ -729,6 +736,13 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
             or (verdict is not None and verdict.outcome == "verified" and not verdict.exact)
         ),
     )
+    at_reset = _reset_total(
+        data, contributions, state=state, failures=unique_failures, coverage_complete=coverage_complete,
+        final_trophies=final_trophies, automatic_loss=automatic_loss,
+        # A reading during the day that contradicts it leaves no end to prove.
+        end_proof=None if during is not None and during.reading is not None else proof_rule,
+        ledger=ledger if automatic_value_known else None,
+    )
 
     return ReconciliationResult(
         state=state,
@@ -772,6 +786,7 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
             battles_after_reading=battles_after_reading,
             later_reading_at=later_reading_at,
             next_day=None if landed is None else (data.next_day_start, never_landed),
+            reset_total=at_reset.evidence(),
         ),
         shield_evidence=shield_evidence,
         input_evidence=_input_evidence(
@@ -813,6 +828,40 @@ def _settled_start(data: ReconciliationInput) -> tuple[int | None, int, int]:
             data.ranked_day.start.weekday() == 0 and not data.season_first_day):
         start, correction = 5000, correction + 5000 - start
     return start, loss, correction
+
+
+def _reset_total(
+    data: ReconciliationInput, contributions: tuple[BattleContribution, ...], *, state: DayState,
+    failures: tuple[str, ...], coverage_complete: bool, final_trophies: int | None,
+    automatic_loss: int | None, end_proof: dict[str, Any] | None, ledger: dict[str, Any] | None,
+) -> reset_total.ResetTotal:
+    """The ended day's Reset total (``reset_total``), from its counted
+    battles and its newest trustworthy reading at or before the Reset;
+    ``end_proof`` is the rule the day's own end was judged by, ``None``
+    when none was, and ``ledger`` what a reading may show from the end
+    Reset on, ``None`` when the automatic loss is not known."""
+    official = data.end_baseline_evidence.get("official_final_trophies")
+    old = max((reading for reading in data.readings if reading.read_at <= data.ranked_day.end
+               and not reading.confirm_only), key=lambda reading: reading.read_at,
+              default=data.older_reading)
+    return reset_total.reset_total(
+        reset_at=data.ranked_day.end, day_start=data.ranked_day.start, state=state,
+        failure_reasons=failures,
+        end_before_loss=None if final_trophies is None else final_trophies + (automatic_loss or 0),
+        eod=final_trophies, season_end=data.boundary_kind == "season" or official is not None,
+        official_final=None if official is None else int(official),
+        battles=[reset_total.Battle(
+            -(item.amount or 0) if item.lens == "defense" else item.amount or 0,
+            item.battle_timestamp, item.lens == "defense", item.disagreement,
+            data.attack_ends.get(item.battle_identity),
+        ) for item in contributions],
+        battles_usable=coverage_complete and not DISPUTED_BATTLE_REASONS & set(failures) and all(
+            item.battle_timestamp is not None and not item.disagreement for item in contributions),
+        old_reading=old, end_proof=end_proof,
+        reading_proof=None if ledger is None else {
+            "readings": _readings(data), "reset_at": data.ranked_day.end, **ledger,
+            "unknown_from": data.first_unshown_report},
+    )
 
 
 def _deduplicate_contributions(
@@ -1204,6 +1253,7 @@ def _formula_components(
     battles_after_reading: tuple[str, ...] = (),
     later_reading_at: datetime | None = None,
     next_day: tuple[int | None, int] | None = None,
+    reset_total: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     components: dict[str, Any] = {
         "start_trophies": start_trophies,
@@ -1243,6 +1293,8 @@ def _formula_components(
         components["next_day_start_trophies"] = next_day[0]
     if next_day is not None and next_day[1]:
         components["automatic_loss_never_landed"] = next_day[1]
+    if reset_total is not None:
+        components["reset_total"] = reset_total
     return components
 
 

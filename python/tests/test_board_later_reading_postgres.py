@@ -12,6 +12,7 @@ reading plus the 8 attacks. See docs/testing.md.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
@@ -172,13 +173,16 @@ def test_an_unproven_day_shows_its_calculated_end(
                           CONTRADICTED: (5037, SEASON), CONTRADICTED_FAR: (5037, SEASON)})
         first_days = {tag: story.saved_day(tag, start)["state"] for tag in battles}
         first = story.served_board(end)
+        stored_first = _stored(connection_info, start, battles)
         story.reads(_at(5, 44, 56), {SINGAPORE: 4939, NEVER_CREDITED: 4640})
         story.wait(timedelta(hours=1))
         later_days = {tag: story.saved_day(tag, start)["state"] for tag in battles}
         with psycopg.connect(connection_info) as connection:
-            singapore = connection.execute(
-                "SELECT id FROM players WHERE normalized_tag = %s", (SINGAPORE,)).fetchone()[0]
+            singapore, never_credited = (connection.execute(
+                "SELECT id FROM players WHERE normalized_tag = %s", (tag,)).fetchone()[0]
+                for tag in (SINGAPORE, NEVER_CREDITED))
         later = story.served_board(end)
+        stored_later = _stored(connection_info, start, battles)
         unfinished = story.unfinished_jobs()
 
     assert unfinished == []
@@ -188,8 +192,9 @@ def test_an_unproven_day_shows_its_calculated_end(
     assert later_days == {**first_days, SINGAPORE: "Partial"}
     # SINGAPORE's proof lost to its 05:44:56 reading is logged once: same
     # end, same battles. Proof only gained, as NEVER_CREDITED's, is not.
-    lost = [event for event in map(json.loads, capsys.readouterr().out.splitlines())
-            if event.get("event") == "day_proof_lost"]
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()
+              if line.startswith("{")]
+    lost = [event for event in events if event.get("event") == "day_proof_lost"]
     assert [(event["player_id"], event["old_state"], event["new_state"], event["end_changed"],
              event["battles_changed"], datetime.fromisoformat(event["reading_at"]))
             for event in lost] == [(singapore, "Complete", "Partial", False, False,
@@ -202,8 +207,119 @@ def test_an_unproven_day_shows_its_calculated_end(
     # The board was rebuilt for the two days the later readings changed.
     assert later["snapshot_id"] != first["snapshot_id"]
     assert _entries(later) == {**shown, NEVER_CREDITED: (4640, "confirmed")}
+    # Each player's newest day result stores the Reset total the board shows.
+    assert {tag: answer[:2] for tag, answer in stored_first.items()} == _entries(first)
+    assert {tag: answer[:2] for tag, answer in stored_later.items()} == _entries(later)
+    assert stored_later[NEVER_CREDITED][2:] == ("reading_side", _at(5, 44, 56))
+    # The rebuild pinned NEVER_CREDITED's result saved before its 05:44:56
+    # reading, whose stored total is its calculated end, unproven; the board
+    # judged that reading itself. Its newer result saved after the rebuild.
+    assert [(event["generation"], event["player_id"], event["board_trophies"],
+             event["board_confirmed"], event["stored_value"], event["stored_proven"])
+            for event in events if event.get("event") == "reset_total_shadow"] == [
+        (2, never_credited, 4640, True, 4680, False)]
+    assert sum(event["different"] for event in events
+               if event.get("event") == "reset_total_shadow_summary") == 1
+
+
+PROVEN_ONCE = "#2RR"
+
+
+def test_a_reset_total_proven_at_the_reset_stays_proven(
+    database_url: str, archive_server, monkeypatch, capsys
+) -> None:
+    """The day starts at 5,000, gains 80 over 2 attacks and loses 80 over 8
+    defenses, which leave no automatic loss: 5,000, which its reading at 04:00,
+    after every battle landed, shows, so the board confirms it. At 05:18 a reading 37 lower,
+    which nothing explains, contradicts the day. The board, still ranking by
+    its own rule, marks the entry uncertain; the day result's stored Reset
+    total stays proven by the 04:00 reading, and each build after logs the
+    difference in the mark, never in the number."""
+    start, end = day(2), day(3)
+    with domain_database(database_url) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, PROVEN_ONCE)
+        story.players[PROVEN_ONCE].battles = [*attacks(start, 40, 40),
+                                              *defenses(start, *[10] * 8)]
+        story.reset(start, {PROVEN_ONCE: (5000, SEASON)})
+        story.reads(_at(4, 0, 0), {PROVEN_ONCE: 5000})
+        story.reset(end, {PROVEN_ONCE: (5000, SEASON)})
+        first = (story.saved_day(PROVEN_ONCE, start)["state"],
+                 _entries(story.served_board(end)), _stored(connection_info, start, (PROVEN_ONCE,)))
+        capsys.readouterr()
+        story.reads(_at(5, 18, 0), {PROVEN_ONCE: 4963})
+        story.wait(timedelta(hours=1))
+        later = (story.saved_day(PROVEN_ONCE, start)["state"],
+                 _entries(story.served_board(end)), _stored(connection_info, start, (PROVEN_ONCE,)))
+        unfinished = story.unfinished_jobs()
+
+    assert unfinished == []
+    # Its 04:00 reading, after every battle landed, already shows its end.
+    proven = {PROVEN_ONCE: (5000, "confirmed", "calculated_end", _at(4, 0, 0))}
+    assert first == ("Complete", {PROVEN_ONCE: (5000, "confirmed")}, proven)
+    assert later == ("Inconsistent", {PROVEN_ONCE: (5000, "uncertain")}, proven)
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()
+              if line.startswith("{")]
+    shadow = [event for event in events if event.get("event") == "reset_total_shadow"]
+    assert shadow and {(event["board_trophies"], event["board_confirmed"],
+                        event["stored_value"], event["stored_proven"],
+                        event["stored_basis"]) for event in shadow} == {
+        (5000, False, 5000, True, "calculated_end")}
+
+
+def _stored(connection_info: str, start: datetime, tags: Iterable[str]
+            ) -> dict[str, tuple[object, ...]]:
+    """The Reset total stored with each of these players' newest result for
+    the day from ``start``: its value, mark, basis and the reading that
+    proved it."""
+    with psycopg.connect(connection_info) as connection:
+        rows = connection.execute(
+            """
+            SELECT DISTINCT ON (day.player_id) player.normalized_tag,
+                   day.formula_components -> 'reset_total'
+            FROM ranked_day_versions AS day
+            JOIN players AS player ON player.id = day.player_id
+            WHERE day.ranked_day_start = %s AND player.normalized_tag = ANY(%s)
+            ORDER BY day.player_id, day.version DESC
+            """,
+            (start, list(tags)),
+        ).fetchall()
+    return {
+        tag: (None,) if answer is None else (
+            answer["value"], "confirmed" if answer["proven"] else "uncertain", answer["basis"],
+            answer["proven_at"] and datetime.fromisoformat(answer["proven_at"]))
+        for tag, answer in rows
+    }
 
 
 def _entries(board: dict[str, object] | None) -> dict[str, tuple[int, str]]:
     _ranked(board)
     return {entry["tag"]: (entry["trophies"], entry["confidence"]) for entry in board["entries"]}
+
+
+UNREAD = "#8RR"
+
+
+def test_a_day_with_no_reading_of_its_own_stores_the_older_reading(
+    database_url: str, archive_server, monkeypatch, capsys
+) -> None:
+    """The collector answers neither the profile nor the battle log at the
+    day's start Reset and reads nothing during the day: the board ranks the
+    reading from the day before, 5,040, alone, and the day result stores
+    the same."""
+    first_day, start, end = day(1), day(2), day(3)
+    with domain_database(database_url) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, UNREAD)
+        story.players[UNREAD].battles = [*attacks(first_day, 40), *attacks(start, 40)]
+        story.reset(first_day, {UNREAD: (5000, SEASON)})
+        story.reads(first_day + timedelta(hours=5), {UNREAD: 5040})
+        story.reset(start, {UNREAD: (None, SEASON)}, no_log=(UNREAD,))
+        story.reset(end, {UNREAD: (5080, SEASON)})
+        board = _entries(story.served_board(end))
+        stored = _stored(connection_info, start, (UNREAD,))
+        unfinished = story.unfinished_jobs()
+
+    assert unfinished == []
+    assert board == {UNREAD: (5040, "uncertain")}
+    assert stored == {UNREAD: (5040, "uncertain", "old_reading", None)}
+    assert [json.loads(line) for line in capsys.readouterr().out.splitlines()
+            if '"reset_total_shadow"' in line] == []
