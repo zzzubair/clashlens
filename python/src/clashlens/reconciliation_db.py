@@ -196,9 +196,9 @@ def recalculate_ranked_day(
     of its saved result, or saved its first. With ``boundary_members``, a new
     result's record for its Reset's board is added there for the caller to
     make before it commits, instead of made here. ``trigger`` names what
-    queued it, for the evidence ``_saved_again_note`` gives; with
-    ``saved_again`` that is added there for the caller to report once it
-    commits (``report_saved_again``), as a rolled-back save is retried."""
+    queued it, for the evidence ``_saved_again_note`` gives, added to
+    ``saved_again`` for the caller to report once it commits
+    (``report_saved_again``), as a rolled-back save is retried."""
     ranked_day = ranked_day_for(day_start)
     # Different source changes can enqueue distinct jobs for one
     # player-day. Serialize their version/publication writes while
@@ -780,8 +780,6 @@ def recalculate_ranked_day(
                                  previous_version, result, contribution_evidence)
         if note is not None and saved_again is not None:
             saved_again.append(note)
-        elif note is not None:
-            report_saved_again([note])
     else:
         version_id = int(existing[0])
         version_number = int(existing[1])
@@ -862,7 +860,9 @@ def _saved_again_note(
         (previous[0],),
     ).fetchone()[0]
     end_reading = result.input_evidence.get("end_reading") or {}
-    reading = end_reading if "read_at" in end_reading else end_reading.get("during_day") or {}
+    # A reading during the day that contradicts it decides, whatever the end's says.
+    reading = ({**end_reading["during_day"], "outcome": "contradicted_during_day"}
+               if "during_day" in end_reading else end_reading)
     return {
         "event": "day_proof_lost", "player_id": player_id,
         "ranked_day_start": ranked_day.start.isoformat(), "trigger": trigger,

@@ -86,15 +86,19 @@ def test_losing_exact_logs_a_changed_end_and_battle_list(capsys) -> None:
     battles = [*OLD_BATTLES, {"battle_identity": "d", "amount_used": -40, "included": True}]
     _, logged = _saved(
         capsys, _previous("Complete", "exact", 4939),
-        _result("Complete", "inferred", 4899, end_reading={"during_day": {
-            "read_at": "2026-11-10T03:00:00+00:00", "trophies": 4979, "residual": 40}}),
+        _result("Complete", "inferred", 4899, end_reading={
+            "read_at": "2026-11-10T05:04:00+00:00", "trophies": 4899, "outcome": "verified",
+            "during_day": {"read_at": "2026-11-10T03:00:00+00:00", "trophies": 4979,
+                           "residual": 40}}),
         battles, trigger="late_battle_sweep")
     assert len(logged) == 1
+    # The reading during the day decides, not the end reading that agrees.
     assert {key: logged[0][key] for key in (
         "trigger", "new_confidence", "end_changed", "battles_changed", "reading_at",
-        "leftover")} == {
+        "reading_outcome", "leftover")} == {
         "trigger": "late_battle_sweep", "new_confidence": "inferred", "end_changed": True,
-        "battles_changed": True, "reading_at": "2026-11-10T03:00:00+00:00", "leftover": 40}
+        "battles_changed": True, "reading_at": "2026-11-10T03:00:00+00:00",
+        "reading_outcome": "contradicted_during_day", "leftover": 40}
 
 
 @pytest.mark.parametrize(("previous", "result"), [
