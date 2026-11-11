@@ -231,12 +231,13 @@ morning check did by hand. For each board player in a country's first list
 read after the Reset, faults left out, `daily_trophies_equal` counts those
 whose list trophies equal the board's, of `daily_trophies_compared`.
 `daily_trophies_equal_after_battles` also counts a difference that equals
-the trophies the player's battles moved from 05:00 to that list's request,
-each battle counted when its attacker's report, stamped when the attack
-ends, falls between the two, through one more read-only lookup (migration
-0142). A battle known only from the defender's report, stamped from 4
-minutes before the Reset to the request, may or may not have ended in
-between, so the difference stays unexplained. The players still unexplained
+what the player's battles add to the list over the board, through one more
+read-only lookup (migration 0142): a battle whose attacker's report, stamped
+when the attack ends, falls from 05:00 to the list's request is in the list
+and not on the board. A battle known only from the defender's report ended
+within 4 minutes after it; the board counts it when it belongs to the ended
+day, and the list once it has ended. When it may or may not have ended by
+the request, the difference stays unexplained. The players still unexplained
 are listed in `daily_trophies_unexplained_tags`. On the 10 November 2026
 board, version 50, that is 7,365 and then 7,387 of 7,387; on 11 November,
 version 15, 7,354 and then 7,365 of 7,367. The two left, in Korea and

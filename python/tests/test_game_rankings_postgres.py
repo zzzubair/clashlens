@@ -316,12 +316,15 @@ def test_a_reset_morning_of_game_lists_ends_in_a_stored_score(
                 "SELECT normalized_tag, id FROM players WHERE normalized_tag IN ('#2QQ', '#2PP')"
             ).fetchall())
             # #2QQ's attack ended at 05:05, before France's 05:07:02 request:
-            # France's 5,310 is the board's 5,300 plus its 10. #2PP's defense
-            # is known only from #2PP's own log, stamped 05:02, so whether its
-            # attack ended before or after 05:00 is unknown, and France's 5,390
-            # against the board's 5,400 stays unexplained.
-            seed_battles(connection, ids["#2QQ"], [(RESET + timedelta(minutes=5), 10)])
-            seed_battles(connection, ids["#2PP"], [(RESET + timedelta(minutes=2), -10)])
+            # France's 5,310 is the board's 5,300 plus its 10. Its defense
+            # known only from its own log, stamped 04:58, ended by 05:02, so
+            # the board and France both count it. #2PP's defense, also known
+            # only from its own log, is stamped 05:04: its attack ended by
+            # 05:08, maybe after the request, so France's 5,390 against the
+            # board's 5,400 stays unexplained.
+            seed_battles(connection, ids["#2QQ"], [(RESET + timedelta(minutes=5), 10),
+                                                   (RESET - timedelta(minutes=2), -20)])
+            seed_battles(connection, ids["#2PP"], [(RESET + timedelta(minutes=4), -10)])
         # 05:00:40 early pull; 05:03 poll still shows yesterday's ranks.
         early, still_yesterday = _day(
             info, origin, tmp_path, [timedelta(seconds=40), timedelta(minutes=3)]
@@ -504,6 +507,11 @@ def test_a_failed_country_pull_makes_the_day_unknown(
             holder.commit()
             holder.execute("SELECT 1 FROM players WHERE normalized_tag = '#2RR' FOR UPDATE")
             _day(info, origin, tmp_path, [timedelta(minutes=3)])
+        # By the retry #2PP's trophies have moved; the board is compared
+        # with the first list read, the one whose discovery failed.
+        answers["/v1/locations/32000087/rankings/players"] = (
+            200, FRANCE.replace(b'"trophies": 5390', b'"trophies": 5400'),
+        )
         _day(info, origin, tmp_path, [timedelta(minutes=minute) for minute in (4, 5.5)])
         printed = _printed_score(info, capsys)
         with psycopg.connect(info) as connection:
@@ -519,6 +527,7 @@ def test_a_failed_country_pull_makes_the_day_unknown(
     assert printed["status"] == "unknown"
     assert printed["unknown_reasons"] == ["countries_missing:1"]
     assert (printed["countries_expected"], printed["countries_pulled"]) == (2, 1)
+    assert (printed["daily_trophies_compared"], printed["daily_trophies_equal"]) == (2, 0)
 
 
 def test_an_expired_country_list_leaves_an_empty_board_unknown(

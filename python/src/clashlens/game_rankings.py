@@ -53,6 +53,8 @@ SWITCHED_SHARE = 0.25
 MIN_SWITCH_ROWS = 10
 # A country pull's failure when its previousRank still holds the Reset before.
 NOT_SWITCHED = "not_switched"
+# A readable pull's failure when a player in it could not go to discovery.
+NOT_HANDED = "discovery_not_handed"
 REQUEST_SECONDS = 0.5
 TICK_SECONDS = 15.0
 SCORE_SECONDS = 600.0
@@ -387,10 +389,12 @@ def _latest(pulls: list[Pull], purpose: str, location_id: int | None = None) -> 
 
 def _country_pulls(pulls: list[Pull], location_id: int) -> tuple[Pull, Pull] | None:
     """A country's list to score, the latest that switched or else the latest
-    not yet switched, and its first list read; None when none was read."""
+    not yet switched, and its first list read; None when neither was read."""
     read = [pull for pull in pulls if pull.purpose == "country"
-            and pull.location_id == location_id and pull.failure in (None, NOT_SWITCHED)]
-    return ((_latest(pulls, "country", location_id) or read[-1]), read[0]) if read else None
+            and pull.location_id == location_id
+            and pull.failure in (None, NOT_SWITCHED, NOT_HANDED)]
+    scored = [pull for pull in read if pull.failure != NOT_HANDED]
+    return ((_latest(pulls, "country", location_id) or scored[-1]), read[0]) if scored else None
 
 
 def previous_lists(
@@ -452,7 +456,7 @@ def save_pull(
                 ).fetchone()
                 added += new
                 if not handed:
-                    failure = failure or "discovery_not_handed"
+                    failure = failure or NOT_HANDED
         connection.execute(
             """
             INSERT INTO game_ranking_pulls (

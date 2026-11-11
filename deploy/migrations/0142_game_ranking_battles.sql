@@ -7,16 +7,17 @@
 -- few players who differ. It stores nothing.
 BEGIN;
 
--- For each (tag, time), the trophies the player's battles moved from the
--- Reset at list_reset_at to that time: a battle counts when its attacker's
--- report, stamped when the attack ends, is from the Reset to the time. Such
--- a battle can belong to the day before (a report up to 5 minutes after the
--- Reset finishes that day's attack), so both days are read. Each side's
--- change comes from its own report when there is one. unsure_battles counts
--- battles known only from the defender's report stamped from 4 minutes
--- before the Reset to the time: their attack may or may not have ended in
--- between. A tag with no player or no battle on those two days returns no
--- row.
+-- For each (tag, time), what the player's battles add to the game's
+-- trophies at that time over the Daily board's at the Reset at
+-- list_reset_at. The board counts a battle when its attacker's report,
+-- stamped when the attack ends, is before the Reset, or, with no attacker's
+-- report, when it belongs to the day before (a report up to 5 minutes after
+-- the Reset finishes that day's attack, so both days are read). The game
+-- counts it once it has ended. With no attacker's report the attack ended
+-- within 4 minutes after the defender's report: unsure_battles counts those
+-- that may or may not have ended by the time. Each side's change comes from
+-- its own report when there is one. A tag with no player or no battle on
+-- those two days returns no row.
 CREATE FUNCTION clashlens_game_ranking_battles(
     list_tags text[], list_reset_at timestamptz, list_times timestamptz[]
 )
@@ -28,20 +29,27 @@ AS $$
                CASE WHEN mine.attacking
                     THEN COALESCE(attacker.attacker_gain, defender.attacker_gain)
                     ELSE -COALESCE(defender.defender_loss, attacker.defender_loss) END
-           ) FILTER (WHERE attacker.battle_timestamp >= list_reset_at
-                       AND attacker.battle_timestamp <= wanted.at), 0)::integer,
+               * CASE WHEN attacker.id IS NOT NULL
+                      THEN (attacker.battle_timestamp >= list_reset_at
+                            AND attacker.battle_timestamp <= wanted.at)::integer
+                      WHEN defender.battle_timestamp + interval '4 minutes' <= wanted.at
+                      THEN (mine.ranked_day_start = list_reset_at)::integer
+                      WHEN defender.battle_timestamp > wanted.at
+                      THEN -(mine.ranked_day_start < list_reset_at)::integer
+                      ELSE 0 END
+           ), 0)::integer,
            count(*) FILTER (WHERE attacker.id IS NULL
-                              AND defender.battle_timestamp >= list_reset_at - interval '4 minutes'
-                              AND defender.battle_timestamp <= wanted.at)::integer
+                              AND defender.battle_timestamp <= wanted.at
+                              AND wanted.at < defender.battle_timestamp + interval '4 minutes')::integer
     FROM unnest(list_tags, list_times) AS wanted(tag, at)
     JOIN players AS player ON player.normalized_tag = wanted.tag
     CROSS JOIN LATERAL (
-        SELECT battle.id, true AS attacking
+        SELECT battle.id, battle.ranked_day_start, true AS attacking
         FROM legend_battles AS battle
         WHERE battle.ranked_day_start IN (list_reset_at - interval '1 day', list_reset_at)
           AND battle.attacker_player_id = player.id
         UNION ALL
-        SELECT battle.id, false
+        SELECT battle.id, battle.ranked_day_start, false
         FROM legend_battles AS battle
         WHERE battle.defender_player_id = player.id
           AND battle.ranked_day_start IN (list_reset_at - interval '1 day', list_reset_at)
