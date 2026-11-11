@@ -69,6 +69,12 @@ WORKER_STAGES = (
     "python_archive_local_verify",
     "python_archive_pool_acquire",
     "python_archive_repair",
+    # The parts of ``python_domain_battle_log``, in order; the rest of it is
+    # finishing the job and committing.
+    "python_battle_log_save_battles",
+    "python_battle_log_army_check",
+    "python_battle_log_reset_evidence",
+    "python_battle_log_queue_recalculations",
     "python_claim",
     "python_database_pool_acquire",
     "python_domain_battle_log",

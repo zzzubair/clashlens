@@ -32,6 +32,7 @@ from .domain import (
     DomainRuleError,
     ranked_day_for,
 )
+from .stage_metrics import Laps
 
 
 def _battle_log_reset_baseline(
@@ -129,6 +130,7 @@ def complete_battle_log(
     ) = claimed_jobs.observation_source(claim)
     with database.connection() as connection:
         with connection.transaction():
+            laps = Laps(getattr(database, "stage_metrics", None))
             from .season_lifecycle import acquire_retirement_reader
 
             acquire_retirement_reader(connection)
@@ -419,6 +421,7 @@ def complete_battle_log(
                     for battle_id, state in current_disagreement_states.items()
                     if previous_disagreement_states.get(battle_id) != state
                 )
+            laps.lap("python_battle_log_save_battles")
             army_ingestion._upsert_army_decodes(
                 database,
                 connection,
@@ -427,6 +430,7 @@ def complete_battle_log(
                 reset_lock_wait=RESET_LOCK_WAIT,
                 skip_busy_battles=True,
             )
+            laps.lap("python_battle_log_army_check")
 
             outcome = "processed_with_gaps" if battle_log.has_row_gap else "processed"
             claimed_jobs.record_processing_outcome(
@@ -438,6 +442,8 @@ def complete_battle_log(
             reset_baselines._refresh_reset_baseline_evidence(
                 database, connection, claim
             )
+            # With the job's outcome row, saved just before.
+            laps.lap("python_battle_log_reset_evidence")
             ranked_day = ranked_day_for(battle_log.observed_at)
             live_player_ids = {reporter_id}
             if shared_state_changed_battle_ids:
@@ -497,6 +503,7 @@ def complete_battle_log(
                     claim,
                     (item["player_id"] for item in discoveries),
                 )
+            laps.lap("python_battle_log_queue_recalculations")
             claimed_jobs.finish_claim(
                 connection, claim, job, state="complete", outcome=outcome
             )

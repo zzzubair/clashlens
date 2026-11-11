@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -21,6 +22,7 @@ from . import (
     reconcile_pass,
     reset_baselines,
 )
+from .day_result import Confidence, DayState
 from .db import (
     DEFAULT_PARSER_VERSION,
     PYTHON_LIVE_PRIORITY,
@@ -54,6 +56,11 @@ from .reconciliation import (
 from .season_anchors import anchored_day
 from .season_lifecycle import acquire_player_season_lock
 from .season_summaries import materialize_player_season
+from .stage_metrics import Counts
+
+# Day results saved again with the same state, confidence and calculated
+# end, by what queued the recalculation; reported in ``worker_health``.
+SAVED_AGAIN = Counts()
 
 # The 2026-10-05 and 2026-10-06 Resets saved every reading within 45 minutes.
 DAY_END_RECALCULATION_DELAY = timedelta(hours=2)
@@ -73,6 +80,7 @@ def limit_lock_waits(connection: Any) -> None:
 
 
 def complete_reconciliation(database: Database, claim: Claim) -> None:
+    saved_again: list[str | dict[str, Any]] = []
     with database.pool.connection() as connection:
         with connection.transaction():
             job = claimed_jobs.lock_live_claim(connection, claim)
@@ -124,6 +132,9 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
             # 81% of the other repair jobs gave up waiting: about 1 of 6
             # background slots ran.
             members: list[dict[str, Any]] = []
+            trigger = str(claim.input_json.get("trigger") or "none")
+            # Days recalculated because the day before them changed.
+            followed: set[datetime] = set()
             while pending:
                 day_start = pending.pop(0)
                 following = day_start + timedelta(days=1)
@@ -139,6 +150,8 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                     domain_rule_version=claim.domain_rule_version,
                     analytics_rule_version=claim.analytics_rule_version,
                     boundary_members=members,
+                    trigger="previous_day_changed" if day_start in followed else trigger,
+                    saved_again=saved_again,
                 ) and following not in day_starts and (
                     ranked_day_for(following).official_season_id
                     == ranked_day_for(day_start).official_season_id
@@ -152,6 +165,7 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                     (player_id, following, RECONCILIATION_RULE_VERSION),
                 ).fetchone() is not None:
                     day_starts.add(following)
+                    followed.add(following)
                     pending.insert(0, following)
             # Oldest Reset first, the lock order every path keeps.
             for member in sorted(members, key=lambda member: member["boundary_at"]):
@@ -160,6 +174,7 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
             claimed_jobs.finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
             )
+    report_saved_again(saved_again)
 
 
 def recalculate_ranked_day(
@@ -173,12 +188,17 @@ def recalculate_ranked_day(
     domain_rule_version: str,
     analytics_rule_version: str,
     boundary_members: list[dict[str, Any]] | None = None,
+    trigger: str = "none",
+    saved_again: list[str | dict[str, Any]] | None = None,
 ) -> bool:
     """Recalculate and publish one player-day in the caller's transaction;
     whether the day has ended and this changed the state, end or next start
     of its saved result, or saved its first. With ``boundary_members``, a new
     result's record for its Reset's board is added there for the caller to
-    make before it commits, instead of made here."""
+    make before it commits, instead of made here. ``trigger`` names what
+    queued it, for the evidence ``_saved_again_note`` gives; with
+    ``saved_again`` that is added there for the caller to report once it
+    commits (``report_saved_again``), as a rolled-back save is retried."""
     ranked_day = ranked_day_for(day_start)
     # Different source changes can enqueue distinct jobs for one
     # player-day. Serialize their version/publication writes while
@@ -602,7 +622,7 @@ def recalculate_ranked_day(
     previous_version = connection.execute(
         """
         SELECT id, version, result_hash, replaces_version_id, state,
-               final_trophies_before_reset, next_start_trophies
+               final_trophies_before_reset, next_start_trophies, confidence
         FROM ranked_day_versions
         WHERE player_id = %s AND ranked_day_start = %s
           AND reconciliation_rule_version = %s
@@ -756,6 +776,12 @@ def recalculate_ranked_day(
         assert version is not None
         version_id = int(version[0])
         _store_ranked_day_adjustments(connection, version_id, result)
+        note = _saved_again_note(connection, trigger, player_id, ranked_day,
+                                 previous_version, result, contribution_evidence)
+        if note is not None and saved_again is not None:
+            saved_again.append(note)
+        elif note is not None:
+            report_saved_again([note])
     else:
         version_id = int(existing[0])
         version_number = int(existing[1])
@@ -805,6 +831,64 @@ def recalculate_ranked_day(
             result_data["next_start_trophies"],
         )
     )
+
+
+def _saved_again_note(
+    connection: Any,
+    trigger: str,
+    player_id: int,
+    ranked_day: RankedDay,
+    previous: Any,
+    result: ReconciliationResult,
+    contributions: list[dict[str, Any]],
+) -> str | dict[str, Any] | None:
+    """Evidence for later changes to when a day is recalculated; it changes
+    nothing saved. For a result saved over one with the same state,
+    confidence and calculated end, ``trigger``, to count. For one saved over
+    a Complete result as another state, or that loses ``exact`` confidence,
+    a ``day_proof_lost`` event: whether the calculated end and the day's
+    counted battles changed, and the reading that decided."""
+    if previous is None:
+        return None
+    old_state, old_confidence = text_value(previous[4]), text_value(previous[7])
+    if (old_state, old_confidence, previous[5]) == (
+            result.state, result.confidence, result.final_trophies_before_reset):
+        return trigger
+    if old_state != DayState.COMPLETE or result.state == DayState.COMPLETE and (
+            old_confidence != Confidence.EXACT or result.confidence == Confidence.EXACT):
+        return None
+    old_contributions = connection.execute(
+        "SELECT input_evidence -> 'contributions' FROM ranked_day_versions WHERE id = %s",
+        (previous[0],),
+    ).fetchone()[0]
+    end_reading = result.input_evidence.get("end_reading") or {}
+    reading = end_reading if "read_at" in end_reading else end_reading.get("during_day") or {}
+    return {
+        "event": "day_proof_lost", "player_id": player_id,
+        "ranked_day_start": ranked_day.start.isoformat(), "trigger": trigger,
+        "old_state": old_state, "new_state": result.state,
+        "old_confidence": old_confidence, "new_confidence": result.confidence,
+        "end_changed": previous[5] != result.final_trophies_before_reset,
+        "battles_changed": _counted(old_contributions or []) != _counted(contributions),
+        "failure_reasons": list(result.failure_reasons),
+        "reading_at": reading.get("read_at"), "reading_outcome": reading.get("outcome"),
+        "leftover": reading.get("residual"),
+    }
+
+
+def report_saved_again(notes: list[str | dict[str, Any]]) -> None:
+    """Count or log each ``_saved_again_note`` of a committed save."""
+    for note in notes:
+        if isinstance(note, str):
+            SAVED_AGAIN.add(note)
+        else:
+            print(json.dumps(note), flush=True)
+
+
+def _counted(contributions: list[dict[str, Any]]) -> Counter[tuple[str, Any]]:
+    """The battles a day result counted, with the amount each counted for."""
+    return Counter((str(item["battle_identity"]), item["amount_used"])
+                   for item in contributions if item.get("included"))
 
 
 def _official_final(connection: Any, player_id: int, season_end: datetime) -> int | None:
