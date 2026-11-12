@@ -203,7 +203,8 @@ def test_an_unproven_reading_side_counts_the_battles_its_reading_lags() -> None:
     proving = Reading(_after(44), 5010)
     assert _total(proving, **contradicted) == ResetTotal(5040, True, "reading_side",
                                                          _after(44), _at(4, 55))
-    # Read 41 minutes after the attack, the reading lagging it is not counted.
-    late = Reading(_at(4, 52), 4980, requested_at=_at(4, 52))
-    assert _total(**{**contradicted, "old": late}) == ResetTotal(4980, False, "reading_side",
+    # Read 41 minutes after the attack, the reading lagging it and the
+    # defense is not counted as lagging them: 5,000 stays as read.
+    late = Reading(_at(4, 52), 5000, requested_at=_at(4, 52))
+    assert _total(**{**contradicted, "old": late}) == ResetTotal(5000, False, "reading_side",
                                                                  reading_at=_at(4, 52))
