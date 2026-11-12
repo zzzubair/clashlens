@@ -935,9 +935,9 @@ def reset_trophies(
                    battles.after_reading, battles.after_reset,
                    battles.after_reset_after_reading, battles.end_unknown,
                    ranked.failure_reasons = '["end_reading_unverified"]'::jsonb,
+                   battles.recent, battles.recent_after_reset,
                    (ranked.input_evidence -> 'end_baseline_evidence'
-                    ->> 'official_final_trophies')::integer,
-                   battles.recent, battles.recent_after_reset
+                    ->> 'official_final_trophies')::integer
             FROM unnest(
                 %s::bigint[], %s::bigint[], %s::bigint[], %s::timestamptz[]
             ) AS reading (player_id, version_id, observation_id, observed_at)
@@ -1068,7 +1068,7 @@ def _reset_total(
     (
         state, confidence, read_clean, final, automatic_loss, boundary_kind,
         battles_usable, ambiguous, after_reading, after_reset,
-        after_reset_after_reading, end_unknown, unproven, official, _, _,
+        after_reset_after_reading, end_unknown, unproven, _, _, official,
     ) = day
     battles_proven = battles_usable and not ambiguous
     total = reading + int(after_reading) if battles_proven or later else None
@@ -1095,7 +1095,7 @@ def _reset_total(
     if not battles_usable or (season_end and ambiguous):
         return reading, False
     # Unproven, plus the battles it lags that ended before the Reset.
-    recent = list(zip(day[14], day[15], strict=True))
+    recent = list(zip(day[13], day[14], strict=True))
     lag = 0 if later else sum(
         change for change, ended in recent[len(recent) - _lagged(reading, day):] if not ended)
     return reading + int(after_reading) + lag - int(after_reset_after_reading), later
@@ -1105,7 +1105,7 @@ def _lagged(reading: int, day: Any) -> int:
     """How many of the latest battles stamped before the reading it lags
     (``reset_total.lagged``), from ``reset_trophies``' row of its day."""
     final, loss = day[3], day[4]
-    return reset_total.lagged(day[14], reading + int(day[8]),
+    return reset_total.lagged(day[13], reading + int(day[8]),
                               None if final is None else int(final) + int(loss or 0))
 
 
