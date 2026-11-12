@@ -323,3 +323,46 @@ def test_a_day_with_no_reading_of_its_own_stores_the_older_reading(
     assert stored == {UNREAD: (5040, "uncertain", "old_reading", None)}
     assert [json.loads(line) for line in capsys.readouterr().out.splitlines()
             if '"reset_total_shadow"' in line] == []
+
+
+LAGGING = "#2UU"
+
+
+def test_an_old_reading_that_lags_a_defense_counts_it(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """#82PLV802V, Argentina, 12 November 2026: the day starts at 4,955,
+    gains 266 over 8 attacks and loses 237 over 8 defenses, the last for 40
+    reported at 04:09:22: 4,984. Its readings at 04:41:10 and at the Reset
+    still show 5,024, the total before that defense; the Reset one, 55
+    minutes after it, is too late to set aside as stale, so it contradicts
+    the day. Its readings at 05:19:58, before the board froze, and 05:42:19
+    show 4,984, as did the game's country list. The board ranked the
+    04:41:10 reading as if it showed every battle reported before it, 5,024,
+    on every version; that reading lags the defense, as the day's own end
+    shows, so the board counts it: 4,984, uncertain, as no reading proves
+    either."""
+    start, end = day(2), day(3)
+    with domain_database(database_url) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, LAGGING)
+        story.players[LAGGING].battles = [
+            *attacks(start, 30, 40, 31, 28, 25, 40, 40, 32),
+            *defenses(start, 30, 23, 40, 24, 14, 40, 26),
+            Battle(_at(4, 9, 22), -40, False),
+        ]
+        story.reset(start, {LAGGING: (4955, SEASON)})
+        story.reads(_at(3, 21, 34), {LAGGING: 5024})
+        story.reads(_at(4, 41, 10), {LAGGING: 5024})
+        story.reset(end, {LAGGING: (5024, SEASON)}, run=False)
+        story.reads(_at(5, 19, 58), {LAGGING: 4984})
+        story.run_worker()
+        saved = story.saved_day(LAGGING, start)
+        first = _entries(story.served_board(end))
+        story.reads(_at(5, 42, 19), {LAGGING: 4984})
+        story.wait(timedelta(hours=1))
+        later = _entries(story.served_board(end))
+        unfinished = story.unfinished_jobs()
+
+    assert unfinished == []
+    assert (saved["state"], saved["end"]) == ("Inconsistent", 4984)
+    assert first == later == {LAGGING: (4984, "uncertain")}

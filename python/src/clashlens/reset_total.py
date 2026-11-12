@@ -17,10 +17,11 @@ The calculated end is the day's end before its automatic loss, less the
 battles whose attack ended at or after the Reset. The old reading is the
 newest profile reading taken at or before the Reset; the reading side is
 that reading plus every battle stamped after it, less those whose attack
-ended at or after the Reset. Usable battles are the day's continuous battle
-logs, an old reading taken at least ``reading_rule.DAY_READINGS_FROM`` into
-the day, a time on every battle, and no battle the two players' reports
-disagree on.
+ended at or after the Reset; unproven, it also counts the latest battles
+stamped before the reading that it lags (``lagged``). Usable battles are
+the day's continuous battle logs, an old reading taken at least
+``reading_rule.DAY_READINGS_FROM`` into the day, a time on every battle,
+and no battle the two players' reports disagree on.
 
 Proven once: the readings from the Reset on are taken in time order, and
 the total is proven by the first run of them that proves it, at the
@@ -42,7 +43,7 @@ proven.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from itertools import combinations
@@ -121,14 +122,15 @@ def reset_total(
     after_reset = sum(battle.change for battle in battles if _ended_after(battle, reset_at))
     end_unknown = any(_may_end_after(battle, reset_at) for battle in battles)
     complete = state == "Complete" and end_before_loss is not None
-    side = _reading_side(old_reading, battles, day_start, reset_at, battles_usable)
+    side = _reading_side(old_reading, battles, day_start, reset_at, battles_usable,
+                         end_before_loss)
     reading_at = None if old_reading is None else old_reading.read_at
     if season_end:
         if complete:
             return ResetTotal(eod, False, CALCULATED_END)
         if side is None or side[2]:
             return _old_reading(old_reading)
-        return ResetTotal(side[1], False, READING_SIDE, reading_at=reading_at)
+        return ResetTotal(side[3], False, READING_SIDE, reading_at=reading_at)
     calculated = None if end_before_loss is None else end_before_loss - after_reset
     proven = None
     if calculated is not None and end_proof is not None and not end_unknown:
@@ -139,7 +141,7 @@ def reset_total(
     # one that proved the day's own end, whatever the day's state now.
     if side is not None and reading_proof is not None and not end_unknown and (
             len(side[2]) <= reading_rule.MAX_AMBIGUOUS_BATTLES):
-        end, value, unshown = side
+        end, value, unshown, _ = side
         proving = reading_rule.first_proof(
             end_before_loss=end, **{**reading_proof, "readings": [
                 reading for reading in reading_proof["readings"]
@@ -156,7 +158,7 @@ def reset_total(
         return ResetTotal(calculated, False, CALCULATED_END)
     if side is None:
         return _old_reading(old_reading)
-    return ResetTotal(side[1], False, READING_SIDE, reading_at=reading_at)
+    return ResetTotal(side[3], False, READING_SIDE, reading_at=reading_at)
 
 
 def _old_reading(old_reading: Reading | None) -> ResetTotal:
@@ -167,11 +169,12 @@ def _old_reading(old_reading: Reading | None) -> ResetTotal:
 
 def _reading_side(
     old_reading: Reading | None, battles: tuple[Battle, ...], day_start: datetime,
-    reset_at: datetime, battles_usable: bool,
-) -> tuple[int, int, list[int]] | None:
+    reset_at: datetime, battles_usable: bool, end_before_loss: int | None,
+) -> tuple[int, int, list[int], int] | None:
     """The old reading plus the battles stamped after it, at the day's end
-    and at the Reset, and the changes of the battles it may or may not
-    show; ``None`` without usable battles."""
+    and at the Reset, the changes of the battles it may or may not show,
+    and the total at the Reset with those it lags (``lagged``) too;
+    ``None`` without usable battles."""
     if old_reading is None or not battles_usable or (
             old_reading.read_at < day_start + reading_rule.DAY_READINGS_FROM):
         return None
@@ -185,8 +188,33 @@ def _reading_side(
         and requested_at - (ATTACK_ENDS_WITHIN if battle.defense else timedelta(0))
         <= battle.stamped_at <= read_at
     ]
+    recent = sorted((battle for battle in battles if battle.stamped_at is not None
+                     and read_at - reading_rule.STALE_READING_LAG <= battle.stamped_at <= read_at),
+                    key=lambda battle: battle.stamped_at)
     end = old_reading.trophies + sum(battle.change for battle in after)
-    return end, end - sum(battle.change for battle in after if _ended_after(battle, reset_at)), unshown
+    value = end - sum(battle.change for battle in after if _ended_after(battle, reset_at))
+    lags = recent[len(recent) - lagged([battle.change for battle in recent], end, end_before_loss):]
+    return end, value, unshown, value + sum(
+        battle.change for battle in lags if not _ended_after(battle, reset_at))
+
+
+def lagged(changes: Sequence[int], shown: int, end: int | None) -> int:
+    """How many of the latest battles stamped in the
+    ``reading_rule.STALE_READING_LAG`` up to an old reading, whose trophy
+    changes are ``changes`` in time order, the reading lags: the fewest
+    whose changes take ``shown``, the reading plus the battles after it, to
+    the day's calculated end before its automatic loss, ``end``, when it
+    differs. The reading then shows the total from before them, as the
+    reading rule's stale reading does, which the day's own calculation sets
+    aside. On 12 November 2026 #82PLV802V read 5,024 at 04:41:10, without
+    its defense for 40 reported at 04:09:22: its day ended at 4,984, as the
+    game's country list and its 05:19:58 reading showed, but the board
+    ranked the reading as if it held that defense, 5,024."""
+    if end is not None and shown != end:
+        for count in range(1, len(changes) + 1):
+            if shown + sum(changes[len(changes) - count:]) == end:
+                return count
+    return 0
 
 
 def _ended_after(battle: Battle, reset_at: datetime) -> bool:

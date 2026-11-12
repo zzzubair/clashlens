@@ -188,3 +188,22 @@ def test_a_seasons_last_day_without_its_official_final_keeps_the_older_rule() ->
     old = Reading(_at(4, 30), 5050, requested_at=_at(4, 30))
     assert _total(state="Inconsistent", season_end=True, old=old) == ResetTotal(
         5030, False, "reading_side", reading_at=_at(4, 30))
+
+
+def test_an_unproven_reading_side_counts_the_battles_its_reading_lags() -> None:
+    """The 04:55 reading still shows 5,040, the total before the defense
+    reported at 04:40, as the day's own end, 5,020, shows: unproven, the
+    reading side counts that defense. A reading after the Reset that proves
+    5,040 proves the reading showed it after all."""
+    contradicted: dict[str, Any] = {
+        "state": "Inconsistent", "failures": ("trophy_equation_mismatch",),
+        "old": Reading(_at(4, 55), 5040, requested_at=_at(4, 55))}
+    assert _total(**contradicted) == ResetTotal(5020, False, "reading_side",
+                                                reading_at=_at(4, 55))
+    proving = Reading(_after(44), 5010)
+    assert _total(proving, **contradicted) == ResetTotal(5040, True, "reading_side",
+                                                         _after(44), _at(4, 55))
+    # Read 41 minutes after the attack, the reading lagging it is not counted.
+    late = Reading(_at(4, 52), 4980, requested_at=_at(4, 52))
+    assert _total(**{**contradicted, "old": late}) == ResetTotal(4980, False, "reading_side",
+                                                                 reading_at=_at(4, 52))
