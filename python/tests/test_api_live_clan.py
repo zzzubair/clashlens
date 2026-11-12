@@ -255,7 +255,7 @@ def test_a_held_key_row_keeps_the_saved_clan_and_the_health_checks_answering(
     player pages: each shows the saved clan at once, and readiness answers
     within the 3 seconds production allows, instead of the lookups taking
     every database connection while they wait for the row."""
-    tags = FIXTURES["tags_for"](40)[8:]
+    tags = (TAGS[7], *FIXTURES["tags_for"](39)[8:])
     with live_clan_api(database_url) as (client, database, _collector, _origin):
         conninfo = database.pool.conninfo
         with psycopg.connect(conninfo) as holder:
@@ -283,7 +283,7 @@ def test_a_held_key_row_keeps_the_saved_clan_and_the_health_checks_answering(
                 live = get("/livez")
                 answers = [view.result() for view in views]
             holder.rollback()
-        # Once the row is free, a live clan is read again.
+        # Busy is not remembered: once the row is free, the next view reads it.
         after = live_clan(client, TAGS[7])
 
     assert ready[:2] == (200, {"ready": True}) and ready[2] < 3
