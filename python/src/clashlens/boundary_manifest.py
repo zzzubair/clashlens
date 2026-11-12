@@ -24,7 +24,7 @@ from typing import Any
 from psycopg.errors import QueryCanceled
 from psycopg.types.json import Jsonb
 
-from . import boundary_members, ranked_day_inputs
+from . import boundary_members, ranked_day_inputs, reading_rule, reset_total
 from .analytics import latest_trophy_changes, unplayed_since_sql, unplayed_sql
 from .army_decoder import CURRENT_DECODES, DECODER_VERSION
 from .boundary_battles import moved_decode_ids, moved_side_arrays
@@ -865,7 +865,10 @@ def reset_trophies(
     showed its 02:44 reading, 4,807, not its 5,085 end.
 
     Otherwise, or once a later reading proves it for an unproven day, the
-    total is the reading plus the day's battles stamped after it, which
+    total is the reading plus the day's battles stamped after it and those
+    before it that it lags (``reset_total.lagged``: on 12 November 2026
+    #82PLV802V's board showed its 04:41 reading of 5,024 without a defense
+    for 40 at 04:09, not 4,984), which
     needs the day's continuous battle logs, a reading taken at least 15
     minutes into that day, after the previous day's last reports and
     automatic defense loss, a time on every battle the day counts, and no
@@ -932,6 +935,7 @@ def reset_trophies(
                    battles.after_reading, battles.after_reset,
                    battles.after_reset_after_reading, battles.end_unknown,
                    ranked.failure_reasons = '["end_reading_unverified"]'::jsonb,
+                   battles.recent, battles.recent_after_reset,
                    (ranked.input_evidence -> 'end_baseline_evidence'
                     ->> 'official_final_trophies')::integer
             FROM unnest(
@@ -967,7 +971,14 @@ def reset_trophies(
                            WHERE ending.after_reset
                              AND battle.stamped_at > reading.observed_at
                        ), 0),
-                       COALESCE(bool_or(ending.unknown), false)
+                       COALESCE(bool_or(ending.unknown), false),
+                       -- The battles the reading may lag (``reset_total.lagged``).
+                       COALESCE(array_agg(battle.change ORDER BY battle.stamped_at)
+                           FILTER (WHERE battle.stamped_at BETWEEN reading.observed_at - %s
+                                                               AND reading.observed_at), '{}'),
+                       COALESCE(array_agg(ending.after_reset IS TRUE ORDER BY battle.stamped_at)
+                           FILTER (WHERE battle.stamped_at BETWEEN reading.observed_at - %s
+                                                               AND reading.observed_at), '{}')
                 FROM jsonb_array_elements(ranked.input_evidence->'contributions')
                     AS contribution
                 CROSS JOIN LATERAL (
@@ -1007,7 +1018,7 @@ def reset_trophies(
                 WHERE contribution.value->>'included' = 'true'
             ) AS battles (
                 after_reading, every_battle_timed, ambiguous, after_reset,
-                after_reset_after_reading, end_unknown
+                after_reset_after_reading, end_unknown, recent, recent_after_reset
             )
             """,
             (
@@ -1016,7 +1027,7 @@ def reset_trophies(
                 [reading[0] for reading in readings.values()],
                 [reading[1] for reading in readings.values()],
                 [reading[2] for reading in readings.values()],
-                boundary_at,
+                boundary_at, reading_rule.STALE_READING_LAG, reading_rule.STALE_READING_LAG,
             ),
         ).fetchall()
     }
@@ -1057,7 +1068,7 @@ def _reset_total(
     (
         state, confidence, read_clean, final, automatic_loss, boundary_kind,
         battles_usable, ambiguous, after_reading, after_reset,
-        after_reset_after_reading, end_unknown, unproven, official,
+        after_reset_after_reading, end_unknown, unproven, _, _, official,
     ) = day
     battles_proven = battles_usable and not ambiguous
     total = reading + int(after_reading) if battles_proven or later else None
@@ -1083,7 +1094,19 @@ def _reset_total(
         return int(final) + int(automatic_loss or 0) - int(after_reset), False
     if not battles_usable or (season_end and ambiguous):
         return reading, False
-    return reading + int(after_reading) - int(after_reset_after_reading), later
+    # Unproven, plus the battles it lags that ended before the Reset.
+    recent = list(zip(day[13], day[14], strict=True))
+    lag = 0 if later else sum(
+        change for change, ended in recent[len(recent) - _lagged(reading, day):] if not ended)
+    return reading + int(after_reading) + lag - int(after_reset_after_reading), later
+
+
+def _lagged(reading: int, day: Any) -> int:
+    """How many of the latest battles stamped before the reading it lags
+    (``reset_total.lagged``), from ``reset_trophies``' row of its day."""
+    final, loss = day[3], day[4]
+    return reset_total.lagged(day[13], reading + int(day[8]),
+                              None if final is None else int(final) + int(loss or 0))
 
 
 def _army_rows(
