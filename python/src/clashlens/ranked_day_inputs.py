@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime, timedelta
 from itertools import combinations, pairwise
 from typing import Any
 
-from . import battle, domain, reading_rule
+from . import battle, domain, reading_rule, reset_total
 from .day_result import shield_run_length
 from .db import Database
 from .db_rows import text_value
@@ -640,7 +641,7 @@ def load_readings(
     rows = connection.execute(
         f"""
         SELECT observed.response_completed_at, profile.trophies,
-               profile.source_contract_state = 'accepted'
+               profile.source_contract_state = 'accepted', observed.request_started_at
         FROM collector_observations AS observed
         {_OUTCOME}
         {_PROFILE_JOIN}
@@ -667,11 +668,60 @@ def load_readings(
     return tuple(
         reading_rule.Reading(
             at, int(trophies), confirm_only=not accepted,
-            uncovered=at >= ranked_day.end and at > covered_until,
+            uncovered=at >= ranked_day.end and at > covered_until, requested_at=requested_at,
         )
-        for at, trophies, accepted in rows
+        for at, trophies, accepted, requested_at in rows
         if trophies is not None
     ), cut, covered_until
+
+
+def load_older_reading(
+    connection: Any, player_id: int, ranked_day: RankedDay,
+) -> reading_rule.Reading | None:
+    """The player's newest accepted, eligible profile naming the day's
+    Season read at or before the day's start Reset: the reading the Daily
+    board ranks a day by when none was taken during it (``reset_total``)."""
+    row = connection.execute(
+        f"""
+        SELECT observed.response_completed_at, profile.trophies, observed.request_started_at
+        FROM collector_observations AS observed
+        {_OUTCOME}
+        {_PROFILE_JOIN}
+        WHERE observed.player_id = %(player)s AND observed.endpoint = 'profile'
+          AND observed.response_completed_at <= %(start)s
+          AND observed.http_status BETWEEN 200 AND 299
+          AND outcome.outcome = 'processed'
+          AND profile.player_id = %(player)s
+          AND profile.source_contract_state = 'accepted'
+          AND profile.eligibility_state = 'eligible'
+          AND profile.current_league_season_id = %(season)s
+        ORDER BY observed.response_completed_at DESC LIMIT 1
+        """,
+        {"processing": PROCESSING_VERSION, "player": player_id, "start": ranked_day.start,
+         "season": ranked_day.official_season_id},
+    ).fetchone()
+    return None if row is None or row[1] is None else reading_rule.Reading(
+        row[0], int(row[1]), requested_at=row[2])
+
+
+def load_attack_ends(
+    connection: Any, ranked_day: RankedDay, contributions: Iterable[BattleContribution],
+) -> dict[str, datetime]:
+    """The attacker's report, the attack's end, of each of the player's
+    defenses reported from ``reset_total.ATTACK_ENDS_WITHIN`` before the
+    day's end on, by battle, when saved: a defense is reported near the
+    attack's start."""
+    late = [int(item.battle_identity) for item in contributions
+            if item.lens == "defense" and item.battle_timestamp is not None
+            and item.battle_timestamp >= ranked_day.end - reset_total.ATTACK_ENDS_WITHIN]
+    return {} if not late else {str(battle_id): reported_at for battle_id, reported_at in connection.execute(
+        """
+        SELECT side.battle_id, evidence.battle_timestamp FROM battle_perspectives AS side
+        JOIN battle_evidence AS evidence ON evidence.id = side.evidence_id
+        WHERE side.battle_id = ANY(%s) AND side.perspective = 'attacker'
+        """,
+        (late,),
+    ).fetchall()}
 
 
 def load_unshown_reports(

@@ -450,6 +450,8 @@ def recalculate_ranked_day(
     unreadable_from: datetime | None = None
     covered_until: datetime | None = None
     next_day_start: int | None = None
+    attack_ends: dict[str, datetime] = {}
+    older_reading: reading_rule.Reading | None = None
     if now >= ranked_day.end:
         readings, unreadable_from, covered_until = ranked_day_inputs.load_readings(
             database, connection, player_id, ranked_day,
@@ -468,6 +470,10 @@ def recalculate_ranked_day(
         )
         day_unshown_report, first_unshown_report = ranked_day_inputs.load_unshown_reports(
             connection, player_id, ranked_day)
+        attack_ends = ranked_day_inputs.load_attack_ends(connection, ranked_day, contributions)
+        if not any(reading.read_at <= ranked_day.end and not reading.confirm_only
+                   for reading in readings):
+            older_reading = ranked_day_inputs.load_older_reading(connection, player_id, ranked_day)
         if end_baseline is not None and end_baseline["id"] is not None:
             next_day_start = ranked_day_inputs.load_next_day_start(
                 connection, player_id, ranked_day, int(end_baseline["id"]))
@@ -544,6 +550,8 @@ def recalculate_ranked_day(
         unreadable_from=unreadable_from,
         covered_until=covered_until,
         next_day_start=next_day_start,
+        attack_ends=attack_ends,
+        older_reading=older_reading,
     )
     result = reconcile_ranked_day(data)
     result_data = {

@@ -107,6 +107,9 @@ class Reading:
     uncovered: bool = False
     # The Reset pair's own profile.
     reset_reading: bool = False
+    # When its request started: a battle reported from then on may or may
+    # not show in it (``reset_total``).
+    requested_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -364,34 +367,42 @@ def decide(
     landed; so never on a day whose loss is only possible. ``stale`` sets
     aside a stale reading (``judge``) instead of letting it contradict.
     """
-    judged = [
-        judged for judged in (
-            judge(
-                reading,
-                end_before_loss=end_before_loss,
-                loss_candidates=loss_candidates,
-                loss_certain=loss_certain,
-                day_effects=day_effects,
-                new_day_effects=new_day_effects,
-                floor=floor,
-                reset=reset,
-                stale=stale,
-            )
+    ledger = {"end_before_loss": end_before_loss, "loss_candidates": loss_candidates,
+              "loss_certain": loss_certain, "day_effects": day_effects,
+              "new_day_effects": new_day_effects, "floor": floor, "reset": reset}
+    return _verdict(_judged(readings, reset_at, ledger, stale), ledger, unknown_from=unknown_from,
+                    start_proven=start_proven, history=history, proof=proof)
+
+
+def _judged(readings: Iterable[Reading], reset_at: datetime, ledger: dict[str, Any],
+            stale: bool) -> list[_Judged | None]:
+    """Each reading from ``reset_at`` on, in time order, judged (``judge``)."""
+    return [judge(reading, **ledger, stale=stale)
             for reading in sorted(readings, key=lambda item: (item.read_at, item.trophies))
-            if reading.read_at >= reset_at
-        )
-        if judged is not None
-    ]
+            if reading.read_at >= reset_at]
+
+
+def _trusted(item: _Judged, unknown_from: datetime | None) -> bool:
+    """Whether a judged reading can contradict (``decide``)."""
+    return not (item.reading.confirm_only or item.reading.uncovered
+                or (unknown_from is not None and item.reading.read_at >= unknown_from))
+
+
+def _verdict(
+    items: list[_Judged | None], ledger: dict[str, Any], *, unknown_from: datetime | None,
+    start_proven: bool, history: frozenset[Way] | None, proof: Reading | None,
+) -> Verdict:
+    """``decide``'s verdict from its readings, judged in time order."""
+    judged = [item for item in items if item is not None]
+    end_before_loss, loss_candidates, loss_certain, floor = (
+        ledger["end_before_loss"], ledger["loss_candidates"], ledger["loss_certain"], ledger["floor"])
+    day_effects, new_day_effects = ledger["day_effects"], ledger["new_day_effects"]
 
     def unknown(item: _Judged) -> bool:
         return unknown_from is not None and item.reading.read_at >= unknown_from
 
-    def trusted(item: _Judged) -> bool:
-        return not (item.reading.confirm_only or item.reading.uncovered or unknown(item))
-
     def floored(item: _Judged) -> bool:
-        return floor is not None and floor in (
-            item.reading.trophies, item.reading.trophies - item.new_day_change)
+        return _floored(item, floor)
 
     def clean(item: _Judged) -> bool:
         return item.matched and not item.ambiguous and not item.missed and len(
@@ -405,7 +416,7 @@ def decide(
     judged_ids = {effect.identity for effect in (*day_effects, *new_day_effects)}
     history = None if history is None else frozenset(
         (loss, raised, shown & judged_ids) for loss, raised, shown in history)
-    misfit, settled = _settle([item for item in judged if trusted(item)], history)
+    misfit, settled = _settle([item for item in judged if _trusted(item, unknown_from)], history)
     if misfit is not None:
         return replace(misfit, lagged=lagged)
     shown = max((shows(item) for item in settled if not floored(item)), default=0)
@@ -432,7 +443,8 @@ def decide(
         return _narrowed(item, ways) if ways else None
 
     judged = sorted(
-        [*settled, *filter(None, (confirming(item) for item in judged if not trusted(item)))],
+        [*settled, *filter(None, (confirming(item) for item in judged
+                                  if not _trusted(item, unknown_from)))],
         key=lambda item: (item.reading.read_at, item.reading.trophies))
     matches = matches or proven + [item for item in judged if clean(item)]
     if matches:
@@ -454,6 +466,74 @@ def decide(
         )
     lagging = [item.reading for item in judged if item.lagged]
     return Verdict("unverified", lagging[-1] if lagging else None, lagged=lagged)
+
+
+def first_proof(
+    readings: Iterable[Reading], *, reset_at: datetime, end_before_loss: int,
+    others: Iterable[int] = (), unknown_from: datetime | None = None, start_proven: bool = False,
+    history: frozenset[Way] | None = None, proof: Reading | None = None, stale: bool = True,
+    **ledger: Any,
+) -> Reading | None:
+    """The last reading of the first run of readings from the day's end
+    Reset on, in time order (the first one, the first two, and so on), that
+    proves the day ended at ``end_before_loss`` before its automatic loss
+    and at none of ``others`` (``proves_end``): ``decide`` verifies that
+    end cleanly from them, and contradicts each other one; the reading
+    during the day that already shows the end (``proof``) when no reading
+    from the Reset on is needed. A reading after that run cannot take the
+    proof back, however often and in whatever order the day is judged.
+    ``None`` when no run proves it, as when a reading contradicts it first.
+    The rest is ``decide``'s."""
+    readings = tuple(readings)
+    ledger = {"end_before_loss": end_before_loss, **ledger}
+    first = 0
+    for other in set(others) - {end_before_loss}:
+        rule = {**ledger, "end_before_loss": other}
+        ways = _judged(readings, reset_at, rule, False)
+        misfit = _verdict(ways, rule, unknown_from=unknown_from, start_proven=start_proven,
+                          history=history, proof=proof)
+        if misfit.outcome != "contradicted":
+            return None
+        first = max(first, 1 + next(index for index, item in enumerate(ways)
+                                    if item is not None and item.reading is misfit.reading))
+    after = sorted((reading for reading in readings if reading.read_at >= reset_at),
+                   key=lambda item: (item.read_at, item.trophies))
+    judged: list[_Judged | None] = []
+    for count in range(len(after) + 1):
+        added = judge(after[count - 1], **ledger, stale=stale) if count else None
+        if count:
+            judged.append(added)
+        # A trustworthy reading fitting no value contradicts every longer run.
+        if added is not None and not added.matched and _trusted(added, unknown_from):
+            return None
+        if count < first or count > first and not _may_prove(added, ledger):
+            continue
+        verdict = _verdict(judged, ledger, unknown_from=unknown_from,
+                           start_proven=start_proven, history=history, proof=proof)
+        if verdict.outcome == "contradicted":
+            return None
+        if verdict.outcome == "verified" and verdict.clean:
+            return after[count - 1] if count else verdict.reading
+    return None
+
+
+def _may_prove(item: _Judged | None, ledger: dict[str, Any]) -> bool:
+    """Whether adding this judged reading can make a run of readings prove
+    the day where the run before it did not (``decide``): a match that may
+    be clean, or, on a day whose loss is only possible, one not floored,
+    which may show more loss than the ones before it. A floored reading is
+    never clean and only ever withholds a proof."""
+    if item is None or not item.matched or _floored(item, ledger["floor"]):
+        return False
+    return not (item.ambiguous or item.missed) or (
+        bool(ledger["loss_candidates"]) and not ledger["loss_certain"])
+
+
+def _floored(item: _Judged, floor: int | None) -> bool:
+    """A reading of the weekly raise's ``floor``, before or after its new-day
+    battles: it proves neither the day's end nor a loss (``decide``)."""
+    return floor is not None and floor in (
+        item.reading.trophies, item.reading.trophies - item.new_day_change)
 
 
 def proves_end(
