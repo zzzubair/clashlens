@@ -580,7 +580,7 @@ def test_a_failed_board_read_waits_its_turn() -> None:
 
         tries = 0
 
-        def current(self, _database: Any, _now: Any) -> Any:
+        def current(self, _database: Any, _now: Any, **_wait: Any) -> Any:
             self.tries += 1
             raise TimeoutError
 
@@ -605,7 +605,7 @@ def test_only_a_follow_up_waits_for_todays_board_and_not_past_its_wait() -> None
         """A Live Leaderboard read that finishes when the test lets it go,
         with one player at 5,000."""
 
-        def current(self, _database: Any, _now: Any) -> Any:
+        def current(self, _database: Any, _now: Any, **_wait: Any) -> Any:
             go.wait(10)
             return SimpleNamespace(rows=[("#2PP", None, 5000)])
 
@@ -668,7 +668,7 @@ def test_only_a_follow_up_waits_for_its_players_projected_place(monkeypatch) -> 
     class Live:
         """Players on 5,000 with every battle left."""
 
-        def current(self, _database: Any, _now: Any) -> Any:
+        def current(self, _database: Any, _now: Any, **_wait: Any) -> Any:
             return SimpleNamespace(rows=list(rows))
 
     class NoLogs:

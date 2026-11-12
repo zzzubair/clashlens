@@ -59,6 +59,7 @@ from .db import CONTRACT_VERSION
 from .domain import SEASON_DAY_COUNT, ranked_day_for
 from .hmac_proof import InvalidProof, VerifiedProof, verify_proof
 from .operating import ApiMetrics, elapsed
+from .shared_copy import CopyBusy
 from .verification import (
     OfficialVerificationResponse,
     VerificationOutcome,
@@ -204,6 +205,10 @@ def create_app(
     @app.exception_handler(ApiError)
     async def api_error_handler(_request: Request, error: ApiError) -> JSONResponse:
         return api_error_response(error)
+
+    @app.exception_handler(CopyBusy)
+    async def copy_busy_handler(_request: Request, _error: CopyBusy) -> JSONResponse:
+        return api_error_response(ApiError(503, "busy"))
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(

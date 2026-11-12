@@ -4,17 +4,24 @@ Saved game data goes through the real worker, which publishes the Reset's
 Daily board; the Live Leaderboard, its search and public profiles' ranks then
 read one shared copy of the board. A copy is never served for a Legend day it
 was not read for, one 20 seconds old is replaced in the background instead of
-making a visitor wait, and one 30 seconds old is never served. See
-docs/testing.md.
+making a visitor wait, and one 30 seconds old is never served. While the
+one read of a missing copy is slow, other visitors are refused as busy at
+once, so the health checks still answer. See docs/testing.md.
 """
 
 from __future__ import annotations
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import wait as wait_for
 from datetime import timedelta
 
 from api_db_organization_support import create_owner
 from domain_test_support import as_api_role, domain_database
+from fastapi.testclient import TestClient
 from group_comparison_postgres_support import link_player
+from private_api_support import NOW_SECONDS, TS_CURRENT, signed_headers
 from reset_scenarios_postgres_support import (
     SEASON,
     Battle,
@@ -26,6 +33,7 @@ from reset_scenarios_postgres_support import (
 )
 
 from clashlens import api_accounts, api_leaderboard
+from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
 
 FIRST, SECOND, THIRD = "#2PP", "#8PP", "#9PP"
@@ -126,3 +134,71 @@ def test_live_board_copy_follows_the_reset_and_refreshes_in_the_background(
     assert expired == after_reset
     assert queued == 1
     assert too_old == refreshed == {FIRST: 5380, THIRD: 5340, SECOND: 5140}
+
+
+def test_a_slow_live_read_leaves_the_health_checks_answering(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """The first Live read after a restart is slow while 40 visitors ask for
+    the board, as many as the API has request threads. Only one waits for
+    it; the rest are refused as busy at once, so the health checks answer
+    within the 3 seconds production allows them. Day 3 as above."""
+    day_3, day_4 = day(3), day(4)
+    with domain_database(database_url) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, FIRST, SECOND, THIRD)
+        story.players[FIRST].battles = attacks(day_3, 40, 40, 40) + defenses(day_3, *[10] * 8)
+        story.players[SECOND].battles = attacks(day_3, 40) + defenses(day_3, *[30] * 8)
+        story.players[THIRD].battles = attacks(day_3, 40, 40, 40, 40) + defenses(
+            day_3, *[5] * 8)
+        story.reset(day_3, {FIRST: (5300, SEASON), SECOND: (5300, SEASON),
+                            THIRD: (5220, SEASON)})
+        story.reads(day_4 - timedelta(minutes=10), {FIRST: 5340, SECOND: 5100, THIRD: 5340})
+        story.run_worker()
+
+        # The real read, held until the test lets it finish.
+        read_live_board = api_leaderboard._read_live_board_from
+        reading, release, reads = threading.Event(), threading.Event(), []
+
+        def slow_read(database, now):
+            reads.append(now)
+            reading.set()
+            assert release.wait(10)
+            return read_live_board(database, now)
+
+        monkeypatch.setattr(api_leaderboard, "_read_live_board_from", slow_read)
+        api = ApiDatabase(as_api_role(connection_info))
+        app = create_app(api, keys={("typescript-website", "current"): TS_CURRENT},
+                         clock=lambda: NOW_SECONDS, now=lambda: day_4 - timedelta(minutes=2))
+
+        def get(target):
+            started = time.monotonic()
+            response = client.get(target, headers=signed_headers(target))
+            return response.status_code, response.json(), time.monotonic() - started
+
+        try:
+            with TestClient(app) as client, ThreadPoolExecutor(max_workers=42) as pool:
+                first = pool.submit(get, "/v1/leaderboards/live")
+                assert reading.wait(10)
+                visitors = [pool.submit(get, "/v1/leaderboards/live") for _ in range(39)]
+                time.sleep(0.5)
+                health = [pool.submit(get, "/livez"), pool.submit(get, "/readyz")]
+                answered, _ = wait_for(health, timeout=3)
+                release.set()
+                refused = [visitor.result() for visitor in visitors]
+                served = first.result()
+                after = get("/v1/leaderboards/live")
+        finally:
+            release.set()
+            api.close()
+
+    assert len(answered) == 2
+    assert [result[:2] for result in (h.result() for h in health)] == [
+        (200, {"live": True}), (200, {"ready": True})]
+    assert all(seconds < 3 for _status, _body, seconds in (h.result() for h in health))
+    assert [(status, body) for status, body, _seconds in refused] == [
+        (503, {"error": "busy"})] * 39
+    assert served[0] == after[0] == 200
+    # One read served the first visitor and every visitor after it.
+    assert len(reads) == 1
+    assert {e["tag"]: e["trophies"] for e in after[1]["entries"]} == {
+        FIRST: 5340, THIRD: 5340, SECOND: 5100}
