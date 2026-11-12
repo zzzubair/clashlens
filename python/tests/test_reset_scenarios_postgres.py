@@ -805,6 +805,10 @@ def test_calendar_does_not_claim_an_unknown_player_season(
         story = _story(info, archive_server, monkeypatch, STEADY, "#8PY")
         story.reset(day(1), {STEADY: (5000, SEASON)})
         story.reset(day(2), {STEADY: (5000, SEASON)})
+        # Read only at Monday's Reset, STEADY's week is Legend I only from
+        # this Reset's reading, after the first board: STEADY joins at its
+        # hourly rebuild.
+        story.wait(timedelta(hours=1))
         assert _ranked(story.served_board(day(2))) == {STEADY: 5000}
         payload = json.loads(story.players["#8PY"].profile(4800, SEASON))
         payload["leagueTier"] = {"id": 105000035, "name": "Legend II"}
