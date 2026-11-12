@@ -15,7 +15,10 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import dataclass
 from threading import Lock
-from typing import Protocol
+from typing import Any, Protocol
+
+from psycopg.errors import LockNotAvailable
+from psycopg_pool import PoolTimeout
 
 from . import api_verification
 from .api_db import ApiDatabase
@@ -29,6 +32,11 @@ from .verification import (
 
 LIVE_CLAN_SECONDS = 60
 LIVE_CLAN_TIMEOUT_SECONDS = 1.5
+# A live clan is optional, so its start waits this long at most for one of the
+# API's database connections, and not at all for the key's row: when either is
+# busy the page shows the saved clan. Waiting held connections and request
+# threads that the health checks and every other page needed.
+LIVE_CLAN_CONNECTION_WAIT_SECONDS = 0.1
 # About 4,096 short entries, well under a megabyte.
 MAX_REMEMBERED_PLAYERS = 4096
 # As loose as the saved clan tag, which the page already links.
@@ -55,7 +63,7 @@ class LiveClan:
 
 
 # Reasons no request was made, so the next view asks again.
-_NOT_ASKED = frozenset({"no_key", "key_not_registered", "cap", "key_not_ready"})
+_NOT_ASKED = frozenset({"no_key", "key_not_registered", "cap", "key_not_ready", "busy"})
 
 
 def acquire_live_read_permit(database: ApiDatabase, fingerprint: str) -> str | None:
@@ -64,37 +72,49 @@ def acquire_live_read_permit(database: ApiDatabase, fingerprint: str) -> str | N
     Live reads use collection's share, so verification's reserved start is
     never touched, and only while collection's share is less than half used,
     so Refresh and first-time collection always keep the other half. Returns
-    None with the start taken, otherwise why none was taken.
+    None with the start taken, otherwise why none was taken: ``busy`` when no
+    connection was free at once or another start held the key's row.
     """
-    with database.pool.connection() as connection:
-        with connection.transaction():
-            # Locking the key's row orders this check with every other start.
-            budget = connection.execute(
-                """
-                SELECT collector_budget FROM shared_api_credentials
-                WHERE credential_fingerprint = %s FOR UPDATE
-                """,
-                (fingerprint,),
-            ).fetchone()
-            if budget is None:
-                return "key_not_registered"
-            used = connection.execute(
-                """
-                SELECT count(*) FROM shared_api_permits
-                WHERE credential_fingerprint = %s AND caller = 'collector'
-                  AND permitted_at > clock_timestamp() - interval '1 second'
-                """,
-                (fingerprint,),
-            ).fetchone()
-            assert used is not None
-            if 2 * (int(used[0]) + 1) > int(budget[0]):
-                return "cap"
-            granted = connection.execute(
-                "SELECT granted FROM clashlens_acquire_shared_api_permit(%s, 'collector')",
-                (fingerprint,),
-            ).fetchone()
-            # Refused while the key cools down or its whole window is used.
-            return None if granted is not None and bool(granted[0]) else "key_not_ready"
+    try:
+        with database.pool.connection(
+            timeout=LIVE_CLAN_CONNECTION_WAIT_SECONDS
+        ) as connection:
+            return _take_permit(connection, fingerprint)
+    except (PoolTimeout, LockNotAvailable):
+        return "busy"
+
+
+def _take_permit(connection: Any, fingerprint: str) -> str | None:
+    with connection.transaction():
+        # Any other lock the start needs fails at once too.
+        connection.execute("SET LOCAL lock_timeout = '1ms'")
+        # Locking the key's row orders this check with every other start.
+        budget = connection.execute(
+            """
+            SELECT collector_budget FROM shared_api_credentials
+            WHERE credential_fingerprint = %s FOR UPDATE NOWAIT
+            """,
+            (fingerprint,),
+        ).fetchone()
+        if budget is None:
+            return "key_not_registered"
+        used = connection.execute(
+            """
+            SELECT count(*) FROM shared_api_permits
+            WHERE credential_fingerprint = %s AND caller = 'collector'
+              AND permitted_at > clock_timestamp() - interval '1 second'
+            """,
+            (fingerprint,),
+        ).fetchone()
+        assert used is not None
+        if 2 * (int(used[0]) + 1) > int(budget[0]):
+            return "cap"
+        granted = connection.execute(
+            "SELECT granted FROM clashlens_acquire_shared_api_permit(%s, 'collector')",
+            (fingerprint,),
+        ).fetchone()
+        # Refused while the key cools down or its whole window is used.
+        return None if granted is not None and bool(granted[0]) else "key_not_ready"
 
 
 class LiveClans:

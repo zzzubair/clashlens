@@ -515,7 +515,8 @@ class DashboardBoard:
     def _read(self, database: ApiDatabase, now: datetime) -> None:
         # A failed read waits a turn instead of starting again at once.
         try:
-            live = self._live_board.current(database, now).rows
+            # A background thread, not a request's, so it waits its turn.
+            live = self._live_board.current(database, now, wait=None).rows
             with database.pool.connection() as connection:
                 # Only until the block's commit: the pool's requests keep 10 s.
                 connection.execute(

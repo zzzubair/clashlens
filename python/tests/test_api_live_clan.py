@@ -7,11 +7,13 @@ import runpy
 import threading
 import time
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar
 
+import psycopg
 import pytest
 from api_migration_support import migrated_production_database
 from fastapi.testclient import TestClient
@@ -244,3 +246,50 @@ def test_views_of_one_player_at_once_share_one_request(database_url: str) -> Non
 
         assert answers == [api_live_clan.LiveClan(False, reason="timeout")] * 3
         assert sorted(FakeGame.profile_reads) == sorted([TAGS[5], TAGS[6]])
+
+
+def test_a_held_key_row_keeps_the_saved_clan_and_the_health_checks_answering(
+    database_url: str,
+) -> None:
+    """Collection holds the key's row while 32 Clashers open 32 different
+    player pages: each shows the saved clan at once, and readiness answers
+    within the 3 seconds production allows, instead of the lookups taking
+    every database connection while they wait for the row."""
+    tags = FIXTURES["tags_for"](40)[8:]
+    with live_clan_api(database_url) as (client, database, _collector, _origin):
+        conninfo = database.pool.conninfo
+        with psycopg.connect(conninfo) as holder:
+            holder.execute(
+                "SELECT 1 FROM shared_api_credentials"
+                " WHERE credential_fingerprint = %s FOR UPDATE",
+                (FINGERPRINT,),
+            )
+
+            # Answers as the website gets them, failures included.
+            website = TestClient(client.app, raise_server_exceptions=False)
+
+            def get(target):
+                started = time.monotonic()
+                response = website.get(target, headers=signed_headers(target))
+                return response.status_code, response.json(), time.monotonic() - started
+
+            with ThreadPoolExecutor(max_workers=34) as pool:
+                views = [
+                    pool.submit(get, f"/v1/players/{tag.replace('#', '%23')}/clan")
+                    for tag in tags
+                ]
+                time.sleep(0.3)
+                ready = get("/readyz")
+                live = get("/livez")
+                answers = [view.result() for view in views]
+            holder.rollback()
+        # Once the row is free, a live clan is read again.
+        after = live_clan(client, TAGS[7])
+
+    assert ready[:2] == (200, {"ready": True}) and ready[2] < 3
+    assert live[:2] == (200, {"live": True}) and live[2] < 3
+    assert [(status, body) for status, body, _seconds in answers] == [
+        (200, {"tag": tag, "live": False, "reason": "busy"}) for tag in tags]
+    assert max(seconds for _status, _body, seconds in answers) < 1
+    assert after["live"] is True
+    assert FakeGame.profile_reads == [TAGS[7]]

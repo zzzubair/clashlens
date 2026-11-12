@@ -17,6 +17,11 @@ from typing import Any
 # read that keeps failing costs at most 10 of every 300 seconds of one
 # connection instead of starting again as soon as the last one fails.
 SHARED_COPY_RETRY_CAP_SECONDS = 300
+# A request that finds no copy to serve waits this long for the read under
+# way, then is refused as busy (a retryable 503). Waiting longer held one of
+# the API's 40 request threads per visitor until they were all taken and even
+# the health checks could not answer, though the database had connections free.
+SHARED_COPY_WAIT_SECONDS = 0.05
 
 
 class CopyState(StrEnum):
@@ -37,9 +42,10 @@ class CopyState(StrEnum):
     ``STALE`` request after its wait (``SHARED_COPY_RETRY_CAP_SECONDS``)
     starts another. A failed request read reaches that
     visitor and changes nothing. Reads take turns, so requests that find the
-    copy ``MISSING`` or ``EXPIRED`` wait for the one read under way and use
-    it when it is ``FRESH``. The copy lives in memory only: a restart begins
-    ``MISSING``.
+    copy ``MISSING`` or ``EXPIRED`` wait for the one read under way, up to
+    ``SHARED_COPY_WAIT_SECONDS``, and use it when it is ``FRESH``; past that
+    wait they are refused as busy. The copy lives in memory only: a restart
+    begins ``MISSING``.
 
     Owner: ``SharedCopy._state`` is the only place the state is decided.
     """
@@ -48,6 +54,11 @@ class CopyState(StrEnum):
     FRESH = "fresh"
     STALE = "stale"
     EXPIRED = "expired"
+
+
+class CopyBusy(Exception):
+    """No copy to serve, and the read under way did not finish within the
+    request's wait. The API answers it with a retryable 503 ``busy``."""
 
 
 def _start_thread(work: Callable[[], None]) -> None:
@@ -103,7 +114,16 @@ class SharedCopy[Copy]:
             return CopyState.STALE, copy[2]
         return CopyState.EXPIRED, None
 
-    def current(self, database: Any, now: datetime) -> Copy:
+    def current(
+        self,
+        database: Any,
+        now: datetime,
+        *,
+        wait: float | None = SHARED_COPY_WAIT_SECONDS,
+    ) -> Copy:
+        """The copy for ``now``; with none to serve, waits up to ``wait``
+        seconds (None: as long as it takes) for the read under way, then
+        raises ``CopyBusy``."""
         key = self._key(now)
         with self._lock:
             state, served = self._state(key)
@@ -119,13 +139,17 @@ class SharedCopy[Copy]:
             self._start(lambda: self._refresh(database, now, key))
         if state is CopyState.STALE:
             return served  # type: ignore[return-value]
-        with self._reading:
+        if not self._reading.acquire(timeout=-1 if wait is None else wait):
+            raise CopyBusy
+        try:
             with self._lock:
                 # Read by another request while this one waited.
                 state, served = self._state(key)
             if state is CopyState.FRESH:
                 return served  # type: ignore[return-value]
             return self._read_copy(database, now, key)
+        finally:
+            self._reading.release()
 
     def _read_copy(self, database: Any, now: datetime, key: Hashable) -> Copy:
         started = self._clock()

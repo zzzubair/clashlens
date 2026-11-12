@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from datetime import timedelta
 from urllib.parse import urlencode
 
@@ -17,7 +19,7 @@ from clashlens.analytics import tie_order_key
 from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
 from clashlens.domain import ranked_day_for
-from clashlens.shared_copy import SharedCopy
+from clashlens.shared_copy import SHARED_COPY_WAIT_SECONDS, CopyBusy, SharedCopy
 
 
 @pytest.fixture()
@@ -84,6 +86,53 @@ def test_shared_copy_reaches_visitors_failures_only_once_too_old(capsys):
     refreshes.pop()()
     assert copy.current(None, NOW + timedelta(days=1)) == 5
     assert len(reads) == 5
+
+
+def test_no_visitor_waits_long_for_a_shared_copy_read_under_way():
+    clock = [0.0]
+    started, release = threading.Event(), threading.Event()
+    reads = []
+
+    def read(_database, _now):
+        reads.append(clock[0])
+        if len(reads) == 1:
+            started.set()
+            assert release.wait(10)
+            raise RuntimeError("canceling statement due to statement timeout")
+        return len(reads)
+
+    copy = SharedCopy(read, key=lambda _now: None, seconds=20, longest=30,
+                      name="test_copy", clock=lambda: clock[0], start=lambda _read: None)
+    first: list[object] = []
+    reader = threading.Thread(target=lambda: first.append(_outcome(copy.current, NOW)))
+    reader.start()
+    assert started.wait(5)
+    # No copy yet and the first visitor's read is slow: the next visitor is
+    # refused as busy at once instead of holding a request thread for it.
+    waited = time.monotonic()
+    with pytest.raises(CopyBusy):
+        copy.current(None, NOW)
+    assert time.monotonic() - waited < SHARED_COPY_WAIT_SECONDS + 0.5
+    # A background reader (no request thread) still waits for it.
+    background: list[object] = []
+    behind = threading.Thread(
+        target=lambda: background.append(_outcome(copy.current, NOW, wait=None)))
+    behind.start()
+    time.sleep(0.3)
+    release.set()
+    reader.join(5)
+    behind.join(5)
+    # The slow read failed for its own visitor only; the one behind it read
+    # again, and later visitors share that copy.
+    assert first == ["RuntimeError"] and background == [2]
+    assert copy.current(None, NOW) == 2 and len(reads) == 2
+
+
+def _outcome(current, now, **wait):
+    try:
+        return current(None, now, **wait)
+    except Exception as error:  # noqa: BLE001 - the test compares outcomes
+        return type(error).__name__
 
 
 def test_shared_copy_waits_longer_after_each_failed_background_read(capsys):
