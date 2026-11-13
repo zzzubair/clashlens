@@ -715,6 +715,15 @@ def _record_battle_sources(
     log_id: int,
     reporter_id: int,
 ) -> dict[int, int]:
+    """Each source row index's saved battle report id, saving the new ones.
+
+    A battle log repeats most of its rows from the player's last one, and
+    looking a report up by its hash reads a random part of a large index.
+    So the rows the newest earlier listed log of this player already holds
+    are matched by hash in that list, read by id, and only the rest are
+    looked up or saved by hash. A report's hash names exactly one row, so
+    the ids are the ones a lookup by hash would find.
+    """
     rows = [
         {
             "source_row_index": row.source_row_index,
@@ -725,50 +734,97 @@ def _record_battle_sources(
         }
         for row in battle_log.rows
     ]
-    connection.execute(
-        """
-        WITH input AS (
-            SELECT * FROM jsonb_to_recordset(%s::jsonb) AS row_data (
-                source_row_index integer, outcome text, failure_category text,
-                source_json jsonb, report_hash text
+    known = {
+        text_value(row[0]): int(row[1])
+        for row in connection.execute(
+            """
+            WITH input AS (
+                SELECT * FROM jsonb_to_recordset(%s::jsonb) AS row_data (
+                    source_row_index integer, outcome text, failure_category text,
+                    source_json jsonb, report_hash text
+                )
+            ), known AS (
+                SELECT source.report_hash, source.id
+                FROM (
+                    SELECT log.parsed_payload_id FROM battle_log_observations AS log
+                    WHERE log.player_id = %s AND log.parser_version = %s
+                      AND log.id <> %s AND log.parsed_payload_id IS NOT NULL
+                    ORDER BY log.observed_at DESC, log.id DESC LIMIT 1
+                ) AS earlier
+                JOIN battle_payload_row_lists AS list
+                  ON list.parsed_payload_id = earlier.parsed_payload_id
+                 AND list.reporting_player_id = %s
+                CROSS JOIN LATERAL unnest(list.source_row_ids) AS member (id)
+                JOIN battle_source_rows AS source ON source.id = member.id
+                WHERE source.report_hash IS NOT NULL
+            ), saved AS (
+                INSERT INTO battle_source_rows (
+                    report_hash, source_row_index, outcome, failure_category,
+                    source_json
+                )
+                SELECT report_hash, 0, outcome, failure_category, source_json
+                FROM input
+                WHERE report_hash NOT IN (SELECT report_hash FROM known)
+                ORDER BY report_hash
+                ON CONFLICT (report_hash) WHERE report_hash IS NOT NULL DO NOTHING
             )
-        )
-        INSERT INTO battle_source_rows (
-            report_hash, source_row_index, outcome, failure_category, source_json
-        )
-        SELECT report_hash, 0, outcome, failure_category, source_json
-        FROM input ORDER BY report_hash
-        ON CONFLICT (report_hash) WHERE report_hash IS NOT NULL DO NOTHING
-        """,
-        (Jsonb(rows),),
-    )
+            SELECT report_hash, id FROM known
+            """,
+            (
+                Jsonb(rows),
+                reporter_id,
+                battle_log.parser_version,
+                log_id,
+                reporter_id,
+            ),
+        ).fetchall()
+    }
     # One row lists the whole log; array position N is source row N - 1.
     # A payload first listed per row, before the list table, stays so.
     assert [row["source_row_index"] for row in rows] == list(range(len(rows)))
-    connection.execute(
+    listed = connection.execute(
         """
         WITH input AS (
             SELECT * FROM jsonb_to_recordset(%s::jsonb) AS member (
-                source_row_index integer, report_hash text
+                source_row_index integer, report_hash text, source_row_id bigint
             )
         ), members AS (
             INSERT INTO battle_payload_row_lists (
                 parsed_payload_id, reporting_player_id, source_row_ids
             )
-            SELECT %s, %s, array_agg(source.id ORDER BY input.source_row_index)
-            FROM input LEFT JOIN battle_source_rows AS source USING (report_hash)
+            SELECT %s, %s, array_agg(
+                -- Only a report the earlier list did not hold is looked up.
+                COALESCE(input.source_row_id, (
+                    SELECT source.id FROM battle_source_rows AS source
+                    WHERE source.report_hash = input.report_hash
+                ))
+                ORDER BY input.source_row_index
+            )
+            FROM input
             HAVING count(*) > 0 AND NOT EXISTS (
                 SELECT 1 FROM battle_payload_rows AS member
                 WHERE member.parsed_payload_id = %s
                   AND member.reporting_player_id = %s
             )
             ON CONFLICT (parsed_payload_id, reporting_player_id) DO NOTHING
+            RETURNING source_row_ids
+        ), updated AS (
+            UPDATE battle_log_observations SET parsed_payload_id = %s
+            WHERE id = %s
         )
-        UPDATE battle_log_observations SET parsed_payload_id = %s
-        WHERE id = %s
+        SELECT source_row_ids FROM members
         """,
         (
-            Jsonb(rows),
+            Jsonb(
+                [
+                    {
+                        "source_row_index": row["source_row_index"],
+                        "report_hash": row["report_hash"],
+                        "source_row_id": known.get(row["report_hash"]),
+                    }
+                    for row in rows
+                ]
+            ),
             payload_id,
             reporter_id,
             payload_id,
@@ -776,7 +832,14 @@ def _record_battle_sources(
             payload_id,
             log_id,
         ),
-    )
+    ).fetchone()
+    if listed is not None:
+        # The list just saved is the one this log reads back.
+        return {
+            index: int(source_row_id)
+            for index, source_row_id in enumerate(listed[0])
+            if source_row_id is not None
+        }
     return {
         int(row[0]): int(row[1])
         for row in connection.execute(
