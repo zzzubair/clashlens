@@ -32,7 +32,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import db, domain, job_contracts, reconcile_pass
+from . import day_recalculation, db, domain, job_contracts, reconcile_pass, reset_total
 from .background_pacing import (
     DAY_RECHECK_PRIORITY,
     LIVE_LAG_MIN_JOBS,
@@ -269,6 +269,45 @@ def queue_for_battles(connection: Any, observation_id: int, corrected_ids: Itera
     for player_id, day_start in rows:
         _queue_day(connection, int(player_id), day_start,
                    f"reconcile:report:{observation_id}:{player_id}")
+
+
+def queue_for_attack_ends(connection: Any, observation_id: int, at: datetime) -> None:
+    """Each attacker's report log ``observation_id`` saved of a defense
+    reported in the last ``reset_total.ATTACK_ENDS_WITHIN`` before its day's
+    end Reset says whether the attack ended before that Reset, and so the
+    Reset total the defender's ended day stores (``reset_total``):
+    recalculate that day at its own priority, as the Reset's day results
+    go, not in the day recheck lane, which waits until the Reset's board
+    publishes (``background_pacing``). On 13 November 2026 such reports for
+    five players, saved from 05:09:49 to 05:29:11, waited there until 06:28,
+    after both of the Reset's board builds."""
+    rows = connection.execute(
+        """
+        SELECT DISTINCT battle.defender_player_id, battle.ranked_day_start
+        FROM battle_evidence AS attacker
+        JOIN legend_battles AS battle ON battle.id = attacker.battle_id
+        JOIN battle_perspectives AS side
+          ON side.battle_id = battle.id AND side.perspective = 'defender'
+        JOIN battle_evidence AS defender ON defender.id = side.evidence_id
+        WHERE attacker.observation_id = %(observation)s
+          AND attacker.perspective = 'attacker'
+          AND defender.battle_timestamp
+              >= battle.ranked_day_start + interval '1 day' - %(within)s
+          AND battle.ranked_day_start + interval '1 day' <= %(at)s
+          AND EXISTS (SELECT FROM ranked_day_versions AS day
+              WHERE day.player_id = battle.defender_player_id
+                AND day.ranked_day_start = battle.ranked_day_start
+                AND day.reconciliation_rule_version = %(rule)s
+                AND day.official_season_id IN (%(season)s, %(previous)s))
+        """,
+        {**_VERSIONS, "observation": observation_id, "at": at,
+         "within": reset_total.ATTACK_ENDS_WITHIN, **_seasons(at)},
+    ).fetchall()
+    for player_id, day_start in rows:
+        day_recalculation.request(
+            connection, int(player_id), day_start, observation_id,
+            key=f"reconcile:attack-end:{observation_id}:{player_id}:{_day_text(day_start)}",
+            trigger="attack_end", later_days=False)
 
 
 def queue_recheck(database: db.Database, slot: str, boundary: datetime,
