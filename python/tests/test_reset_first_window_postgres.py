@@ -14,11 +14,13 @@ import json
 from datetime import datetime, timedelta
 
 import psycopg
+import pytest
 from domain_test_support import domain_database
 from reconciliation_postgres_support import _processor
 from reset_scenarios_postgres_support import (
     SEASON,
     Story,
+    _ranked,
     _story,
     attacks,
     day,
@@ -191,3 +193,92 @@ def test_a_stuck_board_holds_live_results_and_rechecks_only_until_0545(
     assert not published
     assert [(line["status"], line.get("reason")) for line in windows] == [
         ("started", None), ("ended", "cap")]
+
+
+# Claims one response thread makes before the board is checked: enough for
+# all 8 of the Reset's responses on 3 claims in 4, not on every other claim.
+RESPONSE_BUDGET = 10
+
+
+def _board_after_a_response_budget(
+    database_url: str, archive_server, monkeypatch, at: datetime, batch: int,
+) -> tuple[list[int], bool, dict[str, int] | None, dict[str, int]]:
+    """At ``at``, each player's Reset profile and battle log wait at Reset
+    priority, beside their live profile and battle log read at 05:08 and
+    05:09. The response thread makes ``RESPONSE_BUDGET`` claims, alone or,
+    when ``batch`` is over 1, through a continuous worker's batched claims
+    (one free thread, so one job a batch), then the
+    day-result and build threads run until idle. Returns the responses'
+    priorities in claim order, whether the board published, the board then
+    served, and the board served once all the work is done."""
+    clock = [at]
+    with domain_database(database_url) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, *TAGS)
+        _at_the_reset(story, monkeypatch, clock)
+        for tag in TAGS:
+            story.read(tag, RESET + timedelta(minutes=9), trophies=5370)
+        # The collector queues a sweep's own responses at Reset priority.
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                """
+                UPDATE python_processing_jobs SET priority = %s
+                WHERE observation_id IN (
+                    SELECT unnest(ARRAY[work.profile_observation_id,
+                                        work.battle_log_observation_id])
+                    FROM collector_work AS work
+                    JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id
+                    WHERE sweep.boundary_at = %s)
+                """,
+                (db.PYTHON_RESET_PRIORITY, RESET),
+            )
+        database, processor = _processor(connection_info, archive_server)
+        processor.claim_batch = batch
+        try:
+            responses = [priority for priority, _ in _lane(
+                processor, RESPONSE_WORK_TYPES, claims=RESPONSE_BUDGET)]
+            for _ in range(20):
+                boundary_publication.reevaluate_boundary_publications(database)
+                if _published(connection_info) or not (
+                        _lane(processor, DERIVED_WITHOUT_BUILDS)
+                        + _lane(processor, POPULATION_BUILD_WORK_TYPES)):
+                    break
+            published = _published(connection_info)
+            first = _ranked(story.served_board(RESET)) if published else None
+        finally:
+            database.close()
+        story.run_worker()
+        return responses, published, first, _ranked(story.served_board(RESET))
+
+
+@pytest.mark.parametrize("batch", [1, 2])
+def test_reset_battle_logs_take_three_claims_in_four_until_0530(
+    database_url: str, archive_server, monkeypatch, batch: int,
+) -> None:
+    """At 05:10, with the board waiting, the response thread takes the
+    Reset's responses first on 3 claims in 4: all 8 within 10 claims, so
+    the board publishes, with the members, trophies and order it has once
+    every job is done, and 2 live responses still go through. Before, it
+    took them on every other claim, 5 of 10, and the board waited."""
+    responses, published, first, final = _board_after_a_response_budget(
+        database_url, archive_server, monkeypatch, RESET + timedelta(minutes=10), batch)
+
+    assert published, f"{responses.count(db.PYTHON_RESET_PRIORITY)} of the Reset's 8 responses"
+    assert first == final == dict.fromkeys(TAGS, 5330)
+    assert list(first) == list(final)
+    assert responses.count(db.PYTHON_RESET_PRIORITY) == 2 * len(TAGS)
+    assert responses.count(db.PYTHON_LIVE_PRIORITY) == RESPONSE_BUDGET - 2 * len(TAGS)
+
+
+@pytest.mark.parametrize("batch", [1, 2])
+def test_from_0530_reset_battle_logs_take_every_other_claim_again(
+    database_url: str, archive_server, monkeypatch, batch: int,
+) -> None:
+    """At 05:30, though the board still waits, the response thread takes
+    the Reset's responses first on every other claim again: 5 of 10, and
+    the board waits for the rest."""
+    responses, published, _, final = _board_after_a_response_budget(
+        database_url, archive_server, monkeypatch, RESET + timedelta(minutes=30), batch)
+
+    assert responses.count(db.PYTHON_RESET_PRIORITY) == RESPONSE_BUDGET // 2
+    assert not published
+    assert final == dict.fromkeys(TAGS, 5330)

@@ -581,11 +581,13 @@ class Database:
         work_types: Collection[str] | None = None,
         planned: bool = False,
         reset_first: bool | None = None,
+        reset_rush: bool = False,
     ) -> Claim | None:
         """Claim the best due job, or ``job_id``; a ``planned`` one yields to Reset work."""
         claims = self.claim_jobs(
             owner=owner, lease_seconds=lease_seconds, work_types=work_types,
             job_ids=None if job_id is None else [job_id], planned=planned, reset_first=reset_first,
+            reset_rush=reset_rush,
         )
         return claims[0] if claims else None
 
@@ -599,12 +601,15 @@ class Database:
         work_types: Collection[str] | None = None,
         planned: bool = False,
         reset_first: bool | None = None,
+        reset_rush: bool = False,
     ) -> list[Claim]:
         """Claim up to ``limit`` of the best due jobs, or of ``job_ids``, at once.
 
         One transaction leases them all, but each job gets its own token and
         attempt, exactly as if it were claimed alone. No population build is
         claimed while another runs or waits to start, in any worker process.
+        ``reset_rush`` marks a turn that takes Reset work first while the
+        Reset's board waits, until 05:30 UTC (``reset_first_claim``).
         """
         if not owner:
             raise ValueError("lease owner is required")
@@ -617,7 +622,11 @@ class Database:
                               if kind not in builds]
                 if not work_types:
                     return []
-            hold, reset_first = background_pacing.reset_first_claim(connection, work_types, reset_first)
+            hold, first = background_pacing.reset_first_claim(
+                connection, work_types, reset_first, rush=reset_rush)
+            # In the window, planned responses yield to Reset work on a rush turn too.
+            planned = planned or (reset_rush and hold and first is True and job_ids is not None)
+            reset_first = first
             options = {
                 "work_types": work_types,
                 "reset_first": reset_first,
