@@ -496,6 +496,8 @@ def complete_battle_log(
                 connection, observation_id, shared_state_changed_battle_ids,
                 battle_log.observed_at,
             )
+            queue_refresh.queue_for_attack_ends(
+                connection, observation_id, battle_log.observed_at)
             if discoveries:
                 enqueue_discovered_players(
                     connection,

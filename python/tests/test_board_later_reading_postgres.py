@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
 import psycopg
@@ -21,9 +21,12 @@ from board_later_reading_postgres_support import (
     _hold,
 )
 from domain_test_support import domain_database
+from reconciliation_postgres_support import _processor
 from reset_scenarios_postgres_support import (
     SEASON,
     Battle,
+    Player,
+    _even,
     _ranked,
     _story,
     attacks,
@@ -31,7 +34,7 @@ from reset_scenarios_postgres_support import (
     defenses,
 )
 
-from clashlens import queue_refresh
+from clashlens import background_pacing, boundary_publication, queue_refresh
 
 # PROVEN is #CLU28LR2's numbers. EARLY's 02:54:19 reading came before that
 # defense showed, so the reading plus the attacks is 26 too many: its later
@@ -366,3 +369,85 @@ def test_an_old_reading_that_lags_a_defense_counts_it(
     assert unfinished == []
     assert (saved["state"], saved["end"]) == ("Inconsistent", 4984)
     assert first == later == {LAGGING: (4984, "uncertain")}
+
+
+DEFENDER, ATTACKER, WAITED_FOR = "#2VV", "#8VV", "#9VV"
+
+
+@dataclass
+class _Opposed(Player):
+    """A player whose battles at these times are against these tracked
+    players, so both players' reports are of one battle."""
+
+    against: dict[datetime, str] = field(default_factory=dict)
+
+    def log(self, at: datetime) -> bytes:
+        body = json.loads(super().log(at))
+        against = {when.strftime("%Y%m%dT%H%M%S.000Z"): tag for when, tag in self.against.items()}
+        for item in body["items"]:
+            item["opponentPlayerTag"] = against.get(
+                item["battleTimestamp"], item["opponentPlayerTag"])
+        return json.dumps(body).encode()
+
+
+def test_an_attackers_late_report_refreshes_the_stored_reset_total(
+    database_url: str, archive_server, monkeypatch, capsys
+) -> None:
+    """#29Y209RJ2, 13 November 2026: its day result, saved at 05:08:35,
+    counted a defense for 26 reported at 04:59:01, whose attacker's report,
+    saved at 05:09:49, shows the attack ended at 05:01:27, after the Reset.
+    The board, building at 05:34 once other players' days saved, left that
+    defense out, 5,089; the stored Reset total stayed 5,063, unproven, as
+    its recheck waited behind the Reset until 06:28. Here the day starts at
+    5,000, gains 160 over 4 attacks and loses 96 over 8 defenses, that one
+    last: 5,064, which its Reset reading and its 05:20 reading show; its
+    04:50 reading shows 5,090. The attacker's report is saved at 05:25:59,
+    as #Y808CULJJ's was, and WAITED_FOR's Reset responses last, so the board
+    waits for them after it."""
+    start, end = day(2), day(3)
+    defense_at, attack_ended_at = _at(4, 59, 1), _at(5, 1, 27)
+    with domain_database(database_url) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, WAITED_FOR)
+        story.players[DEFENDER] = _Opposed(DEFENDER, [
+            *attacks(start, 40, 40, 40, 40), *defenses(start, *[10] * 7),
+            Battle(defense_at, -26, False)], against={defense_at: ATTACKER})
+        story.players[ATTACKER] = _Opposed(ATTACKER, [Battle(attack_ended_at, 26, True)],
+                                           against={attack_ended_at: DEFENDER})
+        story.players[WAITED_FOR].battles = _even(start)
+        story.reset(start, {DEFENDER: (5000, SEASON), WAITED_FOR: (5000, SEASON)})
+        story.reads(_at(4, 50, 0), {DEFENDER: 5090, WAITED_FOR: 5000})
+        story.reset(end, {DEFENDER: (5064, SEASON), WAITED_FOR: (5000, SEASON)}, run=False)
+        _hold(connection_info, (WAITED_FOR,), end)
+        # The worker's clock is in the Reset's first minutes, so background
+        # work waits until the board publishes, as on 13 November.
+        monkeypatch.setattr(background_pacing, "_now", lambda: _at(5, 25, 59))
+        monkeypatch.setattr(background_pacing, "_open_window", [])
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            boundary_publication.reevaluate_boundary_publications(database)
+            processor.process_until_idle(owner="story", max_jobs=10_000)
+        finally:
+            database.close()
+        saved = story.saved_day(DEFENDER, start)
+        before = _stored(connection_info, start, (DEFENDER,))
+        capsys.readouterr()
+        story.reads(_at(5, 20, 0), {DEFENDER: 5064})
+        story.read(ATTACKER, _at(5, 25, 59))
+        story.run_worker()
+        board = _entries(story.served_board(end))
+        after = _stored(connection_info, start, (DEFENDER,))
+        unfinished = story.unfinished_jobs()
+
+    assert unfinished == []
+    assert (saved["state"], saved["end"]) == ("Complete", 5064)
+    # The defense may have ended after the Reset: unproven.
+    assert before == {DEFENDER: (5064, "uncertain", "calculated_end", None)}
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()
+              if line.startswith("{")]
+    # The board's first build pinned the result the attacker's report refreshed.
+    assert [(event["board_trophies"], event["stored_value"], event["stored_proven"])
+            for event in events if event.get("event") == "reset_total_shadow"] == []
+    assert [event["different"] for event in events
+            if event.get("event") == "reset_total_shadow_summary"] == [0]
+    assert board == {DEFENDER: (5090, "confirmed"), WAITED_FOR: (5000, "confirmed")}
+    assert after == {DEFENDER: (5090, "confirmed", "calculated_end", _at(5, 20, 0))}
