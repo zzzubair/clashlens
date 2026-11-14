@@ -124,3 +124,49 @@ def test_a_board_frozen_without_late_days_takes_them_and_a_later_proof(
     assert _ranked(corrected) == {ON_TIME: 5141, LATE: 5140, SWEDE: 4859}
     assert {entry["tag"]: entry["confidence"] for entry in corrected["entries"]} == {
         ON_TIME: "confirmed", LATE: "confirmed", SWEDE: "confirmed"}
+
+
+JOINERS = ("#2QQ", "#2GG", "#2LL")
+
+
+def test_new_members_after_the_first_board_join_one_hourly_rebuild(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """Three Legend I players the Reset did not sweep, read at 04:50, have
+    their ended days saved one after another once the first board is out. A
+    new member follows the newest Reset's hourly pace (docs/domain.md,
+    section 6), so the three join one rebuild an hour after the first board,
+    not one rebuild each at once."""
+    start, end = day(2), day(3)
+    with domain_database(database_url) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, ON_TIME, *JOINERS)
+        for player in story.players.values():
+            player.battles = attacks(start, 40)
+        story.reset(start, {ON_TIME: (5100, SEASON)})
+        story.reads(_at(4, 50, 0), {ON_TIME: 5140})
+        story.reset(end, {ON_TIME: (5140, SEASON)})
+        first = _first_board(connection_info, end)
+        for tag in JOINERS:
+            story.reads(_at(4, 50, 0), {tag: 5140})
+            story.run_worker()
+        waiting = _generations(connection_info, end)
+        story.wait(timedelta(hours=1))
+        rebuilt = _generations(connection_info, end)
+        unfinished = story.unfinished_jobs()
+        members = story.board_members(end)
+        board = story.served_board(end)
+
+    assert first == {ON_TIME: (5140, "confirmed")}
+    assert waiting == 1
+    assert rebuilt == 2
+    assert unfinished == []
+    assert set(members) == {ON_TIME, *JOINERS}
+    assert _ranked(board) == dict.fromkeys((ON_TIME, *JOINERS), 5140)
+
+
+def _generations(connection_info: str, boundary: datetime) -> int:
+    """How many board versions the Reset has started."""
+    with psycopg.connect(connection_info) as connection:
+        return connection.execute(
+            "SELECT count(*) FROM boundary_publication_generations WHERE boundary_at = %s",
+            (boundary,)).fetchone()[0]

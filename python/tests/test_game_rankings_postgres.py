@@ -17,9 +17,10 @@ import psycopg
 from domain_test_support import domain_database, seed_battles, store_observation
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from reconciliation_postgres_support import _processor, _profile
+from reset_scenarios_postgres_support import SEASON, _ranked, _story, attacks, day
 from reset_settlement_collection_postgres_support import _collector
 
-from clashlens import game_rankings
+from clashlens import collector_reset, game_rankings
 from clashlens.collector_db import CollectorDatabase
 from clashlens.domain import ranked_day_for
 
@@ -240,12 +241,13 @@ def _database(info: str) -> CollectorDatabase:
     return CollectorDatabase(make_conninfo(info, options=options))
 
 
-def _day(info: str, origin: str, tmp_path, times: list[timedelta]) -> list[Counter[str]]:
+def _day(info: str, origin: str, tmp_path, times: list[timedelta],
+         reset: datetime = RESET) -> list[Counter[str]]:
     """Run the collector's pulls at each time after the Reset; each is sent SENT_AFTER later."""
     database = _database(info)
     try:
         collector = _collector(origin, database, tmp_path)
-        now = [RESET]
+        now = [reset]
         client = collector.client
         for fetch in (client.fetch_rankings, client.fetch_locations):
             async def sent_late(*args, fetch=fetch):
@@ -256,7 +258,7 @@ def _day(info: str, origin: str, tmp_path, times: list[timedelta]) -> list[Count
         async def pulls() -> list[Counter[str]]:
             counts = []
             for after in times:
-                now[0] = RESET + after
+                now[0] = reset + after
                 counts.append(await game_rankings.pull_due(
                     collector, game_rankings._Puller(collector, lambda: now[0])
                 ))
@@ -731,3 +733,158 @@ def test_a_country_list_is_judged_switched_against_the_reset_before() -> None:
     # Nine players with a known rank are too few.
     assert judge(rows([*BEFORE_RANKS[:9], 0]), switched_before) is None
     assert judge(rows(BEFORE_RANKS), rows(BEFORE_RANKS, AUSTRIA)) is None
+
+
+FRANCE_PATH = "/v1/locations/32000087/rankings/players"
+UNITED_STATES_PATH = "/v1/locations/32000249/rankings/players"
+
+
+def test_a_midday_pull_hands_new_legend_i_players_to_discovery_and_is_never_scored(
+    database_url: str, tmp_path, capsys, monkeypatch
+) -> None:
+    """At 17:00 every country's list is pulled once more, only so a player
+    who reached Legend I during the day is due a discovery check before the
+    next Reset's sweep. The score reads the morning's lists alone."""
+    monkeypatch.setattr(game_rankings, "REQUEST_SECONDS", 0.0)
+    answers = {
+        "/v1/locations": (200, LOCATIONS),
+        "/v1/locations/global/rankings/players": (200, _global(TODAY_RANKS)),
+        FRANCE_PATH: (200, FRANCE),
+        UNITED_STATES_PATH: (200, UNITED_STATES),
+    }
+    with domain_database(database_url) as info, _game(answers) as origin:
+        _seed(info)
+        [morning, before_midday] = _day(
+            info, origin, tmp_path, [timedelta(seconds=40), timedelta(hours=11, minutes=59)])
+        # By 17:00 #2YY has reached Legend I and France lists them; the
+        # United States' list fails once.
+        answers[FRANCE_PATH] = (200, _list([
+            ("#2QQ", 5350, 41, 1, LEGEND_I), ("#2YY", 5040, 1, 0, LEGEND_I)]))
+        answers[UNITED_STATES_PATH] = (503, b"{}")
+        [midday] = _day(info, origin, tmp_path, [timedelta(hours=12)])
+        answers[UNITED_STATES_PATH] = (200, UNITED_STATES)
+        # Each request goes out 2 seconds after its tick, so the retry is
+        # due from 17:02:02.
+        [too_soon, retried, done, after_window] = _day(info, origin, tmp_path, [
+            timedelta(hours=12, minutes=2), timedelta(hours=12, minutes=3),
+            timedelta(hours=12, minutes=30), timedelta(hours=13)])
+        printed = _printed_score(info, capsys, timedelta(hours=13))
+        with psycopg.connect(info) as connection:
+            due = connection.execute(
+                "SELECT normalized_tag FROM players"
+                " WHERE NOT active AND eligibility_due_at IS NOT NULL ORDER BY normalized_tag"
+            ).fetchall()
+            pulls = connection.execute(
+                "SELECT purpose, count(*), count(*) FILTER (WHERE failure IS NULL)"
+                " FROM game_ranking_pulls WHERE purpose IN ('country', 'country_midday')"
+                " GROUP BY purpose ORDER BY purpose"
+            ).fetchall()
+    assert morning == Counter(global_early=1, locations=1, country=2, added_to_discovery=2)
+    assert before_midday == Counter()
+    # #2RR and #2CC are still due from the morning; #2YY is new.
+    assert midday == Counter(country_midday=1, failed=1, added_to_discovery=1)
+    assert too_soon == Counter()
+    assert retried == Counter(country_midday=1, added_to_discovery=0)
+    assert done == after_window == Counter()
+    assert due == [("#2CC",), ("#2RR",), ("#2YY",)]
+    assert pulls == [("country", 2, 2), ("country_midday", 3, 2)]
+    # The score is the morning's: #2YY is not missing from the board.
+    assert printed["status"] == "scored"
+    assert (printed["countries_expected"], printed["countries_pulled"]) == (2, 2)
+    assert printed["last_country_at"] == (RESET + timedelta(seconds=40) + SENT_AFTER).isoformat()
+    assert printed["s4_tags"] == ["#2RR"]
+
+
+TRACKED, NEW = "#2PP", "#2YY"
+
+
+def _discovery_checks(info: str) -> list[str]:
+    """The players the collector's next discovery pass checks; it runs on
+    the database's clock, as the due times are."""
+    with psycopg.connect(info) as connection:
+        connection.execute("SELECT clashlens_admit_discovery_profiles(clock_timestamp())")
+        return [str(tag) for (tag,) in connection.execute(
+            "SELECT normalized_tag FROM collector_work"
+            " WHERE kind = 'discovery_profile' AND status = 'pending' ORDER BY normalized_tag")]
+
+
+def _tracked(info: str) -> list[str]:
+    with psycopg.connect(info) as connection:
+        return [str(tag) for (tag,) in connection.execute(
+            "SELECT normalized_tag FROM players WHERE active ORDER BY normalized_tag")]
+
+
+def _swept(info: str, boundary: datetime) -> list[str]:
+    """The players the collector's Reset sweep at ``boundary`` would take;
+    the story then sweeps them itself."""
+    with psycopg.connect(info) as connection:
+        connection.execute("SELECT 1")
+        sweep = collector_reset.begin_reset(connection, boundary)
+        members = [str(tag) for (tag,) in connection.execute(
+            "SELECT player.normalized_tag FROM collector_reset_sweeps AS sweep"
+            " CROSS JOIN unnest(sweep.member_ids) AS member (id)"
+            " JOIN players AS player ON player.id = member.id"
+            " WHERE sweep.id = %s ORDER BY 1", (sweep,))]
+        connection.rollback()
+    return members
+
+
+def test_a_player_first_listed_during_the_day_is_on_the_next_resets_first_board(
+    database_url: str, archive_server, tmp_path, monkeypatch
+) -> None:
+    """On 10 November 2026, 197 Legend I players were first seen in the
+    country lists pulled at 05:00 to 05:02, after the Reset had swept its
+    players, and joined its board from 05:56 through rebuilds. TRACKED is
+    tracked all day. NEW, untracked, attacks for 40 at 07:00 and is first
+    listed in France's list at 17:00. The midday pull hands NEW to discovery,
+    its check reads NEW in Legend I, so NEW is tracked, swept at the next
+    Reset and ranked on that Reset's first board."""
+    start, end = day(2), day(3)
+    monkeypatch.setattr(game_rankings, "REQUEST_SECONDS", 0.0)
+    answers = {
+        "/v1/locations": (200, json.dumps({"items": [
+            {"id": 32000087, "name": "France", "isCountry": True, "countryCode": "FR"},
+        ], "paging": {"cursors": {}}}).encode()),
+        "/v1/locations/global/rankings/players": (
+            200, _list([(TRACKED, 5100, 40, 1, LEGEND_I)])),
+        FRANCE_PATH: (200, _list([(TRACKED, 5100, 40, 1, LEGEND_I)])),
+    }
+    with domain_database(database_url) as info, _game(answers) as origin:
+        story = _story(info, archive_server, monkeypatch, TRACKED, NEW)
+        story.players[TRACKED].battles = attacks(start, 40)
+        story.players[NEW].battles = attacks(start + timedelta(hours=1), 40)
+        story.reset(start, {TRACKED: (5100, SEASON)})
+        with psycopg.connect(info) as connection:
+            connection.execute("UPDATE players SET active = true WHERE normalized_tag = %s",
+                               (TRACKED,))
+        [morning] = _day(info, origin, tmp_path, [timedelta(seconds=40)], start)
+        answers[FRANCE_PATH] = (200, _list([
+            (TRACKED, 5140, 41, 1, LEGEND_I), (NEW, 5040, 1, 0, LEGEND_I)]))
+        [midday] = _day(info, origin, tmp_path, [timedelta(hours=12)], start)
+        checked = _discovery_checks(info)
+        story.reads(start + timedelta(hours=12, minutes=2), dict.fromkeys(checked, 5040))
+        story.run_worker()
+        # The battle logs' opponents are tracked too; the story plays only
+        # its own two players.
+        totals = {TRACKED: 5140, NEW: 5040}
+        story.reads(end - timedelta(minutes=10),
+                    {tag: totals[tag] for tag in _tracked(info) if tag in totals})
+        story.run_worker()
+        swept = [tag for tag in _swept(info, end) if tag in totals]
+        story.reset(end, {tag: (totals[tag], SEASON) for tag in swept})
+        unfinished = story.unfinished_jobs()
+        members = story.board_members(end)
+        board = story.served_board(end)
+        with psycopg.connect(info) as connection:
+            versions = connection.execute(
+                "SELECT count(*) FROM boundary_publication_generations WHERE boundary_at = %s",
+                (end,)).fetchone()[0]
+    # One board version, and NEW is on it.
+    assert set(members) == {TRACKED, NEW}
+    assert versions == 1
+    assert _ranked(board) == {TRACKED: 5140, NEW: 5040}
+    assert unfinished == []
+    assert morning == Counter(global_early=1, locations=1, country=1, added_to_discovery=0)
+    assert midday == Counter(country_midday=1, added_to_discovery=1)
+    assert checked == [NEW]
+    assert swept == [TRACKED, NEW]

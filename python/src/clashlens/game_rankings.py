@@ -6,8 +6,11 @@ Reset R, the global top 200 at R+30 s, then every 3 minutes until its
 (migration 0099), each again until it too has switched. An early pull that already holds R's ranks is R's list. Untracked Legend I players in country lists are saved as due
 a discovery check. From R+2 h each newly published frozen Daily board for R is
 scored against the pulls: S1-S6 from the 11 Oct 2026 blind review, ``unknown``
-whenever a pull failed or is missing. Schedule, storage and the score's
-meaning: docs/collector-polling.md, "The game's ranking lists, once a day".
+whenever a pull failed or is missing. At R+12 h every country's list is
+pulled once more (``MIDDAY``), only to hand its untracked Legend I players to
+discovery, so they are tracked before the next Reset's sweep and on its first
+board; the score never reads it. Schedule, storage and the score's meaning:
+docs/collector-polling.md, "The game's ranking lists, once a day".
 """
 
 from __future__ import annotations
@@ -45,6 +48,12 @@ POLL_UNTIL = timedelta(hours=1)
 SCORE_FROM = timedelta(hours=2)
 RETRY_AFTER = timedelta(minutes=2)
 EARLY_RETRY_AFTER = timedelta(minutes=1)
+# The midday pull of every country's list, a failed one again after
+# RETRY_AFTER until MIDDAY_UNTIL. On 10 Nov 2026, 197 Legend I players first
+# seen in the lists pulled just after the Reset joined its board from 05:56.
+MIDDAY = "country_midday"
+MIDDAY_AT = timedelta(hours=12)
+MIDDAY_UNTIL = timedelta(hours=13)
 LOCATIONS_EVERY = timedelta(days=7)
 KEEP_PULLS = timedelta(days=28)
 SWITCHED_SHARE = 0.25
@@ -186,7 +195,9 @@ class RankingStep(StrEnum):
     - ``scoring``: from R+2 h each newly published Daily board version of R
       is scored once against the pulls (``score_day``), ``unknown`` with
       its reasons whenever a pull failed or is missing; a later version is
-      scored again.
+      scored again. From R+12 h until R+13 h each country's list is pulled
+      once more as ``MIDDAY``, with the newest saved location list, a failed
+      one again after 2 minutes, only for its untracked Legend I players.
 
     ``pull_due`` moves through the pulling steps on the collector's 15 s
     tick and ``run`` scores every 10 minutes. Pulls are saved rows, so a
@@ -681,7 +692,7 @@ async def pull_due(collector: Collector, puller: _Puller) -> Counter[str]:
                 failure = NOT_SWITCHED
         added, failure = await collector.database_call(
             save_pull, database, boundary, purpose, location, requested_at, response, failure,
-            discover=rows if purpose == "country" and rows else [],
+            discover=rows if purpose in ("country", MIDDAY) and rows else [],
         )
         counts["added_to_discovery"] += added
         counts[purpose if failure is None else NOT_SWITCHED if failure == NOT_SWITCHED
@@ -710,13 +721,15 @@ async def pull_due(collector: Collector, puller: _Puller) -> Counter[str]:
         reference = read_rows(_latest(pulls, "global_early").body)
         await pull("global_poll", None, judge=lambda rows: switched(rows, reference))
         step = ranking_step(boundary, now, pulls)
-    if step is not RankingStep.COUNTRIES:
+    midday = boundary + MIDDAY_AT <= now < boundary + MIDDAY_UNTIL
+    if step is not RankingStep.COUNTRIES and not midday:
         return counts
+    purpose = "country" if step is RankingStep.COUNTRIES else MIDDAY
     locations = _latest(pulls, "locations")
     last = _last_try(pulls, "locations")
-    if (locations is None or now - locations.requested_at >= LOCATIONS_EVERY) and (
-        last is None or now - last >= RETRY_AFTER
-    ):
+    if purpose == "country" and (
+        locations is None or now - locations.requested_at >= LOCATIONS_EVERY
+    ) and (last is None or now - last >= RETRY_AFTER):
         await pull("locations", None)
         locations = _latest(pulls, "locations") or locations
     if locations is None:
@@ -725,12 +738,12 @@ async def pull_due(collector: Collector, puller: _Puller) -> Counter[str]:
         if collector.stopping.is_set():
             break
         tries = [tried for tried in pulls
-                 if tried.purpose == "country" and tried.location_id == location[0]]
+                 if tried.purpose == purpose and tried.location_id == location[0]]
         # A list not yet switched is pulled again until R+1 h.
         given_up = (bool(tries) and tries[-1].failure == NOT_SWITCHED
                     and now >= boundary + POLL_UNTIL)
-        if due("country", location[0], RETRY_AFTER) and not given_up:
-            await pull("country", location)
+        if due(purpose, location[0], RETRY_AFTER) and not given_up:
+            await pull(purpose, location)
     return counts
 
 

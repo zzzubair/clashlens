@@ -184,14 +184,21 @@ regular keys, one request at a time and at most two a second
   11 Nov, none with a Legend I player. A list not yet switched is saved with
   the failure `not_switched` and pulled again 2 minutes after its last try,
   until 06:00; 2 lists on 10 Nov and 10 on 11 Nov.
+- every country's top 200 once more at 17:00, 12 hours after the Reset,
+  saved as `country_midday` (migration 0143), with the newest saved location
+  list; a failed pull is tried again 2 minutes later, until 18:00. It is
+  pulled only for discovery, below, so a player who reaches Legend I during
+  the day is tracked before the next Reset's sweep and is on its first board:
+  on 10 Nov 2026, 197 players first seen in the lists pulled after the Reset
+  joined that board from 05:56. The score never reads these lists.
 
-That is about 258 requests a day plus up to 19 polls and a few country
+That is about 513 requests a day plus up to 19 polls and a few country
 re-pulls. Each pull keeps its raw
 bytes gzip-compressed, its request time and location in `game_ranking_pulls`,
-deleted 28 days after its Reset: about 4 MB a day compressed (43 MB raw), so
-about 115 MB at most. Every Legend I player in a country list who is not
+deleted 28 days after its Reset: about 8 MB a day compressed (86 MB raw), so
+about 230 MB at most. Every Legend I player in a country list who is not
 tracked is saved as due a discovery check, the same path as a Monday
-promotion, so each is asked again once a day. A country pull with a player
+promotion, so each is asked again twice a day. A country pull with a player
 another job holds at that moment is saved as failed and tried again 2 minutes
 later. On 11 October 2026, 570 Legend I players in the lists were missing from
 the board; tracked ones are skipped.
