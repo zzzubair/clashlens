@@ -222,6 +222,10 @@ def queue_for_check(connection: Any, check: Any) -> None:
         at=check.response_completed_at, reader=check.player_id,
         scope=check.scope, identity=check.identity_key, reset=reset,
     )
+    queue_for_reset_proof(
+        connection, check.player_id,
+        f"reconcile:reset-proof:check:{check.player_id}:{check.response_completed_at}",
+        check.response_completed_at, _COLLECTOR_JOBS)
 
 
 def queue_for_battles(connection: Any, observation_id: int, corrected_ids: Iterable[int],
@@ -314,34 +318,44 @@ def queue_for_attack_ends(connection: Any, observation_id: int, at: datetime) ->
             trigger="attack_end", later_days=False)
 
 
-def queue_for_reset_proof(connection: Any, player_id: int, observation_id: int,
-                          at: datetime) -> None:
-    """A profile read at ``at``, within ``RESET_PROOF_WINDOW`` of the Reset
-    that ended the player's newest day, may prove the Reset total that
-    day's newest result stores unproven (``reset_total``): recalculate that
-    day at its own priority, as the Reset's day results go, not in the day
-    recheck lane, which waits until the Reset's board publishes
-    (``background_pacing``), so the board pins the result holding the
-    proof. On 15 November 2026 #PL0Q0UVLC's 05:19:33 reading proved its
-    total, which the board's first build at 05:34 confirmed from that
-    reading itself, but the result storing it saved only at 06:38:32."""
+def queue_for_reset_proof(connection: Any, player_id: int, key: str, at: datetime,
+                          jobs: tuple[str, str] = _WORKER_JOBS) -> None:
+    """A profile read at ``at``, or a battle log or unchanged check then that
+    covers the readings before it, may prove the Reset total the newest
+    result of the day the latest Reset ended stores unproven
+    (``reset_total``); a reading after the player's latest log proves
+    nothing until one covers it (``reading_rule``). Within
+    ``RESET_PROOF_WINDOW`` of that Reset, recalculate the day at its own
+    priority, as the Reset's day results go, not in the day recheck lane,
+    which waits until the Reset's board publishes (``background_pacing``),
+    so the board pins the result holding the proof. On 15 November 2026
+    #PL0Q0UVLC's 05:19:33 reading proved its total, which the board's first
+    build at 05:34 confirmed from that reading itself, but the result
+    storing it saved only at 06:38:32."""
     reset = domain.ranked_day_for(at).start
     if at >= reset + RESET_PROOF_WINDOW:
         return
-    day_start = reset - timedelta(days=1)
-    newest = connection.execute(
-        """
-        SELECT formula_components -> 'reset_total' ->> 'proven' FROM ranked_day_versions
-        WHERE player_id = %s AND ranked_day_start = %s AND reconciliation_rule_version = %s
-        ORDER BY version DESC LIMIT 1
+    day_start, (relation, state) = reset - timedelta(days=1), jobs
+    day = _day_text(day_start)
+    connection.execute(
+        f"""
+        INSERT INTO {relation} (observation_id, work_type,
+            deduplication_key, input_json, {state}, due_at, parser_version,
+            processing_version, domain_rule_version, analytics_rule_version, priority)
+        SELECT NULL, 'reconcile_ranked_day', %(key)s, %(input)s, 'pending',
+               clock_timestamp(), %(parser)s, %(processing)s, %(domain)s, %(analytics)s,
+               %(priority)s
+        WHERE (SELECT formula_components -> 'reset_total' ->> 'proven'
+               FROM ranked_day_versions
+               WHERE player_id = %(player)s AND ranked_day_start = %(day)s
+                 AND reconciliation_rule_version = %(rule)s
+               ORDER BY version DESC LIMIT 1) = 'false'
+        ON CONFLICT (deduplication_key) DO NOTHING
         """,
-        (player_id, day_start, RECONCILIATION_RULE_VERSION),
-    ).fetchone()
-    if newest is not None and newest[0] == "false":
-        day_recalculation.request(
-            connection, player_id, day_start, observation_id,
-            key=f"reconcile:reset-proof:{observation_id}:{player_id}:{_day_text(day_start)}",
-            trigger="reset_proof", later_days=False)
+        {**_VERSIONS, "player": player_id, "day": day_start, "key": f"{key}:{day}",
+         "priority": db.ended_day_priority(day_start), "input": Jsonb({
+             "player_id": int(player_id), "ranked_day_start": day, "trigger": "reset_proof"})},
+    )
 
 
 def queue_recheck(database: db.Database, slot: str, boundary: datetime,

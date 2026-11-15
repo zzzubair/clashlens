@@ -72,7 +72,7 @@ def test_a_later_reading_proves_the_battles_after_an_older_one(
     ]
     with domain_database(database_url) as connection_info:
         story = _story(connection_info, archive_server, monkeypatch, *LATE, SLOW)
-        for recheck in ("queue_for_reading", "queue_for_battles"):
+        for recheck in ("queue_for_reading", "queue_for_battles", "queue_for_reset_proof"):
             monkeypatch.setattr(queue_refresh, recheck, lambda *_: None)
         for tag in story.players:
             story.players[tag].battles = list(battles)
@@ -511,7 +511,7 @@ def test_an_attackers_late_report_refreshes_the_stored_reset_total(
     assert after == {DEFENDER: (5090, "confirmed", "calculated_end", _at(5, 20, 0))}
 
 
-SAVED_EARLY, HELD = "#2GG", "#8GG"
+SAVED_EARLY, PLAYED_ON, HELD = "#2GG", "#8GG", "#9GG"
 
 
 def test_a_proof_read_after_the_day_saved_is_in_the_result_the_board_pins(
@@ -521,51 +521,68 @@ def test_a_proof_read_after_the_day_saved_is_in_the_result_the_board_pins(
     its Reset total unproven; its 05:19:33 reading proved it, and the
     board's first build at 05:34 confirmed it from that reading itself, but
     the result storing the proof waited in the day recheck lane until
-    06:38:32, so the board pinned the older one for three builds. Here the
-    day is PROVEN's: its result saves with the Reset's, its 05:23:18 reading
-    of 5,233 proves the reading plus the attacks after it, and HELD's Reset
-    responses are saved last, so the board builds after that reading."""
+    06:38:32, so the board pinned the older one for three builds. Here both
+    days are PROVEN's, and PLAYED_ON attacks for 30 at 05:10. Each result
+    saves with the Reset's; at 05:23:18 each profile reads the reading plus
+    the attacks after it, and PLAYED_ON's battle log showing the new attack
+    is saved a minute later. HELD's Reset responses are saved last, so the
+    board builds after them."""
     start, end = day(2), day(3)
+    battles = [*defenses(start, *[40] * 6, 12), Battle(_at(2, 51, 16), -26, False),
+               *(Battle(_at(4, 35, 53) + timedelta(minutes=3 * n), 40 if n < 7 else 29, True)
+                 for n in range(8))]
     with domain_database(database_url) as connection_info:
-        story = _story(connection_info, archive_server, monkeypatch, SAVED_EARLY, HELD)
-        story.players[SAVED_EARLY].battles = [
-            *defenses(start, *[40] * 6, 12), Battle(_at(2, 51, 16), -26, False),
-            *(Battle(_at(4, 35, 53) + timedelta(minutes=3 * n), 40 if n < 7 else 29, True)
-              for n in range(8))]
+        story = _story(connection_info, archive_server, monkeypatch, SAVED_EARLY, PLAYED_ON, HELD)
+        story.players[SAVED_EARLY].battles = list(battles)
+        story.players[PLAYED_ON].battles = [*battles, Battle(end + timedelta(minutes=10), 30, True)]
         story.players[HELD].battles = _even(start)
-        story.reset(start, {SAVED_EARLY: (5202, SEASON), HELD: (5000, SEASON)})
-        story.reads(_at(2, 54, 19), {SAVED_EARLY: 4924})
-        story.reset(end, {SAVED_EARLY: (4924, SEASON), HELD: (5000, SEASON)}, run=False)
+        story.reset(start, {SAVED_EARLY: (5202, SEASON), PLAYED_ON: (5202, SEASON),
+                            HELD: (5000, SEASON)})
+        story.reads(_at(2, 54, 19), {SAVED_EARLY: 4924, PLAYED_ON: 4924})
+        story.reset(end, {SAVED_EARLY: (4924, SEASON), PLAYED_ON: (4924, SEASON),
+                          HELD: (5000, SEASON)}, run=False)
         _hold(connection_info, (HELD,), end)
         # The worker's clock is in the Reset's first minutes, so background
         # work waits until the board publishes, as on 15 November.
         monkeypatch.setattr(background_pacing, "_now", lambda: _at(5, 23, 18))
         monkeypatch.setattr(background_pacing, "_open_window", [])
-        database, processor = _processor(connection_info, archive_server)
-        try:
-            boundary_publication.reevaluate_boundary_publications(database)
-            processor.process_until_idle(owner="story", max_jobs=10_000)
-        finally:
-            database.close()
-        saved = story.saved_day(SAVED_EARLY, start)
-        before = _stored(connection_info, start, (SAVED_EARLY,))
+
+        def work() -> None:
+            database, processor = _processor(connection_info, archive_server)
+            try:
+                boundary_publication.reevaluate_boundary_publications(database)
+                processor.process_until_idle(owner="story", max_jobs=10_000)
+            finally:
+                database.close()
+
+        work()
+        before = _stored(connection_info, start, (SAVED_EARLY, PLAYED_ON))
+        story.read(SAVED_EARLY, _at(5, 23, 18), 5233)
+        story.read(PLAYED_ON, _at(5, 23, 18), 5263)
+        work()
+        uncovered = _stored(connection_info, start, (SAVED_EARLY, PLAYED_ON))
         capsys.readouterr()
-        story.reads(_at(5, 23, 18), {SAVED_EARLY: 5233})
+        story.read(PLAYED_ON, _at(5, 24, 18))
         story.run_worker()
         board = _entries(story.served_board(end))
-        after = _stored(connection_info, start, (SAVED_EARLY,))
+        after = _stored(connection_info, start, (SAVED_EARLY, PLAYED_ON))
         unfinished = story.unfinished_jobs()
 
     assert unfinished == []
-    assert (saved["state"], saved["end"]) == ("Partial", 5233)
-    assert before == {SAVED_EARLY: (5233, "uncertain", "calculated_end", None)}
+    unproven = (5233, "uncertain", "calculated_end", None)
+    assert before == {SAVED_EARLY: unproven, PLAYED_ON: unproven}
+    # SAVED_EARLY's reading proves its total at once; PLAYED_ON's shows an
+    # attack no saved log holds yet, so it proves nothing until one does.
+    assert uncovered == {**before, SAVED_EARLY: (5233, "confirmed", "calculated_end",
+                                                 _at(5, 23, 18))}
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()
               if line.startswith("{")]
-    # The board's first build pinned the result holding the reading's proof.
+    # The board's first build pinned the results holding the readings' proofs.
     assert [(event["board_trophies"], event["stored_value"], event["stored_proven"])
             for event in events if event.get("event") == "reset_total_shadow"] == []
     assert [event["different"] for event in events
             if event.get("event") == "reset_total_shadow_summary"] == [0]
-    assert board == {SAVED_EARLY: (5233, "confirmed"), HELD: (5000, "confirmed")}
-    assert after[SAVED_EARLY][:2] == (5233, "confirmed")
-    assert after[SAVED_EARLY][3] == _at(5, 23, 18)
+    assert board == {SAVED_EARLY: (5233, "confirmed"), PLAYED_ON: (5233, "confirmed"),
+                     HELD: (5000, "confirmed")}
+    assert {tag: (answer[:2], answer[3]) for tag, answer in after.items()} == dict.fromkeys(
+        (SAVED_EARLY, PLAYED_ON), ((5233, "confirmed"), _at(5, 23, 18)))

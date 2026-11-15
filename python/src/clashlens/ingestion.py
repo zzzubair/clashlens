@@ -228,7 +228,8 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                 connection, player[0], f"reading:{observation_id}", profile.observed_at
             )
             queue_refresh.queue_for_reset_proof(
-                connection, player[0], observation_id, profile.observed_at
+                connection, player[0], f"reconcile:reset-proof:reading:{observation_id}:{player[0]}",
+                profile.observed_at,
             )
             connection.execute(
                 """
