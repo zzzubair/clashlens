@@ -11,6 +11,7 @@ from collector_db_postgres_support import NOW, _handoff, _hash, _player
 from collector_db_postgres_support import NOW as _PLAYER_NOW
 from domain_test_support import domain_database, store_observation
 from first_battle_log_postgres_support import LOSS, WIN, _log
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from reconciliation_postgres_support import _profile
 from reset_reading_before_loss_postgres_support import DAY_B, DAY_C, DAY_D
 from reset_settlement_state_postgres_support import TAG, _process, _reset_work
@@ -71,12 +72,12 @@ def test_a_check_after_the_reset_recalculates_an_unproven_reset_total_at_once(
     database_url: str,
 ) -> None:
     # A reading after the Reset can prove the ended day's stored Reset total
-    # only once a battle log covers it, and an unchanged check covers it
-    # without saving a log. Within an hour of the Reset, each such check of a day
-    # whose newest result stores the total unproven recalculates it at the
-    # day's own priority, above the day recheck lane; one while that result
-    # is still Live, an hour after the Reset, or once the total is proven,
-    # queues nothing.
+    # only once a battle log covers it, and the collector's unchanged check
+    # covers it without saving a log. Within an hour of the Reset, each such
+    # check of a day whose newest result stores the total unproven
+    # recalculates it at the day's own priority, above the day recheck lane;
+    # one while that result is still Live, an hour after the Reset, or once
+    # the total is proven, queues nothing.
     reset = datetime(2026, 11, 15, 5, tzinfo=UTC)
     day_start = reset - timedelta(days=1)
     with domain_database(database_url) as connection_info:
@@ -100,8 +101,12 @@ def test_a_check_after_the_reset_recalculates_an_unproven_reset_total_at_once(
                      json.dumps({"reset_total": {"value": 5000, "proven": proven}})),
                 )
 
+        options = conninfo_to_dict(connection_info).get("options", "")
+        collector = CollectorDatabase(
+            make_conninfo(connection_info, options=f"{options} -c role=clashlens_collector"))
+
         def check(key: str, minutes: int) -> None:
-            CollectorDatabase(connection_info).record_response(_handoff(
+            collector.record_response(_handoff(
                 occurrence_key=key, response_hash=_hash("a"), player_id=player_id,
                 endpoint="battle_log", completed_at=reset + timedelta(minutes=minutes)))
 
@@ -113,6 +118,7 @@ def test_a_check_after_the_reset_recalculates_an_unproven_reset_total_at_once(
         check("log-4", 61)
         save(3, True)
         check("log-5", 30)
+        collector.close()
         with psycopg.connect(connection_info) as connection:
             queued = connection.execute(
                 "SELECT deduplication_key, priority > %s FROM python_processing_jobs"

@@ -225,7 +225,7 @@ def queue_for_check(connection: Any, check: Any) -> None:
     queue_for_reset_proof(
         connection, check.player_id,
         f"reconcile:reset-proof:check:{check.player_id}:{check.response_completed_at}",
-        check.response_completed_at, _COLLECTOR_JOBS)
+        check.response_completed_at, jobs=_COLLECTOR_JOBS)
 
 
 def queue_for_battles(connection: Any, observation_id: int, corrected_ids: Iterable[int],
@@ -319,14 +319,15 @@ def queue_for_attack_ends(connection: Any, observation_id: int, at: datetime) ->
 
 
 def queue_for_reset_proof(connection: Any, player_id: int, key: str, at: datetime,
+                          observation_id: int | None = None,
                           jobs: tuple[str, str] = _WORKER_JOBS) -> None:
     """A profile read at ``at``, or a battle log or unchanged check then that
     covers the readings before it, may prove the Reset total the newest
     result of the day the latest Reset ended stores unproven
     (``reset_total``); a reading after the player's latest log proves
     nothing until one covers it (``reading_rule``). Not while that result
-    is Live, saved before the day ended: the Reset's own day calculation,
-    which reads the Reset's responses, is still to come. Within
+    is Live, saved before the day ended, nor for the Reset's own responses,
+    ``observation_id``: the Reset's day calculation reads them. Within
     ``RESET_PROOF_WINDOW`` of that Reset, recalculate the day at its own
     priority, as the Reset's day results go, not in the day recheck lane,
     which waits until the Reset's board publishes (``background_pacing``),
@@ -339,6 +340,12 @@ def queue_for_reset_proof(connection: Any, player_id: int, key: str, at: datetim
         return
     day_start, (relation, state) = reset - timedelta(days=1), jobs
     day = _day_text(day_start)
+    # Only the worker reads the Reset's responses; a check has none.
+    reset_response = "" if observation_id is None else """
+          AND NOT EXISTS (SELECT FROM reset_baseline_evidence AS pair
+              WHERE pair.boundary_at = %(reset)s AND pair.player_id = %(player)s
+                AND %(observation)s IN (pair.profile_observation_id,
+                                        pair.battle_log_observation_id))"""
     connection.execute(
         f"""
         INSERT INTO {relation} (observation_id, work_type,
@@ -351,10 +358,11 @@ def queue_for_reset_proof(connection: Any, player_id: int, key: str, at: datetim
                FROM ranked_day_versions
                WHERE player_id = %(player)s AND ranked_day_start = %(day)s
                  AND reconciliation_rule_version = %(rule)s
-               ORDER BY version DESC LIMIT 1)
+               ORDER BY version DESC LIMIT 1){reset_response}
         ON CONFLICT (deduplication_key) DO NOTHING
         """,
         {**_VERSIONS, "player": player_id, "day": day_start, "key": f"{key}:{day}",
+         "reset": reset, "observation": observation_id,
          "priority": db.ended_day_priority(day_start), "input": Jsonb({
              "player_id": int(player_id), "ranked_day_start": day, "trigger": "reset_proof"})},
     )
