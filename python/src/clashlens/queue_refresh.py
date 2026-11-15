@@ -324,7 +324,9 @@ def queue_for_reset_proof(connection: Any, player_id: int, key: str, at: datetim
     covers the readings before it, may prove the Reset total the newest
     result of the day the latest Reset ended stores unproven
     (``reset_total``); a reading after the player's latest log proves
-    nothing until one covers it (``reading_rule``). Within
+    nothing until one covers it (``reading_rule``). Not while that result
+    is Live, saved before the day ended: the Reset's own day calculation,
+    which reads the Reset's responses, is still to come. Within
     ``RESET_PROOF_WINDOW`` of that Reset, recalculate the day at its own
     priority, as the Reset's day results go, not in the day recheck lane,
     which waits until the Reset's board publishes (``background_pacing``),
@@ -345,11 +347,11 @@ def queue_for_reset_proof(connection: Any, player_id: int, key: str, at: datetim
         SELECT NULL, 'reconcile_ranked_day', %(key)s, %(input)s, 'pending',
                clock_timestamp(), %(parser)s, %(processing)s, %(domain)s, %(analytics)s,
                %(priority)s
-        WHERE (SELECT formula_components -> 'reset_total' ->> 'proven'
+        WHERE (SELECT state <> 'Live' AND formula_components -> 'reset_total' ->> 'proven' = 'false'
                FROM ranked_day_versions
                WHERE player_id = %(player)s AND ranked_day_start = %(day)s
                  AND reconciliation_rule_version = %(rule)s
-               ORDER BY version DESC LIMIT 1) = 'false'
+               ORDER BY version DESC LIMIT 1)
         ON CONFLICT (deduplication_key) DO NOTHING
         """,
         {**_VERSIONS, "player": player_id, "day": day_start, "key": f"{key}:{day}",

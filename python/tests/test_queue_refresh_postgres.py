@@ -74,14 +74,15 @@ def test_a_check_after_the_reset_recalculates_an_unproven_reset_total_at_once(
     # only once a battle log covers it, and an unchanged check covers it
     # without saving a log. Within an hour of the Reset, each such check of a day
     # whose newest result stores the total unproven recalculates it at the
-    # day's own priority, above the day recheck lane; one an hour after the
-    # Reset, or once the total is proven, queues nothing.
+    # day's own priority, above the day recheck lane; one while that result
+    # is still Live, an hour after the Reset, or once the total is proven,
+    # queues nothing.
     reset = datetime(2026, 11, 15, 5, tzinfo=UTC)
     day_start = reset - timedelta(days=1)
     with domain_database(database_url) as connection_info:
         player_id = _player(connection_info, now=reset)
 
-        def save(version: int, proven: bool) -> None:
+        def save(version: int, proven: bool, state: str = "Partial") -> None:
             with psycopg.connect(connection_info) as connection:
                 connection.execute("SET LOCAL session_replication_role = replica")
                 connection.execute(
@@ -92,10 +93,10 @@ def test_a_check_after_the_reset_recalculates_an_unproven_reset_total_at_once(
                         reconciliation_rule_version, input_hash, result_hash, version,
                         state, confidence, formula_components
                     ) VALUES (%s, %s, %s, %s, 11, 'test', %s, repeat('a', 64),
-                              repeat(%s, 64), %s, 'Partial', 'uncertain', %s)
+                              repeat(%s, 64), %s, %s, 'uncertain', %s)
                     """,
                     (player_id, day_start, reset, ranked_day_for(day_start).official_season_id,
-                     RECONCILIATION_RULE_VERSION, str(version), version,
+                     RECONCILIATION_RULE_VERSION, str(version), version, state,
                      json.dumps({"reset_total": {"value": 5000, "proven": proven}})),
                 )
 
@@ -104,12 +105,14 @@ def test_a_check_after_the_reset_recalculates_an_unproven_reset_total_at_once(
                 occurrence_key=key, response_hash=_hash("a"), player_id=player_id,
                 endpoint="battle_log", completed_at=reset + timedelta(minutes=minutes)))
 
-        save(1, False)
+        save(1, False, "Live")
         check("log-1", 4)
-        check("log-2", 24)
-        check("log-3", 61)
-        save(2, True)
-        check("log-4", 30)
+        check("log-2", 10)
+        save(2, False)
+        check("log-3", 24)
+        check("log-4", 61)
+        save(3, True)
+        check("log-5", 30)
         with psycopg.connect(connection_info) as connection:
             queued = connection.execute(
                 "SELECT deduplication_key, priority > %s FROM python_processing_jobs"
