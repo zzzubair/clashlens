@@ -45,6 +45,10 @@ from .season_lifecycle import SEASON_CLOSE_WAIT
 EVIDENCE_REFRESH_WINDOW = timedelta(days=7)
 CHECK_INTERVAL_SECONDS = 600
 RECHECK_SPREAD = timedelta(hours=4)
+# A profile read this long from a Reset may prove the ended day's stored
+# Reset total before the board builds (``queue_for_reset_proof``): its hard
+# deadline. On 14 and 15 November 2026 every such proof came 05:19 to 05:54.
+RESET_PROOF_WINDOW = timedelta(hours=1)
 # A pass waits while this many rechecks are already due in its lane.
 RECHECK_ROOM = 5000
 NIGHT_PASS_DUE_BY = timedelta(hours=22)  # 03:00 UTC, counted from the Reset.
@@ -308,6 +312,36 @@ def queue_for_attack_ends(connection: Any, observation_id: int, at: datetime) ->
             connection, int(player_id), day_start, observation_id,
             key=f"reconcile:attack-end:{observation_id}:{player_id}:{_day_text(day_start)}",
             trigger="attack_end", later_days=False)
+
+
+def queue_for_reset_proof(connection: Any, player_id: int, observation_id: int,
+                          at: datetime) -> None:
+    """A profile read at ``at``, within ``RESET_PROOF_WINDOW`` of the Reset
+    that ended the player's newest day, may prove the Reset total that
+    day's newest result stores unproven (``reset_total``): recalculate that
+    day at its own priority, as the Reset's day results go, not in the day
+    recheck lane, which waits until the Reset's board publishes
+    (``background_pacing``), so the board pins the result holding the
+    proof. On 15 November 2026 #PL0Q0UVLC's 05:19:33 reading proved its
+    total, which the board's first build at 05:34 confirmed from that
+    reading itself, but the result storing it saved only at 06:38:32."""
+    reset = domain.ranked_day_for(at).start
+    if at >= reset + RESET_PROOF_WINDOW:
+        return
+    day_start = reset - timedelta(days=1)
+    newest = connection.execute(
+        """
+        SELECT formula_components -> 'reset_total' ->> 'proven' FROM ranked_day_versions
+        WHERE player_id = %s AND ranked_day_start = %s AND reconciliation_rule_version = %s
+        ORDER BY version DESC LIMIT 1
+        """,
+        (player_id, day_start, RECONCILIATION_RULE_VERSION),
+    ).fetchone()
+    if newest is not None and newest[0] == "false":
+        day_recalculation.request(
+            connection, player_id, day_start, observation_id,
+            key=f"reconcile:reset-proof:{observation_id}:{player_id}:{_day_text(day_start)}",
+            trigger="reset_proof", later_days=False)
 
 
 def queue_recheck(database: db.Database, slot: str, boundary: datetime,

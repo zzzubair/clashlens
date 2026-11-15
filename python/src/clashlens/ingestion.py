@@ -227,6 +227,9 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
             queue_refresh.queue_for_reading(
                 connection, player[0], f"reading:{observation_id}", profile.observed_at
             )
+            queue_refresh.queue_for_reset_proof(
+                connection, player[0], observation_id, profile.observed_at
+            )
             connection.execute(
                 """
                 WITH candidate AS (

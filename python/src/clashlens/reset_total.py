@@ -34,7 +34,14 @@ not saved may have ended after it, so a total counting it is not proven.
 The old reading may or may not show a battle reported between its request
 and its response, or a defense reported up to ``ATTACK_ENDS_WITHIN`` before
 that request: the reading side is then proven only when the same run also
-contradicts every other way of reading it.
+contradicts every other way of reading it. Nor is the reading side proven
+while its old reading lags battles (``lagged``): every reading from the
+Reset on that fits it fits the same profile still lagging them, so none
+tells the two apart. On 15 November 2026 #2CC2CQC2G read 5,093 at
+04:40:08, 05:06:13 and 05:21:14, all without its defense for 40 reported
+at 04:30:49: its day ended at 5,053, as the game's country list at 05:03
+and its 05:30:03 reading showed, but the stored total was 5,093, proven at
+05:06:13.
 
 A Season's last Reset keeps the board's older rule: without the official
 final, a Complete day gives its EOD and any other its reading side, neither
@@ -138,9 +145,10 @@ def reset_total(
         if proving is not None:
             proven = ResetTotal(calculated, True, CALCULATED_END, proving.read_at)
     # The reading side stands only when proven first: by readings before the
-    # one that proved the day's own end, whatever the day's state now.
+    # one that proved the day's own end, whatever the day's state now, and
+    # never while its reading lags battles (``side[3]`` counts them).
     if side is not None and reading_proof is not None and not end_unknown and (
-            len(side[2]) <= reading_rule.MAX_AMBIGUOUS_BATTLES):
+            side[3] == side[1] and len(side[2]) <= reading_rule.MAX_AMBIGUOUS_BATTLES):
         end, value, unshown, _ = side
         proving = reading_rule.first_proof(
             end_before_loss=end, **{**reading_proof, "readings": [

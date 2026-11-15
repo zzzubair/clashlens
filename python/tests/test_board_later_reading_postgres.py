@@ -17,6 +17,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
 import psycopg
+import reset_scenarios_postgres_support as scenarios
 from board_later_reading_postgres_support import (
     _hold,
 )
@@ -371,6 +372,63 @@ def test_an_old_reading_that_lags_a_defense_counts_it(
     assert first == later == {LAGGING: (4984, "uncertain")}
 
 
+REPEATING = "#2LL"
+
+
+def test_a_reading_repeating_a_lagging_old_reading_proves_nothing(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """#2CC2CQC2G, Bangladesh, 15 November 2026: the day starts at 5,112,
+    gains 247 over 8 attacks and loses 306 over 8 defenses, the last for 40
+    reported at 04:30:49: 5,053, as the game's country list at 05:03
+    showed. Its readings at 04:40:08, 05:06:13 (the Reset's) and 05:21:14
+    still show 5,093, the total before that defense; its 05:30:03 reading
+    shows 5,053, and its 05:42:52 reading 5,013, after a new-day defense for
+    40 reported at 05:25:46. A reading of 5,093 fits the reading side and
+    the profile still lagging that defense alike, so it proves neither: the
+    stored Reset total is 5,053, unproven, in every result saved, never
+    5,093 proven at 05:06:13, as production stored it."""
+    start, end = day(2), day(3)
+    with domain_database(database_url) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, REPEATING)
+        story.players[REPEATING].battles = [
+            *attacks(start, 40, 40, 40, 40, 40, 16, 16, 15),
+            *defenses(start, 40, 40, 40, 40, 40, 40, 26),
+            Battle(_at(4, 30, 49), -40, False), Battle(_at(5, 25, 46), -40, False)]
+        story.reset(start, {REPEATING: (5112, SEASON)})
+        story.reads(_at(4, 40, 8), {REPEATING: 5093})
+        monkeypatch.setattr(scenarios, "READ_AFTER", timedelta(minutes=6, seconds=13))
+        story.reset(end, {REPEATING: (5093, SEASON)})
+        stored = [_stored(connection_info, start, (REPEATING,))[REPEATING]]
+        for at, trophies in ((_at(5, 21, 14), 5093), (_at(5, 30, 3), 5053),
+                             (_at(5, 42, 52), 5013)):
+            story.reads(at, {REPEATING: trophies})
+            story.run_worker()
+            stored.append(_stored(connection_info, start, (REPEATING,))[REPEATING])
+        with psycopg.connect(connection_info) as connection:
+            proven = connection.execute(
+                """
+                SELECT day.formula_components -> 'reset_total' ->> 'value'
+                FROM ranked_day_versions AS day
+                JOIN players AS player ON player.id = day.player_id
+                WHERE day.ranked_day_start = %s AND player.normalized_tag = %s
+                  AND (day.formula_components -> 'reset_total' ->> 'proven')::boolean
+                """,
+                (start, REPEATING),
+            ).fetchall()
+        saved = story.saved_day(REPEATING, start)
+        story.wait(timedelta(hours=1))
+        board = _entries(story.served_board(end))
+        unfinished = story.unfinished_jobs()
+
+    assert unfinished == []
+    assert (saved["state"], saved["end"]) == ("Inconsistent", 5053)
+    assert [answer[:2] for answer in stored] == [(5053, "uncertain")] * 4
+    # No result saved, live or ended, ever proved a total.
+    assert proven == []
+    assert board == {REPEATING: (5053, "uncertain")}
+
+
 DEFENDER, ATTACKER, WAITED_FOR = "#2VV", "#8VV", "#9VV"
 
 
@@ -451,3 +509,63 @@ def test_an_attackers_late_report_refreshes_the_stored_reset_total(
             if event.get("event") == "reset_total_shadow_summary"] == [0]
     assert board == {DEFENDER: (5090, "confirmed"), WAITED_FOR: (5000, "confirmed")}
     assert after == {DEFENDER: (5090, "confirmed", "calculated_end", _at(5, 20, 0))}
+
+
+SAVED_EARLY, HELD = "#2GG", "#8GG"
+
+
+def test_a_proof_read_after_the_day_saved_is_in_the_result_the_board_pins(
+    database_url: str, archive_server, monkeypatch, capsys
+) -> None:
+    """#PL0Q0UVLC, 15 November 2026: its day result saved at the Reset with
+    its Reset total unproven; its 05:19:33 reading proved it, and the
+    board's first build at 05:34 confirmed it from that reading itself, but
+    the result storing the proof waited in the day recheck lane until
+    06:38:32, so the board pinned the older one for three builds. Here the
+    day is PROVEN's: its result saves with the Reset's, its 05:23:18 reading
+    of 5,233 proves the reading plus the attacks after it, and HELD's Reset
+    responses are saved last, so the board builds after that reading."""
+    start, end = day(2), day(3)
+    with domain_database(database_url) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, SAVED_EARLY, HELD)
+        story.players[SAVED_EARLY].battles = [
+            *defenses(start, *[40] * 6, 12), Battle(_at(2, 51, 16), -26, False),
+            *(Battle(_at(4, 35, 53) + timedelta(minutes=3 * n), 40 if n < 7 else 29, True)
+              for n in range(8))]
+        story.players[HELD].battles = _even(start)
+        story.reset(start, {SAVED_EARLY: (5202, SEASON), HELD: (5000, SEASON)})
+        story.reads(_at(2, 54, 19), {SAVED_EARLY: 4924})
+        story.reset(end, {SAVED_EARLY: (4924, SEASON), HELD: (5000, SEASON)}, run=False)
+        _hold(connection_info, (HELD,), end)
+        # The worker's clock is in the Reset's first minutes, so background
+        # work waits until the board publishes, as on 15 November.
+        monkeypatch.setattr(background_pacing, "_now", lambda: _at(5, 23, 18))
+        monkeypatch.setattr(background_pacing, "_open_window", [])
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            boundary_publication.reevaluate_boundary_publications(database)
+            processor.process_until_idle(owner="story", max_jobs=10_000)
+        finally:
+            database.close()
+        saved = story.saved_day(SAVED_EARLY, start)
+        before = _stored(connection_info, start, (SAVED_EARLY,))
+        capsys.readouterr()
+        story.reads(_at(5, 23, 18), {SAVED_EARLY: 5233})
+        story.run_worker()
+        board = _entries(story.served_board(end))
+        after = _stored(connection_info, start, (SAVED_EARLY,))
+        unfinished = story.unfinished_jobs()
+
+    assert unfinished == []
+    assert (saved["state"], saved["end"]) == ("Partial", 5233)
+    assert before == {SAVED_EARLY: (5233, "uncertain", "calculated_end", None)}
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()
+              if line.startswith("{")]
+    # The board's first build pinned the result holding the reading's proof.
+    assert [(event["board_trophies"], event["stored_value"], event["stored_proven"])
+            for event in events if event.get("event") == "reset_total_shadow"] == []
+    assert [event["different"] for event in events
+            if event.get("event") == "reset_total_shadow_summary"] == [0]
+    assert board == {SAVED_EARLY: (5233, "confirmed"), HELD: (5000, "confirmed")}
+    assert after[SAVED_EARLY][:2] == (5233, "confirmed")
+    assert after[SAVED_EARLY][3] == _at(5, 23, 18)
