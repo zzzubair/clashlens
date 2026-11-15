@@ -227,10 +227,6 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
             queue_refresh.queue_for_reading(
                 connection, player[0], f"reading:{observation_id}", profile.observed_at
             )
-            queue_refresh.queue_for_reset_proof(
-                connection, player[0], f"reconcile:reset-proof:reading:{observation_id}:{player[0]}",
-                profile.observed_at, observation_id,
-            )
             connection.execute(
                 """
                 WITH candidate AS (
@@ -272,6 +268,11 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
             # Tracking follows the weekly league record, decided from this
             # answer within seconds (``league_days.track``).
             reset_baselines._refresh_reset_baseline_evidence(database, connection, claim)
+            # After the pair evidence, so the Reset's own profile is skipped.
+            queue_refresh.queue_for_reset_proof(
+                connection, player[0], f"reconcile:reset-proof:reading:{observation_id}:{player[0]}",
+                profile.observed_at, observation_id,
+            )
             claimed_jobs.finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
             )
