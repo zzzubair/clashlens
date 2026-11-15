@@ -155,9 +155,8 @@ def _early_reading_days(
         observed_at=DAY_C + timedelta(minutes=10), normalized_tag=TAG,
     )[1])
     if saved_before_rule is not None:
-        saved_before_rule.setattr(
-            queue_refresh, "queue_for_reading", lambda *args: None
-        )
+        for recheck in ("queue_for_reading", "queue_for_reset_proof"):
+            saved_before_rule.setattr(queue_refresh, recheck, lambda *args: None)
     _process(connection_info, archive_server, jobs)
     if saved_before_rule is not None:
         saved_before_rule.undo()

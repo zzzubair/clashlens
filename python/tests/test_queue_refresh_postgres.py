@@ -11,6 +11,7 @@ from collector_db_postgres_support import NOW, _handoff, _hash, _player
 from collector_db_postgres_support import NOW as _PLAYER_NOW
 from domain_test_support import domain_database, store_observation
 from first_battle_log_postgres_support import LOSS, WIN, _log
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from reconciliation_postgres_support import _profile
 from reset_reading_before_loss_postgres_support import DAY_B, DAY_C, DAY_D
 from reset_settlement_state_postgres_support import TAG, _process, _reset_work
@@ -65,6 +66,70 @@ def test_unchanged_battle_log_check_after_a_profile_read_queues_the_day(
         queued = _queued(connection_info, "reconcile:check:")
 
     assert queued == [(str(player_id), "2020-09-09T05:00:00Z")]
+
+
+def test_a_check_after_the_reset_recalculates_an_unproven_reset_total_at_once(
+    database_url: str,
+) -> None:
+    # A reading after the Reset can prove the ended day's stored Reset total
+    # only once a battle log covers it, and the collector's unchanged check
+    # covers it without saving a log. Within an hour of the Reset, each such
+    # check of a day whose newest result stores the total unproven
+    # recalculates it at the day's own priority, above the day recheck lane;
+    # one while that result is still Live, an hour after the Reset, or once
+    # the total is proven, queues nothing.
+    reset = datetime(2026, 11, 15, 5, tzinfo=UTC)
+    day_start = reset - timedelta(days=1)
+    with domain_database(database_url) as connection_info:
+        player_id = _player(connection_info, now=reset)
+
+        def save(version: int, proven: bool, state: str = "Partial") -> None:
+            with psycopg.connect(connection_info) as connection:
+                connection.execute("SET LOCAL session_replication_role = replica")
+                connection.execute(
+                    """
+                    INSERT INTO ranked_day_versions (
+                        player_id, ranked_day_start, ranked_day_end, official_season_id,
+                        season_day_number, season_anchor_rule_version,
+                        reconciliation_rule_version, input_hash, result_hash, version,
+                        state, confidence, formula_components
+                    ) VALUES (%s, %s, %s, %s, 11, 'test', %s, repeat('a', 64),
+                              repeat(%s, 64), %s, %s, 'uncertain', %s)
+                    """,
+                    (player_id, day_start, reset, ranked_day_for(day_start).official_season_id,
+                     RECONCILIATION_RULE_VERSION, str(version), version, state,
+                     json.dumps({"reset_total": {"value": 5000, "proven": proven}})),
+                )
+
+        options = conninfo_to_dict(connection_info).get("options", "")
+        collector = CollectorDatabase(
+            make_conninfo(connection_info, options=f"{options} -c role=clashlens_collector"))
+
+        def check(key: str, minutes: int) -> None:
+            collector.record_response(_handoff(
+                occurrence_key=key, response_hash=_hash("a"), player_id=player_id,
+                endpoint="battle_log", completed_at=reset + timedelta(minutes=minutes)))
+
+        save(1, False, "Live")
+        check("log-1", 4)
+        check("log-2", 10)
+        save(2, False)
+        check("log-3", 24)
+        check("log-4", 61)
+        save(3, True)
+        check("log-5", 30)
+        collector.close()
+        with psycopg.connect(connection_info) as connection:
+            queued = connection.execute(
+                "SELECT deduplication_key, priority > %s FROM python_processing_jobs"
+                " WHERE deduplication_key LIKE 'reconcile:reset-proof:%%' ORDER BY id",
+                (DAY_RECHECK_PRIORITY,),
+            ).fetchall()
+
+    day = "2026-11-14T05:00:00Z"
+    assert queued == [
+        (f"reconcile:reset-proof:check:{player_id}:{reset + timedelta(minutes=minutes)}:{day}",
+         True) for minutes in (24,)]
 
 
 def test_only_new_battle_reports_queue_their_day_and_the_day_before(

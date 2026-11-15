@@ -492,6 +492,10 @@ def complete_battle_log(
             queue_refresh.queue_for_reading(
                 connection, reporter_id, f"log:{observation_id}", battle_log.observed_at
             )
+            queue_refresh.queue_for_reset_proof(
+                connection, reporter_id, f"reconcile:reset-proof:log:{observation_id}:{reporter_id}",
+                battle_log.observed_at, observation_id,
+            )
             queue_refresh.queue_for_battles(
                 connection, observation_id, shared_state_changed_battle_ids,
                 battle_log.observed_at,

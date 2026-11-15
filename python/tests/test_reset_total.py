@@ -69,25 +69,27 @@ def test_an_unproven_day_shows_its_calculated_end_uncertain() -> None:
 
 
 def test_an_unproven_day_shows_the_reading_side_once_a_later_reading_proves_it() -> None:
-    """The game never credits the 40 for the attack: the old reading,
-    5,000, plus the defense after it, 4,980, is what a later reading shows,
-    which the day's own end reads only as the attacker's credit lagging."""
+    """The game never credits the 40 for the attack: the old reading at
+    04:52, 4,980, is what a later reading shows less the loss, which the
+    day's own end reads only as the attacker's credit lagging. The attack
+    came 41 minutes before that reading, too long to count as lagging it."""
     later = Reading(_after(44), 4950)
-    old = Reading(_at(4, 30), 5000, requested_at=_at(4, 30))
+    old = Reading(_at(4, 52), 4980, requested_at=_at(4, 52))
     assert _decide(later).outcome == "unverified"
     assert _total(later, state="Partial", failures=("end_reading_unverified",), old=old) == (
-        ResetTotal(4980, True, "reading_side", _after(44), _at(4, 30)))
+        ResetTotal(4980, True, "reading_side", _after(44), _at(4, 52)))
 
 
 def test_proven_once_a_later_proof_of_the_other_answer_takes_nothing_back() -> None:
     """At 05:44 the profile shows 4,950: the reading side's end less the
     loss, or the day's own end lacking the attack's credit. At 06:30 the
     credit has landed, 4,990, which proves the day's own end and makes the
-    day Complete; the reading side proven at 05:44 stands."""
-    old = Reading(_at(4, 30), 5000, requested_at=_at(4, 30))
+    day Complete; the reading side proven at 05:44 stands. The old reading
+    at 04:52, 4,980, lags no battle: the attack came 41 minutes before it."""
+    old = Reading(_at(4, 52), 4980, requested_at=_at(4, 52))
     readings = (Reading(_after(44), 4950), Reading(_after(90), 4990))
     assert _decide(*readings).outcome == "verified"
-    proven = ResetTotal(4980, True, "reading_side", _after(44), _at(4, 30))
+    proven = ResetTotal(4980, True, "reading_side", _after(44), _at(4, 52))
     assert _total(*readings[:1], state="Partial", failures=("end_reading_unverified",),
                   old=old) == proven
     assert _total(*readings, old=old) == proven
@@ -193,16 +195,15 @@ def test_a_seasons_last_day_without_its_official_final_keeps_the_older_rule() ->
 def test_an_unproven_reading_side_counts_the_battles_its_reading_lags() -> None:
     """The 04:55 reading still shows 5,040, the total before the defense
     reported at 04:40, as the day's own end, 5,020, shows: unproven, the
-    reading side counts that defense. A reading after the Reset that proves
-    5,040 proves the reading showed it after all."""
+    reading side counts that defense. A reading after the Reset of 5,040
+    less the loss fits the profile still lagging the defense as well as
+    the reading side: it proves neither (#2CC2CQC2G, 15 November 2026)."""
     contradicted: dict[str, Any] = {
         "state": "Inconsistent", "failures": ("trophy_equation_mismatch",),
         "old": Reading(_at(4, 55), 5040, requested_at=_at(4, 55))}
-    assert _total(**contradicted) == ResetTotal(5020, False, "reading_side",
-                                                reading_at=_at(4, 55))
-    proving = Reading(_after(44), 5010)
-    assert _total(proving, **contradicted) == ResetTotal(5040, True, "reading_side",
-                                                         _after(44), _at(4, 55))
+    unproven = ResetTotal(5020, False, "reading_side", reading_at=_at(4, 55))
+    assert _total(**contradicted) == unproven
+    assert _total(Reading(_after(44), 5010), **contradicted) == unproven
     # Read 41 minutes after the attack, the reading lagging it and the
     # defense is not counted as lagging them: 5,000 stays as read.
     late = Reading(_at(4, 52), 5000, requested_at=_at(4, 52))
