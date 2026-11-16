@@ -42,8 +42,8 @@ CATEGORY = "army-types"
 # Bump on any change to the rules, camp spaces, variant list,
 # ``army_composition`` or ``army_group`` below, never for a rename. v5 is v4's
 # types plus the first variant list; v6 saves each army's composition keys;
-# v7 adds Squads, typed by their members.
-RULES_VERSION = "army-types-v7"
+# v7 adds Squads, typed by their members; v8 the Hog Rider and Miner Squads.
+RULES_VERSION = "army-types-v8"
 
 # Permanent type ids: rename freely, never reuse or renumber one.
 OTHER, UNREADABLE = 1, 2
@@ -91,8 +91,8 @@ CAMP_SPACE = {
     # take 46 and 26 below level 3 by the notes, but every saved army fits
     # only 44 and 24, and an army link names no level.
     "troop:195": 15, "troop:196": 25, "troop:197": 8, "troop:198": 12,
-    "troop:199": 16, "troop:200": 55, "troop:203": 70, "troop:204": 44,
-    "troop:205": 85, "troop:206": 24,
+    "troop:199": 16, "troop:200": 55, "troop:201": 48, "troop:202": 48,
+    "troop:203": 70, "troop:204": 44, "troop:205": 85, "troop:206": 24,
 }
 
 # Each Squad's members: an army is typed by them, the Squad's camp space
@@ -104,6 +104,8 @@ SQUADS = {
     "troop:198": (("troop:10", 8),),
     "troop:199": (("troop:5", 4),),
     "troop:200": (("troop:13", 1), ("troop:15", 4)),
+    "troop:201": (("troop:11", 12),),
+    "troop:202": (("troop:24", 10),),
     "troop:203": (("troop:5", 1), ("troop:7", 5)),
     "troop:204": (("troop:9", 1), ("troop:95", 1)),
     "troop:205": (("troop:8", 2), ("troop:65", 2)),

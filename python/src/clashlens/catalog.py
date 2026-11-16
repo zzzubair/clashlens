@@ -3,8 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 
-CATALOG_VERSION = "unit-catalog-v4"
-# Provenance: ClashKingInc/clashy.py@0703aee64a24c48aef296856bd688704d434181f coc/static/static_data.json blob b90a6b2bfbccac3b755a68f78fe8885b35bc80d6 sha256 3fa1e2b9ccd4a24f48ca7ade5a23d54c8ce0c3f17ad986270f2b913584f9c1d5; fixture h0p9e14_32d1x53u2x58-1x97s2x2 observed 2026-08-21; v2 adds equipment:60 Revenge Deck (Dragon Duke equipment 60 matched Revenge Deck in archived player profiles, 2026-10-03) and names seasonal troop:167 Meteor Golem (event), which the same static data separates from Barracks troop:177; v3 adds equipment:61 Portal Pendant (Minion Prince equipment 61 first seen in battle logs 2026-10-08 08:03 UTC and matched Portal Pendant in archived player profiles, 2026-10-09; Zacatac3/clash_widgets@4f12eab15671e305e8b4df1b5e4b11025437cfac clash_widgets/json/mapping.json maps 90000061 to Portal Pendant); v4 adds ten of the twelve Squads (troop:195-200 and 203-206) and spell:153 Heroic Spell from the 16 Nov 2026 update, matched by the release notes' camp space and members in 7,835 armies saved that day, each filling at most 352 camp space; troop:201 and troop:202 both take 48, the Hog Rider and Miner Squads, but no saved army yet says which is which, so both stay unnamed
+CATALOG_VERSION = "unit-catalog-v5"
+# Provenance: ClashKingInc/clashy.py@0703aee64a24c48aef296856bd688704d434181f coc/static/static_data.json blob b90a6b2bfbccac3b755a68f78fe8885b35bc80d6 sha256 3fa1e2b9ccd4a24f48ca7ade5a23d54c8ce0c3f17ad986270f2b913584f9c1d5; fixture h0p9e14_32d1x53u2x58-1x97s2x2 observed 2026-08-21; v2 adds equipment:60 Revenge Deck (Dragon Duke equipment 60 matched Revenge Deck in archived player profiles, 2026-10-03) and names seasonal troop:167 Meteor Golem (event), which the same static data separates from Barracks troop:177; v3 adds equipment:61 Portal Pendant (Minion Prince equipment 61 first seen in battle logs 2026-10-08 08:03 UTC and matched Portal Pendant in archived player profiles, 2026-10-09; Zacatac3/clash_widgets@4f12eab15671e305e8b4df1b5e4b11025437cfac clash_widgets/json/mapping.json maps 90000061 to Portal Pendant); v4 adds ten of the twelve Squads (troop:195-200 and 203-206) and spell:153 Heroic Spell from the 16 Nov 2026 update, matched by the release notes' camp space and members in 7,835 armies saved that day, each filling at most 352 camp space; troop:201 and troop:202 both take 48, the Hog Rider and Miner Squads, but no saved army yet says which is which, so both stay unnamed; v5 names troop:201 Hog Rider Squad and troop:202 Miner Squad (ClashKingInc/ClashKingAssets@fa40345986d5c862480e6fa34aa5100ab8eee345 assets/static_data/troops.json blob c162090c2605817a6b7a34b965caa2101f1217c9 gives _id 4000201 Hog Rider Squad, level 1 at Town Hall 14, and 4000202 Miner Squad, Town Hall 15, both 48 housing, copied from the game's characters GlobalID; the release notes' Hog Rider Squad at Town Hall 14 and Miner Squad at Town Hall 15 agree)
 # License: MIT; Supercell Fan Content Policy applies to game metadata
 
 _CATALOG_ENTRIES: dict[str, dict[str, str | bool]] = {
@@ -239,6 +239,8 @@ _CATALOG_ENTRIES: dict[str, dict[str, str | bool]] = {
     "troop:198": {"category": "troop", "is_siege": False, "name": "Minion Squad"},
     "troop:199": {"category": "troop", "is_siege": False, "name": "Balloon Squad"},
     "troop:200": {"category": "troop", "is_siege": False, "name": "Golem Witch Squad"},
+    "troop:201": {"category": "troop", "is_siege": False, "name": "Hog Rider Squad"},
+    "troop:202": {"category": "troop", "is_siege": False, "name": "Miner Squad"},
     "troop:203": {"category": "troop", "is_siege": False, "name": "Healer Squad"},
     "troop:204": {"category": "troop", "is_siege": False, "name": "P.E.K.K.A Titan Squad"},
     "troop:205": {"category": "troop", "is_siege": False, "name": "Dragon Squad"},

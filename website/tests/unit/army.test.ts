@@ -165,6 +165,26 @@ describe("ArmyPortraits", () => {
     expect(heroic).toMatch(
       /<img src="[^"]*\/spell-153\.webp[^"]*" alt="1 × Heroic Spell"/,
     );
+    // 3 Miner Squads and a Hog Rider Squad, never drawn as Miners.
+    const miners = renderToStaticMarkup(
+      createElement(ArmyPortraits, {
+        id: "army",
+        code:
+          "h0p4e14_32-1p11e16_48-2p8e4_5-4p10e40_50i1x75-12x11d1x53-1x70" +
+          "u1x5-1x203-3x202-1x201-1x28-4x57s2x9-3x35-1x2-1x1-2x5",
+        names: {
+          "troop:201": { name: "Hog Rider Squad", siege: false },
+          "troop:202": { name: "Miner Squad", siege: false },
+        },
+      }),
+    );
+    expect(miners).toMatch(
+      /<img src="[^"]*\/troop-202\.webp[^"]*" alt="3 × Miner Squad"/,
+    );
+    expect(miners).toMatch(
+      /<img src="[^"]*\/troop-201\.webp[^"]*" alt="1 × Hog Rider Squad"/,
+    );
+    expect(miners).not.toContain("troop-24.webp");
   });
 
   it("draws nothing for an unreadable code", () => {
