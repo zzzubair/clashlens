@@ -30,6 +30,7 @@ from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, time
+from fractions import Fraction
 from time import monotonic
 from typing import Any
 
@@ -40,8 +41,9 @@ from .domain import DomainRuleError, allocate_trophies
 CATEGORY = "army-types"
 # Bump on any change to the rules, camp spaces, variant list,
 # ``army_composition`` or ``army_group`` below, never for a rename. v5 is v4's
-# types plus the first variant list; v6 saves each army's composition keys.
-RULES_VERSION = "army-types-v6"
+# types plus the first variant list; v6 saves each army's composition keys;
+# v7 adds Squads, typed by their members.
+RULES_VERSION = "army-types-v7"
 
 # Permanent type ids: rename freely, never reuse or renumber one.
 OTHER, UNREADABLE = 1, 2
@@ -84,6 +86,28 @@ CAMP_SPACE = {
     "troop:84": 12, "troop:95": 32, "troop:97": 20, "troop:98": 12,
     "troop:109": 26, "troop:110": 20, "troop:123": 16, "troop:132": 16,
     "troop:147": 35, "troop:150": 18, "troop:177": 40,
+    # Squads, from 16 Nov 2026, by the release notes' camp space, which
+    # their saved armies' 352 confirm. P.E.K.K.A Titan and Baby Dragon Squads
+    # take 46 and 26 below level 3 by the notes, but every saved army fits
+    # only 44 and 24, and an army link names no level.
+    "troop:195": 15, "troop:196": 25, "troop:197": 8, "troop:198": 12,
+    "troop:199": 16, "troop:200": 55, "troop:203": 70, "troop:204": 44,
+    "troop:205": 85, "troop:206": 24,
+}
+
+# Each Squad's members: an army is typed by them, the Squad's camp space
+# shared among them by their own (docs/domain.md, Army types).
+SQUADS = {
+    "troop:195": (("troop:0", 15), ("troop:1", 15)),
+    "troop:196": (("troop:3", 3), ("troop:6", 5)),
+    "troop:197": (("troop:4", 5),),
+    "troop:198": (("troop:10", 8),),
+    "troop:199": (("troop:5", 4),),
+    "troop:200": (("troop:13", 1), ("troop:15", 4)),
+    "troop:203": (("troop:5", 1), ("troop:7", 5)),
+    "troop:204": (("troop:9", 1), ("troop:95", 1)),
+    "troop:205": (("troop:8", 2), ("troop:65", 2)),
+    "troop:206": (("troop:23", 3),),
 }
 
 
@@ -147,12 +171,20 @@ PAIR_MINIMUM, PAIR_SHARE = 3, 50
 def classify(home_troops: Iterable[Any]) -> int:
     """The type id for an army's home troops, as [troop id, count] pairs."""
     quantities: Counter[str] = Counter()
+    space: Counter[str] = Counter()
     for entry in home_troops:
-        if isinstance(entry, (list, tuple)) and len(entry) >= 2 and int(entry[1]) > 0:
-            quantities[str(entry[0])] += int(entry[1])
-    if any(troop not in CAMP_SPACE for troop in quantities):
-        return UNREADABLE
-    space = {troop: count * CAMP_SPACE[troop] for troop, count in quantities.items()}
+        if not (isinstance(entry, (list, tuple)) and len(entry) >= 2 and int(entry[1]) > 0):
+            continue
+        troop, count = str(entry[0]), int(entry[1])
+        if troop not in CAMP_SPACE:
+            return UNREADABLE
+        # A Squad counts as its members, its camp space shared among them.
+        members = SQUADS.get(troop, ((troop, 1),))
+        ordinary = sum(CAMP_SPACE[member] * each for member, each in members)
+        for member, each in members:
+            quantities[member] += count * each
+            space[member] += Fraction(
+                count * CAMP_SPACE[troop] * CAMP_SPACE[member] * each, ordinary)
     total = sum(space.values())
     if total == 0:
         return UNREADABLE

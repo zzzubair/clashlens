@@ -3,8 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 
-CATALOG_VERSION = "unit-catalog-v3"
-# Provenance: ClashKingInc/clashy.py@0703aee64a24c48aef296856bd688704d434181f coc/static/static_data.json blob b90a6b2bfbccac3b755a68f78fe8885b35bc80d6 sha256 3fa1e2b9ccd4a24f48ca7ade5a23d54c8ce0c3f17ad986270f2b913584f9c1d5; fixture h0p9e14_32d1x53u2x58-1x97s2x2 observed 2026-08-21; v2 adds equipment:60 Revenge Deck (Dragon Duke equipment 60 matched Revenge Deck in archived player profiles, 2026-10-03) and names seasonal troop:167 Meteor Golem (event), which the same static data separates from Barracks troop:177; v3 adds equipment:61 Portal Pendant (Minion Prince equipment 61 first seen in battle logs 2026-10-08 08:03 UTC and matched Portal Pendant in archived player profiles, 2026-10-09; Zacatac3/clash_widgets@4f12eab15671e305e8b4df1b5e4b11025437cfac clash_widgets/json/mapping.json maps 90000061 to Portal Pendant)
+CATALOG_VERSION = "unit-catalog-v4"
+# Provenance: ClashKingInc/clashy.py@0703aee64a24c48aef296856bd688704d434181f coc/static/static_data.json blob b90a6b2bfbccac3b755a68f78fe8885b35bc80d6 sha256 3fa1e2b9ccd4a24f48ca7ade5a23d54c8ce0c3f17ad986270f2b913584f9c1d5; fixture h0p9e14_32d1x53u2x58-1x97s2x2 observed 2026-08-21; v2 adds equipment:60 Revenge Deck (Dragon Duke equipment 60 matched Revenge Deck in archived player profiles, 2026-10-03) and names seasonal troop:167 Meteor Golem (event), which the same static data separates from Barracks troop:177; v3 adds equipment:61 Portal Pendant (Minion Prince equipment 61 first seen in battle logs 2026-10-08 08:03 UTC and matched Portal Pendant in archived player profiles, 2026-10-09; Zacatac3/clash_widgets@4f12eab15671e305e8b4df1b5e4b11025437cfac clash_widgets/json/mapping.json maps 90000061 to Portal Pendant); v4 adds ten of the twelve Squads (troop:195-200 and 203-206) and spell:153 Heroic Spell from the 16 Nov 2026 update, matched by the release notes' camp space and members in 7,835 armies saved that day, each filling at most 352 camp space; troop:201 and troop:202 both take 48, the Hog Rider and Miner Squads, but no saved army yet says which is which, so both stay unnamed
 # License: MIT; Supercell Fan Content Policy applies to game metadata
 
 _CATALOG_ENTRIES: dict[str, dict[str, str | bool]] = {
@@ -180,6 +180,7 @@ _CATALOG_ENTRIES: dict[str, dict[str, str | bool]] = {
     "spell:11": {"category": "spell", "is_siege": False, "name": "Haste Spell"},
     "spell:120": {"category": "spell", "is_siege": False, "name": "Totem Spell"},
     "spell:123": {"category": "spell", "is_siege": False, "name": "Angry Spell"},
+    "spell:153": {"category": "spell", "is_siege": False, "name": "Heroic Spell"},
     "spell:16": {"category": "spell", "is_siege": False, "name": "Clone Spell"},
     "spell:17": {"category": "spell", "is_siege": False, "name": "Skeleton Spell"},
     "spell:2": {"category": "spell", "is_siege": False, "name": "Rage Spell"},
@@ -232,6 +233,16 @@ _CATALOG_ENTRIES: dict[str, dict[str, str | bool]] = {
     "troop:17": {"category": "troop", "is_siege": False, "name": "Lava Hound"},
     "troop:177": {"category": "troop", "is_siege": False, "name": "Meteor Golem"},
     "troop:188": {"category": "troop", "is_siege": True, "name": "Sky Wagon"},
+    "troop:195": {"category": "troop", "is_siege": False, "name": "Barch Squad"},
+    "troop:196": {"category": "troop", "is_siege": False, "name": "Giant Wizard Squad"},
+    "troop:197": {"category": "troop", "is_siege": False, "name": "Wall Breaker Squad"},
+    "troop:198": {"category": "troop", "is_siege": False, "name": "Minion Squad"},
+    "troop:199": {"category": "troop", "is_siege": False, "name": "Balloon Squad"},
+    "troop:200": {"category": "troop", "is_siege": False, "name": "Golem Witch Squad"},
+    "troop:203": {"category": "troop", "is_siege": False, "name": "Healer Squad"},
+    "troop:204": {"category": "troop", "is_siege": False, "name": "P.E.K.K.A Titan Squad"},
+    "troop:205": {"category": "troop", "is_siege": False, "name": "Dragon Squad"},
+    "troop:206": {"category": "troop", "is_siege": False, "name": "Baby Dragon Squad"},
     "troop:2": {"category": "troop", "is_siege": False, "name": "Goblin"},
     "troop:22": {"category": "troop", "is_siege": False, "name": "Bowler"},
     "troop:23": {"category": "troop", "is_siege": False, "name": "Baby Dragon"},
