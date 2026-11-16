@@ -132,6 +132,41 @@ describe("ArmyPortraits", () => {
     ]);
   });
 
+  it("draws a Squad as itself, with its own Fan Kit art", () => {
+    // Attacks saved on 16 Nov 2026, the day Squads and the Heroic Spell came
+    // out: 4 Dragon Squads, and a Heroic Spell in the Clan Castle.
+    const names: ArmyUnitNames = {
+      "troop:205": { name: "Dragon Squad", siege: false },
+      "spell:153": { name: "Heroic Spell", siege: false },
+    };
+    const squads = renderToStaticMarkup(
+      createElement(ArmyPortraits, {
+        id: "army",
+        code:
+          "h1p9e48_17-2m1p16e4_34-6p17e49_43-7p4e52_60i1x8-1x76d2x70" +
+          "u4x205-1x188-1x23-2x1s3x120-1x2-3x5-1x9-1x98",
+        names,
+      }),
+    );
+    expect(squads).toMatch(
+      /<img src="[^"]*\/troop-205\.webp[^"]*" alt="4 × Dragon Squad"/,
+    );
+    // Never drawn as its members: no Dragon Rider anywhere in this army.
+    expect(squads).not.toContain("troop-65.webp");
+    const heroic = renderToStaticMarkup(
+      createElement(ArmyPortraits, {
+        id: "army",
+        code:
+          "h0p10e14_32-1p16e48_16-2p7e4_19-7p4e59_52i1x58-1x64-1x110d1x2-1x153" +
+          "u5x7-1x53-1x82-1x58-6x80-3x28-1x97-1x188-1x5-1x23-1x6s2x35-1x53-1x9-1x2-1x120-1x5-1x98",
+        names,
+      }),
+    );
+    expect(heroic).toMatch(
+      /<img src="[^"]*\/spell-153\.webp[^"]*" alt="1 × Heroic Spell"/,
+    );
+  });
+
   it("draws nothing for an unreadable code", () => {
     expect(
       renderToStaticMarkup(

@@ -21,6 +21,8 @@ from clashlens.army_types import (
     TYPE_NAMES,
     UNREADABLE,
     VARIANTS,
+    army_composition,
+    army_group,
     classify,
     variant,
 )
@@ -153,3 +155,37 @@ def test_types_without_variants_and_every_variant_id_is_used_once() -> None:
     ids = [v for listed in VARIANTS.values() for v, _name, _items in listed]
     assert len(ids) == len(set(ids)) == 41 and 0 not in ids
 
+
+
+# Armies saved on 16 Nov 2026, the day Squads came out.
+@pytest.mark.parametrize(
+    ("troops", "expected"),
+    [
+        # 4 Dragon Squads bring 8 Dragons and 8 Dragon Riders: Hydra.
+        (army(t205=4, t23=1, t1=2), HYDRA),
+        # 3 Dragon Squads and 3 Dragons: 9 Dragons and 6 Dragon Riders.
+        (army(t205=3, t8=3, t57=4, t1=3), HYDRA),
+        # Balloon Squads bring the Balloons, an Ice Hound the hound: LaLo.
+        (army(t199=9, t76=3, t63=4, t1=5, t10=2, t12=1, t23=1, t0=1), LAVALOON),
+        # A Healer Squad behind 9 Throwers stays Thrower.
+        (army(t132=9, t203=1, t109=3, t26=3, t28=2, t5=2, t58=1, t1=2, t10=1), THROWER),
+    ],
+)
+def test_a_squad_counts_as_its_members(troops, expected) -> None:
+    assert classify(troops) == expected
+
+
+def test_a_squad_shares_its_camp_space_among_its_members() -> None:
+    # Trained one by one, 4 Dragons and 4 Dragon Riders (180) hold 50.7% of
+    # this army beside 5 Super Bowlers and a P.E.K.K.A (175): Hydra.
+    assert classify(army(t8=4, t65=4, t80=5, t9=1)) == HYDRA
+    # As 2 Dragon Squads they hold the Squads' 170, 49.3%, so the Super
+    # Bowlers' 150 lead instead.
+    assert classify(army(t205=2, t80=5, t9=1)) == SUPER_BOWLER
+
+
+def test_a_squad_keeps_its_own_id_in_example_groups() -> None:
+    composition = army_composition(army(t205=4, t23=1, t1=2), [], [])
+    # The Squads hold 340 of 352: one entry, never its members. The Baby
+    # Dragon's 10 and the Archers' 2 are under 5%, so fillers.
+    assert army_group(composition)[0] == ("troop:205",)

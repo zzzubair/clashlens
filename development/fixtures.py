@@ -111,7 +111,11 @@ def legend_attack(
             {"resource": "elixir", "amount": 1_000_000},
             {"resource": "darkElixir", "amount": 8_000},
         ],
-        "armyShareCode": "u1x0-2x1",
+        # A Legend attack saved on 16 November 2026: 4 Dragon Squads.
+        "armyShareCode": (
+            "h1p9e48_17-2m1p16e4_34-6p17e49_43-7p4e52_60i1x8-1x76d2x70"
+            "u4x205-1x188-1x23-2x1s3x120-1x2-3x5-1x9-1x98"
+        ),
     }
 
 

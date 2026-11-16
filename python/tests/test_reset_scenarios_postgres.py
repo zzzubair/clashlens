@@ -41,10 +41,13 @@ from reset_scenarios_postgres_support import (
 )
 
 from clashlens import (
+    api_analytics,
     reconcile_pass,
 )
 from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
+from clashlens.api_players import read_player_page
+from clashlens.army_analytics import ArmyAnalyticsSelection
 from clashlens.collector_db import CollectorDatabase
 from clashlens.reading_rule import MAX_AMBIGUOUS_BATTLES
 
@@ -814,8 +817,6 @@ def test_calendar_does_not_claim_an_unknown_player_season(
         story.run_worker()
         api = ApiDatabase(as_api_role(info))
         try:
-            from clashlens.api_players import read_player_page
-
             with api.pool.connection() as connection:
                 response = read_player_page(connection, "#8PY", now=day(2), freshness_seconds=900)
             assert response["screen_ready"]["season"] is None
@@ -874,3 +875,63 @@ def test_collection_cutoff_keeps_both_origins_and_next_reset_board(
         assert _ranked(story.served_board(monday)) == {STEADY: 5100}
         story.reset(tuesday, {STEADY: (5100, SEASON)})
         assert _ranked(story.served_board(tuesday)) == {STEADY: 5100}
+
+
+# An attack saved on 16 November 2026, the day Squads came out: 4 Dragon
+# Squads, a Baby Dragon and 2 Archers.
+DRAGON_SQUADS = ("h1p9e48_17-2m1p16e4_34-6p17e49_43-7p4e52_60i1x8-1x76d2x70"
+                 "u4x205-1x188-1x23-2x1s3x120-1x2-3x5-1x9-1x98")
+
+
+def test_squad_attacks_are_typed_by_their_members_and_shown_as_squads(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """Town Hall 19's update brought Squads: one army entry for a fixed set
+    of troops, saved under its own id. A day of attacks with 4 Dragon Squads
+    goes through the worker to the Monday board. The Armies view names them
+    Hydra, by the Squads' 8 Dragons and 8 Dragon Riders, while Unit usage
+    and the player's battles show Dragon Squad itself, never its members."""
+    sunday, monday = day(7), day(8)
+    with domain_database(database_url) as info:
+        story = _story(info, archive_server, monkeypatch, STEADY)
+        # 4 attacks with Dragon Squads (40, 40, 32, 40), 4 with Throwers (40
+        # each) and 8 defenses of 30: 5300 + 312 - 240 = 5372.
+        story.players[STEADY].battles = (
+            attacks(sunday + timedelta(hours=8), 40, 40, 32, 40, army=DRAGON_SQUADS)
+            + attacks(sunday + timedelta(hours=12), *[40] * 4, army=THROWER)
+            + defenses(sunday, *[30] * 8)
+        )
+        story.reset(sunday, {STEADY: (5300, SEASON)})
+        story.reset(monday, {STEADY: (5372, SEASON)})
+        saved = story.saved_day(STEADY, sunday)
+        board = story.served_board(monday)
+        noon = monday + timedelta(hours=7)
+        story.count_armies(noon)
+        army_types_view = story.served_army_types(noon)
+        api = ApiDatabase(as_api_role(info))
+        try:
+            unit_usage = api_analytics.get_army_analytics(
+                api_analytics.ArmyAnalyticsReader(api.pool), ArmyAnalyticsSelection.parse(
+                    lens="offense", season="current", start_day=1, end_day=28,
+                    population="top-10", category="troops", sort="usage-rate",
+                ), now=noon)
+            with api.pool.connection() as connection:
+                page = read_player_page(connection, STEADY, now=noon, freshness_seconds=900)
+        finally:
+            api.close()
+        unfinished = story.unfinished_jobs()
+
+    assert unfinished == []
+    assert (saved["state"], saved["end"], saved["attacks"]) == ("Complete", 5372, 8)
+    assert _ranked(board) == {STEADY: 5372}
+    assert army_types_view is not None
+    assert [
+        (row["label"], row["usage_count"], row["average_trophies"])
+        for row in army_types_view["rows"]
+    ] == [("Thrower", 4, 40.0), ("Hydra", 4, 38.0)]
+    assert unit_usage is not None
+    assert {row["label"]: row["usage_count"] for row in unit_usage["rows"]} == {
+        "Dragon Squad": 4, "Baby Dragon": 4, "Archer": 4, "Thrower": 4, "Healer": 4,
+    }
+    assert page["screen_ready"]["army_units"]["troop:205"]["name"] == "Dragon Squad"
+    assert "troop:65" not in page["screen_ready"]["army_units"]
