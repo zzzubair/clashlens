@@ -373,9 +373,9 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 expected["reproducibility"]["source_evidence_hash"] = expected_source_hash
                 expected["selection"] = selection.as_dict()
                 # The result names its unit list's version, so the identity
-                # was captured again under unit-catalog-v4.
+                # was captured again under unit-catalog-v5.
                 expected["publication_identity"] = (
-                    "army-publication-d644708939ba930a7053acf0-db83902e2d8d96b4"
+                    "army-publication-d644708939ba930a7053acf0-90c65445b264ae04"
                 )
                 expected["season_bounds"] = {
                     "id": SEASON_ID, "start": "2026-07-13T05:00:00+00:00",

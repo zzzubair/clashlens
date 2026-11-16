@@ -731,7 +731,7 @@ which the site footer links to.
 `app/units/` holds official unit art from the Supercell Fan Kit
 (fankit.supercell.com, checked on October 13, 2026, and on November 16, 2026
 for the Squads and Heroic Spell), also used under the Fan
-Content Policy: 170 images, 64 × 64 pixels, 379 KB in all, each named after the
+Content Policy: 172 images, 64 × 64 pixels, 384 KB in all, each named after the
 unit's saved id (`troop:23` is `troop-23.webp`). The build gives them
 fingerprinted names under `/assets/`, cached for a year. Tapping an attack or defense
 on a player page opens it: the opponent's tag, a link to their Legend log, Copy

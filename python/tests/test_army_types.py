@@ -169,6 +169,9 @@ def test_types_without_variants_and_every_variant_id_is_used_once() -> None:
         (army(t199=9, t76=3, t63=4, t1=5, t10=2, t12=1, t23=1, t0=1), LAVALOON),
         # A Healer Squad behind 9 Throwers stays Thrower.
         (army(t132=9, t203=1, t109=3, t26=3, t28=2, t5=2, t58=1, t1=2, t10=1), THROWER),
+        # 3 Miner Squads and a Hog Rider Squad bring 30 Miners and 12 Hog
+        # Riders. Miners lead, and Miner names no type: Other.
+        (army(t202=3, t201=1, t203=1, t57=4, t28=1, t5=1), OTHER),
     ],
 )
 def test_a_squad_counts_as_its_members(troops, expected) -> None:

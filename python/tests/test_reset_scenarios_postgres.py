@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import psycopg
+import pytest
 from domain_test_support import as_api_role, domain_database, store_observation
 from fastapi.testclient import TestClient
 from private_api_support import NOW_SECONDS, TS_CURRENT, signed_headers
@@ -877,27 +878,46 @@ def test_collection_cutoff_keeps_both_origins_and_next_reset_board(
         assert _ranked(story.served_board(tuesday)) == {STEADY: 5100}
 
 
-# An attack saved on 16 November 2026, the day Squads came out: 4 Dragon
-# Squads, a Baby Dragon and 2 Archers.
+# Attacks saved on 16 November 2026, the day Squads came out: 4 Dragon
+# Squads, a Baby Dragon and 2 Archers; and 3 Miner Squads, a Hog Rider
+# Squad, a Healer Squad, 4 Rocket Balloons, a Super Wall Breaker and a
+# Balloon, with 12 Hog Riders in the Clan Castle.
 DRAGON_SQUADS = ("h1p9e48_17-2m1p16e4_34-6p17e49_43-7p4e52_60i1x8-1x76d2x70"
                  "u4x205-1x188-1x23-2x1s3x120-1x2-3x5-1x9-1x98")
+MINER_SQUADS = ("h0p4e14_32-1p11e16_48-2p8e4_5-4p10e40_50i1x75-12x11d1x53-1x70"
+                "u1x5-1x203-3x202-1x201-1x28-4x57s2x9-3x35-1x2-1x1-2x5")
 
 
+@pytest.mark.parametrize(
+    ("code", "army_type", "units", "shown", "member"),
+    [
+        # Hydra by the Squads' 8 Dragons and 8 Dragon Riders.
+        (DRAGON_SQUADS, "Hydra",
+         {"Dragon Squad": 4, "Baby Dragon": 4, "Archer": 4},
+         {"troop:205": "Dragon Squad"}, "troop:65"),
+        # Other by the Squads' 30 Miners, who lead but name no type.
+        (MINER_SQUADS, "Other",
+         {"Miner Squad": 4, "Hog Rider Squad": 4, "Healer Squad": 4,
+          "Rocket Balloon": 4, "Super Wall Breaker": 4, "Balloon": 4},
+         {"troop:202": "Miner Squad", "troop:201": "Hog Rider Squad"}, "troop:24"),
+    ],
+    ids=["dragon-squads", "miner-and-hog-rider-squads"],
+)
 def test_squad_attacks_are_typed_by_their_members_and_shown_as_squads(
-    database_url: str, archive_server, monkeypatch
+    database_url: str, archive_server, monkeypatch, code, army_type, units, shown, member
 ) -> None:
     """Town Hall 19's update brought Squads: one army entry for a fixed set
-    of troops, saved under its own id. A day of attacks with 4 Dragon Squads
-    goes through the worker to the Monday board. The Armies view names them
-    Hydra, by the Squads' 8 Dragons and 8 Dragon Riders, while Unit usage
-    and the player's battles show Dragon Squad itself, never its members."""
+    of troops, saved under its own id. A day of attacks with Squads goes
+    through the worker to the Monday board. The Armies view types them by
+    the Squads' members, while Unit usage and the player's battles show
+    each Squad itself, never its members."""
     sunday, monday = day(7), day(8)
     with domain_database(database_url) as info:
         story = _story(info, archive_server, monkeypatch, STEADY)
-        # 4 attacks with Dragon Squads (40, 40, 32, 40), 4 with Throwers (40
+        # 4 attacks with Squads (40, 40, 32, 40), 4 with Throwers (40
         # each) and 8 defenses of 30: 5300 + 312 - 240 = 5372.
         story.players[STEADY].battles = (
-            attacks(sunday + timedelta(hours=8), 40, 40, 32, 40, army=DRAGON_SQUADS)
+            attacks(sunday + timedelta(hours=8), 40, 40, 32, 40, army=code)
             + attacks(sunday + timedelta(hours=12), *[40] * 4, army=THROWER)
             + defenses(sunday, *[30] * 8)
         )
@@ -928,10 +948,11 @@ def test_squad_attacks_are_typed_by_their_members_and_shown_as_squads(
     assert [
         (row["label"], row["usage_count"], row["average_trophies"])
         for row in army_types_view["rows"]
-    ] == [("Thrower", 4, 40.0), ("Hydra", 4, 38.0)]
+    ] == [("Thrower", 4, 40.0), (army_type, 4, 38.0)]
     assert unit_usage is not None
     assert {row["label"]: row["usage_count"] for row in unit_usage["rows"]} == {
-        "Dragon Squad": 4, "Baby Dragon": 4, "Archer": 4, "Thrower": 4, "Healer": 4,
+        **units, "Thrower": 4, "Healer": 4,
     }
-    assert page["screen_ready"]["army_units"]["troop:205"]["name"] == "Dragon Squad"
-    assert "troop:65" not in page["screen_ready"]["army_units"]
+    named = page["screen_ready"]["army_units"]
+    assert {unit: named[unit]["name"] for unit in shown} == shown
+    assert member not in named
