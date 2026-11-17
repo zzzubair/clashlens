@@ -308,7 +308,7 @@ def build_day(
     events: list[tuple[datetime, int, bool, int]] = []
     # The Daily board's total is taken at exactly the Reset, so a battle
     # whose attacker's report is stamped at or after it is not in it
-    # (boundary_manifest.reset_trophies).
+    # (reset_total).
     for attacker, defender, saved_at, gain, loss in connection.execute(
         """
         SELECT battle.attacker_player_id, battle.defender_player_id,

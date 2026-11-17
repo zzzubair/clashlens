@@ -166,10 +166,10 @@ def test_monday_reset_reading_before_the_weekly_raise(
         DEFENDED: 5020, LOSS_TOO: 4970, LATE_RAISE: 4940, RAISE_UNDONE: 4940,
         LATE_CREDIT: 4940, QUIET: 4900}
     # The Reset reading matched each total before the raise, so it proves it.
+    # RAISE_UNDONE's unraised reading at 05:40 makes its day Inconsistent but
+    # takes no proof away.
     labels = {entry["tag"]: entry["confidence"] for entry in monday_board["entries"]}
-    assert labels == {
-        LATE_RAISE: "confirmed", LOSS_TOO: "confirmed", RAISE_UNDONE: "uncertain",
-        LATE_CREDIT: "confirmed", QUIET: "confirmed", DEFENDED: "confirmed"}
+    assert labels == dict.fromkeys(story.players, "confirmed")
     # Unfinished, they rank at their last readings, uncertain.
     assert _ranked(tuesday_board) == {
         LATE_RAISE: 4800, LOSS_TOO: 4800, RAISE_UNDONE: 4940, LATE_CREDIT: 5000,
@@ -242,10 +242,14 @@ def _saved_before_the_fix(connection_info: str, archive_server, monkeypatch):
     # Before the fix the raise counted as landed at the Reset, and Monday
     # started from its Reset reading: the rule starting it at 5,000
     # leaves a Season's first day alone.
+    # Nor did a day result store its Reset total (``reset_total``).
     judge, settled_start = reading_rule.judge, reconciliation._settled_start
+    formula = reconciliation._formula_components
     monkeypatch.setattr(reading_rule, "judge", _instant_raise(judge))
     monkeypatch.setattr(reconciliation, "_settled_start",
                         lambda data: settled_start(replace(data, season_first_day=True)))
+    monkeypatch.setattr(reconciliation, "_formula_components", lambda *args, **kwargs: formula(
+        *args, **{**kwargs, "reset_total": None}))
     for tag, sunday_defenses in ((LATE_RAISE, 8), (LOSS_TOO, 7)):
         story.players[tag].battles = (
             _saturday(saturday) + attacks(sunday, 40) + defenses(sunday, *[30] * sunday_defenses)
@@ -262,6 +266,7 @@ def _saved_before_the_fix(connection_info: str, archive_server, monkeypatch):
     def fixed() -> None:
         monkeypatch.setattr(reading_rule, "judge", judge)
         monkeypatch.setattr(reconciliation, "_settled_start", settled_start)
+        monkeypatch.setattr(reconciliation, "_formula_components", formula)
 
     story.fixed = fixed
     return story

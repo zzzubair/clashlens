@@ -39,17 +39,20 @@ from clashlens.db import Database
 COMPLETE, INCONSISTENT, PARTIAL = "#2PP", "#8PP", "#9PP"
 
 
-def _old_rule(reading, ranked_day, season_end, *rest):
+def _old_rule(connection, boundary_at, readings):
     """The rule before this fix, for these players: only a Complete day used
-    the official final, and only as proof of its own end. A Complete day
-    with an official final always ends at it, as one that does not is saved
-    Inconsistent, so the stand-in leaves Complete days to the new rule."""
-    if ranked_day is not None and text(ranked_day[0]) != "Complete":
-        ranked_day = (*ranked_day[:-1], None)
-    return _new_rule(reading, ranked_day, season_end, *rest)
+    the official final, and only as proof of its own end; any other day
+    kept its reading, uncertain. A Complete day with an official final
+    always ends at it, as one that does not is saved Inconsistent, so the
+    stand-in leaves Complete days to the new rule."""
+    complete = {int(row[0]) for row in connection.execute(
+        "SELECT player_id FROM ranked_day_versions WHERE id = ANY(%s) AND state = 'Complete'",
+        ([reading[0] for reading in readings.values()],))}
+    return {player: answer if player in complete else (readings[player][3], False)
+            for player, answer in _new_rule(connection, boundary_at, readings).items()}
 
 
-_new_rule = boundary_manifest._reset_total
+_new_rule = boundary_manifest.reset_trophies
 
 
 def _days(connection_info: str, start) -> dict[str, tuple]:
@@ -117,7 +120,7 @@ def test_day_28_board_shows_the_saved_official_final(
         finals = {COMPLETE: 5320, INCONSISTENT: 5261, PARTIAL: 5044 - 90}
         story.history(day_1 + timedelta(minutes=34), day_1, finals)
         # The board is built and rebuilt under the old rule.
-        monkeypatch.setattr(boundary_manifest, "_reset_total", _old_rule)
+        monkeypatch.setattr(snapshots, "reset_trophies", _old_rule)
         story.run_worker()
         story.reads(day_1 + timedelta(minutes=20),
                     {tag: trophies for tag, (trophies, _) in opening.items()})
@@ -128,7 +131,7 @@ def test_day_28_board_shows_the_saved_official_final(
         old_entries = _entries(connection_info, old_snapshot)
 
         # The fix is deployed and the board correction runs for that Season.
-        monkeypatch.setattr(boundary_manifest, "_reset_total", _new_rule)
+        monkeypatch.setattr(snapshots, "reset_trophies", _new_rule)
         season_id = str(int(old.timestamp()))
         database = Database(connection_info)
         try:
@@ -204,7 +207,7 @@ def test_day_28_board_and_player_pages_show_the_official_final_ranks(
         # Production's board was published before the official finals
         # counted for days not Complete, and before ties followed the game.
         with monkeypatch.context() as before_fixes:
-            before_fixes.setattr(boundary_manifest, "_reset_total", _old_rule)
+            before_fixes.setattr(snapshots, "reset_trophies", _old_rule)
             before_fixes.setattr(snapshots, "follow_official_ties",
                                  lambda entries, _: entries, raising=False)
             story.run_worker()

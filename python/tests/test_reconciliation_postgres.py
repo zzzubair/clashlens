@@ -595,11 +595,14 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
             ]
             assert snapshots[0][3] is None and snapshots[1][3] is not None
             assert all(float(row[4]) == 1.0 and row[5] == 0 for row in snapshots)
+            # Each board shows the Reset total its day result stores. The
+            # correction reads 6,039 at the same 05:00 as the first reading's
+            # 6,040, so the corrected day's total rests on the first, unproven.
             assert [(text(row[0]), row[1], row[3]) for row in entries] == [
                 ("frozen", 1, 6040),
-                ("frozen", 2, 6039),
+                ("frozen", 2, 6040),
                 ("live", 1, 6040),
-                ("live", 2, 6039),
+                ("live", 2, 6040),
             ]
             assert all(text(row[4]) == "fresh" for row in entries)
             # The corrected day has a trophy mismatch, so it cannot prove its

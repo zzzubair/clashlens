@@ -307,9 +307,8 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     and text_value(row[3]) == "eligible"
                 ]
                 # The trophies at the Reset, before the automatic defense
-                # loss, from each reading and the ended day.
+                # loss, stored with each member's ended day.
                 at_reset = reset_trophies(
-                    database,
                     connection,
                     boundary_at,
                     {
@@ -391,7 +390,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
             }
             entries: list[dict[str, Any]] = []
             for row in profile_rows:
-                # Without proof, a reading stays as it is and is marked
+                # A member without a saved day ranks by its reading,
                 # uncertain.
                 trophies, proven = (
                     at_reset.get(int(row[0]), (int(row[2]), False))
@@ -431,9 +430,6 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                         "latest_change_at": latest_changes.get(int(row[0])),
                     }
                 )
-            if at_reset is not None:
-                _shadow_reset_totals(
-                    connection, boundary_at, generation_number, entries, ranked_day_versions)
             entries.sort(
                 key=lambda item: (
                     -int(item["trophies"]),
@@ -1056,38 +1052,3 @@ def _enqueue_snapshot_analytics(
         ),
     )
 
-
-def _shadow_reset_totals(
-    connection: Any, boundary_at: datetime, generation: int | None,
-    entries: list[dict[str, Any]], versions: dict[int, int],
-) -> None:
-    """Shadow, until the board reads it: log each entry whose number or mark
-    differs from the Reset total stored with its member's day result
-    (``reset_total``), and once per build how many were compared, differed
-    and had none stored, as a result saved before it was stored has none."""
-    stored = dict(connection.execute(
-        "SELECT id, formula_components -> 'reset_total' FROM ranked_day_versions"
-        " WHERE id = ANY(%s)", (sorted(set(versions.values())),),
-    ).fetchall())
-    counts = dict.fromkeys(("compared", "different", "not_stored"), 0)
-    for entry in entries:
-        answer = stored.get(versions.get(entry["player_id"]))
-        if answer is None:
-            counts["not_stored"] += 1
-            continue
-        counts["compared"] += 1
-        confirmed = entry["confidence"] == "confirmed"
-        if (answer["value"], answer["proven"]) == (entry["trophies"], confirmed):
-            continue
-        counts["different"] += 1
-        print(json.dumps({
-            "event": "reset_total_shadow", "boundary_at": boundary_at.isoformat(),
-            "generation": generation, "player_id": entry["player_id"],
-            "ranked_day_version_id": versions[entry["player_id"]],
-            "board_trophies": entry["trophies"], "board_confirmed": confirmed,
-            "board_reading_at": entry["observed_at"].isoformat(),
-            **{f"stored_{key}": value for key, value in answer.items()},
-        }), flush=True)
-    print(json.dumps({"event": "reset_total_shadow_summary",
-                      "boundary_at": boundary_at.isoformat(), "generation": generation,
-                      **counts}), flush=True)

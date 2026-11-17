@@ -826,7 +826,8 @@ can start a new board for its Reset; the `boards` step re-checks every
 board of the Season after all day jobs finish. `receipt` writes nothing and
 shows the saved before beside the same counts now, and checks that every
 published view agrees with the days: `boards_disagreeing` lists boards whose
-entries the rules would still change, and `summaries_disagreeing` counts
+entries the rules would still change, such as an entry other than the
+Reset total the player's shown day result stores, and `summaries_disagreeing` counts
 saved summaries that differ from their days, as the Season's closure checks
 them, which reads every summary of a finished Season. Rebuilt boards record
 the board rule that built them (`rule`). A board rebuild is finished once its

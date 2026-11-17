@@ -771,9 +771,10 @@ def queue_board_rebuilds(
     """Find, and with ``queue`` rebuild, each of the Season's Reset boards
     whose frozen input still ranks a reading taken before the player's
     profile answered "player not found", whose saved entries differ from
-    the trophies at the Reset ``reset_trophies`` now gives, or its mark,
-    that an older ordering rule ordered, that is a Season's last board
-    ranking a tie out of the game's final order (``official_order``), or
+    the Reset total, or its mark, stored with the player's day result now
+    shown (``reset_trophies``), that an older ordering rule ordered, that is a
+    Season's last board ranking a tie out of the game's final order
+    (``official_order``), or
     whose members the weekly league record now changes
     (``boundary_members``). On 5
     to 7 October 2026 that was 24 players on Day 1 and 34 on Day 2, two of
@@ -852,16 +853,30 @@ def queue_board_rebuilds(
                     int(row[0]): datetime.fromisoformat(str(row[1])) for row in rows
                 }
                 not_found = profiles_not_found(connection, boundary_at, readings)
-                # Saved entries whose value or mark the current rule changes.
-                # A board not built yet saves them already.
+                # Saved entries whose value or mark differs from the Reset
+                # total the player's day result now shown stores, as a
+                # rebuild would pin it. A board not built yet saves them
+                # already.
+                shown = dict(connection.execute(
+                    """
+                    SELECT DISTINCT ON (log.player_id) log.player_id, log.ranked_day_version_id
+                    FROM api_player_daily_logs AS log
+                    JOIN ranked_day_versions AS day ON day.id = log.ranked_day_version_id
+                    WHERE log.player_id = ANY(%s::bigint[])
+                      AND log.ranked_day_start = %s::timestamptz - interval '1 day'
+                      AND day.ranked_day_end = %s
+                    ORDER BY log.player_id, log.version DESC
+                    """,
+                    ([int(row[0]) for row in rows if row[2] is not None], boundary_at,
+                     boundary_at),
+                ).fetchall())
                 at_reset = reset_trophies(
-                    database,
                     connection,
                     boundary_at,
                     {
                         int(row[0]): (
-                            int(row[2]), int(row[3]), readings[int(row[0])],
-                            int(row[4]),
+                            int(shown.get(int(row[0]), row[2])), int(row[3]),
+                            readings[int(row[0])], int(row[4]),
                         )
                         for row in rows
                         if row[2] is not None
