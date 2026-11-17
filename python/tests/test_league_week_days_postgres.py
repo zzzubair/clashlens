@@ -51,6 +51,7 @@ from clashlens.boundary import queue_board_rebuilds
 from clashlens.collector_db import CollectorDatabase
 from clashlens.collector_uploads import claim_upload, complete_upload
 from clashlens.db import Database
+from clashlens.domain import SEASON_DURATION
 from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
 from clashlens.league_week import Below, Claim, League, ProofKind
 from clashlens.season_summaries import materialize_player_season
@@ -879,6 +880,72 @@ def test_a_past_board_rebuild_takes_a_day_that_comes_out_the_same(
     assert _ranked(stuck_board) == {STAYS: 5140, GONE: 5140}
     assert members == dict.fromkeys((STAYS, SAME, CHANGED), "complete")
     assert _ranked(rebuilt) == {STAYS: 5140, SAME: 5140, CHANGED: 5140}
+
+
+KEPT, LATER, NOW = "#2LL", "#8LL", "#9LL"
+
+
+def test_a_league_flip_rebuilds_boards_of_the_current_season_only(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """On Monday 16 November 2026 the promotion re-check moved about 2,000
+    players' weeks of the Season before out of Legend I, and each one queued
+    a rebuild of every board of their week, about 8 minutes of database work
+    apiece that changed no ranked entry. A board of an ended Season keeps its
+    version; one of the current Season is still rebuilt without the player.
+
+    KEPT, LATER and NOW rank at 5,140 on the Sunday 11 October board. Once
+    the Season of 5 October has ended, LATER's week of 5 October is decided
+    below Legend I: no correction is queued and, six hours on, the board
+    keeps its version with LATER. While that Season runs, NOW's week is
+    decided the same: the board is rebuilt, and its new members leave off
+    both players, as any rebuild does."""
+    saturday, sunday = day(6), day(7)
+    tags = (KEPT, LATER, NOW)
+    with domain_database(database_url) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, *tags)
+        for tag in tags:
+            story.players[tag].battles = _saturday(saturday)
+        story.reset(saturday, {tag: (5300, SEASON) for tag in tags})
+        story.reads(saturday + timedelta(hours=9, minutes=15), dict.fromkeys(tags, 5060))
+        story.reset(sunday, {tag: (5140, SEASON) for tag in tags})
+        story.reads(sunday + timedelta(minutes=20), dict.fromkeys(tags, 5140))
+        story.run_worker()
+        # The 05:20 check's rebuild publishes first.
+        story.wait(timedelta(hours=6))
+        first = (_board_version(connection_info, sunday), story.served_board(sunday))
+
+        story.decides = False
+        _decide_below(connection_info, (LATER,), SEASON + SEASON_DURATION)
+        story.wait(timedelta(hours=6))
+        kept = (_board_version(connection_info, sunday), story.served_board(sunday))
+
+        _decide_below(connection_info, (NOW,), story.clock)
+        story.wait(timedelta(hours=6))
+        rebuilt = (_board_version(connection_info, sunday), story.served_board(sunday))
+        unfinished = story.unfinished_jobs()
+
+    assert unfinished == []
+    generation, corrections = first[0]
+    assert kept[0] == (generation, corrections)
+    assert rebuilt[0] == (generation + 1, corrections + 1)
+    assert _ranked(first[1]) == dict.fromkeys(tags, 5140)
+    assert _ranked(kept[1]) == dict.fromkeys(tags, 5140)
+    assert _ranked(rebuilt[1]) == {KEPT: 5140}
+
+
+def _board_version(connection_info: str, boundary: datetime) -> tuple[int, int]:
+    """The Reset's newest board version and how many corrections it was sent."""
+    with psycopg.connect(connection_info) as connection:
+        return connection.execute(
+            """
+            SELECT (SELECT max(generation) FROM boundary_publication_generations
+                    WHERE boundary_at = %(at)s),
+                   (SELECT count(*) FROM boundary_publication_corrections
+                    WHERE boundary_at = %(at)s)
+            """,
+            {"at": boundary},
+        ).fetchone()
 
 
 def _decide_below(connection_info: str, tags: tuple[str, ...], now: datetime) -> None:

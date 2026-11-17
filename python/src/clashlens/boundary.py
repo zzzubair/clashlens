@@ -1179,12 +1179,15 @@ def _create_boundary_artifact_identity(
     return int(row[0])
 
 
-def remove_league_members(database: Database, connection: Any, player_id: int, days: list[datetime]) -> None:
+def remove_league_members(
+    database: Database, connection: Any, player_id: int, days: list[datetime], *, correct: bool,
+) -> None:
     """The player's week holding ``days`` left Legend I: take them off the
     board of each Reset ending one where they are a member. A generation's
     members never change, so a board not frozen yet stops waiting for their
-    day and ranks them nowhere (``boundary_members.leagues``), and a frozen one gets a queued
-    correction, whose replacement takes the members again. The caller holds
+    day and ranks them nowhere (``boundary_members.leagues``), and, with
+    ``correct``, a frozen one gets a queued correction, whose replacement
+    takes the members again. The caller holds
     the player's week rows. The Reset's lock is taken as a day result takes
     it (``boundary.lock_boundary_members``), shared while many members wait,
     so this never waits behind them; a Reset busy past ``RESET_LOCK_WAIT``
@@ -1221,6 +1224,8 @@ def remove_league_members(database: Database, connection: Any, player_id: int, d
             if not shared:
                 _try_enqueue_boundary_artifacts(
                     database, connection, boundary_at=boundary_at, generation_id=int(current[0]))
+            continue
+        if not correct:
             continue
         queued = connection.execute(
             """

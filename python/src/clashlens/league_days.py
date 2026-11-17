@@ -156,7 +156,7 @@ def save_season(
     )
     withdraw(database, connection, player_id, leaving)
     changed = league_week.save_season(connection, player_id, season_start, decisions)
-    _leave_boards(database, connection, player_id, leaving)
+    _leave_boards(database, connection, player_id, leaving, ended=end <= now)
     moved = {week for week in changed if before.get(week) != after[week]}
     if queue_days and moved:
         numbers = dict(connection.execute(
@@ -359,14 +359,21 @@ def withdraw(database: Any, connection: Any, player_id: int, weeks: list[datetim
     return len(deleted)
 
 
-def _leave_boards(database: Any, connection: Any, player_id: int, weeks: list[datetime]) -> None:
+def _leave_boards(
+    database: Any, connection: Any, player_id: int, weeks: list[datetime], *, ended: bool,
+) -> None:
     """Once ``weeks`` are saved out of Legend I, take the player off each
-    board ranking a day of them, saved or not (``boundary.remove_league_members``)."""
+    board ranking a day of them, saved or not (``boundary.remove_league_members``).
+    In a Season that has ``ended`` a published board keeps its version: on
+    16 November 2026 the Monday re-check moved about 2,000 players' weeks of
+    the Season before out of Legend I, and rebuilding its boards for them
+    took about 8 minutes of database work each and changed no ranked entry."""
     from .boundary import remove_league_members
 
     remove_league_members(database, connection, player_id, [
         week + timedelta(days=offset)
-        for week in weeks if week >= league_week.RECORDED_FROM for offset in range(7)])
+        for week in weeks if week >= league_week.RECORDED_FROM for offset in range(7)],
+        correct=not ended)
 
 
 def _refresh_summaries(connection: Any, player_id: int, seasons: set[Any]) -> None:
