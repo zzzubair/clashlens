@@ -314,8 +314,12 @@ not a sealed full manifest of the same Reset and kind, and a reused identity
 not stored in full. Every freeze logs a `boundary_manifest_frozen` line with
 rows and identity bytes stored and reused, its generation, its earlier
 timed-out tries and the seconds each stage took (`members`, `rows`,
-`season_inputs`, `store`); a freeze past the query limit logs the same line
-with `"outcome": "timed_out"` and the stage it stopped in. Measured on a 13,000-player test
+`season_inputs`, `store`), and for a board the seconds each lookup of its
+`rows` stage took (`row_seconds`: `official_ranks`, `trophy_changes`,
+`profiles`, `unplayed`, `first_readings`, `not_found`, `no_profile`,
+`days_and_leagues`, `identities`); a freeze past the query limit logs the same
+line with `"outcome": "timed_out"`, the stage it stopped in and, in `rows`, the
+lookup (`part`). Measured on a 13,000-player test
 board, a correction manifest stored 0.3-0.4 MB of rows instead of 12 MB.
 Replaying the same rule on production's 4-8 October manifests stores about 91%
 fewer row bytes. Manifests frozen before migration 0081 stay full and unchanged.
