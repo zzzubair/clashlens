@@ -30,6 +30,7 @@ from reset_scenarios_postgres_support import (
     Story,
     _even,
     _ranked,
+    _results,
     _story,
     attacks,
     day,
@@ -139,8 +140,9 @@ def test_an_unproven_day_shows_its_calculated_end(
     SINGAPORE (#20GCYC90Q, 10 November) reads 4,970 at 01:44:31, 3 minutes
     after a defense for 40, then loses 31: 4,939, which its Reset reading
     matches while a new-day defense is in flight, so the day is Complete;
-    at 05:44:56 a reading lacks its three new-day attacks' credits and
-    leaves the day unproven. NEVER_CREDITED (#UQUQR02Q, 7 November) has an
+    at 05:44:56 a reading lacks the credits of its three new-day attacks
+    from 05:20, which says nothing of that Reset reading: the day stays
+    Complete and saves no new result. NEVER_CREDITED (#UQUQR02Q, 7 November) has an
     attack for 40 at 09:11 its profile never shows: its day ends at 4,680
     by its battles, 4,640 in the game, which its 05:44:56 reading proves."""
     start, end = day(2), day(3)
@@ -151,12 +153,11 @@ def test_an_unproven_day_shows_its_calculated_end(
         first_days = {tag: story.saved_day(tag, start)["state"] for tag in battles}
         first = story.served_board(end)
         stored_first = _stored(connection_info, start, battles)
+        singapore = _results(connection_info, start, SINGAPORE)
         story.reads(_at(5, 44, 56), {SINGAPORE: 4939, NEVER_CREDITED: 4640})
         story.wait(timedelta(hours=1))
         later_days = {tag: story.saved_day(tag, start)["state"] for tag in battles}
-        with psycopg.connect(connection_info) as connection:
-            singapore = connection.execute(
-                "SELECT id FROM players WHERE normalized_tag = %s", (SINGAPORE,)).fetchone()[0]
+        singapore_later = _results(connection_info, start, SINGAPORE)
         later = story.served_board(end)
         stored_later = _stored(connection_info, start, battles)
         unfinished = story.unfinished_jobs()
@@ -165,19 +166,17 @@ def test_an_unproven_day_shows_its_calculated_end(
     assert first_days == {
         **dict.fromkeys((SWEDEN, KOREA, IRAQ, NEVER_CREDITED), "Partial"),
         SINGAPORE: "Complete", CONTRADICTED: "Inconsistent", CONTRADICTED_FAR: "Inconsistent"}
-    assert later_days == {**first_days, SINGAPORE: "Partial"}
-    # SINGAPORE's proof lost to its 05:44:56 reading is logged once: same
-    # end, same battles. Proof only gained, as NEVER_CREDITED's, is not.
+    assert later_days == first_days
+    # SINGAPORE's 05:44:56 reading changes nothing its day result records,
+    # so none is saved again and no proof is lost. Proof only gained, as
+    # NEVER_CREDITED's, is not logged either.
+    assert singapore_later == singapore
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()
               if line.startswith("{")]
-    lost = [event for event in events if event.get("event") == "day_proof_lost"]
-    assert [(event["player_id"], event["old_state"], event["new_state"], event["end_changed"],
-             event["battles_changed"], datetime.fromisoformat(event["reading_at"]))
-            for event in lost] == [(singapore, "Complete", "Partial", False, False,
-                                    _at(5, 44, 56))]
+    assert [event for event in events if event.get("event") == "day_proof_lost"] == []
     shown = UNPROVEN_SHOWN
     assert _entries(first) == shown
-    # The board was rebuilt for the two days the later readings changed.
+    # The board was rebuilt for the day the later readings changed.
     assert later["snapshot_id"] != first["snapshot_id"]
     assert _entries(later) == {**shown, NEVER_CREDITED: (4640, "confirmed")}
     # Each player's newest day result stores the Reset total the board shows.

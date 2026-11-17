@@ -12,9 +12,10 @@ attacks shows the game crediting the attacker's profile late, which it can
 do until the player stops attacking: it neither confirms nor contradicts. A
 trustworthy reading that fits no value makes the day Uncertain, and no
 later match erases that; nor can a later reading take back a loss an
-earlier one showed landed. Otherwise the last clean match decides; a
-reading during the day taken once its last battle had landed, fitting one
-way only, is one, read before the loss. A reading can only confirm when it
+earlier one showed landed. Otherwise the first clean match showing the
+final loss decides, and a later one changes nothing; a reading during the
+day taken once its last battle had landed, fitting one way only, is one,
+read before the loss. A reading can only confirm when it
 is not trustworthy: a Legend I profile naming Season 0, one read after the
 player's continuous battle logs, or one read after a battle only the
 opponent has reported so far.
@@ -133,7 +134,8 @@ class Verdict:
     # every battle landed and none was in flight, whether or not the loss
     # had landed yet.
     clean: bool = False
-    # Attacks some reading lacked the gains of, the game's attacker-profile lag.
+    # Attacks a reading lacked the gains of, the game's attacker-profile lag,
+    # that withheld a guess: the ended day's, or new-day ones stamped by it.
     lagged: tuple[str, ...] = ()
 
 
@@ -351,15 +353,17 @@ def decide(
     one way only. With a ``floor``, a reading of 5,000, or of 5,000 or the
     raise to it once its new-day battles are taken off, proves neither the
     day's end nor a loss: it decides nothing, and a possible loss only it
-    shows leaves the day unverified. Otherwise the last
-    trustworthy clean match decides, a match proving the day with the loss
-    landed when one is certain or a reading showed it, or, read before the
-    loss, proving its end before the loss; with none, the last clean
-    confirm-only match showing the most loss confirms. Neither it nor a
+    shows leaves the day unverified. Otherwise the first
+    trustworthy clean match showing the final loss decides, a match proving
+    the day with the loss landed when one is certain or a reading showed it,
+    or, read before the loss, proving its end before the loss; with none, the
+    first clean confirm-only match showing the most loss confirms. Neither it nor a
     reading taken from ``unknown_from`` shows a possible loss did not land,
     nor the latter that it did. A reading that fits
     only with a battle not yet shown, or read one way, is a guess: taken
-    when the day's start is proven and no clean reading decided. ``history``
+    when the day's start is proven, no clean reading decided, and no reading
+    lacked the credit of an ended-day attack or a new-day one stamped by the
+    guess's reading. ``history``
     is what the readings during the day left possible, and ``proof`` the
     reading during the day that shows its end (``contradiction_during_day``):
     equal to the end before the loss, it is a clean match read before the
@@ -418,7 +422,7 @@ def _verdict(
         (loss, raised, shown & judged_ids) for loss, raised, shown in history)
     misfit, settled = _settle([item for item in judged if _trusted(item, unknown_from)], history)
     if misfit is not None:
-        return replace(misfit, lagged=lagged)
+        return misfit
     shown = max((shows(item) for item in settled if not floored(item)), default=0)
     matches = [item for item in settled if clean(item)]
     possible = bool(loss_candidates) and not loss_certain
@@ -426,7 +430,7 @@ def _verdict(
         proof.trophies == end_before_loss) else []
     floored_loss = next((item for item in settled if possible and shows(item) > shown), None)
     if floored_loss is not None:
-        return Verdict("unverified", floored_loss.reading, lagged=lagged)
+        return Verdict("unverified", floored_loss.reading)
 
     def confirming(item: _Judged) -> _Judged | None:
         """An untrusted reading, never contradicting, with only the ways the
@@ -449,23 +453,32 @@ def _verdict(
     matches = matches or proven + [item for item in judged if clean(item)]
     if matches:
         loss = max(shown, *(item.loss for item in matches))
-        decider = ([item for item in matches if item.loss == loss] or matches)[-1]
+        # The first match showing the final loss decides: a later one proves
+        # nothing more, so the saved result does not move to it.
+        decider = ([item for item in matches if item.loss == loss] or matches)[0]
         return Verdict(
             # A certain loss must have landed for the whole day; a possible
             # one (a day with no defense slot used) is uncharged until a
             # reading shows otherwise.
             "verified", decider.reading, loss, bool(loss or not loss_certain),
-            (), decider.new_day_change, clean=True, lagged=lagged,
+            (), decider.new_day_change, clean=True,
         )
-    # A reading showing the lag confirms nothing, and no guess stands beside it.
+    # A reading showing the lag confirms nothing, and no guess stands beside
+    # it when a lagging attack is the ended day's, whose credit the guess
+    # counts, or was stamped by the guess's reading, which may lack it too.
+    # A new-day attack stamped after it says nothing of it (#20GCYC90Q, 10
+    # November 2026: three lagging at 05:44:56 took the 05:04:28 guess away).
     guessed = next((item for item in judged if item.matched and not floored(item)), None)
-    if guessed is not None and start_proven and not lagged:
+    stamped = {effect.identity: effect.lands_from for effect in new_day_effects}
+    held = () if guessed is None else tuple(
+        name for name in lagged if stamped.get(name, UNTIMED) <= guessed.reading.read_at)
+    if guessed is not None and start_proven and not held:
         return Verdict(
             "verified", guessed.reading, max(shown, shows(guessed)), False,
-            guessed.missed, guessed.new_day_change, lagged=lagged,
+            guessed.missed, guessed.new_day_change,
         )
-    lagging = [item.reading for item in judged if item.lagged]
-    return Verdict("unverified", lagging[-1] if lagging else None, lagged=lagged)
+    lagging = next((item.reading for item in judged if set(item.lagged) & set(held)), None)
+    return Verdict("unverified", lagging, lagged=held)
 
 
 def first_proof(

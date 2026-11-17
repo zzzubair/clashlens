@@ -169,12 +169,14 @@ def test_proven_once_a_reading_that_fits_nothing_takes_nothing_back() -> None:
 
 def test_proven_once_a_lagging_reading_takes_nothing_back() -> None:
     """A new-day attack for 30 lands from 05:10; at 06:00 the profile still
-    lacks its credit, the game's attacker-profile lag."""
+    lacks its credit, the game's attacker-profile lag. The 05:04 reading
+    still decides the day, which records no lag it did not need."""
     ledger = {**LEDGER, "new_day_effects": (Effect("new", 30, _after(10)),)}
     readings = (Reading(_after(4), 5020), Reading(_after(60), 4990))
     proof = {"readings": readings, "reset_at": RESET, "start_proven": True, **ledger}
-    assert reading_rule.decide(readings, reset_at=RESET, end_before_loss=5020, start_proven=True,
-                               **ledger).lagged == ("new",)
+    decided = reading_rule.decide(readings, reset_at=RESET, end_before_loss=5020,
+                                  start_proven=True, **ledger)
+    assert (decided.outcome, decided.reading, decided.lagged) == ("verified", readings[0], ())
     assert _total(state="Partial", failures=("end_reading_unverified",), end_proof=proof) == (
         ResetTotal(5020, True, "calculated_end", _after(4)))
 

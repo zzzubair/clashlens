@@ -466,6 +466,19 @@ def _ranked(board: dict[str, object] | None) -> dict[str, int]:
     return {entry["tag"]: entry["trophies"] for entry in entries}
 
 
+def _results(connection_info: str, start: datetime, tag: str) -> int:
+    """How many results the player's day from ``start`` has saved."""
+    with psycopg.connect(connection_info) as connection:
+        return connection.execute(
+            """
+            SELECT count(*) FROM ranked_day_versions AS day
+            JOIN players AS player ON player.id = day.player_id
+            WHERE day.ranked_day_start = %s AND player.normalized_tag = %s
+            """,
+            (start, tag),
+        ).fetchone()[0]
+
+
 def _story(connection_info: str, archive_server, monkeypatch, *tags: str,
            wall_clock: object | None = None) -> Story:
     return Story(connection_info, archive_server, monkeypatch,

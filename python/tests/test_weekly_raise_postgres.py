@@ -358,8 +358,9 @@ def test_season_repair_rebuilds_its_boards_within_minutes_and_no_other(
     database_url: str, archive_server, monkeypatch
 ) -> None:
     """The same two players. The Sunday board, now an older one, has an
-    ordinary correction waiting since the Monday readings changed their
-    Saturdays; the Monday board was rebuilt minutes before the repair. Its
+    ordinary correction waiting since a reading at 05:14 that fits nothing,
+    saved late, contradicted LATE_RAISE's Saturday; the Monday board was
+    rebuilt minutes before the repair. Its
     steps run 10 minutes apart: the Monday board, which it corrects, is
     rebuilt with both players confirmed within the half hour, while the
     Sunday correction keeps its 6 hours and the repair waits for it. On 14
@@ -369,6 +370,9 @@ def test_season_repair_rebuilds_its_boards_within_minutes_and_no_other(
     sunday, monday = day(21, season), day(22, season)
     with domain_database(database_url) as connection_info:
         story = _saved_before_the_fix(connection_info, archive_server, monkeypatch)
+        # Before Sunday's own readings count, from 05:15.
+        story.reads(sunday + timedelta(minutes=14), {LATE_RAISE: 5139}, season)
+        story.run_worker()
         story.fixed()
         sunday_waiting = _waiting_corrections(connection_info, sunday)
         database = Database(connection_info)

@@ -830,7 +830,8 @@ def test_a_past_board_rebuild_takes_a_day_that_comes_out_the_same(
     board is rebuilt without them. GONE's week is decided below Legend I
     too, which queues a rebuild. The record then decides SAME's and
     CHANGED's week Legend I again while that rebuild is due, with CHANGED's
-    05:20 settlement check saved only now: CHANGED's Saturday comes out
+    05:20 settlement check saved only now: its Reset reading lacked its
+    last attack's credit, so the check proves its Saturday, which comes out
     different, SAME's the same. The rebuilt board must rank both, and not GONE."""
     saturday, sunday = day(6), day(7)
     tags = (STAYS, SAME, CHANGED, GONE)
@@ -843,7 +844,7 @@ def test_a_past_board_rebuild_takes_a_day_that_comes_out_the_same(
         story.reset(saturday, {tag: (5300, SEASON) for tag in tags})
         story.reads(saturday + timedelta(hours=9, minutes=15), dict.fromkeys(tags, 5060))
         story.reads(sunday - timedelta(minutes=10), {SAME: 5140})
-        story.reset(sunday, {tag: (5140, SEASON) for tag in tags})
+        story.reset(sunday, {**{tag: (5140, SEASON) for tag in tags}, CHANGED: (5100, SEASON)})
         story.reads(sunday + timedelta(minutes=20), dict.fromkeys((STAYS, SAME, GONE), 5140))
         story.run_worker()
         first = story.served_board(sunday)
