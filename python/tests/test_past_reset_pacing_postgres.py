@@ -25,6 +25,8 @@ def _version(
     connection, player_id: int, boundary_at: datetime, version: int, state: str
 ) -> int:
     input_hash = format(version, "x") * 64
+    # Each version starts the day anew, which changes the board and the army
+    # records.
     return int(
         connection.execute(
             """
@@ -32,10 +34,10 @@ def _version(
                 player_id, ranked_day_start, ranked_day_end, official_season_id,
                 season_day_number, season_anchor_rule_version,
                 reconciliation_rule_version, result_hash, version, state, confidence,
-                input_hash, evidence_complete, coverage_complete
+                input_hash, evidence_complete, coverage_complete, start_trophies
             ) VALUES (
                 %s, %s, %s, 'test-season', 1, 'test-anchor', 'test-rules',
-                %s, %s, %s, 'exact', %s, true, true
+                %s, %s, %s, 'exact', %s, true, true, 5000 + %s
             ) RETURNING id
             """,
             (
@@ -46,6 +48,7 @@ def _version(
                 version,
                 state,
                 input_hash,
+                version,
             ),
         ).fetchone()[0]
     )
@@ -200,6 +203,17 @@ def test_past_reset_corrections_within_six_hours_start_one_generation_later(
                 clock.now = NOON + timedelta(hours=1)
                 _record(database, connection, player_id, PAST, 3)
                 latest_version = _record(database, connection, player_id, PAST, 4)
+                # The waiting correction's own list keeps its first input; the
+                # second is a row of its own, so nothing is saved again.
+                assert connection.execute(
+                    """
+                    SELECT jsonb_array_length(pending_inputs),
+                           jsonb_array_length(clashlens_correction_inputs(correction))
+                    FROM boundary_publication_corrections AS correction
+                    WHERE boundary_at = %s AND state = 'queued'
+                    """,
+                    (PAST,),
+                ).fetchall() == [(1, 2)]
                 connection.commit()
                 boundary_publication.reevaluate_boundary_publications(database)
                 assert _latest(connection, PAST)[1] == 2

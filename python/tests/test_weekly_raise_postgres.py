@@ -153,9 +153,9 @@ def test_monday_reset_reading_before_the_weekly_raise(
         "automatic_loss": None, "raise": 0, "attacks": 1, "defenses": 8, "residual": 0,
     }
     assert mondays == {LATE_RAISE: monday_day, LOSS_TOO: monday_day}
-    assert monday_members == {
-        LATE_RAISE: "complete", LOSS_TOO: "complete", RAISE_UNDONE: "inconsistent",
-        LATE_CREDIT: "complete", QUIET: "complete", DEFENDED: "complete"}
+    # RAISE_UNDONE's Inconsistent day shows the same on the board as its
+    # Complete one, so the board keeps the result it pinned.
+    assert monday_members == dict.fromkeys(story.players, "complete")
     # The rest stay Legend I by the record, so members too; with no Tuesday
     # Reset reading their Mondays are unfinished.
     assert tuesday_members == {

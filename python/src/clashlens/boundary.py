@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -10,6 +11,7 @@ from . import board_deadline, boundary_members
 from .analytics import (
     SNAPSHOT_ORDERING_RULE_VERSION,
     follow_official_ties,
+    latest_trophy_changes,
     season_end_placements,
 )
 from .army_decoder import CURRENT_DECODES, DECODER_VERSION
@@ -19,6 +21,7 @@ from .boundary_manifest import (
 from .boundary_manifest import (
     profiles_not_found,
     reset_trophies,
+    shown_total,
     unplayed_profiles,
 )
 from .db import (
@@ -255,12 +258,18 @@ def _supersede_generation(
     generation_id: int,
     generation: int,
     pending_inputs: list[dict[str, Any]] | None = None,
+    affected: tuple[str, ...] = ("snapshot", "army"),
 ) -> tuple[int, int]:
-    """Replace ``generation_id`` with a generation rebuilding both artifacts
-    under the current rules and the board's members now
-    (``boundary_members``), started as the Reset's active correction.
-    Corrections still waiting on the replaced generation wait on its
-    replacement."""
+    """Replace ``generation_id`` with a generation rebuilding the
+    ``affected`` artifacts under the current rules and the board's members
+    now (``boundary_members``), started as the Reset's active correction;
+    the published other one is kept. Corrections still waiting on the
+    replaced generation wait on its replacement."""
+    # An army-only rebuild keeps the board, and with it the board's rule.
+    ordering = None if "snapshot" in affected else connection.execute(
+        "SELECT ordering_rule_version FROM boundary_publication_generations WHERE id = %s",
+        (generation_id,),
+    ).fetchone()[0]
     connection.execute(
         """
         UPDATE boundary_publication_generations
@@ -286,7 +295,13 @@ def _supersede_generation(
         generation=generation + 1,
         supersedes_id=generation_id,
         pending_inputs=pending_inputs,
+        ordering_rule_version=None if ordering is None else text_value(ordering),
+        affected_artifacts=list(affected),
     )
+    for artifact in ("snapshot", "army"):
+        if artifact not in affected:
+            boundary_members.inherit_artifact(
+                connection, new_id, generation_id, artifact, published=True)
     connection.execute(
         """
         UPDATE boundary_publication_corrections
@@ -300,9 +315,9 @@ def _supersede_generation(
         INSERT INTO boundary_publication_corrections
             (boundary_at, source_generation_id, generation_id,
              affected_artifacts, state, started_at)
-        VALUES (%s, %s, %s, ARRAY['snapshot', 'army'], 'active', clock_timestamp())
+        VALUES (%s, %s, %s, %s, 'active', clock_timestamp())
         """,
-        (boundary_at, generation_id, new_id),
+        (boundary_at, generation_id, new_id, list(affected)),
     )
     return new_id, new_generation
 
@@ -518,7 +533,9 @@ def _record_boundary_generation(
     were taken joins, at once while nothing froze, else as a changed member.
     A generation is reused until either artifact has frozen; after that a
     changed member starts one superseding generation and later corrections
-    coalesce into it.
+    coalesce into it. A member is changed only for the artifacts whose row
+    for it the new result changes (``_changed_artifacts``): a result showing
+    what the pinned one shows leaves the pin as it is and rebuilds nothing.
     """
     boundary_at = boundary_at.astimezone(UTC)
     # A sweep is saved with its members in one transaction and never changes,
@@ -564,7 +581,8 @@ def _record_boundary_generation(
         generation_id, generation = int(current[0]), int(current[1])
         prior_member = connection.execute(
             """
-            SELECT ranked_day_version_id, ranked_day_input_hash
+            SELECT ranked_day_version_id, ranked_day_input_hash,
+                   snapshot_status, army_status
             FROM boundary_publication_generation_members
             WHERE generation_id = %s AND player_id = %s
             FOR UPDATE
@@ -582,12 +600,43 @@ def _record_boundary_generation(
                 raise LockNotAvailable(
                     f"Reset {boundary_at.isoformat()} queues a new member only under its full lock"
                 )
-            prior_member = (None, None)
-        changed = (
-            prior_member[0] is None
-            or int(prior_member[0]) != int(ranked_day_version_id)
-            or text_value(prior_member[1]) != ranked_day_input_hash
-        )
+            prior_member = (None, None, None, None)
+        if prior_member[0] is None:
+            changes = ["snapshot", "army"]
+        elif (int(prior_member[0]), text_value(prior_member[1])) == (
+                int(ranked_day_version_id), ranked_day_input_hash):
+            changes = []
+        else:
+            # A correction waiting with a newer result of theirs applies it.
+            waiting = connection.execute(
+                """
+                SELECT (input.value ->> 'ranked_day_version_id')::bigint
+                FROM boundary_publication_corrections AS correction
+                CROSS JOIN LATERAL jsonb_array_elements(clashlens_correction_inputs(correction))
+                    WITH ORDINALITY AS input (value, position)
+                WHERE correction.boundary_at = %s AND correction.source_generation_id = %s
+                  AND correction.state IN ('queued', 'pending_inputs')
+                  AND input.value ->> 'player_id' = %s
+                  AND input.value ? 'ranked_day_version_id'
+                ORDER BY correction.id DESC, input.position DESC
+                LIMIT 1
+                """,
+                (boundary_at, generation_id, str(player_id)),
+            ).fetchone()
+            changes = _changed_artifacts(
+                database, connection, boundary_at=boundary_at, player_id=player_id,
+                pinned=(int(prior_member[0]), text_value(prior_member[2]),
+                        text_value(prior_member[3])) if waiting is None
+                else (int(waiting[0]), None, None),
+                ranked_day_version_id=ranked_day_version_id, generation_id=generation_id)
+            if not changes:
+                # The board and its army records would show what they show.
+                if not shared:
+                    _try_enqueue_boundary_artifacts(
+                        database, connection, boundary_at=boundary_at,
+                        generation_id=generation_id)
+                return True
+        changed = bool(changes)
         frozen_artifacts = [
             kind
             for kind, manifest_id in (
@@ -603,11 +652,11 @@ def _record_boundary_generation(
                 kind for kind in frozen_artifacts if kind in affected
             ]
         elif changed and (frozen_artifacts or joins):
-            # A ranked-day source feeds both artifacts. Once either
-            # manifest has frozen, reprocess both instead of inheriting an
-            # army identity built from the previous source version. A new
+            # Once either manifest has frozen, the member's pin cannot
+            # change (migration 0011): a correction rebuilds each changed
+            # artifact from the new result, and inherits the other one. A new
             # member needs both rebuilt, frozen or not.
-            frozen_artifacts = ["snapshot", "army"]
+            frozen_artifacts = changes
         queued = (
             connection.execute(
                 """
@@ -661,22 +710,22 @@ def _record_boundary_generation(
                 """
                 UPDATE boundary_publication_generations
                 SET affected_artifacts = ARRAY(
-                        SELECT DISTINCT unnest(affected_artifacts || ARRAY['snapshot']::text[])
+                        SELECT DISTINCT unnest(affected_artifacts || %s::text[])
                     ),
                     updated_at = clock_timestamp()
                 WHERE id = %s
                 """,
-                (generation_id,),
+                (changes, generation_id),
             )
             connection.execute(
                 """
                 UPDATE boundary_publication_corrections
                 SET affected_artifacts = ARRAY(
-                        SELECT DISTINCT unnest(affected_artifacts || ARRAY['snapshot']::text[])
+                        SELECT DISTINCT unnest(affected_artifacts || %s::text[])
                     )
                 WHERE id = %s
                 """,
-                (active_target_correction[0],),
+                (changes, active_target_correction[0]),
             )
             _try_enqueue_boundary_artifacts(database,
                 connection, boundary_at=boundary_at, generation_id=generation_id
@@ -753,6 +802,7 @@ def _record_boundary_generation(
                         "input_hash": ranked_day_input_hash,
                     }
                 ],
+                affected=tuple(frozen_artifacts),
             )
     boundary_members.record_day(
         database, connection, generation_id=generation_id, boundary_at=boundary_at,
@@ -763,6 +813,117 @@ def _record_boundary_generation(
             connection, boundary_at=boundary_at, generation_id=generation_id
         )
     return True
+
+
+# Member statuses whose day the board ranks, by the member's reading.
+_RANKED_STATUSES = frozenset({"complete", "partial", "inconsistent", "malformed"})
+# A battle log event's record of the poll that last reported it, which moves
+# with each poll; the army build reads none of it.
+_POLL_KEYS = frozenset({"source_observation_id", "source_evidence_id", "source_row_id",
+                        "source_observed_at"})
+
+
+def _changed_artifacts(
+    database: Database, connection: Any, *, boundary_at: datetime, player_id: int,
+    pinned: tuple[int, str | None, str | None], ranked_day_version_id: int,
+    generation_id: int,
+) -> list[str]:
+    """The artifacts whose row for ``player_id`` changes if their day result
+    ``ranked_day_version_id`` replaces ``pinned`` (the pinned result and the
+    member's snapshot and army status, worked out when None).
+
+    The board's row is whether it ranks the member by their day, the Reset
+    total and mark the result stores (``shown_total``) and, once the board
+    of ``generation_id`` froze, the latest trophy change it froze,
+    which orders equal totals, against the one a rebuild would freeze now; a
+    result storing no total changes it. The army records' row is whether the
+    member's army waits (``army_status`` pending), the day's start and the
+    battles its battle log lists, with what the army build reads of them; an
+    army saved again for one of those battles is the decode check's
+    (``boundary_publication``). A day turning Complete from Partial, or
+    Inconsistent, changes neither. On 10 November 2026, 10,090 day results
+    were saved again after the first board and 1 changed its end: each
+    rebuilt the whole board and its army records."""
+    def statuses(version_id: int) -> tuple[str, str]:
+        snapshot = boundary_members.snapshot_status(
+            connection, player_id=player_id, ranked_day_version_id=version_id,
+            boundary_at=boundary_at)
+        return snapshot, boundary_members.army_status(
+            database, connection, player_id=player_id, ranked_day_version_id=version_id,
+            snapshot_status=snapshot)
+
+    snapshot, army = statuses(ranked_day_version_id)
+    if pinned[1] is None:
+        pinned = (pinned[0], *statuses(pinned[0]))
+    rows = {
+        int(version_id): (None if answer is None else shown_total(answer, None), start, sorted(
+            json.dumps({key: value for key, value in event.items() if key not in _POLL_KEYS},
+                       sort_keys=True)
+            for event in (battles if isinstance(battles, list) else [])
+            if isinstance(event, dict)))
+        for version_id, answer, start, battles in connection.execute(
+            """
+            SELECT ranked.id, ranked.formula_components -> 'reset_total', ranked.start_trophies,
+                   (SELECT log.battles FROM api_player_daily_logs AS log
+                    WHERE log.ranked_day_version_id = ranked.id ORDER BY log.id DESC LIMIT 1)
+            FROM ranked_day_versions AS ranked
+            WHERE ranked.id = ANY(%s::bigint[])
+            """,
+            ([pinned[0], ranked_day_version_id],),
+        ).fetchall()
+    }
+    before, after = rows.get(pinned[0]), rows[ranked_day_version_id]
+    if before is None:
+        return ["snapshot", "army"]
+
+    def ranks(status: str) -> str:
+        return "ranked" if status in _RANKED_STATUSES else status
+
+    affected = []
+    if None in (before[0], after[0]) or (ranks(pinned[1]), before[0]) != (
+            ranks(snapshot), after[0]) or _tie_moved(
+                connection, boundary_at, player_id, generation_id):
+        affected.append("snapshot")
+    if (pinned[2] == "pending", *before[1:]) != (army == "pending", *after[1:]):
+        affected.append("army")
+    return affected
+
+
+def _tie_moved(
+    connection: Any, boundary_at: datetime, player_id: int, generation_id: int
+) -> bool:
+    """Whether the player's latest trophy change before the Reset, which
+    orders equal totals, differs from the one the generation's board froze:
+    its own, or for an army-only rebuild the board it keeps."""
+    manifest_id = connection.execute(
+        """
+        SELECT COALESCE(generation.snapshot_manifest_id, CASE
+                   WHEN NOT 'snapshot' = ANY(generation.affected_artifacts)
+                   THEN source.snapshot_manifest_id END)
+        FROM boundary_publication_generations AS generation
+        LEFT JOIN boundary_publication_generations AS source
+          ON source.id = generation.source_generation_id
+        WHERE generation.id = %s
+        """,
+        (generation_id,),
+    ).fetchone()[0]
+    if manifest_id is None:
+        return False
+    frozen = connection.execute(
+        """
+        SELECT input_identity ->> 'latest_change_at', input_identity ? 'latest_change_at'
+        FROM boundary_publication_manifest_entries(%s)
+        WHERE player_id = %s
+        """,
+        (manifest_id, player_id),
+    ).fetchone()
+    # A board frozen under an older order is rebuilt for it elsewhere.
+    if frozen is None or not frozen[1]:
+        return False
+    now = latest_trophy_changes(
+        connection, day_start=boundary_at - RANKED_DAY_DURATION, cutoff=boundary_at,
+        player_ids=[player_id]).get(player_id)
+    return (None if frozen[0] is None else datetime.fromisoformat(frozen[0])) != now
 
 
 def queue_board_rebuilds(

@@ -802,7 +802,10 @@ def test_days_saved_unfinished_before_the_fix_finish_at_the_next_reset(
     }, {15: "partial", 16: "partial"})
     assert unfinished == []
     assert days == {number: ("Complete", [], 5000, 5000) for number in range(8, 17)}
-    assert boards == {number: "complete" for number in range(9, 18)}
+    # Day 14 ends at 5,000 either way, so board 15 shows it the same and
+    # keeps the result it pinned.
+    assert boards == {number: "partial" if number == 15 else "complete"
+                      for number in range(9, 18)}
 
 
 STAYS, SAME, CHANGED, GONE = "#2GG", "#8GG", "#9GG", "#PGG"

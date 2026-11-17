@@ -459,6 +459,7 @@ def test_boundary_generation_coalesces_population_and_corrections(
                 )
                 player_id, _ = players[0]
                 corrected_hash = "d" * 64
+                # A new start changes the board and the army records.
                 corrected_version = int(
                     connection.execute(
                         """
@@ -466,9 +467,11 @@ def test_boundary_generation_coalesces_population_and_corrections(
                             player_id, ranked_day_start, ranked_day_end, official_season_id,
                             season_day_number, season_anchor_rule_version,
                             reconciliation_rule_version, result_hash, version, state,
-                            confidence, input_hash, evidence_complete, coverage_complete
+                            confidence, input_hash, evidence_complete, coverage_complete,
+                            start_trophies
                         ) VALUES (%s, %s, %s, 'test-season', 1, 'test-anchor',
-                                  'test-rules', %s, 2, 'Complete', 'exact', %s, true, true)
+                                  'test-rules', %s, 2, 'Complete', 'exact', %s, true, true,
+                                  5001)
                         RETURNING id
                         """,
                         (
@@ -1093,7 +1096,7 @@ def test_boundary_correction_recovery_activates_pending_inputs(
             database.close()
 
 
-def test_source_correction_marks_both_artifacts_when_one_manifest_is_frozen(
+def test_source_correction_marks_what_changed_when_one_manifest_is_frozen(
     database_url: str,
 ) -> None:
     with domain_database(database_url) as connection_info:
@@ -1163,7 +1166,8 @@ def test_source_correction_marks_both_artifacts_when_one_manifest_is_frozen(
                     (generation,),
                 ).fetchone()
                 assert correction is not None
-                assert tuple(correction) == (["snapshot", "army"], "queued")
+                # The new result changes the board, not the army records' battles.
+                assert tuple(correction) == (["snapshot"], "queued")
         finally:
             database.close()
 
