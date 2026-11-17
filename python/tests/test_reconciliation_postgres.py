@@ -299,7 +299,9 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                     (DAY_END,),
                 ).fetchone()
                 assert correction[0] == 1
-                assert set(correction[1]) == {"snapshot", "army"}
+                # The corrected end changes the board, not the battles the
+                # army records read.
+                assert set(correction[1]) == {"snapshot"}
                 assert (
                     connection.execute(
                         "SELECT count(*) FROM boundary_publication_corrections WHERE boundary_at = %s",

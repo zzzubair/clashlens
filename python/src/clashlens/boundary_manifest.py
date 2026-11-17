@@ -866,12 +866,17 @@ def reset_trophies(
     stored = {player_id: answer for player_id, answer in days.items() if answer is not None}
     stored.update(_saved_before(connection, boundary_at, {
         player_id: readings[player_id] for player_id in days.keys() - stored.keys()}))
-    return {
-        player_id: (int(answer["value"]), bool(answer["proven"]))
-        if (answer := stored.get(player_id)) is not None and answer["value"] is not None
-        else (reading[3], False)
-        for player_id, reading in readings.items()
-    }
+    return {player_id: shown_total(stored.get(player_id), reading[3])
+            for player_id, reading in readings.items()}
+
+
+def shown_total(answer: Mapping[str, Any] | None, reading: int | None) -> tuple[int | None, bool]:
+    """The trophies and mark a board entry shows from a day result's stored
+    Reset total ``answer``: its value and whether it is proven, or the
+    entry's ``reading``, uncertain, when it stores no value."""
+    if answer is None or answer["value"] is None:
+        return reading, False
+    return int(answer["value"]), bool(answer["proven"])
 
 
 def _saved_before(

@@ -77,9 +77,9 @@ def test_monday_corrections_battles_and_army_counts_save_only_what_changed(
     """Five Sundays end at 4,940 and are raised to 5,000 at the Monday Reset,
     read at 05:13, before the raise, as the last Reset readings were on 12
     October 2026. The 05:20 check shows the raise, so every Sunday changes
-    after the Monday board's first build and joins it through corrections at
-    the hourly rebuild. Each Sunday saves Complete and the board ranks each
-    at 4,940, confirmed, as before. Battle logs keep reporting Sunday's
+    after the Monday board's first build. Each Sunday saves Complete and the
+    board ranks each at 4,940, confirmed, as before: no board row changes, so
+    no correction is saved. Battle logs keep reporting Sunday's
     battles, and Sunday's armies are counted again: neither saves an
     unchanged row again, and the counts read the same. The days must have
     ended by the real clock, so this is the previous Season's Monday,
@@ -121,26 +121,17 @@ def test_monday_corrections_battles_and_army_counts_save_only_what_changed(
     assert _ranked(board) == dict.fromkeys(PLAYERS, 4940)
     assert {entry["confidence"] for entry in board["entries"]} == {"confirmed"}
 
-    # Each Sunday that changed after a build is an input of a correction, in
-    # the order the changes arrived. A correction's own list keeps only the
-    # input it was created with; each one added later is a row of its own,
-    # so adding one saves no list again.
-    corrections = [inputs for inputs, _ in after["corrections"] if inputs]
-    assert len({entry["player_id"] for inputs in corrections for entry in inputs}) == len(PLAYERS)
-    for inputs in corrections:
-        versions = [entry["ranked_day_version_id"] for entry in inputs]
-        assert versions == sorted(versions)
-    assert all(len(listed) <= 1 for _, listed in after["corrections"])
-    assert max(len(inputs) for inputs in corrections) == len(PLAYERS)
+    # Each Sunday changed after the build, but not what the board or its army
+    # records show: no correction is saved.
+    assert after["corrections"] == []
 
     # Every battle was reported again by the 05:20 and 05:21 checks: none
     # is saved again.
     assert before["battles"] and after["battles"] == before["battles"]
 
-    # Sunday's armies were counted again from its new saved days, with the
-    # same battles: the same counts, and no row saved again.
-    assert len(set(before["counted"])) == len(set(after["counted"])) == 1
-    assert after["counted"] != before["counted"]
+    # The army records keep Sunday's saved days, so counting Sunday's armies
+    # again finds the same facts: the same counts, and no row saved again.
+    assert len(set(before["counted"])) == 1 and after["counted"] == before["counted"]
     assert all(before["counts"][table] for table in COUNTS)
     assert after["counts"] == before["counts"]
     assert armies_after == armies_before
