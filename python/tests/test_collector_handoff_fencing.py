@@ -10,7 +10,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import psycopg
 import pytest
 from collector_support import _Client, _collector, _Reservation, _Spool, _Store
 
@@ -553,27 +552,6 @@ def _poll_profile(collector: Any) -> Any:
         lane="ordinary",
         endpoints=("profile",),
     )
-
-
-def test_failed_unchanged_check_still_saves_the_response() -> None:
-    class DownStore(_Store):
-        checks = 0
-
-        def record_unchanged_response(self, _handoff: Any) -> bool:
-            self.checks += 1
-            raise psycopg.OperationalError("database unavailable")
-
-    spool = _Spool()
-    store = DownStore(spool)
-    collector = _collector(spool, store, _Client(spool))
-
-    async def scenario() -> list[list[str]]:
-        return [await _poll_profile(collector), await _poll_profile(collector)]
-
-    assert asyncio.run(scenario()) == [["recorded"], ["recorded"]]
-    assert store.checks == 1
-    assert [handoff.endpoint for handoff in store.handoffs] == ["profile"] * 2
-    assert spool.events[-3:] == ["handoff", "database", "ack"]
 
 
 def test_cancelled_unchanged_check_still_saves_the_response() -> None:

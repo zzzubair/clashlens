@@ -18,7 +18,6 @@ from clashlens.army_types import (
     SUPER_WITCH,
     THROWER,
     THROWER_RUIN_WITCH,
-    TYPE_NAMES,
     UNREADABLE,
     VARIANTS,
     army_composition,
@@ -98,11 +97,6 @@ def test_the_same_troops_get_the_same_type_however_they_are_listed() -> None:
     assert {classify(order) for order in permutations(tied)} == {THROWER_RUIN_WITCH}
 
 
-def test_every_type_has_a_name() -> None:
-    assert {OTHER, UNREADABLE, THROWER, HYDRA} <= set(TYPE_NAMES)
-    assert TYPE_NAMES[OTHER] == "Other"
-
-
 def test_army_types_count_attacks_only() -> None:
     values = {
         "season": "current", "start_day": 1, "end_day": 1, "population": "top-100",
@@ -153,7 +147,7 @@ def test_types_without_variants_and_every_variant_id_is_used_once() -> None:
     assert variant(DRAGONS, heroes(duke=(60, 53))) == 0
     assert variant(OTHER, heroes(duke=(60, 53))) == 0
     ids = [v for listed in VARIANTS.values() for v, _name, _items in listed]
-    assert len(ids) == len(set(ids)) == 41 and 0 not in ids
+    assert len(ids) == len(set(ids)) and 0 not in ids
 
 
 

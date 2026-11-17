@@ -177,42 +177,6 @@ def test_claim_job_applies_each_endpoint_parser_contract(
             database.close()
 
 
-def test_battle_parser_migration_is_repeatable_and_changes_no_saved_work(
-    database_url: str, archive_server
-) -> None:
-    from pathlib import Path
-
-    migration = (
-        Path(__file__).parents[2] / "deploy/migrations/0060_battle_parser_v3.sql"
-    ).read_text(encoding="utf-8")
-    with domain_database(database_url) as connection_info:
-        for index, parser_version in enumerate(
-            ("supercell-source-parser-v2", "supercell-battle-parser-v3")
-        ):
-            store_observation(
-                connection_info,
-                archive_server,
-                occurrence_key=f"migration-0060-{index}",
-                endpoint="battle_log",
-                body=b"{}",
-                observed_at=datetime(2026, 8, 3, 19, 35, 1, tzinfo=UTC),
-                normalized_tag="#2PP",
-                parser_version=parser_version,
-            )
-        query = """
-            SELECT parser_version, claim_compatibility_version, status
-            FROM python_processing_jobs ORDER BY id
-        """
-        with psycopg.connect(connection_info, autocommit=True) as connection:
-            before = connection.execute(query).fetchall()
-            connection.execute(migration)
-            assert connection.execute(query).fetchall() == before
-        assert before == [
-            ("supercell-source-parser-v2", 2, "pending"),
-            ("supercell-battle-parser-v3", 7, "pending"),
-        ]
-
-
 def test_replay_observation_claim_carries_source_metadata_and_processes(
     database_url: str, archive_server
 ) -> None:

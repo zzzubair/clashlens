@@ -25,7 +25,6 @@ from domain_test_support import (
 from fastapi.testclient import TestClient
 from player_season_summaries_postgres_support import _player
 from private_api_support import NOW, NOW_SECONDS, TS_CURRENT, signed_headers
-from psycopg.types.json import Jsonb
 from reconciliation_postgres_support import _processor as _real_processor
 from reconciliation_postgres_support import _store_baseline_pair
 from season_detail_retirement_postgres_support import (
@@ -44,11 +43,6 @@ from clashlens import (
 )
 from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
-from clashlens.army_analytics import (
-    CATEGORIES,
-    ArmyAnalyticsSelection,
-    build_army_result,
-)
 from clashlens.army_history import HISTORY_READ_CATEGORIES
 from clashlens.army_season_summaries import materialize_army_season
 from clashlens.season_retirement import finalize_season_detail, retire_season_detail
@@ -384,8 +378,8 @@ def test_all_players_keep_28_daily_trophy_entries_and_totals(database_url):
             api.close()
 
 
-def test_measure_retained_season_bytes_against_label_based_rows(database_url):
-    """A repeatable 224-attack season cost with unit quantities."""
+def test_a_224_attack_season_counts_known_and_unknown_units(database_url):
+    """Every eighth attack uses units the catalogue does not know."""
     specs = []
     for index in range(224):
         code = UNKNOWN_CODE if index % 8 == 0 else f"h0p9e14_32u{1 + index % 5}x58s1x2i{1 + index % 4}x0"
@@ -395,29 +389,6 @@ def test_measure_retained_season_bytes_against_label_based_rows(database_url):
         _seed(connection, offense=specs)
         for lens in ("offense", "defense"):
             materialize_army_season(connection, MEASURE_SEASON, lens)
-        connection.execute("CREATE TEMP TABLE history_v1 (LIKE army_season_summaries INCLUDING ALL)")
-        connection.execute("ALTER TABLE history_v1 DROP COLUMN unit_usage")
-        cursor = connection.execute("SELECT * FROM army_season_summaries WHERE category='troops'")
-        columns = [column.name for column in cursor.description]
-        for values in cursor.fetchall():
-            template = dict(zip(columns, values))
-            for category in sorted(CATEGORIES):
-                record = dict(template)
-                record.pop("unit_usage")
-                record["category"] = category
-                record["projection_version"] = "army-season-summary-v1"
-                selection = ArmyAnalyticsSelection(record["lens"], MEASURE_SEASON, 1, 28, "all", category, "usage-rate")
-                result = build_army_result([fact(UNKNOWN_CODE if i % 8 == 0 else f"h0p9e14_32u{1 + i % 5}x58s1x2i{1 + i % 4}x0", 3 if i % 2 else 2, 100 if i % 2 else 80) for i in range(224)] if record["lens"] == "offense" else [], selection)
-                record["result_rows"] = Jsonb(result["rows"])
-                record["army_states"] = Jsonb(record["army_states"])
-                connection.execute(f"INSERT INTO history_v1 ({', '.join(record)}) VALUES ({', '.join(['%s'] * len(record))})", list(record.values()))
-        measurements = {}
-        for label, table in (("previous", "history_v1"), ("id_based", "army_season_summaries")):
-            count, size = connection.execute(f"SELECT count(*), sum(pg_column_size(s)) FROM {table} s").fetchone()
-            allocated = connection.execute("SELECT pg_total_relation_size(%s)", (table,)).fetchone()[0]
-            measurements[label] = {"rows": count, "retained_row_bytes": size, "allocated_bytes": allocated}
-        measurements["row_growth_bytes"] = measurements["id_based"]["retained_row_bytes"] - measurements["previous"]["retained_row_bytes"]
-        print("HISTORY_STORAGE " + json.dumps(measurements, sort_keys=True))
         connection.commit()
         api = ApiDatabase(ci)
         try:

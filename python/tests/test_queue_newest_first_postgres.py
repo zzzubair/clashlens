@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import psycopg
 import pytest
@@ -648,47 +647,3 @@ def test_collector_owned_observations_cannot_be_finished_as_superseded(
             assert [text(row[0]) for row in statuses] == ["leased"] * 3
         finally:
             database.close()
-
-
-def test_collector_work_observation_lookups_are_available_and_repeatable(
-    database_url: str,
-) -> None:
-    migration = (
-        Path(__file__).parents[2]
-        / "deploy/migrations/0044_collector_work_observation_lookup.sql"
-    )
-    fields = (
-        "profile_observation_id",
-        "battle_log_observation_id",
-        "league_history_observation_id",
-    )
-    names = [f"collector_work_{field.removesuffix('_id')}_lookup" for field in fields]
-    with domain_database(database_url) as connection_info:
-        with psycopg.connect(connection_info, autocommit=True) as connection:
-            connection.execute(migration.read_text())
-            rows = connection.execute(
-                """
-                SELECT relation.relname, method.amname, attribute.attname,
-                       definition.indisvalid, definition.indisready
-                FROM pg_index AS definition
-                JOIN pg_class AS relation ON relation.oid = definition.indexrelid
-                JOIN pg_am AS method ON method.oid = relation.relam
-                JOIN pg_attribute AS attribute
-                  ON attribute.attrelid = definition.indrelid
-                 AND attribute.attnum = definition.indkey[0]
-                WHERE definition.indrelid = 'collector_work'::regclass
-                  AND definition.indnkeyatts = 1
-                  AND relation.relname = ANY(%s)
-                """,
-                (names,),
-            ).fetchall()
-            assert {
-                text(row[0]): (text(row[1]), text(row[2]), row[3], row[4])
-                for row in rows
-            } == {
-                name: ("btree", field, True, True)
-                for name, field in zip(names, fields, strict=True)
-            }
-            assert connection.execute(
-                "SELECT count(*) FROM clash_lens_schema_migrations WHERE version = 44"
-            ).fetchone()[0] == 1

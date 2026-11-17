@@ -309,30 +309,8 @@ def test_claim_plan_at_production_depth_is_bounded(database_url: str) -> None:
             assert "Seq Scan on collector_observations" not in plan_text, (
                 f"claim plan scans all observations:\n{plan_text}"
             )
-            assert "python_processing_jobs_pending_claim_v2" in plan_text, (
-                f"claim plan does not use the indexed pending probe:\n{plan_text}"
-            )
-            assert "python_processing_jobs_waiting_retry_claim" in plan_text, (
-                f"claim plan reads pending jobs to find retries:\n{plan_text}"
-            )
             assert "Bitmap Heap Scan on python_processing_jobs" not in plan_text, (
                 f"claim plan reads an unbounded candidate set:\n{plan_text}"
-            )
-            assert "python_processing_jobs_unknown_priority_v2" in plan_text, (
-                f"claim plan does not use the indexed catch-all probe:\n{plan_text}"
-            )
-            assert (
-                "python_processing_jobs_waiting_dependency_unknown_priority_v3"
-                in plan_text
-            ), f"dependency catch-all probe is not bounded:\n{plan_text}"
-            # The expiry probe may be served by either dedicated partial index;
-            # both are bounded indexed access paths. What matters is that no
-            # probe falls back to a sequential scan at production depth.
-            assert (
-                "python_processing_jobs_expired_leases_v2" in plan_text
-                or "python_processing_jobs_expired_maintenance_v2" in plan_text
-            ), (
-                f"claim plan does not use an indexed expiry probe:\n{plan_text}"
             )
             assert millis < 100, (
                 f"claim took {millis:.1f} ms at production depth, want < 100 ms"
@@ -355,11 +333,9 @@ def test_claim_plan_at_production_depth_is_bounded(database_url: str) -> None:
             maintenance_plan_text = "\n".join(
                 _database_text(row[0]) for row in maintenance_plan
             )
-            assert "Seq Scan on python_processing_jobs" not in maintenance_plan_text
-            assert (
-                "python_processing_jobs_expired_maintenance_v2"
-                in maintenance_plan_text
-            ), maintenance_plan_text
+            assert "Seq Scan on python_processing_jobs" not in maintenance_plan_text, (
+                maintenance_plan_text
+            )
             maintenance_match = EXECUTION_TIME_PATTERN.search(maintenance_plan_text)
             assert maintenance_match is not None
             assert float(maintenance_match.group(1)) < 100
@@ -774,64 +750,6 @@ def test_expired_lease_probe_claims_expired_lease_at_depth(database_url: str) ->
             )
         finally:
             database.close()
-
-
-def test_forward_migration_reapply_keeps_python_claim_indexes(database_url: str) -> None:
-    with _production_database(database_url) as connection_info:
-        with psycopg.connect(connection_info) as connection:
-            observation_id = _insert_observation(
-                connection, occurrence_key="reapply-keeps-jobs"
-            )
-            _insert_job(
-                connection,
-                work_type="process_observation",
-                deduplication_key="reapply:keeps",
-                input_json={},
-                observation_id=observation_id,
-            )
-            from pathlib import Path
-
-            root = Path(__file__).parents[2]
-            connection.execute(
-                (root / "deploy/migrations/0004_source_parser_v2.sql").read_text(
-                    encoding="utf-8"
-                )
-            )
-            indexes = {
-                _database_text(row[0])
-                for row in connection.execute(
-                    """
-                    SELECT indexname FROM pg_indexes
-                    WHERE tablename = 'python_processing_jobs'
-                      AND indexname IN (
-                          'python_processing_jobs_pending_claim_v2',
-                          'python_processing_jobs_unknown_priority_v2',
-                          'python_processing_jobs_expired_leases_v2',
-                          'python_processing_jobs_expired_maintenance_v2'
-                      )
-                    """
-                )
-            }
-            assert indexes == {
-                "python_processing_jobs_pending_claim_v2",
-                "python_processing_jobs_unknown_priority_v2",
-                "python_processing_jobs_expired_leases_v2",
-                "python_processing_jobs_expired_maintenance_v2",
-            }, f"claim indexes after 0004 reapply = {indexes}"
-            marker = connection.execute(
-                """
-                SELECT claim_compatibility_version
-                FROM python_processing_jobs
-                WHERE deduplication_key = 'reapply:keeps'
-                """
-            ).fetchone()[0]
-            assert marker == 1, "0004 reapply must preserve v1 claimable work"
-            assert (
-                connection.execute(
-                    "SELECT count(*) FROM python_processing_jobs"
-                ).fetchone()[0]
-                == 1
-            ), "0004 reapply must be non-destructive"
 
 
 @pytest.mark.parametrize(

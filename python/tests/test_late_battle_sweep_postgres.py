@@ -45,7 +45,7 @@ from clashlens.job_contracts import (
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
 )
-from clashlens.late_battle_sweep import LateBattleSweep, SweepState, sweep_late_battles
+from clashlens.late_battle_sweep import LateBattleSweep, sweep_late_battles
 from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
 from clashlens.reconciliation import RECONCILIATION_RULE_VERSION
 
@@ -409,12 +409,6 @@ def _recorded_sweeps(connection_info: str) -> list:
     with psycopg.connect(connection_info) as connection:
         return [row[0] for row in connection.execute(
             "SELECT boundary_at FROM late_battle_sweeps ORDER BY boundary_at")]
-
-
-def test_a_sweep_result_names_its_state() -> None:
-    assert SweepState.after(None) is SweepState.WAITING
-    assert SweepState.after((3, 0)) is SweepState.COMPLETE
-    assert SweepState.after((2, 1)) is SweepState.RETRYING
 
 
 def test_failed_player_is_rolled_back_logged_and_retried_next_run(

@@ -241,27 +241,6 @@ describe("player route historical independence", () => {
     expect(html).toContain(`<option value="${SEASON}"`);
   });
 
-  it("does not show current-day content for a requested missing season", async () => {
-    const html = await renderRoute({
-      requestedTag: TAG,
-      player: PLAYER,
-      error: null,
-      refreshStatus: null,
-      refreshError: null,
-      noJsIdempotencyKey: "test-idempotency-key",
-      lookup: { tag: TAG, state: "tracking" },
-      lookupError: null,
-      seasons: SEASONS,
-      selectedSeason: "missing",
-      historical: null,
-      historicalError: {
-        error: { code: "missing", message: "That season is unavailable." },
-      },
-    });
-    expect(html).not.toContain("Current Legend day");
-    expect(html).not.toContain("Legend season");
-  });
-
   it("says only that a missing summary is unavailable and keeps a known final count", async () => {
     const official = await renderSeason({
       ...SUMMARY,
@@ -401,7 +380,6 @@ describe("player route historical independence", () => {
     );
     expect(html.match(/class="battle-row /g)).toHaveLength(9);
     expect(html).toContain("Opponent 9");
-    expect(html).not.toContain("Empty attack slot 9");
     expect(html).toContain(
       "Clash of Clans returned 9 attacks for this day, more than the usual 8, so this day is uncertain.",
     );
@@ -455,7 +433,6 @@ describe("automatic tag lookup", () => {
     expect(mocks.startPlayerLookup).toHaveBeenCalledExactlyOnceWith("198.51.100.9", TAG);
     const html = await renderRoute(result);
     expect(html).toContain("Checking this tag");
-    expect(html).not.toContain("Start tracking");
     expect(html).toContain("Check progress");
   });
 
@@ -492,7 +469,6 @@ describe("automatic tag lookup", () => {
     const html = await renderRoute(result);
     expect(html).toContain("The submitted player tag is not valid.");
     expect(html).toContain("Check the tag and try again.");
-    expect(html).not.toContain("Try refreshing");
   });
 
   it.each([
@@ -849,7 +825,6 @@ describe("automatic tag lookup", () => {
       expect(text).toContain("Day 2");
       // The unconfirmed day is numbered from the current Season's start.
       expect(text).toContain("Day 1");
-      expect(text).not.toContain("Date only");
       expect(text).not.toContain("Day 17");
       expect(displayed.seasonDays).toEqual([confirmedDay]);
       if (trackingState === "tracking") {
@@ -917,7 +892,6 @@ describe("automatic tag lookup", () => {
     expect(html).toContain(
       "Season Clasher is in Legend League but hasn&#x27;t played a Legend League battle this Season.",
     );
-    expect(html).not.toContain("This page updates as soon as they play.");
     expect(html).toContain("Synthetic Clan");
     expect(html).toContain("5,000");
     expect(html).not.toContain("Current trophies");

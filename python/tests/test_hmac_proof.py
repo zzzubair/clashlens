@@ -9,7 +9,6 @@ import pytest
 from clashlens.hmac_proof import (
     InvalidProof,
     SigningInput,
-    _parse_canonical_unix_time,
     build_signing_bytes,
     request_headers,
     sign,
@@ -126,9 +125,31 @@ def test_verifier_rejects_unknown_proof_version_with_a_valid_signature() -> None
         )
 
 
-def test_timestamp_parser_rejects_unbounded_decimal_input_as_invalid_proof() -> None:
+def test_an_unbounded_issued_at_header_is_an_invalid_proof() -> None:
+    vector = json.loads(VECTORS_PATH.read_text(encoding="utf-8"))["vectors"][0]
+    headers = [
+        (b"x-clashlens-proof-version", vector["proof_version"].encode("ascii")),
+        (b"x-clashlens-caller", vector["caller_b64url"].encode("ascii")),
+        (b"x-clashlens-key-id", vector["key_id_b64url"].encode("ascii")),
+        (b"x-clashlens-issued-at", b"1" * 5000),
+        (b"x-clashlens-expires-at", vector["expires_at"].encode("ascii")),
+        (b"x-clashlens-request-id", vector["request_id"].encode("ascii")),
+        (b"x-clashlens-provider", vector["provider_b64url"].encode("ascii")),
+        (b"x-clashlens-provider-subject", vector["provider_subject_b64url"].encode("ascii")),
+        (b"x-clashlens-signature", vector["signature_b64url"].encode("ascii")),
+    ]
+
     with pytest.raises(InvalidProof):
-        _parse_canonical_unix_time("1" * 5000)
+        verify_proof(
+            headers=headers,
+            method=vector["method"],
+            raw_target=vector["target"].encode("ascii"),
+            body=bytes.fromhex(vector["body_hex"]),
+            keys={
+                (vector["caller"], vector["key_id"]): bytes.fromhex(vector["key_hex"])
+            },
+            now=vector["verification_time"],
+        )
 
 
 def test_request_headers_verify_against_shared_vectors() -> None:

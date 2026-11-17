@@ -90,8 +90,3 @@ def test_inappropriate_names_are_rejected_authoritatively(supplied: str) -> None
 )
 def test_ordinary_names_still_pass_the_filter(supplied: str) -> None:
     assert is_inappropriate_name(supplied) is False
-
-
-def test_display_and_group_names_reject_inappropriate_values_directly() -> None:
-    assert is_inappropriate_name("Legend Pushers") is False
-    assert is_inappropriate_name("sh1t") is True

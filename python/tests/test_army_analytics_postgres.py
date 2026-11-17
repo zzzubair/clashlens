@@ -863,7 +863,7 @@ def test_battle_moved_to_the_next_day_is_counted_once_in_the_season(
             database.close()
 
 
-def test_completed_day_publishes_facts_without_legacy_rollups(
+def test_a_corrected_battle_queues_a_new_army_build_and_keeps_one_army(
     database_url: str, archive_server, monkeypatch) -> None:
     with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server, monkeypatch)
@@ -907,15 +907,6 @@ def test_completed_day_publishes_facts_without_legacy_rollups(
                     (DAY_START,),
                 ).fetchone()
                 assert marker is None
-                assert connection.execute(
-                    "SELECT count(*) FROM army_analytics_day_summaries"
-                ).fetchone()[0] == 0
-                assert connection.execute(
-                    "SELECT count(*) FROM army_analytics_season_summaries"
-                ).fetchone()[0] == 0
-                assert connection.execute(
-                    "SELECT count(*) FROM army_analytics_breakdowns"
-                ).fetchone()[0] == 0
 
             corrected = _battle_row(
                 opponent="#8PP",
@@ -944,12 +935,6 @@ def test_completed_day_publishes_facts_without_legacy_rollups(
                 == "processed"
             )
             with database.pool.connection() as connection:
-                assert connection.execute(
-                    "SELECT count(*) FROM army_analytics_day_summaries"
-                ).fetchone()[0] == 0
-                assert connection.execute(
-                    "SELECT count(*) FROM army_analytics_season_summaries"
-                ).fetchone()[0] == 0
                 assert (
                     connection.execute(
                         """
@@ -966,144 +951,6 @@ def test_completed_day_publishes_facts_without_legacy_rollups(
                     """
                     ).fetchone()[0]
                     == 1
-                )
-        finally:
-            database.close()
-
-
-def test_army_fact_retries_leave_legacy_rollups_untouched(
-    database_url: str, archive_server, monkeypatch) -> None:
-    with domain_database(database_url) as connection_info:
-        database, processor = _processor(connection_info, archive_server, monkeypatch)
-        try:
-            _observation, battle_job = store_observation(
-                connection_info,
-                archive_server,
-                occurrence_key="army-all-excluded",
-                endpoint="battle_log",
-                body=json.dumps(
-                    {
-                        "items": [
-                            _battle_row(
-                                opponent="#8PP",
-                                offset_hours=1,
-                                code=None,
-                                stars=1,
-                                destruction=50,
-                            )
-                        ]
-                    }
-                ).encode(),
-                observed_at=DAY_START + timedelta(hours=2),
-                normalized_tag="#2PP",
-            )
-            assert (
-                processor.process_job(battle_job, owner="all-excluded").outcome
-                == "processed"
-            )
-            _mark_day_complete(database, trophies=6100)
-            assert (
-                processor.process_job(_army_job(database), owner="first-build").outcome
-                == "processed"
-            )
-
-            with database.pool.connection() as connection:
-                assert connection.execute(
-                    "SELECT count(*) FROM army_analytics_day_summaries"
-                ).fetchone()[0] == 0
-                assert connection.execute(
-                    "SELECT count(*) FROM army_analytics_season_summaries"
-                ).fetchone()[0] == 0
-                player_id = connection.execute(
-                    "SELECT id FROM players WHERE normalized_tag = '#2PP'"
-                ).fetchone()[0]
-                connection.execute(
-                    """
-                    INSERT INTO ranked_day_versions (
-                        player_id, ranked_day_start, ranked_day_end,
-                        official_season_id, season_day_number,
-                        season_anchor_rule_version, reconciliation_rule_version,
-                        result_hash, version, state, confidence, input_hash,
-                        evidence_complete, coverage_complete, start_trophies
-                    ) VALUES (
-                        %s, %s, %s, %s, 23, 'legend-season-anchor-v1',
-                        'legend-ranked-day-v1', repeat('c', 64), 2,
-                        'Complete', 'exact', repeat('d', 64), true, true, 6200
-                    )
-                    """,
-                    (player_id, DAY_START, DAY_START + timedelta(days=1), SEASON_ID),
-                )
-                boundary_publication._enqueue_army_analytics(database, connection, ranked_day_start=DAY_START)
-                connection.commit()
-
-            assert (
-                processor.process_job(
-                    _army_job(database), owner="replacement-build"
-                ).outcome
-                == "processed"
-            )
-            with database.pool.connection() as connection:
-                assert connection.execute(
-                    "SELECT count(*) FROM army_analytics_day_summaries"
-                ).fetchone()[0] == 0
-                assert connection.execute(
-                    "SELECT count(*) FROM army_analytics_season_summaries"
-                ).fetchone()[0] == 0
-        finally:
-            database.close()
-
-
-def test_army_fact_build_rolls_back_atomically(
-    database_url: str, archive_server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    with domain_database(database_url) as connection_info:
-        database, processor = _processor(connection_info, archive_server, monkeypatch)
-        try:
-            _observation, battle_job = store_observation(
-                connection_info,
-                archive_server,
-                occurrence_key="army-atomic-rollback",
-                endpoint="battle_log",
-                body=json.dumps(
-                    {
-                        "items": [
-                            _battle_row(
-                                opponent="#8PP",
-                                offset_hours=1,
-                                code=FIXTURE_CODE,
-                                stars=3,
-                                destruction=100,
-                            )
-                        ]
-                    }
-                ).encode(),
-                observed_at=DAY_START + timedelta(hours=2),
-                normalized_tag="#2PP",
-            )
-            assert (
-                processor.process_job(battle_job, owner="atomic-battle").outcome
-                == "processed"
-            )
-            _mark_day_complete(database)
-
-            def fail_day(*_args, **_kwargs) -> None:
-                raise ValueError("dependency_not_ready: forced day failure")
-
-            monkeypatch.setattr(army_ingestion, "_ensure_army_day_dependency", fail_day)
-            result = processor.process_job(_army_job(database), owner="atomic-build")
-            assert result.outcome == "retrying"
-            with database.pool.connection() as connection:
-                assert (
-                    connection.execute(
-                        "SELECT count(*) FROM army_analytics_day_summaries"
-                    ).fetchone()[0]
-                    == 0
-                )
-                assert (
-                    connection.execute(
-                        "SELECT count(*) FROM army_analytics_season_summaries"
-                    ).fetchone()[0]
-                    == 0
                 )
         finally:
             database.close()
@@ -1146,13 +993,6 @@ def test_active_or_incomplete_day_is_withheld_and_retried(
             result = processor.process_job(job_id, owner="future")
             assert result.outcome == "retrying"
             assert result.category == "dependency_not_ready"
-            with database.pool.connection() as connection:
-                assert (
-                    connection.execute(
-                        "SELECT count(*) FROM army_analytics_day_summaries"
-                    ).fetchone()[0]
-                    == 0
-                )
         finally:
             database.close()
 
@@ -1337,12 +1177,12 @@ def test_army_tables_have_only_required_runtime_privileges(database_url: str) ->
                       has_table_privilege('clashlens_python_worker', 'unit_catalog_versions', 'SELECT'),
                       has_table_privilege('clashlens_python_worker', 'unit_catalog_versions', 'UPDATE'),
                       has_table_privilege('clashlens_python_worker', 'battle_army_decodes', 'INSERT'),
-                      has_table_privilege('clashlens_python_worker', 'army_analytics_breakdowns', 'DELETE'),
                       has_table_privilege('clashlens_python_api', 'exact_armies', 'SELECT'),
                       has_table_privilege('clashlens_python_api', 'legend_season_anchors', 'SELECT'),
                       has_table_privilege('clashlens_python_api', 'legend_season_anchors', 'INSERT'),
                       has_table_privilege('clashlens_python_api', 'legend_season_anchors', 'UPDATE'),
-                      has_table_privilege('clashlens_python_api', 'legend_season_anchors', 'DELETE')
+                      has_table_privilege('clashlens_python_api', 'legend_season_anchors', 'DELETE'),
+                      has_table_privilege('clashlens_python_api', 'army_analytics_battle_facts', 'INSERT')
                     """
                 ).fetchone()
                 assert privileges == (
@@ -1351,7 +1191,7 @@ def test_army_tables_have_only_required_runtime_privileges(database_url: str) ->
                     True,
                     True,
                     True,
-                    True,
+                    False,
                     False,
                     False,
                     False,

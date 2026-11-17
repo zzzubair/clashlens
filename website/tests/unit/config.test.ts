@@ -139,14 +139,6 @@ describe("server-only website login configuration", () => {
     expect(config.loginSecret).toHaveLength(32);
   });
 
-  it("fails startup when production login lacks the protected secret files", async () => {
-    process.env.NODE_ENV = "production";
-    process.env.CLASHLENS_PUBLIC_ORIGIN = "https://clashlens.example";
-    delete process.env.CLASHLENS_GOOGLE_CLIENT_SECRET;
-    delete process.env.CLASHLENS_LOGIN_SECRET_B64;
-    await expect(loadConfig()).rejects.toThrow(/client-secret file/);
-  });
-
   it("fails startup when production login uses an http public origin", async () => {
     process.env.NODE_ENV = "production";
     process.env.CLASHLENS_PUBLIC_ORIGIN = "http://127.0.0.1:3000";

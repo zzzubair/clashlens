@@ -158,11 +158,6 @@ class PublicationBarrier:
         self._cleaning = False
         self._cleanup_waiters = 0
 
-    @property
-    def state(self) -> BarrierState:
-        with self.condition:
-            return self._state_locked()
-
     def _state_locked(self) -> BarrierState:
         if self._cleaning:
             return BarrierState.CLEANING

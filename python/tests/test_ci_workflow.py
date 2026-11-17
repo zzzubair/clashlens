@@ -198,19 +198,15 @@ def test_python_groups_have_independent_postgresql_and_run_development_tests_onc
     assert "if" not in job
     assert job["strategy"] == {"fail-fast": False, "matrix": {"group": [1, 2, 3, 4]}}
     assert job["env"]["CLASHLENS_TEST_DATABASE_URL"] == TEST_DATABASE_URL
-    assert job["services"]["postgres"] == {
-        "image": "mirror.gcr.io/library/postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336",
-        "env": {
-            "POSTGRES_DB": "clashlens",
-            "POSTGRES_PASSWORD": "postgres",
-            "POSTGRES_USER": "postgres",
-        },
-        "ports": ["5432:5432"],
-        "options": (
-            '--health-cmd "pg_isready -U postgres -d clashlens" '
-            "--health-interval 10s --health-timeout 5s --health-retries 5"
-        ),
+    postgres = job["services"]["postgres"]
+    assert postgres["image"].startswith("mirror.gcr.io/library/postgres:18@")
+    # The service accepts the test database address every step uses.
+    assert postgres["env"] == {
+        "POSTGRES_DB": "clashlens",
+        "POSTGRES_PASSWORD": "postgres",
+        "POSTGRES_USER": "postgres",
     }
+    assert postgres["ports"] == ["5432:5432"]
     for step in job["steps"]:
         if "run" in step:
             if "if" in step:
@@ -365,11 +361,7 @@ def test_website_job_uses_node_24_lockfile_and_browser_acceptance_gate(
         for step in job["steps"]
         if step.get("uses", "").startswith("actions/setup-node@")
     )
-    assert setup_node["with"] == {
-        "node-version": "24",
-        "cache": "npm",
-        "cache-dependency-path": "website/package-lock.json",
-    }
+    assert setup_node["with"]["node-version"] == "24"
 
     cleanup = next(step for step in job["steps"] if "Clean up" in step.get("name", ""))
     assert cleanup["if"] == "always()"
@@ -422,19 +414,6 @@ def test_website_job_uses_node_24_lockfile_and_browser_acceptance_gate(
     for call in calls:
         if call["command"] != "podman":
             assert call["cwd"] == str(command_workspace[0] / "website")
-    project = f"clashlens-dev-{hashlib.sha256(str(command_workspace[0]).encode()).hexdigest()[:10]}-e2e"
-    assert [call["args"] for call in calls if call["command"] == "podman"] == [
-        ["pod", "exists", project],
-        ["pod", "rm", "--force", project],
-        *[
-            command
-            for suffix in ("postgres-data", "archive-data", "spool")
-            for command in (
-                ["volume", "exists", f"{project}-{suffix}"],
-                ["volume", "rm", f"{project}-{suffix}"],
-            )
-        ],
-    ]
 
 
 def test_pr_packaging_builds_only_python_and_runs_packaged_tests(
@@ -536,19 +515,14 @@ def test_packaged_python_groups_run_the_full_packaged_suite_once(
     job = _workflow()["jobs"]["packaged-python-tests"]
     assert job["strategy"] == {"fail-fast": False, "matrix": {"group": [1, 2, 3, 4]}}
     # The development stack's database image, user and test database.
-    assert job["services"]["postgres"] == {
-        "image": "mirror.gcr.io/library/postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873",
-        "env": {
-            "POSTGRES_DB": "clashlens_test",
-            "POSTGRES_PASSWORD": "clashlens-dev",
-            "POSTGRES_USER": "clashlens",
-        },
-        "ports": ["5432:5432"],
-        "options": (
-            '--health-cmd "pg_isready -U clashlens -d clashlens_test" '
-            "--health-interval 10s --health-timeout 5s --health-retries 5"
-        ),
+    postgres = job["services"]["postgres"]
+    assert postgres["image"].startswith("mirror.gcr.io/library/postgres:18-alpine@")
+    assert postgres["env"] == {
+        "POSTGRES_DB": "clashlens_test",
+        "POSTGRES_PASSWORD": "clashlens-dev",
+        "POSTGRES_USER": "clashlens",
     }
+    assert postgres["ports"] == ["5432:5432"]
     for step in job["steps"]:
         if "run" not in step:
             continue

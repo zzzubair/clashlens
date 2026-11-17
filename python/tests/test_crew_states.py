@@ -80,7 +80,6 @@ def test_who_may_do_what() -> None:
     }
     kicks = {(actor, holder) for actor in CrewRole for holder in CrewRole if actor.outranks(holder)}
     assert kicks == {(OWNER, ADMIN), (OWNER, MEMBER), (ADMIN, MEMBER)}
-    assert sorted(CrewRole, key=lambda role: role.rank) == [OWNER, ADMIN, MEMBER]
 
 
 def _may(role: CrewRole, action: CrewAction) -> bool:

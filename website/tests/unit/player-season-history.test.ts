@@ -374,12 +374,9 @@ describe("past-Season view", () => {
         SEASON,
       );
       expect(html).toMatch(new RegExp(`<dt>Final rank</dt><dd[^>]*>${expected}</dd>`));
-      expect(html).not.toContain("Clash Lens final rank");
       expect(html).not.toContain(">183<");
       expect(html).toContain("<dt>Final trophies</dt><dd>5,812</dd>");
       if (source === "tracked_summary") {
-        expect(html).not.toContain("Final trophies:");
-        expect(html).not.toContain("A Legend day runs from 05:00 to 05:00 UTC.");
         expect(html).toContain("<small>Trophy change</small>");
         // "Net" names each day in the Daily log, not the Season's total.
         expect(html).not.toContain("<small>Net</small>");
@@ -419,9 +416,6 @@ describe("past-Season view", () => {
     expect(html).toContain(
       '<p class="season-summary-meta" aria-live="polite">23 of 28 days missing</p>',
     );
-    expect(html).not.toContain("Partial Season history");
-    // The summary drops the Season trophy change; it is ending trophies minus 5,000.
-    expect(html).not.toContain("Sum of daily trophy changes");
     expect(html).toContain("50.0%<small>20 of 40</small>");
     expect(html).toMatch(/Offense per day<\/dt><dd>\+320</);
     expect(html).toMatch(/Defense per day<\/dt><dd>−260</);
@@ -430,9 +424,6 @@ describe("past-Season view", () => {
     expect(html).not.toContain("Trophies lost");
     expect(html).not.toContain("Stars unknown");
     expect(html).toContain('title="Recorded attacks minus recorded defenses, without');
-    expect(html).not.toContain("Net change");
-    // Missing days alone do not make any known total unavailable.
-    expect(html).not.toContain("Some daily totals are unavailable.");
     // The day's -30 trophy change stays apart from its +10 recorded battle net.
     expect(html).toMatch(/change<\/small><strong[^>]*>−30<.*battle net<\/dt><dd>\+10</s);
   });
@@ -590,7 +581,7 @@ describe("past-Season view", () => {
     expect(html).not.toContain('title="Calculated"');
   });
 
-  it("shows an unknown total as Unknown without a separate note", async () => {
+  it("shows an unknown total as Unknown", async () => {
     const html = await loadAndRender(
       {
         getPlayer: vi.fn().mockResolvedValue(PLAYER),
@@ -604,26 +595,6 @@ describe("past-Season view", () => {
       SEASON,
     );
     expect(html).toMatch(/Trophy change<\/small><strong class="score-neutral">Unknown</);
-    expect(html).not.toContain("Some daily totals are unavailable.");
-  });
-
-  it("names complete coverage without a partial warning", async () => {
-    const html = await loadAndRender(
-      {
-        getPlayer: vi.fn().mockResolvedValue(PLAYER),
-        getPlayerSeasons: vi.fn().mockResolvedValue([]),
-        getPlayerSeason: vi.fn().mockResolvedValue({
-          ...SUMMARY,
-          daysObserved: 28,
-          daysMissing: [],
-          coverageState: "complete",
-          unresolvedFlags: [],
-        }),
-      },
-      SEASON,
-    );
-    expect(html).not.toContain("days recorded");
-    expect(html).not.toContain("Partial Season history");
   });
 
   it("uses the supplied Season-list bounds in a summary error", async () => {
@@ -777,7 +748,7 @@ describe("past-Season view", () => {
     const client = newSeasonClient();
     const current = (await loadAndRender(client, null)).replace(/<[^>]*>/g, " ");
     expect(current).toContain("Day 1");
-    for (const hidden of ["Date only", "Day 24", "Day 28", "30 Sep 2026"])
+    for (const hidden of ["Day 24", "Day 28", "30 Sep 2026"])
       expect(current).not.toContain(hidden);
     expect(current).toMatch(/Season\s+This Season\s+7 Sep – 4 Oct 2026/);
     // The ended Season's last day is only the end of its name in the menu.

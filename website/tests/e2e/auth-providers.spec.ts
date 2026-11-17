@@ -56,7 +56,6 @@ test("loopback Google and Discord sign-in choices are available", async ({ page 
   await expect(page.getByRole("link", { name: "Sign up with Google" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Sign up with Discord" })).toBeVisible();
   await expectNoSeriousAccessibilityViolations(page);
-  await expectNoSeriousAccessibilityViolations(page);
 });
 
 test("Discord completes a local sign-in without cloud credentials", async ({

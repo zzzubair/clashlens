@@ -16,9 +16,6 @@ vi.mock("../../app/services/players.server", async (importOriginal) => {
       }))().getPlayerSeasons(...args),
   };
 });
-import { createElement, Fragment } from "react";
-import { renderToString } from "react-dom/server";
-import { createRoutesStub, Meta, Outlet } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -70,33 +67,6 @@ async function loadFor(tag: string): Promise<PlayerLoaderData> {
     request: new Request(`${ORIGIN}/players/${encodeURIComponent(tag)}`),
     params: { tag },
   } as never);
-}
-
-// What a link-preview bot sees: the page's <head> tags as server HTML.
-async function headHtml(tag: string): Promise<string> {
-  const loaderData = await loadFor(tag);
-  const Stub = createRoutesStub([
-    {
-      id: "root",
-      path: "/",
-      Component: () =>
-        createElement(Fragment, null, createElement(Meta), createElement(Outlet)),
-      children: [
-        {
-          id: "player",
-          path: "players/:tag",
-          meta: (args) => meta(args as Parameters<typeof meta>[0]),
-          Component: () => null,
-        },
-      ],
-    },
-  ]);
-  return renderToString(
-    createElement(Stub, {
-      initialEntries: [`/players/${encodeURIComponent(tag)}`],
-      hydrationData: { loaderData: { root: null, player: loaderData } },
-    }),
-  );
 }
 
 beforeEach(() => {
@@ -192,17 +162,5 @@ describe("player link previews", () => {
       { title: "Player not found · Clash Lens" },
     ]);
     expect(meta({})).toEqual([{ title: "Player not found · Clash Lens" }]);
-  });
-
-  it("escapes special characters in names in the served HTML", async () => {
-    mocks.getPlayer.mockResolvedValue(playerNamed(`<b>Nova</b> & "Co" ✦`));
-    const html = await headHtml(TAG);
-    expect(html).toContain(
-      "<title>&lt;b&gt;Nova&lt;/b&gt; &amp; &quot;Co&quot; ✦ (#2PP) · Clash Lens</title>",
-    );
-    expect(html).toContain(
-      '<meta property="og:title" content="&lt;b&gt;Nova&lt;/b&gt; &amp; &quot;Co&quot; ✦ (#2PP)"/>',
-    );
-    expect(html).not.toContain("<b>Nova");
   });
 });

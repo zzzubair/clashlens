@@ -69,7 +69,6 @@ describe("player facts response boundary", () => {
     expect(dayPresentation(day).status).toBe("Calculated");
     expect(day.start).toBe(CALENDAR.day_start);
     expect(day.seasonId).toBe(CALENDAR.season_id);
-    expect(day).not.toHaveProperty("period");
   });
   it.each([
     ["saved", null, undefined],

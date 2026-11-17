@@ -276,22 +276,6 @@ def test_day28_and_boundary_adjustment_keep_battle_net_separate(database_url: st
             database.close()
 
 
-def test_migration_is_reentrant(database_url: str) -> None:
-    with domain_database(database_url) as connection_info:
-        with psycopg.connect(connection_info, autocommit=True) as connection:
-            migration = (
-                Path(__file__).parents[2]
-                / "deploy"
-                / "migrations"
-                / "0019_player_season_summaries.sql"
-            )
-            connection.execute(migration.read_text(encoding="utf-8"))
-            row = connection.execute(
-                "SELECT count(*) FROM player_season_summaries"
-            ).fetchone()
-            assert row[0] == 0
-
-
 def test_complete_season_totals_boundaries_and_stars(database_url: str) -> None:
     with domain_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)

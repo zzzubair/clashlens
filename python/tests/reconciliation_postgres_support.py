@@ -65,7 +65,6 @@ def _seed_reset_collection_identity(
     profile_observation_id: int,
     battle_observation_id: int,
     normalized_tag: str = "#2PP",
-    production_admission: bool = False,
 ) -> None:
     with psycopg.connect(connection_info) as connection:
         player_id = int(
@@ -87,8 +86,6 @@ def _seed_reset_collection_identity(
             """,
             (player_id, boundary),
         ).fetchone()
-        if work is None and production_admission:
-            raise RuntimeError("production reset admission did not create compact work")
         if work is None:
             sweep_id = int(
                 connection.execute(
@@ -153,7 +150,6 @@ def _store_baseline_pair(
     empty_battle_log: bool,
     observed_at: datetime | None = None,
     normalized_tag: str = "#2PP",
-    production_admission: bool = False,
     profile_parser_version: str | None = None,
 ) -> tuple[int, int, int, int]:
     # A reset-baseline sweep requests its endpoints after the boundary, so the
@@ -185,6 +181,5 @@ def _store_baseline_pair(
         profile_observation_id=profile_observation,
         battle_observation_id=battle_observation,
         normalized_tag=normalized_tag,
-        production_admission=production_admission,
     )
     return profile_observation, battle_observation, profile_job, battle_job

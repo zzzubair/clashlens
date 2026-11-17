@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { SeasonSummary } from "../../app/components/SeasonSummary";
-import { signedSide } from "../../app/lib/number-format";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 // The same saved days the Python crew boards test reads
@@ -53,19 +52,18 @@ describe("crew and player summary averages", () => {
           }),
         );
       const html = render(saved.expected.season);
-      const [offense, defense, attack, defended] =
+      const [offense, defense, attack, defended, weekOffense, weekDefense] =
         saved.tag === "#2PP"
-          ? ["+60", "−31", "+34.3", "−30.7"]
-          : ["+53", "−10", "+35.0", "−10.0"];
+          ? ["+60", "−31", "+34.3", "−30.7", "+43", "−36"]
+          : ["+53", "−10", "+35.0", "−10.0", "+53", "−10"];
       expect(html).toContain(`Offense per day</dt><dd>${offense}`);
       expect(html).toContain(`Defense per day</dt><dd>${defense}`);
       expect(html).toContain(`<dt>Per attack</dt><dd>${attack}</dd>`);
       expect(html).toContain(`<dt>Per defense</dt><dd>${defended}</dd>`);
       // The week's totals use the same played-day denominator.
-      const week = saved.expected.week;
-      const weekHtml = render(week);
-      expect(weekHtml).toContain(signedSide(week.attack.total / week.attack.days, 1));
-      expect(weekHtml).toContain(signedSide(week.defense.total / week.defense.days, -1));
+      const weekHtml = render(saved.expected.week);
+      expect(weekHtml).toContain(`Offense per day</dt><dd>${weekOffense}`);
+      expect(weekHtml).toContain(`Defense per day</dt><dd>${weekDefense}`);
     });
   }
 });

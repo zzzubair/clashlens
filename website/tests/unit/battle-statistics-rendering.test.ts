@@ -174,7 +174,7 @@ describe("supplied Season summary rendering", () => {
     );
     expect(html).toContain('<dt>Hit rate</dt><dd class="summary-words">Unavailable</dd>');
     expect(html).toContain("<dt>Per attack</dt><dd>Unavailable</dd>");
-    for (const text of ["Trophies now", "Stars unknown", "NaN", "Infinity"])
+    for (const text of ["Stars unknown", "NaN", "Infinity"])
       expect(html).not.toContain(text);
   });
   it("shows the latest Reset's rank and trophies, hit rate, stars and averages", () => {

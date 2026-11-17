@@ -108,28 +108,16 @@ def test_initial_collection_uses_interactive_key_for_profile_battles_and_history
     assert client.seen_pools == [collector.interactive_keys] * 3
 
 
-@pytest.mark.parametrize(
-    "state",
-    [
-        "unknown",
-        "checking",
-        "not_found",
-        "not_in_legend",
-        "uncertain",
-        "failed",
-        "tracking",
-    ],
-)
-def test_lookup_read_is_public_but_requires_signed_website_request(monkeypatch, state):
+def test_lookup_read_is_public_but_requires_signed_website_request(monkeypatch):
     monkeypatch.setattr(
-        api_player_lookup, "get_lookup", lambda _db, tag: {"tag": tag, "state": state}
+        api_player_lookup, "get_lookup", lambda _db, tag: {"tag": tag, "state": "checking"}
     )
     target = "/v1/players/%232PP/lookup"
     with TestClient(_app(FakeDatabase())) as client:
         assert client.get(target).status_code == 401
         response = client.get(target, headers=_signed_headers(target))
     assert response.status_code == 200
-    assert response.json() == {"tag": "#2PP", "state": state}
+    assert response.json() == {"tag": "#2PP", "state": "checking"}
 
 
 def test_lookup_submission_is_anonymous_and_rejects_invalid_tags_and_bodies(

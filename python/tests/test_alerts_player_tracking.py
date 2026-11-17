@@ -4,9 +4,6 @@ import json
 from datetime import UTC, datetime
 
 import pytest
-from alerts_support import (
-    ROOT,
-)
 
 from clashlens import alerts
 
@@ -143,10 +140,9 @@ def test_failed_or_pending_checks_keep_the_confirmed_profile_time(
 
 
 @pytest.mark.parametrize("later_status", [None, 503])
-@pytest.mark.parametrize("upgrade", [False, True])
 def test_not_found_player_leaves_the_leaderboard_and_alert_until_found_again(
     runtime, database_url, archive_server, tmp_path, monkeypatch, capsys,
-    later_status, upgrade,
+    later_status,
 ):
     import hashlib
     from datetime import timedelta
@@ -264,15 +260,6 @@ def test_not_found_player_leaves_the_leaderboard_and_alert_until_found_again(
                 failure_category="timeout", retry_state="next_pass",
                 key_label="regular-a",
             ))
-            if upgrade:
-                with psycopg.connect(connection_info) as connection:
-                    connection.execute(
-                        "ALTER TABLE collector_response_state DROP COLUMN last_not_found_at"
-                    )
-                    connection.commit()
-                    connection.execute(
-                        (ROOT / "deploy/migrations/0043_api_profile_not_found_read.sql").read_text()
-                    )
             board, counts = alert_at(accepted_at + timedelta(hours=3, minutes=9))
             assert board["entries"] == [] and board["total_entries"] == 0
             assert board["tracked_population"] == 1

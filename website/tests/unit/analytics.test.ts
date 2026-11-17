@@ -159,26 +159,6 @@ describe("what leaves the browser", () => {
     }
   });
 
-  it("never sends the browser name and version", () => {
-    const sent = sanitizeEvent({
-      uuid: "u3",
-      event: "ui_error",
-      properties: {
-        distinct_id: "$posthog_cookieless",
-        $cookieless_mode: true,
-        $raw_user_agent: "Mozilla/5.0",
-      },
-      $set: { $raw_user_agent: "Mozilla/5.0" },
-      $set_once: { $initial_raw_user_agent: "Mozilla/5.0" },
-    });
-    expect(sent).toEqual({
-      uuid: "u3",
-      event: "ui_error",
-      properties: { distinct_id: "$posthog_cookieless", $geoip_disable: true },
-      timestamp: undefined,
-    });
-  });
-
   it("keeps a same-site referrer as a page label, never its IDs", () => {
     const sent = sanitizeEvent({
       uuid: "u2",

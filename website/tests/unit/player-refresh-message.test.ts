@@ -71,12 +71,11 @@ describe("player refresh message", () => {
     expect(await refreshMessage("queued")).toContain("Refreshing…");
   });
 
-  it("replaces Refreshing… and its progress once the status read failed", async () => {
+  it("replaces Refreshing… once the status read failed", async () => {
     const message = await refreshMessage("running", {
       error: { code: "unavailable", message: "Unavailable." },
     });
     expect(message).toContain("Couldn&#x27;t refresh right now. Showing saved results.");
     expect(message).not.toContain("Refreshing…");
-    expect(message).not.toContain("<progress");
   });
 });

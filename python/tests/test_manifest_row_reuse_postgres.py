@@ -291,5 +291,6 @@ def test_list_changes_rebuild_the_list_in_its_order(base, values) -> None:
 @pytest.mark.parametrize(
     ("base", "values"), [([1, 2, 1], [1, 2]), ([1, 2, 3], [3, 2, 1])]
 )
-def test_list_changes_refuse_lists_they_cannot_rebuild(base, values) -> None:
-    assert _list_changes(base, values) is None
+def test_list_changes_never_rebuild_a_different_list(base, values) -> None:
+    change = _list_changes(base, values)
+    assert change is None or _apply_list_changes(base, change) == values

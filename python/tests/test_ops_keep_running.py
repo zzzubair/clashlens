@@ -76,14 +76,6 @@ def test_unchanged_up_leaves_the_collector_running(stack):
     assert "--user disable --now clashlens.target" not in Path(stack["env"]["CALLS"]).read_text()
 
 
-def test_changed_collector_image_restarts_only_the_collector(stack):
-    images = json.loads(stack["env"]["IMAGES"])
-    images[NEW_COLLECTOR] = SAME_CONTENTS.replace("aa", "bb")
-    result = deploy(stack, IMAGES=json.dumps(images))
-    assert_collector_restarted(result, "the collector image changed")
-    assert f"keep=false collector={NEW_COLLECTOR}" in result.stdout
-
-
 def test_changed_collector_setting_restarts_only_the_collector(stack):
     collector_env = stack["tmp_path"] / "state" / "clashlens" / "env" / "collector.env"
     collector_env.write_text("CLASHLENS_REQUESTS_PER_SECOND_PER_KEY=35\n")

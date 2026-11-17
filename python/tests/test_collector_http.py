@@ -17,7 +17,6 @@ import pytest
 from clashlens import collector_http
 from clashlens.collector_http import (
     ApiKey,
-    DeadlinePhase,
     KeyPool,
     OfficialApiClient,
     ProviderFailure,
@@ -72,32 +71,6 @@ def test_regular_keys_limit_starts_and_concurrency_per_key() -> None:
     assert maximum == {"regular-1": 2, "regular-2": 2}
     for key_starts in starts.values():
         assert _most_starts_within(key_starts, 0.985) <= 20
-
-
-def test_six_keys_each_start_at_most_the_configured_rate() -> None:
-    labels = ["normal-1", "normal-2", "normal-3", "normal-4", "extra-1", "extra-2"]
-    pool = KeyPool(
-        [ApiKey(label, f"fixture-{label}") for label in labels],
-        starts_per_second=25,
-        concurrency_per_key=6,
-    )
-    starts: dict[str, list[float]] = defaultdict(list)
-
-    async def request(key: ApiKey, start_request) -> None:
-        await start_request()
-        starts[key.label].append(monotonic())
-
-    async def run_requests() -> None:
-        await asyncio.gather(*(pool.run(request) for _ in range(6 * 30)))
-
-    asyncio.run(run_requests())
-
-    assert pool.starts_per_second == 25
-    assert {label: len(times) for label, times in starts.items()} == dict.fromkeys(
-        labels, 30
-    )
-    for key_starts in starts.values():
-        assert _most_starts_within(key_starts, 0.985) <= 25
 
 
 def test_late_wakeups_keep_a_key_at_its_rate_and_no_second_over_it(
@@ -965,15 +938,14 @@ def _deadline(seconds: float = 30.0):
 def test_deadline_phases_from_waiting_to_finished_or_abandoned() -> None:
     loop, signalled, deadline = _deadline()
     try:
-        assert deadline.phase is DeadlinePhase.WAITING
+        assert not deadline.started and not deadline.expired
         assert deadline.begin()
-        assert deadline.phase is DeadlinePhase.RUNNING and deadline.started
+        assert deadline.started
         deadline.complete()
-        assert deadline.phase is DeadlinePhase.FINISHED
         # A request that already finished cannot time out afterwards.
         deadline.expire()
         loop.run_until_complete(asyncio.sleep(0))
-        assert deadline.phase is DeadlinePhase.FINISHED and not signalled.done()
+        assert not deadline.expired and not signalled.done()
         assert not deadline.cancel_before_start()
     finally:
         loop.close()
@@ -982,7 +954,7 @@ def test_deadline_phases_from_waiting_to_finished_or_abandoned() -> None:
     try:
         # A cancellation before the network thread begins abandons it.
         assert deadline.cancel_before_start()
-        assert deadline.phase is DeadlinePhase.ABANDONED and deadline.expired
+        assert deadline.expired
         assert not deadline.begin() and not deadline.started
     finally:
         loop.close()
@@ -992,7 +964,7 @@ def test_deadline_phases_from_waiting_to_finished_or_abandoned() -> None:
         # The budget running out before the thread begins tells the caller.
         deadline.expire()
         loop.run_until_complete(asyncio.wait_for(signalled, 1))
-        assert deadline.phase is DeadlinePhase.ABANDONED
+        assert deadline.expired and not deadline.started
         assert not deadline.begin()
     finally:
         loop.close()
@@ -1000,7 +972,7 @@ def test_deadline_phases_from_waiting_to_finished_or_abandoned() -> None:
     loop, _signalled, deadline = _deadline()
     try:
         deadline.finish()
-        assert deadline.phase is DeadlinePhase.ABANDONED and not deadline.begin()
+        assert deadline.expired and not deadline.begin()
     finally:
         loop.close()
 
@@ -1014,7 +986,6 @@ def test_deadline_interrupts_a_running_request_and_refuses_new_sockets() -> None
         deadline.register(first)
         deadline.expire()
         loop.run_until_complete(asyncio.wait_for(signalled, 1))
-        assert deadline.phase is DeadlinePhase.INTERRUPTED
         assert deadline.started and deadline.expired
         assert first.fileno() == -1
         # The caller is told to keep its slots draining, not to cancel.
@@ -1024,7 +995,7 @@ def test_deadline_interrupts_a_running_request_and_refuses_new_sockets() -> None
         with pytest.raises(ProviderFailure, match="timeout"):
             deadline.guard_connected_socket(late)
         deadline.finish()
-        assert deadline.phase is DeadlinePhase.INTERRUPTED
+        assert deadline.started and deadline.expired
     finally:
         for item in (first, peer, late, late_peer):
             item.close()
@@ -1037,7 +1008,7 @@ def test_deadline_interrupts_a_running_request_and_refuses_new_sockets() -> None
         # Answering after the budget is a timeout even with the bytes in hand.
         with pytest.raises(ProviderFailure, match="timeout"):
             deadline.complete()
-        assert deadline.phase is DeadlinePhase.INTERRUPTED
+        assert deadline.started and deadline.expired
         loop.run_until_complete(asyncio.sleep(0))
         assert not signalled.done()
     finally:

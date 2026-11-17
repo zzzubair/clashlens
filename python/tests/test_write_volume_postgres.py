@@ -1,10 +1,8 @@
-"""Database change-log (WAL) bytes written per repeat sighting and per job.
+"""Repeat sightings and job lease renewals rewrite rows only when they must.
 
-The backup change log grows with every row the database rewrites. Measured on
-8 Oct 2026, repeat sightings moving retention deadlines and job lease renewals
-were two of its largest avoidable sources. Run with ``-s`` to print bytes per
-operation; ``cold`` starts each operation just after a checkpoint, so its first
-change to each page copies the whole page, as most production writes do.
+The backup change log (WAL) grows with every row the database rewrites.
+Measured on 8 Oct 2026, repeat sightings moving retention deadlines and job
+lease renewals were two of its largest avoidable sources.
 """
 
 from __future__ import annotations
@@ -23,19 +21,12 @@ from collector_uploads_postgres_support import (
 )
 from collector_uploads_postgres_support import NOW as _PLAYER_NOW
 
-from clashlens.claimed_jobs import complete_terminal
 from clashlens.collector_db import CollectorDatabase
 from clashlens.collector_uploads import claim_upload, complete_upload
 from clashlens.db import Database, LeaseLost
 from clashlens.job_contracts import RESPONSE_WORK_TYPES
 
 DAY = timedelta(days=1)
-
-
-def _wal(connection: psycopg.Connection, cold: bool) -> int:
-    if cold:
-        connection.execute("CHECKPOINT")
-    return int(connection.execute("SELECT pg_current_wal_insert_lsn() - '0/0'::pg_lsn").fetchone()[0])
 
 
 def _versions(connection: psycopg.Connection, response_hash: str) -> tuple:
@@ -175,49 +166,3 @@ def test_required_renewal_writes_a_full_lease_for_a_remote_read(database_url: st
         finally:
             jobs.close()
             collector.close()
-
-
-@pytest.mark.parametrize("cold", [False, True], ids=["warm", "cold"])
-def test_write_volume_per_sighting_and_job(database_url: str, cold: bool) -> None:
-    sightings, job_count = 96, 40
-    with upload_database(database_url) as connection_info, psycopg.connect(
-        connection_info, autocommit=True
-    ) as connection:
-        database, first = _archived_body(connection_info, f"volume-{cold}")
-        jobs = Database(connection_info)
-        try:
-            # One unchanged body polled every 15 minutes for a day: production
-            # repeat sightings more than 10 minutes apart rewrote both rows.
-            sighting_bytes = 0
-            for index in range(1, sightings + 1):
-                before = _wal(connection, cold)
-                _sighting(database, first, index, NOW + index * timedelta(minutes=15))
-                sighting_bytes += _wal(connection, False) - before
-            for index in range(1, job_count):
-                assert database.record_response(_handoff(
-                    occurrence_key=f"volume-job-{index}", response_hash=_hash(f"volume-job-{cold}-{index}"),
-                    player_id=first.player_id, completed_at=NOW + DAY + index * timedelta(seconds=1),
-                )).changed
-            steps = {"claim": 0, "renew": 0, "complete": 0}
-            for _ in range(job_count):
-                before = _wal(connection, cold)
-                claim = jobs.claim_jobs(owner="volume", lease_seconds=60, work_types=RESPONSE_WORK_TYPES)[0]
-                steps["claim"] += _wal(connection, False) - before
-                # The local-spool worker renews once, right after reading the body.
-                before = _wal(connection, cold)
-                jobs.renew_claim(claim, lease_seconds=60)
-                steps["renew"] += _wal(connection, False) - before
-                before = _wal(connection, cold)
-                complete_terminal(jobs, claim, outcome="processed")
-                steps["complete"] += _wal(connection, False) - before
-            assert connection.execute(
-                "SELECT count(*) FROM python_processing_jobs WHERE status = 'complete'"
-            ).fetchone()[0] == job_count
-            mode = "cold" if cold else "warm"
-            print(f"\n{mode}: {sighting_bytes / sightings:.0f} WAL bytes per repeat sighting"
-                  f" ({sightings} sightings, 15 minutes apart)")
-            for step, total in steps.items():
-                print(f"{mode}: {total / job_count:.0f} WAL bytes per job {step} ({job_count} jobs)")
-        finally:
-            jobs.close()
-            database.close()

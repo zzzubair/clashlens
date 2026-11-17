@@ -107,14 +107,6 @@ def test_adding_a_name_to_the_unit_list_changes_no_saved_army(monkeypatch) -> No
     assert unnamed.heroes[0].equipment_typed_ids == ("equipment:49", "equipment:61")
 
 
-def test_same_numeric_id_in_two_namespaces_distinct() -> None:
-    # troop:2 and spell:2 are different; ensure both valid and identity distinct
-    a = decode_army_share_code("u1x2s1x2")
-    assert not hasattr(a, "category")
-    assert any(f.typed_id == "troop:2" for f in a.home_troops)
-    assert any(f.typed_id == "spell:2" for f in a.spells)
-
-
 def test_each_section_names_its_ids_kind() -> None:
     # Numbers overlap across kinds: 16 is a spell, pet and equipment but no
     # troop; 4 is no spell; 3 is no hero; 28 is no equipment. Each is saved
@@ -173,15 +165,6 @@ def test_changing_only_siege_or_cc_troops_does_not_change_identity() -> None:
     assert len(with_siege.siege) == 1
     assert with_siege.siege[0].typed_id == "troop:51"
     assert len(with_cc.cc_troops) == 1
-
-
-def test_home_and_cc_spells_pool_while_origin_recoverable() -> None:
-    r = decode_army_share_code("s1x2d1x53")
-    assert len(r.spells) == 2
-    assert any(f.origin == "home" for f in r.spells)
-    assert any(f.origin == "clan_castle" for f in r.spells)
-    assert len(r.home_spells_raw) == 1
-    assert len(r.cc_spells_raw) == 1
 
 
 def test_cc_troops_and_siege_never_leak_into_home() -> None:

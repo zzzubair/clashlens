@@ -373,12 +373,10 @@ describe("adding and removing one group player", () => {
     );
     expect(fullCard.match(/class="group-day-bars"/g)).toHaveLength(2);
     // The bars are named "Last 7 days" as Rankings names its own, their
-    // dates on hover and behind the ⓘ with how they are scaled; no range
-    // caption under them.
+    // dates on hover and behind the ⓘ with how they are scaled.
     expect(fullCard).toMatch(
       /<span class="last-days">Last 7 days<details class="last-days-info"><summary title="30 Jul – 5 Aug">[^]*?30 Jul – 5 Aug, one bar a day\. Each player&#x27;s bars have their own scale/,
     );
-    expect(fullCard).not.toMatch(/ a day<\/small>/);
     // Each row on its own scale: its biggest day reaches the band's edge.
     const rows = fullCard.match(
       /<span class="group-day-bars"[^]*?<\/span><\/span>(?=<span class="sr-only"|<span class="group-member)/g,
@@ -402,21 +400,26 @@ describe("adding and removing one group player", () => {
   it("opens adding and editing below the card's buttons without needing JavaScript", async () => {
     const html = await renderGroups(worstGroups());
     const card = html.slice(html.indexOf(`<li id="group-${GROUP_ID}"`));
-    // The title, then one quiet "⋯" menu holding Add player and Edit, then
-    // Compare, the card's one filled button; each panel below holds ordinary
-    // forms, closed at first.
+    // Add player and Edit are plain links to their panel; each panel holds
+    // ordinary forms and starts closed.
+    for (const panel of ["add", "edit"]) {
+      expect(card).toContain(
+        `href="/account/watchlists?group=${GROUP_ID}&amp;panel=${panel}#group-${GROUP_ID}"`,
+      );
+      expect(card).toContain(
+        `<div id="group-${GROUP_ID}-${panel}" class="group-panel" hidden="">`,
+      );
+    }
     expect(card).toMatch(
-      new RegExp(
-        `^<li[^>]*><div class="group-card-head"><div class="group-card-title"><h3>[^<]*</h3>(?:<p class="group-card-meta">[^]*?</p>)?</div>` +
-          `<details class="group-more"><summary title="[^"]+"><span aria-hidden="true">⋯</span><span class="sr-only">More for [^<]*</span></summary><div class="group-more-menu">` +
-          `<a class="group-text-button" href="/account/watchlists\\?group=${GROUP_ID}&amp;panel=add#group-${GROUP_ID}" aria-expanded="false"[^>]*><svg[^]*?</svg>Add player</a>` +
-          `<a class="group-text-button" href="/account/watchlists\\?group=${GROUP_ID}&amp;panel=edit#group-${GROUP_ID}" aria-expanded="false"[^>]*><svg[^]*?</svg>Edit</a></div></details>` +
-          `<a class="group-card-open button-primary" [^>]*aria-label="Compare players in [^"]*"[^>]*>Compare<svg[^]*?</a></div>` +
-          `<div id="group-${GROUP_ID}-add" class="group-panel" hidden=""><form[^>]* action="/account/watchlists" method="post"><input type="hidden" name="action" value="add-player"/>`,
-      ),
+      /action="\/account\/watchlists" method="post"><input type="hidden" name="action" value="add-player"\/>/,
     );
+    // Edit renames the watchlist without JavaScript.
     expect(card).toMatch(
-      /^[^]*?<div id="[^"]+-edit" class="group-panel" hidden=""><div class="group-edit">[^]*?name="action" value="update"[^]*?>Save name<\/button>[^]*?aria-label="Remove [^"]+ from [^"]+"[^]*?<details class="group-delete-step"><summary[^>]*>Delete watchlist<\/summary>[^]*?<button type="submit"[^>]*>Yes, delete watchlist<\/button><a [^>]*>Keep watchlist<\/a>/,
+      /<div id="[^"]+-edit" class="group-panel" hidden="">[^]*?name="action" value="update"[^]*?>Save name<\/button>/,
+    );
+    // Deleting takes a second, explicit step.
+    expect(card).toMatch(
+      /<summary[^>]*>Delete watchlist<\/summary>[^]*?>Yes, delete watchlist<\/button>/,
     );
     expect(html).not.toMatch(/class="group-panel">/);
   });

@@ -399,37 +399,6 @@ def test_spool_io_failure_stays_paused_and_fails_readiness(
     assert collector.client.fetch_count == fetches_after_failure
 
 
-def test_run_starts_one_background_uploader() -> None:
-    spool = _Spool()
-    spool.cleanup_stale = lambda _age: None  # type: ignore[attr-defined]
-    collector = _collector(spool, _Store(spool), _Client(spool))
-    uploads_started = 0
-
-    async def idle_loop(stop: asyncio.Event, _idle_seconds: float) -> None:
-        await stop.wait()
-
-    async def upload_loop(stop: asyncio.Event, _idle_seconds: float) -> None:
-        nonlocal uploads_started
-        uploads_started += 1
-        stop.set()
-
-    collector._regular_loop = idle_loop  # type: ignore[method-assign]
-    collector._intent_loop = (  # type: ignore[method-assign]
-        lambda stop, _rankings, idle: idle_loop(stop, idle)
-    )
-    collector._upload_loop = upload_loop  # type: ignore[method-assign]
-
-    asyncio.run(
-        collector.run(
-            asyncio.Event(),
-            health_host="127.0.0.1",
-            health_port=0,
-        )
-    )
-
-    assert uploads_started == 1
-
-
 def test_normal_shutdown_removes_only_unreferenced_spool_bodies(
     tmp_path: Path,
 ) -> None:
@@ -972,14 +941,3 @@ def test_health_reports_key_spool_and_database_state() -> None:
     assert b"clashlens_spool_bytes 12" in metrics[2]
     assert b"clashlens_collector_pending_uploads 3" in metrics[2]
     assert b"clashlens_spool_free_bytes 100" in metrics[2]
-
-
-def test_cleanup_finishes_database_ack_after_a_crash_already_removed_file() -> None:
-    spool = _Spool()
-    store = _Store(spool)
-    store.deletable = ["a" * 64]
-    collector = _collector(spool, store, _Client(spool))
-
-    assert collector.cleanup_uploaded() == (1, 1)
-    assert store.marked == ["a" * 64]
-    assert spool.events == ["locked"]

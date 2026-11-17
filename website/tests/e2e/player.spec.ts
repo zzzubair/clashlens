@@ -6,7 +6,6 @@ import {
   type Page,
   type Request,
 } from "@playwright/test";
-import { UNSAFE_decodeViaTurboStream } from "react-router";
 import {
   decodePageData,
   encodePageData,
@@ -30,52 +29,6 @@ function refreshSubmitted(page: Page) {
       response.url().includes("/resources/players/"),
   );
 }
-test("saved-page age override preserves streamed history and unrelated counts", async () => {
-  const values: unknown[] = JSON.parse(
-    encodePageData({
-      loaderData: {
-        "routes/player": {
-          player: { profile: { freshness: { ageSeconds: 1 } }, attacks: 1 },
-          pastSeasons: [],
-        },
-      },
-    }),
-  );
-  const historyIndex = values.findIndex((value) => Array.isArray(value));
-  values[historyIndex] = ["P", historyIndex];
-  const chunks = [
-    `${JSON.stringify(values)}\n`,
-    `P${historyIndex}:[[${values.length + 1}],42]\n`,
-  ];
-  const html = chunks
-    .map(
-      (chunk) =>
-        `window.__reactRouterContext.streamController.enqueue(${JSON.stringify(chunk)});`,
-    )
-    .join("");
-  const served = await withServerAge(html, 120);
-  const stream = [...served.matchAll(/streamController\.enqueue\(("(?:[^"\\]|\\.)*")\)/g)]
-    .map((match) => JSON.parse(match[1]) as string)
-    .join("");
-  const decoded = await UNSAFE_decodeViaTurboStream(
-    new Response(stream).body!,
-    globalThis,
-  );
-  await decoded.done;
-  const data = decoded.value as {
-    loaderData: Record<
-      string,
-      {
-        player: { profile: { freshness: { ageSeconds: number } }; attacks: number };
-        pastSeasons: Promise<number[]> | number[];
-      }
-    >;
-  };
-  const saved = data.loaderData["routes/player"];
-  expect(saved.player.profile.freshness.ageSeconds).toBe(120);
-  expect(saved.player.attacks).toBe(1);
-  expect(await saved.pastSeasons).toEqual([42]);
-});
 for (const ageSeconds of [30, 60, 61, 120]) {
   test(`profile visit refreshes once only when the server says its saved check is older than 60 seconds (${ageSeconds}s)`, async ({
     page,
@@ -330,18 +283,6 @@ test("player page canonicalizes the tag and shows collected profile data", async
   ).toBeVisible();
   await expect(page.getByText("Current trophies", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeVisible();
-});
-
-test("player page stays within a narrow viewport", async ({ page }) => {
-  await page.setViewportSize({ width: 375, height: 900 });
-  await refuseRefreshes(page);
-  await page.goto("/players/%232PP");
-
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-    ),
-  ).toBe(0);
 });
 
 test("battle stats fit at iPhone width", async ({ page }) => {

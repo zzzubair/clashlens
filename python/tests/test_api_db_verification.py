@@ -248,7 +248,6 @@ def test_support_transfer_is_atomic_restricted_and_idempotent(
     ) as connection_info:
         database = ApiDatabase(connection_info, max_size=8)
         try:
-            assert not hasattr(database, "apply_support_player_link_transfer")
             first_account = create_account(
                 database, "google-support-first", "supportfirst"
             )

@@ -150,9 +150,6 @@ describe("Discord attack alerts settings", () => {
     );
     expect(switchOf(rows[2], "Dark picture")).toContain('aria-checked="false"');
     expect(html.match(/role="switch"/g)).toHaveLength(5);
-    // The state is said once, by the switch: no badges or sentences repeat it.
-    for (const text of ["✓ On", ">Off<", "No alerts for", "Turn on", "Turn off"])
-      expect(html).not.toContain(text);
     expect(html).toContain('src="/images/attack-alert-light.webp"');
     expect(html).not.toContain("wasn&#x27;t delivered");
     expect(html).not.toContain("Reconnect Discord");

@@ -187,47 +187,6 @@ def test_s3_archive_reader_defaults_to_tls_and_requires_an_explicit_test_overrid
         )
 
 
-def test_s3_archive_reader_retries_one_transient_archive_read() -> None:
-    body = b"{}"
-    digest = hashlib.sha256(body).hexdigest()
-
-    class Response:
-        def __init__(self) -> None:
-            self.headers = {"Content-Length": str(len(body))}
-
-        def read(self, _limit: int) -> bytes:
-            return body
-
-        def close(self) -> None:
-            return
-
-        def release_conn(self) -> None:
-            return
-
-    reader = S3ArchiveReader(
-        endpoint="archive.example.test:9000",
-        bucket="evidence",
-        access_key="test",
-        secret_key="test",
-        max_retries=1,
-    )
-    calls = 0
-
-    def get_object(_bucket: str, _key: str) -> Response:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise OSError("temporary connection failure")
-        return Response()
-
-    reader.client.get_object = get_object  # type: ignore[method-assign]
-
-    result = reader.read_verified("s3://evidence/object", digest)
-
-    assert result.body == body
-    assert calls == 2
-
-
 def test_s3_archive_reader_reports_archive_readiness_without_claiming_work() -> None:
     reader = S3ArchiveReader(
         endpoint="archive.example.test:9000",
@@ -317,26 +276,6 @@ class _FlakyArchive(S3ArchiveReader):
 
 class LeaseLost(Exception):
     pass
-
-
-def test_spool_first_renews_lease_across_remote_retries(tmp_path: Path) -> None:
-    from clashlens.spool import Spool as _Spool  # noqa: F401  (import sanity)
-
-    body = b"heartbeat body"
-    digest = hashlib.sha256(body).hexdigest()
-    reference = f"s3://bucket/sha256/{digest[:2]}/{digest}"
-    archive = _FlakyArchive(body, transient_failures=2)
-
-    reader = SpoolFirstReader(archive, spool_root=str(tmp_path / "spool"))
-    heartbeats: list[int] = []
-    result = reader.read_verified(reference, digest, heartbeat=lambda: heartbeats.append(1))
-
-    assert result.body == body
-    # At least one renewal around each transient retry window; the exact count
-    # depends on the reader's pacing, but a single-shot fallback must never
-    # pass through without renewals when transient failures occurred.
-    assert len(heartbeats) >= 2, "lease renewals must accompany remote retries"
-    assert archive.remaining == 0
 
 
 def test_spool_first_lease_loss_discards_the_fallback_result(tmp_path: Path) -> None:

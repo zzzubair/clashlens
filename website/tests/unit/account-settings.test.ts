@@ -225,15 +225,16 @@ describe("Settings", () => {
     ["?saved=discord-disconnected", "Discord disconnected."],
   ])("says what %s saved in one line at the top", async (search, line) => {
     const html = await settings(search);
-    expect(html).toContain(
-      `<main id="main-content" tabindex="-1" class="page-shell narrow-shell"><p class="status-banner status-banner-success saved-line" role="status">${line}</p>`,
+    // The first thing on the page, read out as a status.
+    expect(html).toMatch(
+      new RegExp(`<main [^>]*><p [^>]*role="status">${line.replaceAll(".", "\\.")}</p>`),
     );
   });
 
   it("says a failed default save failed, and ignores unknown words", async () => {
     const failed = await settings("?saved=default-failed");
     expect(failed).toContain(
-      'class="status-banner status-banner-warning saved-line" role="alert">The default player could not be saved. Try again.',
+      'role="alert">The default player could not be saved. Try again.',
     );
     expect(await settings("?saved=<b>hi</b>")).not.toContain("saved-line");
   });

@@ -226,7 +226,6 @@ describe("player day honesty", () => {
     expect(row).toContain("Calculated");
     expect(row).not.toContain("Uncertain");
     expect(row).not.toContain("so far");
-    expect(await page([DAY_24])).not.toContain("A Legend day runs from");
     expect(row).toContain("The battle log was not checked at the start of this day.");
 
     // Without every battle recorded, a saved number with gaps is uncertain.
@@ -493,7 +492,7 @@ describe("player day honesty", () => {
     expect(text[0]).toContain("Attacks recorded 8 Defenses recorded 8 Adjustment No");
   });
 
-  it("shows the received warnings instead of a late-tracking explanation", async () => {
+  it("shows the received warnings in plain words", async () => {
     const html = await page([ENDED_DAY], {
       dataQuality: [
         {
@@ -514,7 +513,6 @@ describe("player day honesty", () => {
         },
       ],
     });
-    expect(html).not.toContain("tracking started partway");
     expect(html).toContain(
       "This profile hasn&#x27;t been confirmed recently, so it may be behind.",
     );

@@ -103,24 +103,6 @@ describe("requireLogin auth guard", () => {
     });
   });
 
-  it("answers a page without a login with its needs-an-account box, coming back to it", async () => {
-    await expect(requireLogin(loginRequest("/account"))).rejects.toSatisfy(
-      (thrown: unknown) => {
-        expectNeedsAccount(thrown, "/account");
-        return true;
-      },
-    );
-  });
-
-  it("comes back to the exact pathname for nested account routes", async () => {
-    await expect(requireLogin(loginRequest("/account/saved-players"))).rejects.toSatisfy(
-      (thrown: unknown) => {
-        expectNeedsAccount(thrown, "/account/saved-players");
-        return true;
-      },
-    );
-  });
-
   it("returns to the page, not its data, when an in-app link needs sign-in", async () => {
     for (const path of [
       "/account/groups.data",

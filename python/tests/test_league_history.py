@@ -15,9 +15,7 @@ from clashlens import api_players
 from clashlens.api_db import ApiDatabase
 from clashlens.db import Database
 from clashlens.league_history import (
-    LEAGUE_HISTORY_ENDPOINT_VERSION,
     LEAGUE_HISTORY_PARSER_VERSION,
-    LEAGUE_HISTORY_SCHEMA_VERSION,
     LeagueHistoryParseError,
     complete_league_history,
     parse_league_history,
@@ -34,9 +32,6 @@ def test_league_history_parser_reads_season_entries() -> None:
     )
 
     assert parsed.normalized_tag == "#2PP"
-    assert parsed.schema_version == LEAGUE_HISTORY_SCHEMA_VERSION
-    assert parsed.endpoint_version == LEAGUE_HISTORY_ENDPOINT_VERSION
-    assert parsed.parser_version == LEAGUE_HISTORY_PARSER_VERSION
     assert parsed.row_count == 2
     assert parsed.has_row_gap is False
     assert parsed.outcome == "official_observed"
