@@ -532,6 +532,31 @@ def test_weekly_and_season_reset_adjustments_reconcile_against_5000_baseline() -
     assert weekly.net_trophy_change == season.net_trophy_change == 20
 
 
+def test_a_reset_reading_over_an_hour_late_cannot_contradict_a_sunday_already_proven() -> None:
+    # A Sunday from 5,000 loses 80 over 8 defenses, 4,920, and the Monday
+    # raise takes it to 5,000. A 05:23 reading of 4,920 proves its end. The
+    # Reset pair's own profile, read at 07:00, is 4,973: it fits nothing,
+    # but taken over an hour after the Reset it can only confirm, as when
+    # it may show a new-day battle only the opponent has reported.
+    sunday = ranked_day_for(datetime(2026, 10, 11, 12, tzinfo=UTC))
+    shift = sunday.start - DAY.start
+    coverage = tuple(replace(item, observed_at=item.observed_at + shift) for item in _coverage())
+
+    def reset_read(minutes: int, **unshown):
+        at = sunday.end + timedelta(minutes=minutes)
+        return reconcile_ranked_day(_input(**unshown,
+            ranked_day=sunday, boundary_kind="weekly", start_trophies=5000, now=at,
+            coverage_observations=coverage, contributions=_counted_battles("defense", "defense", 8, 80),
+            readings=(reading_rule.Reading(sunday.end + timedelta(minutes=23), 4920),),
+            next_start_trophies=4973, end_baseline_evidence={"profile": {"observed_at": at.isoformat()}}))
+
+    for late in (reset_read(120), reset_read(120, first_unshown_report=sunday.end + timedelta(
+            minutes=100))):
+        assert (late.state, late.next_start_trophies, late.final_trophies_before_reset) == (
+            "Complete", 5000, 4920)
+    # Read within the hour, it still contradicts the day.
+    assert reset_read(50).state == "Inconsistent"
+
 def test_5000_after_a_reset_does_not_confirm_the_automatic_loss_or_final_total() -> (
     None
 ):

@@ -537,7 +537,8 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
             # A late Reset reading may already show new-day battles, landed or in flight.
             judged = reading_rule.judge(reset, **rule) if (
                 end_hidden_by_reset and residual and reset is not None) else None
-            if judged is not None and judged.matched:
+            if judged is not None and judged.matched or end_hidden_by_reset and residual and (
+                    _proven_before(reset, rule["end_before_loss"], proof_rule)):
                 reading_correction, residual, next_start_trophies = -residual, 0, expected_next
                 observed_trophy_change = next_start_trophies - start_trophies
         if end_hidden_by_reset and verdict is not None and verdict.outcome != "contradicted":
@@ -1201,6 +1202,18 @@ def logs_leave_gap(previous: CoverageObservation, current: CoverageObservation) 
         set(previous.battle_identities) & set(current.battle_identities)
         or set(previous.source_row_ids) & set(current.source_row_ids)
     )
+
+
+def _proven_before(reading: reading_rule.Reading | None, end_before_loss: int,
+                   proof_rule: dict[str, Any] | None) -> bool:
+    """Whether a run of readings proved the day's end before ``reading``,
+    taken from ``reading_rule.SETTLE_WINDOW`` after the Reset: it can then
+    only confirm the day (``reading_rule.decide``)."""
+    if reading is None or proof_rule is None or (
+            reading.read_at < proof_rule["reset_at"] + reading_rule.SETTLE_WINDOW):
+        return False
+    proving = reading_rule.first_proof(end_before_loss=end_before_loss, **proof_rule)
+    return proving is not None and proving.read_at < reading.read_at
 
 
 def _readings(data: ReconciliationInput) -> tuple[reading_rule.Reading, ...]:
