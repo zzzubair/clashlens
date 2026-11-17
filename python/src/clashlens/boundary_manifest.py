@@ -44,7 +44,7 @@ from .job_contracts import (
     PROCESSING_VERSION,
 )
 from .league_week import week_start
-from .newest_profiles import ACCEPTED_VERSIONS, ANY_VERSIONS, NEWEST_PROFILES_SQL
+from .newest_profiles import ACCEPTED_PROFILES_SQL, ANY_PROFILES_SQL
 from .publication_states import ManifestStage, day_snapshot_status
 from .reconciliation import DISPUTED_BATTLE_REASONS
 
@@ -133,7 +133,10 @@ def freeze_boundary_manifest(
     except QueryCanceled:
         print(json.dumps({"event": "boundary_manifest_frozen", "outcome": ManifestStage.TIMED_OUT.value,
                           "artifact_kind": artifact_kind, **_timing(timing),
-                          "stage": timing["stages"][-1][0]}), flush=True)
+                          "stage": timing["stages"][-1][0],
+                          **({"part": timing["parts"][-1][0]}
+                             if timing["stages"][-1][0] == "rows" and timing.get("parts") else {})}),
+              flush=True)
         connection.execute(
             f"""
             INSERT INTO python_processing_jobs_worker (
@@ -155,11 +158,19 @@ def freeze_boundary_manifest(
 
 
 def _timing(timing: dict[str, Any]) -> dict[str, Any]:
-    """The freeze's generation, earlier timeouts and seconds per stage so far."""
-    stages = [*timing["stages"], ("", time.monotonic())]
-    return {**{key: value for key, value in timing.items() if key != "stages"},
-            "seconds": {name: round(stages[index + 1][1] - start, 3)
-                        for index, (name, start) in enumerate(stages[:-1])}}
+    """The freeze's generation, earlier timeouts and seconds per stage so far,
+    and, for a board, per lookup of its rows stage."""
+    now = time.monotonic()
+    rows_end = next((start for name, start in timing["stages"] if name == "season_inputs"), now)
+    return {**{key: value for key, value in timing.items() if key not in {"stages", "parts"}},
+            "seconds": _seconds(timing["stages"], now),
+            **({"row_seconds": _seconds(timing["parts"], rows_end)} if timing.get("parts") else {})}
+
+
+def _seconds(marks: list[tuple[str, float]], end: float) -> dict[str, float]:
+    """Seconds from each named mark to the next, the last to end."""
+    ends = [*marks[1:], ("", end)]
+    return {name: round(ends[index][1] - start, 3) for index, (name, start) in enumerate(marks)}
 
 
 def _freeze(
@@ -178,7 +189,7 @@ def _freeze(
     ).fetchall()
     timing["stages"].append(("rows", time.monotonic()))
     if artifact_kind == "snapshot":
-        manifest_rows = _snapshot_rows(connection, members, generation)
+        manifest_rows = _snapshot_rows(connection, members, generation, timing.setdefault("parts", []))
     else:
         manifest_rows = _army_rows(connection, members, generation)
     timing["stages"].append(("season_inputs", time.monotonic()))
@@ -517,10 +528,13 @@ def _rechecks(status: str, version_id: int | None) -> bool:
 
 
 def _snapshot_rows(
-    connection: Any, members: list[Any], generation: Any
+    connection: Any, members: list[Any], generation: Any, parts: list[tuple[str, float]],
 ) -> list[dict[str, Any]]:
+    """The board's frozen rows. parts gets the time each of its lookups
+    starts, for the freeze's event (_timing)."""
     boundary_at = generation[0]
     player_ids = [int(row[0]) for row in members]
+    parts.append(("official_ranks", time.monotonic()))
     official_version = connection.execute(
         """
         SELECT v.id
@@ -557,16 +571,18 @@ def _snapshot_rows(
     )
     # Each player's latest trophy change in the ended day before the Reset,
     # which orders equal trophies (analytics.latest_change_order_key).
+    parts.append(("trophy_changes", time.monotonic()))
     latest_changes = latest_trophy_changes(
         connection,
         day_start=boundary_at - RANKED_DAY_DURATION,
         cutoff=boundary_at,
         player_ids=player_ids,
     )
+    parts.append(("profiles", time.monotonic()))
     profiles = {
         int(row[0]): row[1:]
         for row in connection.execute(
-            NEWEST_PROFILES_SQL.replace("{versions}", ACCEPTED_VERSIONS),
+            ACCEPTED_PROFILES_SQL,
             {"players": player_ids, "boundary": boundary_at},
         ).fetchall()
     }
@@ -575,6 +591,7 @@ def _snapshot_rows(
     # at a Monday Reset who has not played since reads Legend I at 5,000
     # naming Season 0, never accepted, after their last accepted profile in
     # the lower league (135 such players left off the 15 October 2026 board).
+    parts.append(("unplayed", time.monotonic()))
     unplayed = unplayed_profiles(
         connection, boundary_at,
         [
@@ -592,6 +609,7 @@ def _snapshot_rows(
     # A member not read in the ended day's week before the Reset ranks by
     # their Complete day, named by their first Legend I reading since.
     week = week_start(boundary_at - RANKED_DAY_DURATION)
+    parts.append(("first_readings", time.monotonic()))
     late = boundary_members.first_readings(connection, boundary_at, {
         int(row[0]): int(row[1]) for row in members
         if row[1] is not None and (int(row[0]) not in profiles or profiles[int(row[0])][2] < week)
@@ -602,11 +620,13 @@ def _snapshot_rows(
     unprofiled = [player_id for player_id in player_ids if player_id not in profiles]
     # One with none is not found when their newest answer before the Reset
     # says so.
+    parts.append(("not_found", time.monotonic()))
     not_found = profiles_not_found(
         connection, boundary_at,
         {player_id: row[2] for player_id, row in profiles.items()}
         | dict.fromkeys(unprofiled, datetime.min.replace(tzinfo=UTC)),
     )
+    parts.append(("no_profile", time.monotonic()))
     failures = {
         int(row[0]): row[1:]
         for row in connection.execute(
@@ -638,6 +658,7 @@ def _snapshot_rows(
             (boundary_at, boundary_at, unprofiled),
         ).fetchall()
     } if unprofiled else {}
+    parts.append(("days_and_leagues", time.monotonic()))
     ranked_states = {
         (int(row[0]), int(row[1])): text_value(row[2])
         for row in connection.execute(
@@ -646,6 +667,7 @@ def _snapshot_rows(
         ).fetchall()
     }
     leagues = boundary_members.leagues(connection, boundary_at, player_ids)
+    parts.append(("identities", time.monotonic()))
     manifest_rows: list[dict[str, Any]] = []
     for row in members:
         player_id, version_id, input_hash, status = _member(row, "snapshot")
@@ -780,7 +802,7 @@ def unplayed_profiles(
         int(row[0]): row[1:]
         for row in connection.execute(
             f"""
-            SELECT newest.* FROM ({NEWEST_PROFILES_SQL.replace("{versions}", ANY_VERSIONS)})
+            SELECT newest.* FROM ({ANY_PROFILES_SQL})
                 AS newest (player_id, id, observation_id, observed_at,
                            profile_json, normalized_tag, name, trophies,
                            eligibility_state, current_league_season_id)
