@@ -22,10 +22,9 @@ worker's own calculation:
 5. ``missing_day``: a player the Reset sweep ending the day tracked, with no
    saved day, though the weekly league record puts the day's week in Legend
    I: the day's calculation saves one exactly then (``league_days.day_league``);
-6. ``board``: a confirmed Daily board row against its day's end plus its
-   automatic loss, less the battles that ended after the Reset, or at a
-   Season's last Reset its end alone. Rows not confirmed are left to later
-   board corrections.
+6. ``board``: a confirmed Daily board row against the Reset total its
+   day's saved result stores (``reset_total``), when it stores one. Rows
+   not confirmed are left to later board corrections.
 
 Each problem is a row in ``reconcile_findings`` (migration 0110); one its
 check judged again and did not find is resolved and kept, as is a board
@@ -126,7 +125,7 @@ SELECT DISTINCT ON (log.player_id, log.ranked_day_start)
        day.start_trophies, day.final_trophies_before_reset, day.next_start_trophies,
        day.automatic_defense_loss, day.attack_count, day.attack_gain,
        day.defense_count, day.observed_defense_loss,
-       (day.input_evidence -> 'end_baseline_evidence' ->> 'official_final_trophies')::integer
+       day.formula_components -> 'reset_total'
 FROM api_player_daily_logs AS log
 LEFT JOIN ranked_day_versions AS day ON day.id = log.ranked_day_version_id
 WHERE log.player_id = ANY(%(players)s::bigint[])
@@ -239,29 +238,6 @@ SELECT player_id FROM reconcile_findings
 WHERE ranked_day_start = %(day)s AND player_id = ANY(%(players)s::bigint[])
   AND check_name = 'board' AND resolved_at IS NULL AND subject_id <> ({_NEWEST_BOARD})
 """
-# The trophies of a day's battles that ended at or after its Reset, which a
-# board's total leaves out (``boundary_manifest.reset_trophies``): an attack
-# ends at its report time, a defense when its attacker's report is stamped.
-_AFTER_RESET = """
-SELECT day.id, COALESCE(sum(
-           CASE WHEN contribution.value ->> 'lens' = 'offense' THEN 1 ELSE -1 END
-           * (contribution.value ->> 'amount_used')::integer), 0)
-FROM ranked_day_versions AS day
-CROSS JOIN LATERAL jsonb_array_elements(day.input_evidence -> 'contributions')
-    AS contribution
-LEFT JOIN LATERAL (
-    SELECT evidence.battle_timestamp FROM battle_perspectives AS side
-    JOIN battle_evidence AS evidence ON evidence.id = side.evidence_id
-    WHERE side.battle_id = (contribution.value ->> 'battle_identity')::bigint
-      AND side.perspective = 'attacker'
-) AS attack (reported_at) ON contribution.value ->> 'lens' = 'defense'
-WHERE day.id = ANY(%(versions)s)
-  AND contribution.value ->> 'included' = 'true'
-  AND CASE WHEN contribution.value ->> 'lens' = 'offense'
-           THEN (contribution.value ->> 'battle_timestamp')::timestamptz
-           ELSE attack.reported_at END >= day.ranked_day_end
-GROUP BY day.id
-"""
 # The batch's open findings of the day whose recalculation is saved.
 _FIXED = """
 SELECT id FROM reconcile_findings
@@ -354,8 +330,8 @@ def judge(connection: Any, day: datetime, players: list[int]) -> Judgment:
         if start != day or row[2] is None:
             continue
         (_, _, version, season_id, start_trophies, end, _, automatic,
-         attacks, gain, defenses, loss, official) = row
-        ends[player] = (version, end, automatic, official)
+         attacks, gain, defenses, loss, at_reset) = row
+        ends[player] = (version, at_reset)
         judged.add((player, "recount"))
         recount = recounts.get(player, (0, 0, 0, 0))
         if recount != (attacks, gain, defenses, loss):
@@ -388,19 +364,12 @@ def judge(connection: Any, day: datetime, players: list[int]) -> Judgment:
     # its board, whose rows are judged as any.
     judged |= {(int(row[0]), "board")
                for row in [*rows, *connection.execute(_REPLACED, params)]}
-    versions = [ends[int(row[0])][0] for row in rows
-                if ends.get(int(row[0]), (None, None))[1] is not None]
-    after_reset = dict(connection.execute(
-        _AFTER_RESET, {"versions": versions}).fetchall()) if versions else {}
-    # A Season's last board shows the official total, else the EOD itself
-    # (``boundary_manifest.reset_trophies``).
-    season_end = ranked_day.season_end == params["reset"]
     for player, board, trophies in rows:
-        version, end, automatic, official = ends.get(int(player), (None,) * 4)
-        expected = (
-            official if season_end and official is not None
-            else None if end is None else end if season_end
-            else end + (automatic or 0) - after_reset.get(version, 0))
+        version, at_reset = ends.get(int(player), (None, {"value": None}))
+        # A result saved before results stored the total has none to judge by.
+        if at_reset is None:
+            continue
+        expected = at_reset["value"]
         if expected != trophies:
             findings.append(Finding("board", int(player), int(board), version,
                                     {"trophies": expected}, {"trophies": trophies}))

@@ -127,7 +127,7 @@ def reset_total(
         return ResetTotal(official_final, True, OFFICIAL_FINAL)
     battles = tuple(battles)
     after_reset = sum(battle.change for battle in battles if _ended_after(battle, reset_at))
-    end_unknown = any(_may_end_after(battle, reset_at) for battle in battles)
+    end_unknown = any(may_end_after(battle, reset_at) for battle in battles)
     complete = state == "Complete" and end_before_loss is not None
     side = _reading_side(old_reading, battles, day_start, reset_at, battles_usable,
                          end_before_loss)
@@ -232,7 +232,7 @@ def _ended_after(battle: Battle, reset_at: datetime) -> bool:
     return ended is not None and ended >= reset_at
 
 
-def _may_end_after(battle: Battle, reset_at: datetime) -> bool:
+def may_end_after(battle: Battle, reset_at: datetime) -> bool:
     """A defense reported in the last ``ATTACK_ENDS_WITHIN`` before the
     Reset without its attacker's report: its attack may have ended after."""
     return (battle.defense and battle.attack_ended_at is None
