@@ -10,7 +10,7 @@ import {
 } from "../lib/dashboard";
 import type { PastBases } from "../lib/dashboard-cards";
 import { addToGroupPath, canonicalPlayerPath } from "../lib/player-tag";
-import { CardHead, CardNote, InfoTip } from "./DashboardParts";
+import { CardHead, CardNote, growFromButton, InfoTip } from "./DashboardParts";
 import { DashboardIcon } from "./DashboardIcon";
 import { ShieldIcon, Star, Stars, TrophyIcon } from "./GameIcons";
 import { signedNumber as signed } from "../lib/number-format";
@@ -508,7 +508,7 @@ export function OpponentsCard({
                 name="opponents-exact"
                 onClick={(event) => event.stopPropagation()}
               >
-                <summary title={`${line} · ${exact}`}>
+                <summary title={`${line} · ${exact}`} onClick={growFromButton}>
                   {/* Three bars for a hard base, two average, one easy. */}
                   <span
                     className="opponents-meter"
