@@ -191,6 +191,27 @@ def test_a_clean_reading_after_an_exact_match_still_contradicts_the_day() -> Non
     assert (settled.outcome, settled.residual) == ("contradicted", 10)
 
 
+def test_a_reading_an_hour_after_the_reset_can_confirm_a_proven_day_but_not_contradict_it() -> None:
+    # #LGRUVPGGC, 6 November 2026: proven at 05:23, then a 13:58 reading 27
+    # off fits nothing. The day stays proven by the 05:23 reading.
+    proven, misfit = Reading(at(23), 5870), Reading(at(538), 5897)
+    result = verdict(proven, misfit)
+    assert (result.outcome, result.loss, result.exact, result.reading) == (
+        "verified", LOSS, True, proven)
+    # Nor can it take back the loss the 05:23 reading showed landed.
+    assert verdict(proven, Reading(at(180), 5940)).reading == proven
+    # Read before the loss at 05:04, a 07:00 reading still shows it landed,
+    # and a 09:00 one fitting nothing takes neither away.
+    shows = verdict(Reading(at(4), 5940, reset_reading=True), Reading(at(120), 5870),
+                    Reading(at(240), 5897))
+    assert (shows.outcome, shows.loss, shows.exact) == ("verified", LOSS, True)
+    # Inside the first hour it still contradicts, and with nothing proving
+    # the day first, so does any later one.
+    assert verdict(proven, Reading(at(59), 5897)).outcome == "contradicted"
+    assert verdict(misfit).outcome == "contradicted"
+    assert verdict(Reading(at(538), 5870), misfit).outcome == "contradicted"
+
+
 def test_a_reading_after_new_day_battles_the_logs_hold_still_contradicts() -> None:
     # A +30 attack is reported at 05:38; continuous logs hold it, so a 05:55
     # reading of 5,910 fits nothing the ledger allows: neither 5,940 + 30 nor

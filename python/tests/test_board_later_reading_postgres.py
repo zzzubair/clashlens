@@ -330,13 +330,14 @@ def test_a_reset_total_proven_at_the_reset_stays_proven(
     - PROVEN_ONCE and AT_RESET read 4,963 at 05:18, 37 lower than any
       automatic loss the rule expects, which contradicts their days.
     - NINE_HOURS reads 4,877 at 14:23, nine hours after the Reset, which
-      fits nothing (#LGRUVPGGC, 6 November 2026).
+      fits nothing (#LGRUVPGGC, 6 November 2026): over an hour after the
+      Reset, a reading can no longer contradict a proven day.
     - LATE_BATTLE's attack for 30 at 04:58 first shows in its battle log at
       05:31, after its 05:30 reading of 5,030.
 
-    The days of the first three turn Inconsistent, but their Reset totals
-    stay proven, so their entries stay 5,000 and confirmed: a later reading
-    takes no proof away. LATE_BATTLE's day changes its battles, so its
+    The days of the first two turn Inconsistent, NINE_HOURS's stays
+    Complete, and all three Reset totals stay proven, so their entries stay
+    5,000 and confirmed: a later reading takes no proof away. LATE_BATTLE's day changes its battles, so its
     entry moves to 5,030, as its 05:30 reading proves."""
     start, end = day(2), day(3)
     tags = (PROVEN_ONCE, AT_RESET, NINE_HOURS, LATE_BATTLE)
@@ -365,7 +366,8 @@ def test_a_reset_total_proven_at_the_reset_stays_proven(
     assert first == (dict.fromkeys(tags, "Complete"),
                      dict.fromkeys(tags, (5000, "confirmed")), proven)
     states, board, stored = later
-    assert {tag: states[tag] for tag in tags[:3]} == dict.fromkeys(tags[:3], "Inconsistent")
+    assert {tag: states[tag] for tag in tags[:3]} == {
+        PROVEN_ONCE: "Inconsistent", AT_RESET: "Inconsistent", NINE_HOURS: "Complete"}
     assert {tag: stored[tag] for tag in tags[:3]} == {tag: proven[tag] for tag in tags[:3]}
     assert board == {**dict.fromkeys(tags[:3], (5000, "confirmed")),
                      LATE_BATTLE: (5030, "confirmed")}

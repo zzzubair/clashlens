@@ -17,7 +17,9 @@ reading during the day taken once its last battle had landed, fitting one
 way only, is one, read before the loss. A reading can only confirm when it
 is not trustworthy: a Legend I profile naming Season 0, one read after the
 player's continuous battle logs, or one read after a battle only the
-opponent has reported so far.
+opponent has reported so far. Nor can a reading taken from
+``SETTLE_WINDOW`` after the end Reset, once a run of readings has proven
+the day's end, contradict it.
 
 This one rule replaces four: a Reset reading taken before the automatic
 loss landed, a later reading settling a Reset reading taken too early, a
@@ -44,6 +46,14 @@ BATTLE_LANDING_LAG = timedelta(minutes=10)
 # loss at any time after the Reset: its value says whether it did.
 # A reading with more battles than this possibly in flight cannot be judged.
 MAX_AMBIGUOUS_BATTLES = 6
+# The automatic loss and the weekly raise land within this long after the
+# Reset: the loss as late as 05:29 in lab data, the raise from about 05:20
+# on 12 October 2026. Once a run of readings has proven the day's end
+# (``first_proof``), a reading taken from then on can confirm the day but
+# not contradict it: on 6 November 2026 #LGRUVPGGC's day, proven at 4,900
+# by its 05:23:22 reading, was made Inconsistent by a 13:58:13 reading
+# that fit nothing, 27 off.
+SETTLE_WINDOW = timedelta(hours=1)
 # A day's readings are checked from this long after its start Reset: the
 # day before's last attack is reported by 05:05 and lands within
 # BATTLE_LANDING_LAG.
@@ -366,12 +376,29 @@ def decide(
     loss, beside the confirm-only ones, as it cannot show whether the loss
     landed; so never on a day whose loss is only possible. ``stale`` sets
     aside a stale reading (``judge``) instead of letting it contradict.
+    Once the first run of readings that proves the day's end has
+    (``first_proof``), a reading taken after it and from ``SETTLE_WINDOW``
+    after the Reset can still confirm the day, or show a loss landed, but
+    neither contradicts it nor leaves it unverified.
     """
+    readings = tuple(readings)
     ledger = {"end_before_loss": end_before_loss, "loss_candidates": loss_candidates,
               "loss_certain": loss_certain, "day_effects": day_effects,
               "new_day_effects": new_day_effects, "floor": floor, "reset": reset}
-    return _verdict(_judged(readings, reset_at, ledger, stale), ledger, unknown_from=unknown_from,
-                    start_proven=start_proven, history=history, proof=proof)
+    rest = {"unknown_from": unknown_from, "start_proven": start_proven, "history": history,
+            "proof": proof}
+    judged = _judged(readings, reset_at, ledger, stale)
+    verdict = _verdict(judged, ledger, **rest)
+    settled_at = reset_at + SETTLE_WINDOW
+    # Only a reading after the window can take a proof away there.
+    if verdict.outcome == "verified" or verdict.reading is None or (
+            verdict.reading.read_at < settled_at):
+        return verdict
+    proving = first_proof(readings, reset_at=reset_at, stale=stale, **ledger, **rest)
+    if proving is None:
+        return verdict
+    return _verdict(judged, ledger, **rest,
+                    confirm_after=max(proving.read_at, settled_at - _JUST_BEFORE))
 
 
 def _judged(readings: Iterable[Reading], reset_at: datetime, ledger: dict[str, Any],
@@ -391,8 +418,11 @@ def _trusted(item: _Judged, unknown_from: datetime | None) -> bool:
 def _verdict(
     items: list[_Judged | None], ledger: dict[str, Any], *, unknown_from: datetime | None,
     start_proven: bool, history: frozenset[Way] | None, proof: Reading | None,
+    confirm_after: datetime | None = None,
 ) -> Verdict:
-    """``decide``'s verdict from its readings, judged in time order."""
+    """``decide``'s verdict from its readings, judged in time order; one
+    taken after ``confirm_after`` can confirm but neither contradicts nor
+    leaves the day unverified."""
     judged = [item for item in items if item is not None]
     end_before_loss, loss_candidates, loss_certain, floor = (
         ledger["end_before_loss"], ledger["loss_candidates"], ledger["loss_certain"], ledger["floor"])
@@ -416,7 +446,8 @@ def _verdict(
     judged_ids = {effect.identity for effect in (*day_effects, *new_day_effects)}
     history = None if history is None else frozenset(
         (loss, raised, shown & judged_ids) for loss, raised, shown in history)
-    misfit, settled = _settle([item for item in judged if _trusted(item, unknown_from)], history)
+    misfit, settled = _settle([item for item in judged if _trusted(item, unknown_from)], history,
+                              confirm_after)
     if misfit is not None:
         return replace(misfit, lagged=lagged)
     shown = max((shows(item) for item in settled if not floored(item)), default=0)
@@ -424,7 +455,8 @@ def _verdict(
     possible = bool(loss_candidates) and not loss_certain
     proven = [_Judged(proof, True, False)] if proof is not None and not possible and (
         proof.trophies == end_before_loss) else []
-    floored_loss = next((item for item in settled if possible and shows(item) > shown), None)
+    floored_loss = next((item for item in settled if possible and shows(item) > shown and (
+        confirm_after is None or item.reading.read_at <= confirm_after)), None)
     if floored_loss is not None:
         return Verdict("unverified", floored_loss.reading, lagged=lagged)
 
@@ -608,14 +640,18 @@ def contradiction_during_day(
 
 def _settle(
     judged: Iterable[_Judged], surviving: frozenset[Way] | None = None,
+    confirm_after: datetime | None = None,
 ) -> tuple[Verdict | None, list[_Judged]]:
     """These readings, in order, each with only the ways it fits that can
     follow a way the one before it fits, or one of ``surviving``: a loss
     landed, the weekly raise applied and a credit shown stay so; and the
-    first that fits no value or no such way."""
+    first that fits no value or no such way, unless taken after
+    ``confirm_after``: that one is left out."""
     settled: list[_Judged] = []
     for item in judged:
         ways = _following(item.ways, surviving)
+        if not ways and confirm_after is not None and item.reading.read_at > confirm_after:
+            continue
         if not ways:
             landed = max((way[0] for way in surviving or ()), default=0)
             residual = item.residual if not item.matched else (landed - item.loss) or None
