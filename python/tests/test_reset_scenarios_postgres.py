@@ -43,11 +43,16 @@ from reset_scenarios_postgres_support import (
 
 from clashlens import (
     api_analytics,
+    api_leaderboard,
     reconcile_pass,
 )
 from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
-from clashlens.api_players import read_player_page
+from clashlens.api_players import (
+    NEWEST_PROFILE_JOIN,
+    PLAYER_ROW_COLUMNS,
+    read_player_page,
+)
 from clashlens.army_analytics import ArmyAnalyticsSelection
 from clashlens.collector_db import CollectorDatabase
 from clashlens.reading_rule import MAX_AMBIGUOUS_BATTLES
@@ -876,6 +881,56 @@ def test_collection_cutoff_keeps_both_origins_and_next_reset_board(
         assert _ranked(story.served_board(monday)) == {STEADY: 5100}
         story.reset(tuesday, {STEADY: (5100, SEASON)})
         assert _ranked(story.served_board(tuesday)) == {STEADY: 5100}
+
+
+def test_readings_after_the_game_renamed_the_legend_tiers(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """Between 12:21 and 12:31 UTC on Monday 16 November 2026 the game
+    renamed Legend I "Legend League I", keeping its ID. Every profile read
+    under the new name was kept uncertain, so the Live board stopped at the
+    last one read before it, and the 18 November Daily board first published
+    3,804 players, all uncertain. A reading under the new name must count as
+    one under the old: the Live board moves on, each day saves and the
+    board ranks the player."""
+    season = SEASON + timedelta(days=28)
+    sunday, monday, tuesday, wednesday = (day(n, season) for n in (14, 15, 16, 17))
+    renamed_at = monday + timedelta(hours=8)
+    with domain_database(database_url) as info:
+        story = _story(info, archive_server, monkeypatch, STEADY)
+        player = story.players[STEADY]
+        player.battles = _even(sunday) + _even(monday) + _even(tuesday)
+        story.reset(sunday, {STEADY: (5100, season)})
+        story.reset(monday, {STEADY: (5100, season)})
+        player.renamed = True
+        story.read(STEADY, renamed_at, 5100, season)
+        story.run_worker()
+        api = ApiDatabase(as_api_role(info))
+        try:
+            live = api_leaderboard.get_live_leaderboard(
+                api, limit=1, now=renamed_at + timedelta(minutes=5))
+        finally:
+            api.close()
+        story.reset(tuesday, {STEADY: (5100, season)})
+        story.reset(wednesday, {STEADY: (5100, season)})
+        story.wait(timedelta(hours=1))
+        unfinished = story.unfinished_jobs()
+        days = [story.saved_day(STEADY, start)["state"] for start in (monday, tuesday)]
+        members = story.board_members(wednesday)
+        board = story.served_board()
+        with psycopg.connect(info) as connection:
+            newest = connection.execute(
+                f"SELECT {PLAYER_ROW_COLUMNS} FROM players AS player {NEWEST_PROFILE_JOIN}"
+                " WHERE player.normalized_tag = %s", (STEADY,)).fetchone()
+
+    assert [(entry["tag"], entry["observed_at"]) for entry in live["entries"]] == [
+        (STEADY, renamed_at.isoformat())]
+    assert unfinished == []
+    assert days == ["Complete", "Complete"]
+    assert members == {STEADY: "complete"}
+    assert _ranked(board) == {STEADY: 5100}
+    # The website shows a Legend I player as Legend I whatever the game calls it.
+    assert newest[-1] == "Legend I"
 
 
 # Attacks saved on 16 November 2026, the day Squads came out: 4 Dragon

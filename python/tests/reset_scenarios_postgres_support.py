@@ -103,6 +103,9 @@ class Player:
     battles: list[Battle] = field(default_factory=list)
     # A player who drops to Legend II at a Season's end reads Season 0.
     dropped: bool = False
+    # Whether the profile names the tier as the game has since 16 November
+    # 2026: "Legend League I" for "Legend I".
+    renamed: bool = False
 
     def profile(self, trophies: int, season: datetime | None) -> bytes:
         payload = json.loads(PROFILE_FIXTURE.read_bytes())
@@ -115,6 +118,9 @@ class Player:
             ((season or SEASON) - timedelta(days=28)).timestamp())
         if self.dropped:
             payload["leagueTier"] = {"id": 105000035, "name": "Legend II"}
+        if self.renamed:
+            tier = payload["leagueTier"]
+            tier["name"] = tier["name"].replace("Legend ", "Legend League ")
         return json.dumps(payload).encode()
 
     def log(self, at: datetime) -> bytes:

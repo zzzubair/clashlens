@@ -606,11 +606,14 @@ PLAYER_ROW_COLUMNS = (
 # The player's newest saved name, clan and league. Profile parsing validates
 # the tag and name apart from Legend Season and tier evidence, so a player
 # outside Legend still has a name; an uncertain newest profile names no league.
+# Legend I is named so whatever the game calls it: since 16 November 2026 the
+# game says "Legend League I", and the website checks for "Legend I".
 NEWEST_PROFILE_JOIN = """
     LEFT JOIN LATERAL (
         SELECT version.name, version.profile_json -> 'clan' ->> 'name' AS clan,
-               CASE WHEN version.eligibility_state <> 'uncertain'
-                    THEN version.league_tier_name END AS league,
+               CASE version.eligibility_state
+                    WHEN 'eligible' THEN 'Legend I'
+                    WHEN 'ineligible' THEN version.league_tier_name END AS league,
                version.player_id
         FROM player_profile_versions AS version
         CROSS JOIN LATERAL (

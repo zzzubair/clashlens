@@ -40,6 +40,14 @@ RECOGNIZED_NON_LEGEND_TIERS_V1 = {
     105000031: "Electro League 31", 105000032: "Electro League 32", 105000033: "Electro League 33",
     105000034: "Legend III", 105000035: "Legend II",
 }
+# The game renamed its three Legend tiers on 16 November 2026, between 12:21
+# and 12:31 UTC: the same IDs, named as below. Each ID takes its old name or
+# this one, so older saved responses read as before; the tiers below Legend
+# III kept their names.
+RENAMED_LEGEND_TIERS = {
+    105000034: "Legend League III", 105000035: "Legend League II",
+    LEGEND_I_TIER_ID: "Legend League I",
+}
 _PLAYER_TAG_RE = re.compile(r"^#[0289PYLQGRJCUV]+$")
 
 
@@ -234,14 +242,15 @@ def _classify_league_tier(value: Any) -> tuple[int, str, str, str, str]:
         return 0, "", "uncertain", "malformed_league_tier", "conflict"
     if not isinstance(tier_name, str) or not tier_name:
         return tier_id, "", "uncertain", "malformed_league_tier", "conflict"
+    renamed = RENAMED_LEGEND_TIERS.get(tier_id)
     if tier_id == LEGEND_I_TIER_ID:
-        if tier_name == LEGEND_I_TIER_NAME:
+        if tier_name in (LEGEND_I_TIER_NAME, renamed):
             return tier_id, tier_name, "eligible", "confirmed_legend_i", "accepted"
         return tier_id, tier_name, "uncertain", "known_tier_name_conflict", "conflict"
     expected_non_legend_name = RECOGNIZED_NON_LEGEND_TIERS_V1.get(tier_id)
     if expected_non_legend_name is None:
         return tier_id, tier_name, "uncertain", "unknown_tier_id", "conflict"
-    if tier_name != expected_non_legend_name:
+    if tier_name not in (expected_non_legend_name, renamed):
         return tier_id, tier_name, "uncertain", "known_tier_name_conflict", "conflict"
     return tier_id, tier_name, "ineligible", "confirmed_non_legend_i", "accepted"
 
