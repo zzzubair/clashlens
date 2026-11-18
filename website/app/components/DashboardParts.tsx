@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { type MouseEvent, type ReactNode } from "react";
 
 import { DashboardIcon, type IconName } from "./DashboardIcon";
 
@@ -51,13 +51,27 @@ export function CardHead({
 export function InfoTip({ label, children }: { label: string; children: ReactNode }) {
   return (
     <details className="dash-info">
-      <summary title={label}>
+      <summary title={label} onClick={growFromButton}>
         <span aria-hidden="true">ⓘ</span>
         <span className="sr-only">{label}</span>
       </summary>
       <div className="dash-info-body">{children}</div>
     </details>
   );
+}
+
+// A note under a summary grows out of wherever its ⓘ sits, not the note's
+// corner. Opened here, not by the browser, so the grow point is set before the
+// first frame, and measured from layout, not the box the animation shrinks.
+export function growFromButton(event: MouseEvent<HTMLElement>) {
+  const summary = event.currentTarget;
+  const details = summary.parentElement as HTMLDetailsElement;
+  const body = summary.nextElementSibling as HTMLElement;
+  if (details.open) return;
+  event.preventDefault();
+  details.open = true;
+  const x = summary.offsetLeft + summary.offsetWidth / 2 - body.offsetLeft;
+  body.style.transformOrigin = `${x}px 0`;
 }
 
 export function Switch<Value extends string>({

@@ -476,10 +476,6 @@ body {
   .search-dropdown {
     transform-origin: top;
   }
-  /* These open under a trigger at their left edge. */
-  :is(.dash-info-body, .last-days-body) {
-    transform-origin: top left;
-  }
   /* More is the bar's last tab, under the panel. */
   .site-menu-panel {
     transform-origin: bottom right;
