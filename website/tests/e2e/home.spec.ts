@@ -446,6 +446,8 @@ test("header search is a full-width sheet on phones and jumps to an exact tag", 
     page.getByRole("button", { name: "Search players" }).click(),
   );
   const panel = page.locator("#header-search-panel");
+  // Measure the sheet at rest, after it has grown open.
+  await panel.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
   const bounds = await panel.boundingBox();
   expect(bounds?.x).toBe(0);
   expect(bounds?.width).toBe(375);

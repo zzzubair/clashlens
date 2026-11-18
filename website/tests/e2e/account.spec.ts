@@ -184,8 +184,11 @@ test("the account name opens your profile, tools, Settings and Sign out; Join Di
   await expect(page).toHaveURL(/\/users\/[a-z][a-z0-9_]+$/);
   await expect(account).toBeHidden();
 
+  // Playwright's click never retries in a page without scripts once it sees
+  // the menu still growing, so this visit asks for no motion.
   const noScript = await browser.newContext({
     javaScriptEnabled: false,
+    reducedMotion: "reduce",
     baseURL,
     storageState: await page.context().storageState(),
   });

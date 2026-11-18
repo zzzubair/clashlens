@@ -48,6 +48,8 @@ test("on a phone the bottom bar opens each tab and More, and hides nothing", asy
   const discord = sheet.getByRole("link", { name: /^Join Discord/ });
   await expect(discord).toBeVisible();
   await expect(discord).toContainText("Join Discord");
+  // Measure the sheet at rest, after it has grown open.
+  await sheet.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
   const row = (await discord.boundingBox())!;
   expect(row.height).toBeGreaterThanOrEqual(44);
   expect(row.width).toBe((await watchlists.boundingBox())!.width);
