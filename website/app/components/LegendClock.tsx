@@ -474,6 +474,7 @@ export function LegendClock({
       </button>
       {openMark ? (
         <MarkDetail
+          key={phone ? "sheet" : open?.index}
           mark={openMark}
           format={format}
           phone={phone}
