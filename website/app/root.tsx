@@ -260,7 +260,9 @@ function useReplayGrowOnOpen() {
     const observer = new MutationObserver((changes) => {
       for (const { target } of changes) {
         if (!(target instanceof HTMLDetailsElement) || !target.open) continue;
-        for (const panel of target.querySelectorAll<HTMLElement>(":scope > :not(summary)")) {
+        for (const panel of target.querySelectorAll<HTMLElement>(
+          ":scope > :not(summary)",
+        )) {
           panel.style.animation = "none";
           void panel.offsetWidth;
           panel.style.animation = "";
