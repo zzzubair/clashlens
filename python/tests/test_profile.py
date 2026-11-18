@@ -183,6 +183,34 @@ def test_profile_parser_recognizes_every_tier_family_below_legend_i(
     assert profile.source_contract_state == "accepted"
 
 
+# Every Legend tier name production saved from 15 to 18 November 2026. The
+# game renamed the three Legend tiers between 12:21 and 12:31 UTC on 16
+# November, and until this was read every profile under a new name was kept
+# uncertain: on 18 November profile version 5853669 was ID 105000036 named
+# "Legend League I". The tiers below kept their names, and Unranked
+# (105000000) stays uncertain.
+@pytest.mark.parametrize(
+    "tier_id,tier_name,state,reason",
+    [
+        (105000036, "Legend I", "eligible", "confirmed_legend_i"),
+        (105000036, "Legend League I", "eligible", "confirmed_legend_i"),
+        (105000035, "Legend II", "ineligible", "confirmed_non_legend_i"),
+        (105000035, "Legend League II", "ineligible", "confirmed_non_legend_i"),
+        (105000034, "Legend III", "ineligible", "confirmed_non_legend_i"),
+        (105000034, "Legend League III", "ineligible", "confirmed_non_legend_i"),
+    ],
+)
+def test_profile_parser_reads_the_legend_tiers_under_old_and_new_names(
+    tier_id, tier_name, state, reason
+) -> None:
+    profile = _tier_profile({"id": tier_id, "name": tier_name})
+
+    assert (profile.league_tier_id, profile.league_tier_name) == (tier_id, tier_name)
+    assert profile.eligibility_state == state
+    assert profile.eligibility_reason == reason
+    assert profile.source_contract_state == "accepted"
+
+
 def test_profile_parser_catalogue_covers_each_lower_tier_once() -> None:
     assert sorted(RECOGNIZED_NON_LEGEND_TIERS_V1) == list(range(105000001, 105000036))
     assert len(set(RECOGNIZED_NON_LEGEND_TIERS_V1.values())) == 35
@@ -196,6 +224,13 @@ def test_profile_parser_catalogue_covers_each_lower_tier_once() -> None:
         ({"id": 105000031, "name": "Dragon League 31"}, "known_tier_name_conflict"),
         ({"id": 105000034, "name": "Legend I"}, "known_tier_name_conflict"),
         ({"id": 105000036, "name": "Legend II"}, "known_tier_name_conflict"),
+        # A new name still has to match its own ID.
+        ({"id": 105000036, "name": "Legend League II"}, "known_tier_name_conflict"),
+        ({"id": 105000035, "name": "Legend League I"}, "known_tier_name_conflict"),
+        ({"id": 105000034, "name": "Legend League II"}, "known_tier_name_conflict"),
+        ({"id": 105000033, "name": "Legend League III"}, "known_tier_name_conflict"),
+        ({"id": 105000036, "name": "Legend League"}, "known_tier_name_conflict"),
+        ({"id": 105000037, "name": "Legend League 0"}, "unknown_tier_id"),
     ],
 )
 def test_profile_parser_keeps_unlisted_tiers_uncertain(tier, reason) -> None:
@@ -220,9 +255,12 @@ def _negative_profile(changes: dict[str, object]) -> bytes:
     return json.dumps({key: value for key, value in payload.items() if value is not None}).encode()
 
 
-def test_profile_parser_keeps_a_negative_lower_league_count_as_raw_evidence() -> None:
+@pytest.mark.parametrize("tier_name", ["Legend II", "Legend League II"])
+def test_profile_parser_keeps_a_negative_lower_league_count_as_raw_evidence(
+    tier_name,
+) -> None:
     profile = parse_profile(
-        _negative_profile({}),
+        _negative_profile({"leagueTier": {"id": 105000035, "name": tier_name}}),
         expected_tag="#2PP",
         observed_at=datetime(2026, 11, 4, 4, 36, tzinfo=UTC),
         endpoint_version="profile-v1",
@@ -230,7 +268,7 @@ def test_profile_parser_keeps_a_negative_lower_league_count_as_raw_evidence() ->
 
     assert profile.trophies == -179
     assert profile.profile_json["trophies"] == -179
-    assert (profile.league_tier_id, profile.league_tier_name) == (105000035, "Legend II")
+    assert (profile.league_tier_id, profile.league_tier_name) == (105000035, tier_name)
     assert profile.eligibility_state == "ineligible"
     assert profile.eligibility_reason == "confirmed_non_legend_i"
     # Season 0 still leaves the answer unconfirmed, as for any lower league.
