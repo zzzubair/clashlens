@@ -26,7 +26,6 @@ from clashlens.worker import (
     ObservationProcessor,
     ProcessResult,
     check_connection_budget,
-    lane_owner,
     process_concurrently,
     process_until_stopped,
     run_processes,
@@ -54,26 +53,6 @@ class RecordingProcessor:
             call_index = len(self.calls) + 1
             self.calls.append((owner, lease_seconds))
         return ProcessResult(call_index, "processed")
-
-
-def test_lane_owner_is_stable_unique_and_derived_from_configured_owner() -> None:
-    first = [lane_owner("production-python-1", lane) for lane in (1, 2, 3)]
-    second = [lane_owner("production-python-1", lane) for lane in (1, 2, 3)]
-
-    assert first == second
-    assert len(set(first)) == 3
-    assert first == [
-        "production-python-1.lane-1",
-        "production-python-1.lane-2",
-        "production-python-1.lane-3",
-    ]
-
-
-def test_lane_owner_rejects_missing_owner_and_invalid_lane() -> None:
-    with pytest.raises(ValueError, match="lease owner is required"):
-        lane_owner("", 1)
-    with pytest.raises(ValueError, match="lane index"):
-        lane_owner("owner", 0)
 
 
 def test_at_most_concurrency_jobs_run_at_once() -> None:

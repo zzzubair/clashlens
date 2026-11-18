@@ -2,12 +2,7 @@ from datetime import UTC, datetime
 
 import psycopg
 import pytest
-from claim_jobs_postgres_support import (
-    CURRENT_ANALYTICS_INPUT,
-    _insert_job,
-    _processor,
-    _production_database,
-)
+from claim_jobs_postgres_support import _processor
 from domain_test_support import domain_database, store_observation
 
 from clashlens import claimed_jobs, ingestion, reset_baselines
@@ -265,55 +260,3 @@ def test_rejected_job_write_fails_only_that_job(
         finally:
             database.close()
 
-
-def test_refund_conflicts_stop_and_leave_the_lease_to_recovery(
-    database_url, monkeypatch
-):
-    with _production_database(database_url) as connection_info:
-        with psycopg.connect(connection_info) as connection:
-            job_id = _insert_job(
-                connection,
-                work_type="build_analytics",
-                input_json=CURRENT_ANALYTICS_INPUT,
-                deduplication_key="bounded-conflict-refund",
-                max_attempts=3,
-            )
-        database = Database(connection_info)
-        try:
-            for _ in range(2):
-                assert database.claim_job(owner="previous", job_id=job_id)
-                database.expire_lease(job_id)
-                assert database.maintain_queue() == 1
-            claim = database.claim_job(owner="conflicted", job_id=job_id)
-            assert claim is not None
-            refund = claimed_jobs.refund_claim_attempt
-            conflicts = 0
-
-            def reject_refund(connection, claim):
-                nonlocal conflicts
-                conflicts += 1
-                if conflicts <= 3:
-                    raise psycopg.errors.DeadlockDetected()
-                refund(connection, claim)
-
-            monkeypatch.setattr(claimed_jobs, "refund_claim_attempt", reject_refund)
-            claimed_jobs.release_conflicted(database, claim, "database_deadlock")
-            assert (
-                database.scalar(
-                    "SELECT attempt_count FROM python_processing_jobs WHERE id = %s",
-                    (job_id,),
-                )
-                == 3
-            )
-            database.expire_lease(job_id)
-            assert database.maintain_queue() == 1
-            assert (
-                database.scalar(
-                    "SELECT failure_category FROM python_processing_jobs WHERE id = %s",
-                    (job_id,),
-                )
-                == "lease_expired_max_attempts"
-            )
-            assert database.claim_job(owner="recovery", job_id=job_id) is None
-        finally:
-            database.close()

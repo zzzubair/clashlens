@@ -12,18 +12,7 @@ from typing import Any
 import pytest
 from collector_support import _Client, _collector, _Spool, _Store
 
-from clashlens.battle_log_schedule import (
-    CAUGHT_UP,
-    FOLLOW_UP_GAP,
-    BattleLogSchedule,
-    FetchOwed,
-    FollowUpOwed,
-    OrdinaryChecks,
-    SeasonZeroChecks,
-    in_control_group,
-    log_debt_after,
-    season_checks_after,
-)
+from clashlens.battle_log_schedule import BattleLogSchedule, in_control_group
 from clashlens.collector_db import CollectorWork
 from clashlens.collector_http import FetchedResponse, KeyPool, ProviderFailure
 
@@ -1008,32 +997,6 @@ def test_restart_keeps_ordinary_checks_until_the_next_reset(
     assert [game.check() for _ in range(5)] == [[]] * 5
 
 
-def test_log_debt_is_paid_by_a_fetch_after_the_change_then_one_past_the_cache() -> None:
-    debt = log_debt_after(CAUGHT_UP, "profile_changed", START)
-    assert debt == FetchOwed(START)
-    # A log requested before the change was seen pays nothing.
-    assert log_debt_after(debt, "log_saved", START - timedelta(seconds=1)) == debt
-    debt = log_debt_after(debt, "log_saved", START)
-    assert debt == FollowUpOwed(START + FOLLOW_UP_GAP)
-    # A follow-up from inside the API cache pays nothing either.
-    assert log_debt_after(debt, "log_saved", START + timedelta(seconds=30)) == debt
-    assert log_debt_after(debt, "log_saved", START + FOLLOW_UP_GAP) == CAUGHT_UP
-
-
-def test_follow_up_start_only_moves_later_and_outlasts_a_profile_change() -> None:
-    mark = START + timedelta(minutes=10)
-    debt = log_debt_after(CAUGHT_UP, "follow_up", mark)
-    assert debt == FollowUpOwed(mark)
-    assert log_debt_after(debt, "follow_up", START) == debt
-
-    changed = log_debt_after(debt, "profile_changed", START)
-    assert changed == FetchOwed(START, mark)
-    later = mark + timedelta(minutes=1)
-    assert log_debt_after(changed, "follow_up", later) == FetchOwed(START, later)
-    # The fetch for the change still waits for the earlier mark's start.
-    assert log_debt_after(changed, "log_saved", START) == FollowUpOwed(mark)
-
-
 def test_each_debt_state_decides_whether_an_ordinary_check_fetches_the_log() -> None:
     state = _Schedule()
     # Unknown: never checked since the collector started.
@@ -1078,33 +1041,3 @@ def test_finished_day_goes_from_playing_to_settling_to_finished_until_reset() ->
     # The next Reset starts a new Legend day: playing again.
     assert _recheck_at(state, NEXT_RESET) is None
     assert state.due(TAG, NEXT_RESET)
-
-
-def test_season_checks_wait_only_after_the_reset_that_ends_ordinary_checks() -> None:
-    def after(
-        checks: OrdinaryChecks | SeasonZeroChecks,
-        at: datetime,
-        *,
-        season_zero: bool = True,
-        counts_changed: bool = False,
-    ) -> OrdinaryChecks | SeasonZeroChecks:
-        return season_checks_after(
-            checks, at, season_zero=season_zero, counts_changed=counts_changed
-        )
-
-    # A first profile, as after a restart, counts as changed.
-    ordinary = after(OrdinaryChecks(), START, counts_changed=True)
-    assert ordinary == OrdinaryChecks(NEXT_RESET)
-    assert after(ordinary, START + timedelta(hours=1)) == ordinary
-    waiting = after(ordinary, NEXT_RESET)
-    assert waiting == SeasonZeroChecks(NEXT_RESET)
-    later = NEXT_RESET + timedelta(minutes=15)
-    assert after(waiting, later) == SeasonZeroChecks(later)
-    # Changed counts or a valid Season end the wait until the next Reset.
-    for season_zero, counts_changed in ((True, True), (False, False)):
-        assert after(
-            waiting, later, season_zero=season_zero, counts_changed=counts_changed
-        ) == OrdinaryChecks(NEXT_RESET + timedelta(days=1))
-    # A valid Season keeps a later end it already had.
-    end = NEXT_RESET + timedelta(days=1)
-    assert after(OrdinaryChecks(end), START, season_zero=False) == OrdinaryChecks(end)

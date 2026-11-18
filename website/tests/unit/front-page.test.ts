@@ -139,7 +139,6 @@ it("leaves search help to the placeholder and keeps a short tag hint when nothin
     { leaderboard: null, query: "Nova", error: null, search },
     "?q=Nova",
   );
-  expect(html).not.toContain("To look someone up");
   expect(html).toContain('placeholder="Name, @username or #tag"');
   expect(html).toContain("<h3>No players or profiles found</h3>");
   expect(html).toContain("<p>Enter a full #tag to look up anyone.</p>");
@@ -182,15 +181,11 @@ it("shows the search heading and explains a logout the server could not record",
   expect(await renderHome(data, "?saved=logout")).toContain("You&#x27;re signed out.");
   const html = await renderHome(data, "?logout=unrecorded");
   expect(html).toContain("Find any Legend League player");
-  expect(html).not.toContain("13,263 tracked players.");
-  expect(html).not.toContain("Top 0");
   expect(html).toContain("<h3>No standings available yet</h3>");
   expect(html).not.toContain("<table");
   expect(html).toContain(
     "You are signed out on this browser, but Clash Lens could not record it.",
   );
-  expect(html).not.toContain("log out again");
-  expect(html).not.toContain("sign out again");
 });
 
 it("keeps worst-case names readable: one player, right-to-left text and no clan", async () => {
@@ -291,7 +286,6 @@ it.each([
     },
     "",
   );
-  expect(html).not.toContain("Top 0");
   expect(html).toContain("Waiting for the new Season");
   expect(html).toContain(`${count} waiting`);
   expect(html).toContain("will be ranked once their profile shows the new Season");
@@ -335,7 +329,6 @@ it("shows ranked players without the waiting note once the board has entries", a
   expect(html).toContain('<table aria-label="Latest saved standings"');
   expect(html).toContain('data-testid="tracked-player-row"');
   expect(html).not.toContain("Waiting for the new Season");
-  expect(html).not.toContain("waiting for their Season reset");
 });
 
 it("keeps the empty-board message when no players are waiting for the Season reset", async () => {

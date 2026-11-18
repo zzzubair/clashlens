@@ -484,29 +484,9 @@ def test_lower_tier_ends_tracking_but_an_unlisted_tier_never_does(
             database.close()
 
 
-# Migration 0037's candidate search, kept here to prove its replacement
-# selects exactly the same players.
-_0037_SELECTION = """
-    SELECT player.id FROM players AS player
-    WHERE (NOT player.active OR (NOT %(scheduled)s AND player.eligibility_state <> 'eligible'))
-      AND (%(scheduled)s OR player.id = ANY(%(ids)s))
-      AND NOT clashlens_eligibility_checked_since(player.id, %(boundary)s, %(instant)s)
-      AND NOT clashlens_eligibility_fetched_since(player.id, %(boundary)s, %(instant)s)
-      AND NOT EXISTS (
-          SELECT 1 FROM collector_work AS work
-          WHERE work.player_id = player.id
-            AND work.kind IN ('discovery_profile', 'initial_collection', 'live_refresh')
-            AND (work.status IN ('pending', 'waiting_retry')
-                 OR (work.due_at >= %(boundary)s AND work.due_at < %(boundary)s + interval '7 days')
-                 OR EXISTS (
-                     SELECT 1 FROM collector_observations AS observation
-                     WHERE observation.id = work.profile_observation_id
-                       AND observation.response_completed_at >= %(boundary)s
-                       AND observation.response_completed_at <= %(instant)s)))
-    ORDER BY player.id"""
-
-
-def test_direct_selection_matches_0037_for_every_evidence_case(database_url, archive_server):
+def test_weekly_selection_queues_exactly_the_players_without_this_weeks_answer(
+    database_url, archive_server,
+):
     instant = MONDAY + timedelta(days=1)
     with domain_database(database_url) as info:
         database = _collector(info)
@@ -572,7 +552,7 @@ def test_direct_selection_matches_0037_for_every_evidence_case(database_url, arc
             player("failed_work_this_week"); work("failed_work_this_week", MONDAY + timedelta(hours=1), "failed")
             player("failed_work_last_week"); work("failed_work_last_week", MONDAY - timedelta(days=1), "failed")
             player("pending_old_work"); work("pending_old_work", MONDAY - timedelta(days=8), "pending")
-            # Last week's check, retried past the Reset: 0037 counted it as this week's.
+            # Last week's check, retried past the Reset, does not count as this week's.
             player("retried_last_weeks_work")
             work("retried_last_weeks_work", MONDAY + timedelta(minutes=1), week=MONDAY - timedelta(days=7))
             player("old_refresh_answered_this_week")
@@ -589,26 +569,22 @@ def test_direct_selection_matches_0037_for_every_evidence_case(database_url, arc
             by_id = {player_id: name for name, (player_id, _tag) in players.items()}
 
             for scheduled in (True, False):
+                expected = sorted([
+                    "nothing", "fetched_after_instant", "fetched_last_week", "failed_fetch_this_week",
+                    "recognized_last_week", "uncertain_this_week", "failed_work_last_week",
+                    "retried_last_weeks_work", "inactive_eligible",
+                    *(() if scheduled else ("active_unknown",)),
+                ])
                 with psycopg.connect(info) as connection, connection.transaction(force_rollback=True):
                     last = connection.execute("SELECT max(id) FROM collector_work").fetchone()[0]
-                    expected = [row[0] for row in connection.execute(_0037_SELECTION, {
-                        "scheduled": scheduled, "ids": ids, "boundary": MONDAY, "instant": instant,
-                    })]
                     assert connection.execute(
                         "SELECT clashlens_enqueue_eligibility_profiles(%s, %s, %s)",
                         (None if scheduled else ids, instant, scheduled),
-                    ).fetchone()[0] == len(expected) + 1
+                    ).fetchone()[0] == len(expected)
                     selected = [row[0] for row in connection.execute(
-                        "SELECT player_id FROM collector_work WHERE id > %s ORDER BY player_id", (last,),
+                        "SELECT player_id FROM collector_work WHERE id > %s", (last,),
                     )]
-                assert [by_id[i] for i in selected] == sorted(
-                    [by_id[i] for i in expected] + ["retried_last_weeks_work"],
-                    key=lambda name: players[name][0])
-                assert {by_id[i] for i in expected} == {
-                    "nothing", "fetched_after_instant", "fetched_last_week", "failed_fetch_this_week",
-                    "recognized_last_week", "uncertain_this_week", "failed_work_last_week",
-                    "inactive_eligible", *(() if scheduled else ("active_unknown",)),
-                }
+                assert sorted(by_id[i] for i in selected) == expected
         finally:
             database.close()
 

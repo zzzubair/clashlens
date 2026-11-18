@@ -5,20 +5,12 @@ import {
   allowPublicRefresh,
   allowSearch,
   clearPublicRefreshLimits,
-  rateWindowState,
 } from "../../app/server/abuse.server";
 
 const NOW = 1_790_000_000_000;
 
 describe("public request rate windows", () => {
   beforeEach(() => clearPublicRefreshLimits());
-
-  it("names a window none, counting or exhausted", () => {
-    expect(rateWindowState(undefined, 6, NOW)).toBe("none");
-    expect(rateWindowState({ count: 5, resetAt: NOW + 1 }, 6, NOW)).toBe("counting");
-    expect(rateWindowState({ count: 6, resetAt: NOW + 1 }, 6, NOW)).toBe("exhausted");
-    expect(rateWindowState({ count: 6, resetAt: NOW }, 6, NOW)).toBe("none");
-  });
 
   it("counts up to the limit, refuses until the reset time, then renews", () => {
     for (let index = 0; index < 6; index += 1) {

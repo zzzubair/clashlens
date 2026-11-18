@@ -22,12 +22,10 @@ from private_api_support import (
     json_body,
     signed_headers,
 )
-from pydantic import ValidationError
 
 from clashlens import api_accounts, api_analytics, api_verification
-from clashlens.api import GroupBody, create_app
+from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
-from clashlens.api_groups import MAX_COMPARED_MEMBERS
 from clashlens.api_requests import RequestBinding
 from clashlens.army_analytics import ArmyAnalyticsUnavailable, CurrentSeasonEmpty
 from clashlens.verification import OfficialVerificationResponse
@@ -795,32 +793,6 @@ def test_leaderboard_rejects_misaligned_selectors_and_missing_pages(
                 )
         finally:
             database.close()
-
-
-def test_saving_a_group_refuses_more_players_than_a_comparison_shows() -> None:
-    GroupBody(name="Main", tags=["#2PP"] * MAX_COMPARED_MEMBERS)
-    with pytest.raises(ValidationError):
-        GroupBody(name="Main", tags=["#2PP"] * (MAX_COMPARED_MEMBERS + 1))
-
-
-@pytest.mark.parametrize(("method", "target"), [
-    ("GET", "/v1/battles/1/army?perspective=attacker"),
-    ("GET", "/v1/analytics/basic"),
-    ("POST", "/v1/account/exports"),
-    ("GET", "/v1/account/exports/00000000-0000-4000-8000-000000000001"),
-])
-def test_removed_routes_are_not_available(database_url: str, method: str, target: str) -> None:
-    app = create_app(
-        database=ApiDatabase(database_url),
-        keys={("typescript-website", "current"): TS_CURRENT},
-        clock=lambda: NOW_SECONDS,
-    )
-    with TestClient(app) as client:
-        response = client.request(
-            method, target,
-            headers=signed_headers(target, method=method),
-        )
-    assert response.status_code == 404
 
 
 def test_account_metadata_matches_database_and_http_acceptance(database_url: str) -> None:

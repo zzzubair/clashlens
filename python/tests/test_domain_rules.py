@@ -8,7 +8,6 @@ import pytest
 
 from clashlens.domain import (
     HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION,
-    SEASON_ANCHOR_RULE_VERSION,
     TROPHY_ALLOCATION_RULE_VERSION,
     DomainRuleError,
     allocate_trophies,
@@ -154,7 +153,6 @@ def test_ranked_day_uses_half_open_0500_utc_boundaries_and_anchor() -> None:
     assert first.end == datetime(2026, 7, 14, 5, 0, tzinfo=UTC)
     assert first.day_number == 1
     assert first.official_season_id == "1783918800"
-    assert first.anchor_rule_version == SEASON_ANCHOR_RULE_VERSION
     assert last.day_number == 28
     assert next_season.day_number == 1
     assert next_season.official_season_id == "1786338000"

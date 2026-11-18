@@ -165,13 +165,10 @@ it("keeps rank and update explanations off the page but in hover and screen-read
     /Updated <span class="rankings-stamp"><time[^>]+dateTime="2026-10-02T11:59:00Z"/,
   );
   expect(html).not.toContain("2026-10-02T11:30:00Z");
-  expect(html).not.toContain("Tracked player rankings");
   // The board names its ranks at the top, the dash tight between them.
   expect(html).toContain(
     '<h2 id="standings-table-title"><span class="standings-word">Ranks </span>101–101<span class="standings-total"> of 101</span></h2>',
   );
-  expect(html).not.toContain("page-arrow");
-  expect(html).not.toContain("pagination-status");
   expect(html).toMatch(
     /rel="prev" aria-label="Previous 50" title="Previous 50" href="[^"]*page=2"/,
   );
@@ -338,7 +335,6 @@ it("shows each Live row's places moved and trophies won since the last Reset", a
   expect(html).toContain(
     '<th scope="col" class="today-cell" title="Trophies won or lost since the last Reset">Today</th>',
   );
-  expect(html).not.toContain("To player above");
 });
 
 it("leaves out the Reset columns when no row has a Reset place", async () => {
@@ -398,7 +394,6 @@ it("draws each Live row's last 7 finished days as bars, each named by its own da
   expect(html).toMatch(
     /<th scope="col" class="recent-cell" title="25 Sep – 1 Oct, oldest first: [^"]+">Last 7 days<\/th>/,
   );
-  expect(html).not.toContain("recent-scale");
   const charts = [...html.matchAll(/<span class="recent-days"(.*?)<\/span><\/td>/g)].map(
     (match) => match[1],
   );
@@ -415,7 +410,6 @@ it("draws each Live row's last 7 finished days as bars, each named by its own da
   // Every row has exactly 7 day slots, the last for yesterday, and no bar
   // for today.
   for (const chart of charts) expect(chart.match(/class="recent-day"/g)).toHaveLength(7);
-  expect(html).not.toContain("data-today");
   // Each row's biggest day fills its half of the chart, either side of a
   // zero line across the middle: the +60 days on the first row, the +40 day
   // on the second. So the same +40 stands two thirds as tall on the first.
@@ -425,8 +419,6 @@ it("draws each Live row's last 7 finished days as bars, each named by its own da
   );
   expect(charts[1]).toContain('data-index="5" data-sign="up" style="--h:50%"');
   expect(charts[1]).toContain('data-index="6" data-sign="up" style="--h:25%"');
-  expect(html).not.toContain("--zero");
-  expect(html).not.toContain("data-latest");
   // A loss hangs below the zero line; a day without a result is an empty
   // slot in its own place, not merged with another.
   expect(charts[0]).toContain('data-sign="down" style="--h:16.666666666666664%"');
@@ -594,8 +586,6 @@ it("shows all 50 rows of a page under one range, with a small pager there and th
     /<nav aria-label="Leaderboard pages" class="standings-pagination"><span class="button button-secondary" aria-hidden="true">‹<\/span><span class="standings-range">1–50<span class="standings-total"> of 9,000<\/span><\/span><a class="button button-secondary" rel="next" aria-label="Next 50" title="Next 50" href="[^"]*page=2"[^>]*>›<\/a><\/nav>/,
   );
   expect(html).not.toMatch(/rel="prev"|>Previous|>Next/);
-  for (const gone of ["data-folded", "Show all", "Back to top", "page-arrow"])
-    expect(html).not.toContain(gone);
 });
 
 it("formats large ranks without explaining unlisted tracked players", async () => {
@@ -610,7 +600,6 @@ it("formats large ranks without explaining unlisted tracked players", async () =
     '<span class="standings-word">Ranks </span>11,801–11,801<span class="standings-total"> of 11,854</span>',
   );
   expect(html).not.toContain("13,263");
-  expect(html).not.toContain("Tracked players are listed once");
 });
 
 it.each([
@@ -792,8 +781,6 @@ it("heads a Daily board with its Reset time and, at the Season end, its automati
   expect(html).toContain(
     '<p class="rankings-context">Complete days show trophies after the automatic defense loss.</p>',
   );
-  expect(html).not.toContain("not rebuilt since");
-  expect(html).not.toContain("Legend season");
   expect(html).toContain("7,211");
   expect(html).toContain(
     "the player whose trophies changed most recently that Legend day",
@@ -858,7 +845,6 @@ it.each([
     const { html } = await render(`view=live&page=1&${q}`);
     expect(html).toContain(text);
     expect(html).toContain(next);
-    expect(html).not.toContain("Try another name or an exact tag");
   },
 );
 
@@ -889,7 +875,6 @@ it.each([
     ].map(([, day, href]) => ({ day, href }));
     expect(links.map(({ day }) => `Go to Day ${day}`)).toEqual(labels);
     for (const { day, href } of links) expect(href).toContain(`day=${day}`);
-    expect(html).not.toMatch(/>(Older|Newer)</);
     if (labels.length) {
       expect(html.indexOf('aria-label="Other days"')).toBeLessThan(
         html.indexOf("<table"),

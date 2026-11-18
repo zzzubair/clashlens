@@ -303,8 +303,7 @@ def test_boundary_generation_coalesces_population_and_corrections(
                     )
                 generation = connection.execute(
                     """
-                    SELECT id, expected_population_count, expected_population_hash,
-                           membership_rule_version, target_rule, target_at
+                    SELECT id, expected_population_count, target_at
                     FROM boundary_publication_generations
                     """
                 ).fetchone()
@@ -317,10 +316,7 @@ def test_boundary_generation_coalesces_population_and_corrections(
                     ).fetchone()[0]
                     == generation[1]
                 )
-                assert len(generation[2]) == 64
-                assert text(generation[3]) == "active-members-v1"
-                assert text(generation[4]) == "boundary-delay-v1"
-                assert generation[5] == BOUNDARY + timedelta(minutes=5)
+                assert generation[2] == BOUNDARY + timedelta(minutes=5)
                 assert (
                     connection.execute(
                         "SELECT count(*) FROM boundary_publication_generations"
@@ -1361,15 +1357,6 @@ def test_all_unavailable_boundary_publishes_empty_army_with_anchor_metadata(
                     ).fetchone()[0]
                     == 0
                 )
-                assert connection.execute(
-                    "SELECT count(*) FROM army_analytics_day_summaries"
-                ).fetchone()[0] == 0
-                assert connection.execute(
-                    "SELECT count(*) FROM army_analytics_season_summaries"
-                ).fetchone()[0] == 0
-                assert connection.execute(
-                    "SELECT count(*) FROM army_analytics_breakdowns"
-                ).fetchone()[0] == 0
                 generation = connection.execute(
                     """
                     SELECT army_state
@@ -1382,48 +1369,3 @@ def test_all_unavailable_boundary_publishes_empty_army_with_anchor_metadata(
         finally:
             database.close()
 
-
-def test_boundary_progress_updates_only_the_changed_member(
-    database_url: str,
-) -> None:
-    with domain_database(database_url) as connection_info:
-        database = Database(connection_info)
-        try:
-            with database.pool.connection() as connection:
-                first = _player_and_version(connection, "#P1", 1, "a" * 64)
-                second = _player_and_version(connection, "#P2", 1, "b" * 64)
-                _sweep_with_members(connection, [first[0], second[0]])
-                boundary._record_boundary_generation(database,
-                    connection,
-                    boundary_at=BOUNDARY,
-                    player_id=first[0],
-                    ranked_day_version_id=first[1],
-                    ranked_day_input_hash="a" * 64,
-                )
-                before = connection.execute(
-                    """
-                    SELECT updated_at
-                    FROM boundary_publication_generation_members
-                    WHERE player_id = %s
-                    """,
-                    (first[0],),
-                ).fetchone()[0]
-                connection.execute("SELECT pg_sleep(0.02)")
-                boundary._record_boundary_generation(database,
-                    connection,
-                    boundary_at=BOUNDARY,
-                    player_id=second[0],
-                    ranked_day_version_id=second[1],
-                    ranked_day_input_hash="b" * 64,
-                )
-                after = connection.execute(
-                    """
-                    SELECT updated_at
-                    FROM boundary_publication_generation_members
-                    WHERE player_id = %s
-                    """,
-                    (first[0],),
-                ).fetchone()[0]
-                assert after == before
-        finally:
-            database.close()

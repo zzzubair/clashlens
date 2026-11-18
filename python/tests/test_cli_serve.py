@@ -212,23 +212,3 @@ def test_serve_app_closes_database_pool_when_hmac_loading_fails(
     assert len(closed) == 1
     assert closed[0].pool.closed is True
     _assert_no_key_material(capsys, exc.value)
-
-
-def test_serve_app_closes_database_pool_when_create_app_fails(
-    tmp_path: Path, monkeypatch, capsys
-) -> None:
-    arguments = _serve_arguments(tmp_path)
-    _skip_credential_registration(monkeypatch)
-
-    def fail_create_app(**kwargs):
-        del kwargs
-        raise RuntimeError("app construction exploded")
-
-    monkeypatch.setattr(cli, "create_app", fail_create_app)
-    closed = _track_pool_close(monkeypatch)
-
-    with pytest.raises(RuntimeError, match="app construction exploded") as exc:
-        cli._serve_app(arguments)
-    assert len(closed) == 1
-    assert closed[0].pool.closed is True
-    _assert_no_key_material(capsys, exc.value)

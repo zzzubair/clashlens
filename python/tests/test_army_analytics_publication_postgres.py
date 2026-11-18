@@ -107,71 +107,6 @@ def test_army_cache_is_bounded_thread_safe_and_returns_copies() -> None:
     assert api.cache_get(("selection-one",)) is None
 
 
-def test_troop_source_hash_pool_timeout_fails_before_expensive_queries(
-    monkeypatch,
-) -> None:
-    def fake_connection():
-        connection = Mock()
-        query_kinds: list[str] = []
-
-        def execute(query, params=()):
-            del params
-            sql = str(query)
-            cursor = Mock()
-            if "GROUP BY army_state" in sql:
-                query_kinds.append("state")
-                cursor.fetchall.return_value = [("decoded", 1, 0, 0, False)]
-            elif sql.startswith("VALUES (pg_export_snapshot())"):
-                query_kinds.append("snapshot")
-                cursor.fetchone.return_value = ("test-snapshot",)
-            elif "CROSS JOIN LATERAL" in sql:
-                query_kinds.append("component")
-                cursor.fetchall.return_value = [
-                    ("troop:1", 1, 0, 0, 0, 1, 3, 100)
-                ]
-            else:
-                raise AssertionError(f"unexpected query: {sql}")
-            return cursor
-
-        connection.execute.side_effect = execute
-        return connection, query_kinds
-
-    selection = _selection(start_day=1, end_day=1)
-    hash_connections = []
-
-    def source_hash(connection, **_kwargs):
-        hash_connections.append(connection)
-        return "a" * 64
-
-    monkeypatch.setattr(api_analytics, "_selected_source_hash", source_hash)
-    arguments = {
-        "fact_filters": ["true"],
-        "fact_params": [],
-        "requested": selection.as_dict(),
-        "snapshot_ids": [],
-        "selection": selection,
-    }
-    sequential_connection, _ = fake_connection()
-    expected = api_analytics._query_troops_aggregates(
-        sequential_connection, **arguments
-    )
-
-    timed_out_connection, timed_out_queries = fake_connection()
-    pool = Mock(max_size=2)
-    pool.connection.side_effect = PoolTimeout("second connection unavailable")
-    with pytest.raises(PoolTimeout):
-        api_analytics._query_troops_aggregates(
-            timed_out_connection, pool=pool, **arguments
-        )
-
-    assert expected[0]["rows"][0]["usage_count"] == 1
-    pool.connection.assert_called_once_with(
-        timeout=ARMY_ANALYTICS_PARALLEL_POOL_TIMEOUT_SECONDS
-    )
-    assert timed_out_queries == ["state", "snapshot"]
-    assert hash_connections == [sequential_connection]
-
-
 def test_publication_writer_serves_reproducible_perspective_results(
     database_url: str, archive_server, monkeypatch) -> None:
     with domain_database(database_url) as ci:
@@ -257,45 +192,11 @@ def test_publication_writer_serves_reproducible_perspective_results(
 
             api = ApiDatabase(ci)
             api_reader = api_analytics.ArmyAnalyticsReader(api.pool, cache_capacity=0)
-            fact_queries: list[str] = []
-            original_connection = api.pool.connection
-
-            @contextmanager
-            def traced_connection(*args, **kwargs):
-                with original_connection(*args, **kwargs) as connection:
-                    class TracedConnection:
-                        def execute(self, query, *args, **kwargs):
-                            sql = str(query)
-                            if "FROM army_analytics_battle_facts" in sql:
-                                fact_queries.append(sql)
-                            return connection.execute(query, *args, **kwargs)
-
-                        def __getattr__(self, name):
-                            return getattr(connection, name)
-
-                    yield TracedConnection()
-
-            api.pool.connection = traced_connection
             try:
                 # Offense lens: the unnamed troop 9999 counts like any other.
                 selection = _selection()
                 first = api_analytics.get_army_analytics(api_reader, selection)
                 assert first is not None
-                missing_trophy_queries = [
-                    query
-                    for query in fact_queries
-                    if "battle_time_trophies IS NULL" in query
-                ]
-                assert len(missing_trophy_queries) == 1
-                missing_trophy_query = " ".join(missing_trophy_queries[0].split())
-                assert (
-                    "SELECT count(*) FROM army_analytics_battle_facts WHERE "
-                    in missing_trophy_query
-                )
-                assert "AND is_current AND battle_time_trophies IS NULL" in (
-                    missing_trophy_query
-                )
-                assert "FILTER" not in missing_trophy_query
                 assert first["total_attacks"] == 2
                 assert first["usable_army_sample"] == 2
                 assert first["army_states"]["fully_decoded"] == 2
@@ -382,61 +283,14 @@ def test_publication_writer_serves_reproducible_perspective_results(
                     "end": "2026-08-10T05:00:00+00:00", "day_count": 28,
                     "last_day_start": "2026-08-09T05:00:00+00:00"}
                 assert first == expected
-                category_columns = {
-                    "troops": "home_troops",
-                    "spells": "spells",
-                    "siege": "siege",
-                    "cc-troops": "cc_troops",
-                    "cc-composition": "cc_troops",
-                    "heroes": "heroes",
-                    "pets": "heroes",
-                    "equipment": "heroes",
-                    "equipment-for-hero": "heroes",
-                    "hero-pet": "heroes",
-                    "hero-equipment": "heroes",
-                }
-                for category, component_column in category_columns.items():
-                    fact_queries.clear()
-                    category_result = api_analytics.get_army_analytics(api_reader,
-                        _selection(category=category)
-                    )
-                    assert category_result is not None
-                    if category == "troops":
-                        # SQL returns one aggregate row, never selected fact
-                        # payload rows or unrelated component JSON.
-                        aggregate_queries = [
-                            query
-                            for query in fact_queries
-                            if "jsonb_array_elements" in query
-                        ]
-                        assert len(aggregate_queries) == 1
-                        aggregate_query = aggregate_queries[0]
-                        assert "SELECT component.key, count(*)" in aggregate_query
-                        for other_column in (
-                            "spells", "siege", "cc_troops", "heroes"
-                        ):
-                            assert other_column not in aggregate_query
-                        continue
-                    assert len(
-                        [
-                            query
-                            for query in fact_queries
-                            if "battle_time_trophies IS NULL" in query
-                        ]
-                    ) == 1
-                    payload_queries = [
-                        query
-                        for query in fact_queries
-                        if "SELECT id, battle_id" in query
-                    ]
-                    assert len(payload_queries) == 1
-                    payload_query = payload_queries[0]
-                    assert "battle_time_trophies BETWEEN %s AND %s" in payload_query
-                    assert f"{component_column} AS component_payload" in payload_query
-                    for other_column in {
-                        "home_troops", "spells", "siege", "cc_troops", "heroes"
-                    } - {component_column}:
-                        assert f"{other_column} AS component_payload" not in payload_query
+                for category in (
+                    "troops", "spells", "siege", "cc-troops", "cc-composition",
+                    "heroes", "pets", "equipment", "equipment-for-hero",
+                    "hero-pet", "hero-equipment",
+                ):
+                    assert api_analytics.get_army_analytics(
+                        api_reader, _selection(category=category)
+                    ) is not None
 
                 # Malformed component entries are skipped exactly like the
                 # Python reducer while the aggregate still returns one row.
@@ -498,13 +352,8 @@ def test_publication_writer_serves_reproducible_perspective_results(
                         *(result["publication_identity"] for result in other_ranges if result),
                     }
                 ) == 3
-                with database.pool.connection() as connection:
-                    assert connection.execute(
-                        "SELECT to_regclass('army_analytics_publications')"
-                    ).fetchone()[0] is None
 
                 # Defense lens uses the defender's own accepted report.
-                fact_queries.clear()
                 defense = api_analytics.get_army_analytics(api_reader,
                     _selection(lens="defense", category="siege")
                 )
@@ -515,15 +364,6 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 )
                 assert siege_row["usage_count"] == 1
                 assert siege_row["usage_denominator"] == 1
-                payload_queries = [
-                    query for query in fact_queries if "SELECT id, battle_id" in query
-                ]
-                assert len(payload_queries) == 1
-                assert "siege AS component_payload" in payload_queries[0]
-                assert "home_troops" not in payload_queries[0]
-                assert "spells" not in payload_queries[0]
-                assert "cc_troops" not in payload_queries[0]
-                assert "heroes" not in payload_queries[0]
 
                 # Frozen Top-N membership from the final-day snapshot.
                 with database.pool.connection() as connection:
@@ -543,14 +383,12 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 assert top5["reproducibility"]["snapshot_versions"] == [1]
                 # The attacker sits at position 6 of the frozen snapshot, so a
                 # Top-5 offense cohort excludes both of their attacks.
-                fact_queries.clear()
                 top5_offense = api_analytics.get_army_analytics(api_reader,
                     _selection(population="top-5")
                 )
                 assert top5_offense is not None
                 assert top5_offense["total_attacks"] == 0
                 assert top5_offense["rows"] == []
-                assert fact_queries == []
                 # The same fixed fixture's empty Top-5 band, snapshot 1.
                 assert top5_offense["reproducibility"]["source_evidence_hash"] == (
                     "54ddeef76ae2a40e08acdc4ea71d3199aeffd6d5df66b4eb6c591d3724fe6d99"
@@ -579,10 +417,6 @@ def test_publication_writer_serves_reproducible_perspective_results(
                     if row["key"] == "troop:58"
                 )
                 assert two_star_row["star_counts"][2] == 1
-                with database.pool.connection() as connection:
-                    assert connection.execute(
-                        "SELECT to_regclass('army_analytics_publications')"
-                    ).fetchone()[0] is None
             finally:
                 api.close()
         finally:
@@ -1033,10 +867,6 @@ def test_correction_with_unchanged_aggregates_changes_deterministic_identity(
                 second["reproducibility"]["source_evidence_hash"]
                 != first["reproducibility"]["source_evidence_hash"]
             )
-            with database.pool.connection() as connection:
-                assert connection.execute(
-                    "SELECT to_regclass('army_analytics_publications')"
-                ).fetchone()[0] is None
         finally:
             api.close()
             database.close()

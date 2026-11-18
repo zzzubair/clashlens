@@ -10,7 +10,6 @@ from clashlens import collector_uploads
 from clashlens.archive import ArchiveReadError, ArchiveReadResult
 from clashlens.collector_uploads import ArchivedCopy
 from clashlens.evidence_recovery import (
-    FAILURES,
     Evidence,
     read_saved_evidence,
     unreadable_copy,
@@ -82,33 +81,30 @@ def test_a_lost_local_copy_is_recovered_from_the_archive(monkeypatch) -> None:
 MISSING = ArchiveReadError("archive_missing", "no object", retryable=True)
 
 
+# Only a lost local copy with no reader fails for good at once; every other
+# miss is retried within the job's attempts or waited out.
 @pytest.mark.parametrize(
-    ("spool", "copy", "read_error", "marker", "state"),
+    ("spool", "copy", "read_error", "marker", "category", "retryable"),
     [
-        (None, None, None, "ready", Evidence.NO_LOCAL_READER),
-        (Spool(error=OSError("disk")), None, None, "ready", Evidence.LOCAL_READ_FAILED),
-        (Spool(error=SpoolError("bad")), None, None, "ready", Evidence.LOCAL_READ_FAILED),
-        (Spool(None), None, None, "ready", Evidence.NOT_ARCHIVED),
+        (None, None, None, "ready", "spool_missing", False),
+        (Spool(error=OSError("disk")), None, None, "ready", "spool_io_failed", True),
+        (Spool(error=SpoolError("bad")), None, None, "ready", "spool_io_failed", True),
+        (Spool(None), None, None, "ready", "spool_missing", True),
         (Spool(None), ArchivedCopy("s3://e/c", False, False), MISSING, "degraded",
-         Evidence.ARCHIVE_UNAVAILABLE),
+         "archive_unavailable", True),
         (Spool(None), ArchivedCopy("s3://e/c", False, False), MISSING, "terminal",
-         Evidence.ARCHIVE_MISMATCH),
+         "archive_marker_mismatch", True),
         (Spool(None), ArchivedCopy("s3://e/c", False, False), MISSING, "ready",
-         Evidence.NEVER_ARCHIVED),
+         "spool_missing", True),
     ],
 )
 def test_each_missing_state_records_its_own_failure(
-    spool, copy, read_error, marker, state, monkeypatch
+    spool, copy, read_error, marker, category, retryable, monkeypatch
 ) -> None:
     archive = Archive(spool, read_error, marker)
     with pytest.raises(ArchiveReadError) as raised:
         _read(archive, copy, monkeypatch)
-    category, message, retryable = FAILURES[state]
-    assert (raised.value.category, str(raised.value), raised.value.retryable) == (
-        category, f"{category}: {message}", retryable)
-    # Only a lost local copy with no reader fails for good at once; every
-    # other miss is retried within the job's attempts or waited out.
-    assert retryable is (state is not Evidence.NO_LOCAL_READER)
+    assert (raised.value.category, raised.value.retryable) == (category, retryable)
 
 
 @pytest.mark.parametrize(

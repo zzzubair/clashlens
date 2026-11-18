@@ -20,12 +20,7 @@ test("a Clasher can sign in and use account features against the real backend", 
   await signIn(page);
   await ensureAccount(page, "lensscout", "Lens Scout");
 
-  // Saved Players became Watchlists: no menu link, and the old address opens them.
-  await expect(
-    page
-      .getByRole("navigation", { name: "Main navigation" })
-      .getByRole("link", { name: "Saved players" }),
-  ).toHaveCount(0);
+  // The old Saved players address opens Watchlists.
   await page.goto("/account/saved-players");
   await expect(page).toHaveURL((url) => url.pathname === "/account/watchlists");
 

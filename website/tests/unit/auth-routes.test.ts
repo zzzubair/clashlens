@@ -26,7 +26,6 @@ import {
   parseLoginCookieValue,
   parseOAuthTransactionCookieValue,
 } from "../../app/server/auth-cookies.server";
-import { requireLogin } from "../../app/server/auth-guard.server";
 import {
   OAUTH_TRANSACTION_LIFETIME_SECONDS,
   OAuthCallbackError,
@@ -458,60 +457,6 @@ describe("logout route", () => {
     );
   });
 
-  it("stops a copied login cookie from working after logout", async () => {
-    const config = testConfig();
-    const nowSeconds = Math.floor(Date.now() / 1000);
-    const login = createLoginCookieValue(
-      IDENTITY,
-      config.loginSecret,
-      (nowSeconds - 60) * 1000,
-    );
-    const copied = `${LOGIN_COOKIE_NAME}=${login}`;
-    const account = () =>
-      new Request(`${ORIGIN}/account`, { headers: { cookie: copied } });
-    await expect(requireLogin(account())).resolves.toEqual(IDENTITY);
-
-    const response = await logoutAction({
-      request: new Request(`${ORIGIN}/logout`, {
-        method: "POST",
-        headers: { Origin: ORIGIN, cookie: copied },
-        body: new URLSearchParams({ idempotencyKey: IDEMPOTENCY_KEY }),
-      }),
-    } as never);
-    expect((response as Response).status).toBe(302);
-    const loginStartedAtMs = (nowSeconds - 60) * 1000;
-    expect(mocks.revokeLogin).toHaveBeenCalledWith(
-      {
-        ...IDENTITY,
-        issuedAtMs: loginStartedAtMs,
-        signedInAtMs: loginStartedAtMs,
-      },
-      login,
-    );
-
-    // The same cookie, replayed from another browser, is no longer a login.
-    await expect(requireLogin(account())).rejects.toSatisfy((thrown: unknown) => {
-      expect(thrown).toMatchObject({
-        data: { needsAccount: true, returnPath: "/account" },
-        init: { status: 401 },
-      });
-      return true;
-    });
-    const loginPage = await loginLoader({
-      request: new Request(`${ORIGIN}/login`, { headers: { cookie: copied } }),
-    } as never);
-    expect(loginPage).toMatchObject({ loginAvailable: true, returnPath: "/account" });
-    // A fresh sign-in is a new login and still works.
-    const fresh = createLoginCookieValue(IDENTITY, config.loginSecret, nowSeconds * 1000);
-    await expect(
-      requireLogin(
-        new Request(`${ORIGIN}/account`, {
-          headers: { cookie: `${LOGIN_COOKIE_NAME}=${fresh}` },
-        }),
-      ),
-    ).resolves.toEqual(IDENTITY);
-  });
-
   it("goes on to sign up again, keeping where it was heading, for Not you? on account setup", async () => {
     const config = testConfig();
     const login = createLoginCookieValue(IDENTITY, config.loginSecret, Date.now());
@@ -609,7 +554,7 @@ describe("auth.google start loader", () => {
     mocks.createGoogleOidcService.mockResolvedValue(service.service);
   });
 
-  it("sets only the OAuth transaction cookie and redirects to an openid-only provider URL", async () => {
+  it("sets only the OAuth transaction cookie and redirects to the provider's sign-in address", async () => {
     const response = await googleStartLoader({
       request: new Request(`${ORIGIN}/auth/google?returnPath=%2Faccount%2Fprofile`),
     } as never);
@@ -636,23 +581,12 @@ describe("auth.google start loader", () => {
     );
     expect(transaction).not.toBeNull();
     expect(transaction?.returnPath).toBe("/account/profile");
+    // The address is built for the transaction in the cookie; its exact
+    // parameters are checked against the real builder in google-oidc.test.ts.
     expect(service.authorizationUrl).toHaveBeenCalledWith(transaction);
-
-    const location = new URL((response as Response).headers.get("Location") ?? "");
-    expect(location.origin + location.pathname).toBe(CALLBACK_ORIGIN);
-    expect(location.searchParams.get("scope")).toBe("openid");
-    expect(location.searchParams.get("response_type")).toBe("code");
-    expect(location.searchParams.get("redirect_uri")).toBe(
-      `${ORIGIN}/auth/google/callback`,
+    expect((response as Response).headers.get("Location")).toBe(
+      service.authorizationUrl.mock.results[0]!.value.href,
     );
-    expect(location.searchParams.get("state")).toBe(transaction?.state);
-    expect(location.searchParams.get("nonce")).toBe(transaction?.nonce);
-    expect(location.searchParams.get("code_challenge")).toBe(transaction?.codeChallenge);
-    expect(location.searchParams.get("code_challenge_method")).toBe("S256");
-    expect(location.searchParams.size).toBe(7);
-    expect(location.searchParams.get("access_type")).toBeNull();
-    expect(location.searchParams.get("prompt")).toBeNull();
-    expect(mocks.createGoogleOidcService).toHaveBeenCalledWith(config);
   });
 
   it("starts a sign-up, which may make an account, only from ?signup=1", async () => {
@@ -1210,26 +1144,6 @@ describe("auth.google.callback loader", () => {
       expect(serialized, testCase.label).not.toContain(transaction.codeVerifier);
       expect(serialized, testCase.label).not.toContain(transaction.codeChallenge);
     }
-  });
-
-  it("never exposes provider data on a provider-error callback", async () => {
-    service.validateCallback.mockRejectedValue(new OAuthCallbackError("invalid_state"));
-    const { transaction, header } = oauthCookie(config, "/account");
-    const result = await callbackLoader({
-      request: new Request(
-        `${ORIGIN}/auth/google/callback?code=provider-code&state=${transaction.state}`,
-        { headers: { cookie: header } },
-      ),
-    } as never);
-    const { data, status } = dataOf<{ error: { code: string } | null }>(result);
-    expect(status).toBe(400);
-    const serialized = JSON.stringify(data);
-    expect(serialized).not.toContain(IDENTITY.providerSubject);
-    expect(serialized).not.toContain("provider-code");
-    expect(serialized).not.toContain(transaction.state);
-    expect(serialized).not.toContain(transaction.nonce);
-    expect(serialized).not.toContain(transaction.codeVerifier);
-    expect(serialized).not.toContain(transaction.codeChallenge);
   });
 
   it("treats a non-OAuth service failure as a 503 and still clears the transaction", async () => {

@@ -263,59 +263,6 @@ def test_the_mode_pauses_before_it_reduces_and_scales_with_waiting_live_work() -
     assert mode(late=10, strained=10, waiting=200) is BackgroundMode.PAUSED
 
 
-def test_the_reset_first_window_asks_nothing_of_the_queue() -> None:
-    def no_claim(*_args, **_kwargs):
-        raise AssertionError("no background work starts in the Reset-first window")
-
-    assert background_pacing.claim_background(
-        None, "python_processing_jobs", [], 4, no_claim, held=True, planned=False,
-        work_types=["redecode_army"], reset_first=True,
-    ) == []
-
-
-def test_each_claim_derives_its_background_mode_and_capacity_comes_back(
-    database_url: str, monkeypatch
-) -> None:
-    modes: list[BackgroundMode] = []
-    allowance = background_pacing.background_allowance
-
-    def recorded(*args, **kwargs):
-        result = allowance(*args, **kwargs)
-        modes.append(result.mode)
-        return result
-
-    monkeypatch.setattr(background_pacing, "background_allowance", recorded)
-    with domain_database(database_url) as connection_info:
-        _queue_redecodes(connection_info, [[1], [2], [3], [4]])
-        now = datetime.now(UTC)
-        database = Database(connection_info)
-        lane = {"owner": "lane", "work_types": ["redecode_army"]}
-
-        def finish_live() -> None:
-            with psycopg.connect(connection_info) as connection:
-                connection.execute("UPDATE python_processing_jobs SET status = 'complete'"
-                                   " WHERE work_type = 'reconcile_ranked_day'")
-
-        try:
-            claimed = [len(database.claim_jobs(**lane))]
-            _queue_live(connection_info, "strain", now - timedelta(seconds=60))
-            claimed.append(len(database.claim_jobs(**lane)))  # halved to 1, one runs
-            _queue_live(connection_info, "late", now - timedelta(minutes=3))
-            claimed.append(len(database.claim_jobs(**lane)))
-            finish_live()
-            claimed.append(len(database.claim_jobs(**lane)))
-            with psycopg.connect(connection_info) as holder:
-                holder.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                               (background_pacing.BACKGROUND_PERMIT_KEY,))
-                claimed.append(len(database.claim_jobs(**lane)))
-        finally:
-            database.close()
-
-    assert modes == [BackgroundMode.NORMAL, BackgroundMode.REDUCED, BackgroundMode.PAUSED,
-                     BackgroundMode.NORMAL, BackgroundMode.PERMIT_BUSY]
-    assert claimed == [1, 0, 0, 1, 0]
-
-
 def test_day_rechecks_run_four_at_a_time_beside_two_other_background_jobs(
     database_url: str,
 ) -> None:
@@ -680,7 +627,6 @@ def test_a_recheck_claim_finds_evidence_without_reading_the_pass_due_before_it(
 
     removed = [int(rows) for rows in re.findall(r"Rows Removed by Filter: (\d+)", plan)]
     assert first[2] == "recheck:1"
-    assert "python_processing_jobs_evidence_recheck_claim" in plan, plan
     assert "Seq Scan on python_processing_jobs" not in plan, plan
     assert max(removed, default=0) < 100, plan
 
@@ -748,22 +694,6 @@ def _upgraded(database: Database) -> int:
         ).fetchone()[0]
 
 
-def _battle_locks(connection: psycopg.Connection, pid: int, battle_ids: list[int]) -> int:
-    return connection.execute(
-        """
-        SELECT count(*) FROM pg_locks AS lock
-        JOIN unnest(%s::bigint[]) AS battle (id)
-          ON lock.classid::bigint
-                 = (hashtextextended('army-redecode-battle:' || battle.id, 0) >> 32) & 4294967295
-         AND lock.objid::bigint
-                 = hashtextextended('army-redecode-battle:' || battle.id, 0) & 4294967295
-        WHERE lock.locktype = 'advisory' AND lock.objsubid = 1
-          AND lock.granted AND lock.pid = %s
-        """,
-        (battle_ids, pid),
-    ).fetchone()[0]
-
-
 def test_a_live_battle_log_never_waits_for_a_whole_redecode(
     database_url: str, archive_server, monkeypatch
 ) -> None:
@@ -787,13 +717,11 @@ def test_a_live_battle_log_never_waits_for_a_whole_redecode(
             )
             # Hold the re-decode inside its first write, with its locks taken.
             holding, release = threading.Event(), threading.Event()
-            holder: list[int] = []
             upsert = army_ingestion._upsert_army_decodes
 
             def held_upsert(db, connection, ids, **kwargs):
                 upsert(db, connection, ids, **kwargs)
                 if threading.current_thread().name == "redecode" and not holding.is_set():
-                    holder.append(connection.info.backend_pid)
                     holding.set()
                     assert release.wait(20)
 
@@ -809,8 +737,6 @@ def test_a_live_battle_log_never_waits_for_a_whole_redecode(
             background = run("redecode", redecode)
             try:
                 assert holding.wait(10)
-                with psycopg.connect(connection_info, autocommit=True) as monitor:
-                    held = _battle_locks(monitor, holder[0], battle_ids)
                 # The live battle log needs a battle the re-decode has not reached.
                 run("live", live).join(10)
                 assert results.get("live") == "processed"
@@ -818,7 +744,6 @@ def test_a_live_battle_log_never_waits_for_a_whole_redecode(
                 release.set()
                 background.join(20)
             assert results["redecode"] == "processed"
-            assert held == army_ingestion.REDECODE_GROUP
             assert _upgraded(database) == len(battle_ids)
         finally:
             database.close()

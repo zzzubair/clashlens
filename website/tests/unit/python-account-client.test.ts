@@ -236,25 +236,25 @@ describe("server-only Python account client", () => {
     );
   });
 
-  it("uses a shorter bounded timeout for an optional navigation client", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse({
-        username: "nova88",
-        display_name: "Nova",
-        preferences: {},
-        providers: ["google"],
-      }),
+  it("gives up on an unanswered account read at the navigation client's shorter limit", async () => {
+    // Python never answers: the read ends only when its own time limit passes.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_url: URL, init: RequestInit) =>
+          new Promise((_resolve, reject) =>
+            init.signal!.addEventListener("abort", () => reject(init.signal!.reason)),
+          ),
+      ),
     );
-    vi.stubGlobal("fetch", fetchMock);
-    const timeoutSpy = vi
-      .spyOn(AbortSignal, "timeout")
-      .mockReturnValue(new AbortController().signal);
     const { createPythonClient } = await import("../../app/services/python.server");
+    const started = Date.now();
 
-    await createPythonClient(IDENTITY, { accountReadTimeoutMs: 250 }).getAccount();
-
-    expect(timeoutSpy).toHaveBeenCalledWith(250);
-    timeoutSpy.mockRestore();
+    await expect(
+      createPythonClient(IDENTITY, { accountReadTimeoutMs: 250 }).getAccount(),
+    ).rejects.toMatchObject({ status: 503, payload: { error: "timeout" } });
+    // Well inside the 5 seconds every other request is allowed.
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 
   it("rejects oversized preferences before contacting the service", async () => {

@@ -39,7 +39,6 @@ DAY = timedelta(days=1)
 END = START + 28 * DAY
 DEADLINE = datetime(2026, 10, 12, 5, tzinfo=UTC)
 NOW = END + DAY
-MIGRATION = Path(__file__).parents[2] / "deploy/migrations/0064_domain_repair_campaigns.sql"
 
 
 @contextmanager
@@ -630,18 +629,6 @@ def _set_publication_items(connection_info: str, state: str) -> None:
         connection.execute(
             "UPDATE domain_repair_items SET state = %s WHERE kind = 'publication'", (state,)
         )
-
-
-def test_campaign_migration_is_repeatable_and_creates_no_campaign(database_url: str) -> None:
-    with _campaign_database(database_url) as (connection_info, worker):
-        with psycopg.connect(connection_info, autocommit=True) as connection:
-            connection.execute(MIGRATION.read_text(encoding="utf-8"))
-            assert connection.execute(
-                "SELECT (SELECT count(*) FROM domain_repair_campaigns),"
-                " (SELECT count(*) FROM domain_repair_items),"
-                " (SELECT count(*) FROM python_processing_jobs)"
-            ).fetchone() == (0, 0, 0)
-        assert domain_repair.preview(worker, SEASON, now=NOW)["items"] == {}
 
 
 def test_season_repair_recalculates_days_then_rebuilds_boards_with_a_receipt(

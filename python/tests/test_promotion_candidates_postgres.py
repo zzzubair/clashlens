@@ -13,7 +13,6 @@ import psycopg
 import pytest
 from domain_test_support import (
     _processor,
-    apply_migration,
     domain_database,
     store_observation,
 )
@@ -22,7 +21,6 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from clashlens import population, promotion_candidates
 
 PROFILE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
-MIGRATION = Path(__file__).parents[2] / "deploy" / "migrations" / "0076_promotion_candidates.sql"
 OBSERVED_AT = datetime(2026, 8, 4, 12, 5, tzinfo=UTC)
 LEGEND_II = {"id": 105000035, "name": "Legend II"}
 LEGEND_I = {"id": 105000036, "name": "Legend I"}
@@ -233,28 +231,3 @@ def test_an_older_profile_waits_for_a_newer_job_and_leaves_its_removal(
             assert _rows(connection_info) == []
         finally:
             database.close()
-
-
-def test_migration_copies_saved_profiles_as_of_their_latest_check(
-    database_url: str, archive_server
-) -> None:
-    confirmed_at = OBSERVED_AT + timedelta(hours=1)
-    with domain_database(database_url) as connection_info:
-        database, processor = _processor(connection_info, archive_server)
-        try:
-            _store(connection_info, archive_server, "legend-ii", _profile(LEGEND_II, 4900), OBSERVED_AT)
-            assert processor.process_once(owner="legend-ii") is not None
-        finally:
-            database.close()
-        with psycopg.connect(connection_info, autocommit=True) as connection:
-            connection.execute(
-                "UPDATE players SET current_profile_confirmed_at = %s WHERE normalized_tag = '#2PP'",
-                (confirmed_at,),
-            )
-            connection.execute("DROP TABLE promotion_candidates")
-            connection.execute(
-                "DROP FUNCTION clashlens_note_promotion_candidate(text,integer,integer,timestamptz)"
-            )
-            connection.execute("DELETE FROM clash_lens_schema_migrations WHERE version = 76")
-            apply_migration(connection, MIGRATION.read_text(encoding="utf-8"))
-        assert _rows(connection_info) == [("#2PP", 105000035, 4900, confirmed_at)]

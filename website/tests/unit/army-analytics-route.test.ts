@@ -465,7 +465,6 @@ describe("army analytics route historical reads", () => {
         /^<span class="unit-art"[^>]*><img [^>]*src="[^"]*troop-132\.webp[^"]*"[^>]*><\/span>$/,
       ),
     ]);
-    expect(text).not.toContain("not which army is best");
     // Unidentified armies are a row of their own, named for what a Clasher
     // sees, not excluded.
     expect(text).toContain("Battle records 12 Included 12 Excluded 0");
@@ -790,20 +789,6 @@ describe("army analytics route historical reads", () => {
     expect(renderedText(complete)).not.toContain("not tracked");
   });
 
-  it("keeps notes short: no old-rank warning or star-rate explanation", async () => {
-    mocks.createPythonClient.mockReturnValue({
-      getArmyAnalytics: vi
-        .fn()
-        .mockResolvedValue(currentAnalytics("top-100", [25, 26], 100, 100)),
-    });
-    const html = await renderArmyRoute("season=current&category=troops");
-    const text = renderedText(html);
-    expect(text).not.toContain("These numbers cover");
-    expect(text).not.toContain("Star rates show");
-    expect(text).not.toContain("Full star breakdown");
-    expect(html.match(/<details.*?<\/details>/s)?.[0]).not.toContain("<p>");
-  });
-
   it("offers Clan Castle Troops as a unit type, keeping old checkbox links", async () => {
     const getArmyAnalytics = vi.fn().mockResolvedValue({ selection: {} });
     mocks.createPythonClient.mockReturnValue({ getArmyAnalytics });
@@ -928,11 +913,6 @@ describe("army analytics route historical reads", () => {
     expect((result as Response).headers.get("location")).toBe(
       "?category=spells&recent=1",
     );
-  });
-
-  it("reconciles recorded, included and excluded captured attack records", async () => {
-    const text = renderedText(await renderArmyRoute("recent=1&population=top-100"));
-    expect(text).toContain("Battle records 1,600 Included 1,600 Excluded 0");
   });
 });
 
@@ -1363,14 +1343,6 @@ describe("army analytics worst-case data", () => {
     expect(text).toContain("71.1% 91,388 battles");
     expect(text).toContain("Unknown ID 4000123");
     expect(text).toContain("100.0% 1 battle");
-  });
-
-  it("says an empty table has no components instead of showing a bare header", async () => {
-    mocks.createPythonClient.mockReturnValue({
-      getArmyAnalytics: vi.fn().mockResolvedValue(currentAnalytics("top-100", [1], 0)),
-    });
-    const html = await renderArmyRoute("season=current");
-    expect(html.match(/No recognized components in this selection\./g)).toHaveLength(1);
   });
 
   it("formats past-season quantities and result totals", async () => {

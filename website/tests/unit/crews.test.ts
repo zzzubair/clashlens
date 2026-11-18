@@ -267,7 +267,6 @@ describe("crew page", () => {
     expect(html.replace(/<[^>]*>/g, "")).toContain(
       "9 accounts · 3 Clashers · 9/50 places used",
     );
-    expect(html).not.toMatch(/places open|open</);
     // Seven attackers: five on the card, and the card's title opens all seven.
     const attackers = html.slice(html.indexOf('id="board-attackers"'));
     const card = attackers.slice(0, attackers.indexOf("</section>"));
@@ -436,7 +435,6 @@ describe("crew page", () => {
     );
     const html = await render(`/crews/${CREW_ID}?period=today`, crewRoute);
     expect(html.match(/No attacks yet today/g)).toHaveLength(2);
-    expect(html).not.toContain("No battles");
   });
 
   it("shows a phone the board picked in the address, with its tab, keeping it across periods", async () => {

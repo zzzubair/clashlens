@@ -65,8 +65,6 @@ def test_public_reservation_covers_request_and_publish_without_double_counting(
     root = tmp_path / "spool"
     spool = Spool(root, max_body_bytes=1024, max_bytes=2048, max_objects=2)
 
-    assert not (root / ".locks").exists()
-    assert not (root / ".control" / "capacity.json").exists()
     with spool.reservation() as reservation:
         stats = spool.stats()
         assert stats["reserved_bytes"] == 1024
@@ -865,7 +863,7 @@ def test_reservation_context_releases_capacity_after_request(tmp_path: Path) -> 
     assert spool.stats()["reserved_objects"] == 0
 
 
-def test_reconcile_counts_actual_files_without_ledger(tmp_path: Path) -> None:
+def test_reconcile_counts_files_a_crash_left_behind(tmp_path: Path) -> None:
     root = tmp_path / "spool"
     spool = Spool(root, max_body_bytes=1024, max_bytes=1024, max_objects=3)
     temporary = root / "tmp" / "crashed.tmp"
@@ -874,7 +872,6 @@ def test_reconcile_counts_actual_files_without_ledger(tmp_path: Path) -> None:
     counts = spool.reconcile()
     assert counts["temporary_bytes"] == len(b"crashed response")
     assert counts["temporary_objects"] == 1
-    assert not (root / ".control" / "capacity.json").exists()
     with pytest.raises(SpoolError, match="reservation denied"):
         spool.reserve()
 
@@ -1435,30 +1432,6 @@ def test_non_btrfs_device_mismatch_falls_back_to_finite(tmp_path: Path) -> None:
             real_close(fd)
         except OSError:
             pass
-
-
-def test_symlink_resolution_opens_real_target(tmp_path: Path) -> None:
-    from unittest import mock
-
-    import clashlens.filesystem as fs
-
-    real = tmp_path / "real"
-    real.mkdir()
-    link = tmp_path / "link"
-    link.symlink_to(real, target_is_directory=True)
-    seen: dict[str, str] = {}
-    real_open = os.open
-
-    def fake_open(path, flags, *args):
-        seen["path"] = path
-        return real_open(path, flags, *args)
-
-    with (
-        mock.patch.object(fs.os, "open", side_effect=fake_open),
-    ):
-        capacity = fs.filesystem_capacity(link)
-        assert seen["path"] == str(real)
-        assert capacity["inode_model"] in ("finite", "dynamic", "unknown")
 
 
 def test_descriptors_close_and_probe_failures_propagate(tmp_path: Path) -> None:

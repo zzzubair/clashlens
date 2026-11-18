@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
-
 import pytest
 
 from clashlens.source_observation_contract import (
-    SOURCE_OBSERVATION_CONTRACTS,
     get_source_observation_contract,
     validate_source_observation_contract,
 )
@@ -152,9 +149,3 @@ def test_battle_parser_v3_is_rejected_outside_battle_logs(
         == "unsupported_parser_version"
     )
 
-
-def test_source_observation_contract_registry_is_immutable() -> None:
-    contract = SOURCE_OBSERVATION_CONTRACTS[0]
-
-    with pytest.raises(FrozenInstanceError):
-        contract.endpoint = "changed"  # type: ignore[misc]

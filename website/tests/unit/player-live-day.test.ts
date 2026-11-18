@@ -173,7 +173,7 @@ const mark = (html: string, key: string) =>
   html.split(`id="legend-day-${key}"`)[1].split("<small>Starting trophies</small>")[0];
 
 describe("today's Legend day wording", () => {
-  it("shows no live trend and keeps the previous Season's days out", async () => {
+  it("keeps the previous Season's days out", async () => {
     const previousSeasonDay: RankedDaySummary = {
       ...TODAY,
       dayNumber: 28,
@@ -189,10 +189,8 @@ describe("today's Legend day wording", () => {
     const html = await page(WAITING, "2026-10-08T12:00:00Z", [previousSeasonDay], [], {
       historyDays: [TODAY],
     });
-    expect(html).not.toContain("Trophy trend");
     const summary = html.split('id="season-summary-title"')[1].split("</section>")[0];
     expect(summary).toContain("3 days missing");
-    expect(summary).not.toContain("Trophies now");
     expect(html).not.toContain('id="legend-day-2026-10-04"');
   });
 

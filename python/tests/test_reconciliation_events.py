@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 
 from clashlens.api_player_presentation import screen_events
 from clashlens.reconciliation import (
-    BATTLE_EVENT_SERIALIZATION_VERSION,
     BattleContribution,
     serialize_ranked_day_battles,
 )
@@ -50,7 +49,6 @@ def test_ranked_day_battle_events_are_canonical_signed_and_ordered() -> None:
         )
     )
 
-    assert BATTLE_EVENT_SERIALIZATION_VERSION == "legend-ranked-day-battle-events-v1"
     assert [event["battle_id"] for event in events] == ["defense-1", "attack-1"]
     assert events == [
         {

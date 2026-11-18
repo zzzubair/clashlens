@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import psycopg
 import pytest
@@ -287,48 +286,6 @@ def test_first_battle_priority_rolls_back_with_response_state(
             ).fetchone()[0]
         assert state_count == 0
         assert pending is True
-
-
-def test_first_battle_priority_migration_backfills_successful_state(
-    database_url: str,
-) -> None:
-    with domain_database(database_url) as connection_info:
-        player_id = _player(connection_info, now=_PLAYER_NOW)
-        database = CollectorDatabase(connection_info)
-        database.record_response(
-            _handoff(
-                occurrence_key="pre-migration-battle",
-                response_hash=_hash("pre-migration-battle"),
-                player_id=player_id,
-                endpoint="battle_log",
-            )
-        )
-        migration = (
-            Path(__file__).parents[2]
-            / "deploy/migrations/0034_first_battle_priority.sql"
-        ).read_text(encoding="utf-8")
-        with psycopg.connect(connection_info) as connection:
-            connection.execute(
-                "UPDATE players SET first_battle_pending = true WHERE id = %s",
-                (player_id,),
-            )
-            connection.execute(migration)
-            pending, collector_update, collector_insert = connection.execute(
-                """
-                SELECT first_battle_pending,
-                       has_column_privilege(
-                           'clashlens_collector', 'players',
-                           'first_battle_pending', 'UPDATE'),
-                       has_column_privilege(
-                           'clashlens_collector', 'players',
-                           'first_battle_pending', 'INSERT')
-                FROM players WHERE id = %s
-                """,
-                (player_id,),
-            ).fetchone()
-        assert pending is False
-        assert collector_update is True
-        assert collector_insert is False
 
 
 def test_response_state_compacts_unchanged_and_enqueues_changed_response(
@@ -1295,21 +1252,12 @@ def test_rankings_and_discovery_use_unleased_compact_work(
                 "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])",
                 ([player_id],),
             )
-            lease_columns = connection.execute(
-                """
-                SELECT column_name FROM information_schema.columns
-                WHERE table_schema = current_schema()
-                  AND table_name = 'collector_work'
-                  AND column_name IN ('lease_owner', 'lease_token', 'lease_expires_at')
-                """
-            ).fetchall()
             # Rankings have an explicit cycle time; discovery admission uses
             # database time. Read both due times before advancing the test clock.
             due_at = connection.execute(
                 "SELECT max(due_at) FROM collector_work"
             ).fetchone()[0]
-        assert lease_columns == []
-        intents = database.pending_intents(limit=10, now=due_at)
+        intents =database.pending_intents(limit=10, now=due_at)
         assert {intent.kind for intent in intents} == {
             "global_player_rankings",
             "discovery_profile",

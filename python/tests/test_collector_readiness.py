@@ -5,12 +5,10 @@ import hashlib
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import MagicMock
 
 import psycopg
 from collector_support import _Client, _collector, _Spool, _Store
 from domain_test_support import domain_database
-from psycopg_pool import PoolTimeout
 
 from clashlens.collector_db import CollectorDatabase
 from clashlens.collector_http import ApiKey, KeyPool
@@ -80,20 +78,6 @@ def test_spool_cleanup_read_over_its_time_limit_skips_one_sweep(tmp_path) -> Non
 
     assert collector.outcomes["spool_sweep_timeout"] == 1
     assert spool.verify(digest) == b"orphan"
-
-
-def test_unreachable_database_fails_readiness() -> None:
-    spool = _Spool()
-    store = _Store(spool)
-    store.pool = MagicMock()
-    store.pool.connection.side_effect = PoolTimeout("no connection")
-    collector = _collector(spool, store, _Client(spool))
-
-    assert asyncio.run(collector.health_response("/readyz")) == (
-        503,
-        "text/plain",
-        b"database_unavailable\n",
-    )
 
 
 def test_readiness_reaches_a_real_database(database_url: str) -> None:

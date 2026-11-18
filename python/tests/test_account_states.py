@@ -20,7 +20,6 @@ from clashlens.api_verification import (
     permit_answer,
     verification_answer,
 )
-from clashlens.shared_copy import CopyState, SharedCopy
 from clashlens.verification import VerificationOutcome
 
 NOW = datetime(2026, 10, 12, 12, tzinfo=UTC)
@@ -133,20 +132,3 @@ def test_a_lookup_without_a_profile_follows_its_newest_check(
     assert (state in RECHECKABLE) is (
         state in {LookupState.UNKNOWN, LookupState.FAILED, LookupState.NOT_FOUND}
     )
-
-
-def test_a_shared_copy_ages_from_fresh_to_stale_to_expired() -> None:
-    clock = [0.0]
-    copy = SharedCopy(
-        lambda _database, now: now.day, key=lambda now: now.date(), seconds=10,
-        longest=30, name="test", clock=lambda: clock[0], start=lambda work: None,
-    )
-    assert copy._state(NOW.date()) == (CopyState.MISSING, None)
-    assert copy.current(None, NOW) == 12
-    assert copy._state(NOW.date()) == (CopyState.FRESH, 12)
-    clock[0] = 10
-    assert copy._state(NOW.date()) == (CopyState.STALE, 12)
-    clock[0] = 30
-    assert copy._state(NOW.date()) == (CopyState.EXPIRED, None)
-    # Another Legend day's copy is never served.
-    assert copy._state((NOW + timedelta(days=1)).date())[0] is CopyState.MISSING

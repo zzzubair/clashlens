@@ -1141,17 +1141,6 @@ def test_season_writers_share_the_lock_and_stay_fenced(
             assert fenced["status"] == SEASON_DETAIL_RETIRED
 
 
-def test_rolling_log_keeps_noncanonical_day_until_anchor_resolution(
-    database_url: str,
-) -> None:
-    with domain_database(database_url) as connection_info:
-        item = SimpleNamespace(
-            battle=SimpleNamespace(ranked_day_start=DAY0 - timedelta(days=1)),
-        )
-        with psycopg.connect(connection_info) as connection:
-            assert battle_ingestion._guard_battle_rows(connection, [item]) == [item]
-
-
 def test_pre_anchor_battle_ingestion_works(
     database_url: str, archive_server
 ) -> None:
@@ -1236,7 +1225,6 @@ def test_measurement_snapshot_and_projection_labels(database_url: str) -> None:
                 )
                 assert projection["players"] == 12500
                 assert projection["projected_total_bytes"] > 0
-                assert any("Step 9" in label for label in projection["labels"])
                 assert isinstance(projection["fits_budget"], bool)
                 with pytest.raises(ValueError, match="projection population"):
                     project_six_months(

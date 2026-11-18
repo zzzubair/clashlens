@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from clashlens.profile import (
-    PARSER_VERSION,
     PROFILE_PARSER_VERSION,
     RECOGNIZED_NON_LEGEND_TIERS_V1,
     SCHEMA_VERSION,
@@ -113,7 +112,6 @@ def test_synthetic_legend_i_fixture_parses_as_versioned_eligible_profile() -> No
     assert profile.previous_league_season_id == "1781499600"
     assert profile.season_anchor_state == "valid"
     assert profile.schema_version == SCHEMA_VERSION
-    assert PARSER_VERSION == PROFILE_PARSER_VERSION
     assert profile.parser_version == PROFILE_PARSER_VERSION
 
 

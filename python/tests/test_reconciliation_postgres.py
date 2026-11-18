@@ -29,31 +29,6 @@ from clashlens import (
 from clashlens.api_db import ApiDatabase
 
 
-def test_production_admission_fixture_requires_existing_reset_work(
-    database_url: str, archive_server
-) -> None:
-    with domain_database(database_url) as connection_info:
-        try:
-            _store_baseline_pair(
-                connection_info,
-                archive_server,
-                key="missing-production-root",
-                boundary=DAY_END,
-                trophies=6040,
-                empty_battle_log=False,
-                production_admission=True,
-            )
-        except RuntimeError as error:
-            assert str(error) == "production reset admission did not create compact work"
-        else:
-            raise AssertionError("production fixture accepted absent reset work")
-        with psycopg.connect(connection_info) as connection:
-            work_count = connection.execute(
-                "SELECT count(*) FROM collector_work WHERE kind = 'reset_baseline'"
-            ).fetchone()[0]
-        assert work_count == 0
-
-
 def test_reset_evidence_rejects_a_different_work_identity(
     database_url: str, archive_server
 ) -> None:

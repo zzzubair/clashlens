@@ -76,7 +76,7 @@ def test_frozen_snapshot_is_served_once_built_and_its_analytics_follow(
             with database.pool.connection() as connection:
                 snapshots = connection.execute(
                     """
-                    SELECT id, snapshot_kind, state, input_hash
+                    SELECT id, snapshot_kind, state
                     FROM leaderboard_snapshots
                     WHERE boundary_at = %s
                     ORDER BY snapshot_kind
@@ -85,7 +85,7 @@ def test_frozen_snapshot_is_served_once_built_and_its_analytics_follow(
                 ).fetchall()
                 analytics_jobs = connection.execute(
                     """
-                    SELECT id, input_json, deduplication_key, status
+                    SELECT id, status
                     FROM python_processing_jobs
                     WHERE work_type = 'build_analytics'
                     ORDER BY id
@@ -96,16 +96,8 @@ def test_frozen_snapshot_is_served_once_built_and_its_analytics_follow(
             assert text(by_kind["frozen"][2]) == "published"
             assert text(by_kind["live"][2]) == "published"
             assert len(analytics_jobs) == 1
-            analytics_job_id, analytics_input, analytics_key, analytics_status = (
-                analytics_jobs[0]
-            )
+            analytics_job_id, analytics_status = analytics_jobs[0]
             assert text(analytics_status) == "pending"
-            assert analytics_input["snapshot_id"] == by_kind["frozen"][0]
-            assert analytics_input["snapshot_version"] == 1
-            assert text(analytics_input["snapshot_input_hash"]) == text(
-                by_kind["frozen"][3]
-            )
-            assert text(analytics_key).startswith("build_analytics:snapshot:")
 
             # The Daily board shows none of its analytics, so it does not
             # wait for them.

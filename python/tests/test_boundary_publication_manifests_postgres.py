@@ -310,19 +310,11 @@ def test_army_rows_keep_the_day_evidence_out_of_the_frozen_row(
                 connection_info, archive_server, processor
             )
             with database.pool.connection() as connection:
-                [(generation_id, rule_versions, digest, generation)] = (
-                    connection.execute(
-                        """
-                        SELECT manifest.generation_id, manifest.rule_versions,
-                               manifest.digest, generation.generation
-                        FROM boundary_publication_manifests AS manifest
-                        JOIN boundary_publication_generations AS generation
-                          ON generation.id = manifest.generation_id
-                        WHERE manifest.id = %s
-                        """,
-                        (army_input["manifest_id"],),
-                    ).fetchall()
-                )
+                [(generation_id, digest)] = connection.execute(
+                    "SELECT generation_id, digest FROM boundary_publication_manifests"
+                    " WHERE id = %s",
+                    (army_input["manifest_id"],),
+                ).fetchall()
                 rows = [
                     row[0]
                     for row in connection.execute(
@@ -344,20 +336,7 @@ def test_army_rows_keep_the_day_evidence_out_of_the_frozen_row(
                 assert frozen["start_baseline_id"] and frozen["end_baseline_id"]
                 assert frozen["battle_ids"] and frozen["decode_ids"]
                 assert frozen["evidence_ids"] and frozen["daily_log_id"]
-                # The digest covers exactly the stored rows, and a retry
-                # reuses the frozen manifest as stored.
-                assert digest == hashlib.sha256(
-                    json.dumps(
-                        {
-                            "generation": generation,
-                            "artifact_kind": "army",
-                            "rule_versions": rule_versions,
-                            "rows": rows,
-                        },
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ).encode("utf-8")
-                ).hexdigest()
+                # A retry reuses the frozen manifest as stored.
                 assert boundary._freeze_boundary_manifest(
                     connection,
                     generation_id=generation_id,

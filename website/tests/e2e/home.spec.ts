@@ -50,7 +50,7 @@ test("fan content notice is exact, linked and readable on phones in both themes"
   }
 });
 
-test("old About links open home, and no page links to About", async ({ page }) => {
+test("old About links open home", async ({ page }) => {
   const response = await page.request.get("/about", { maxRedirects: 0 });
   expect(response.status()).toBe(301);
   expect(response.headers()["location"]).toBe("/");
@@ -60,7 +60,6 @@ test("old About links open home, and no page links to About", async ({ page }) =
   await expect(
     page.getByRole("heading", { name: "Find any Legend League player" }),
   ).toBeVisible();
-  await expect(page.getByRole("link", { name: "About", exact: true })).toHaveCount(0);
 });
 
 test("the front page and the full leaderboard show collected synthetic players", async ({

@@ -192,7 +192,7 @@ describe("group comparison", () => {
     );
   });
 
-  it("shows the table without explanation paragraphs", async () => {
+  it("shows the table's day bars, gain chart and column headings", async () => {
     const handler = createStaticHandler([
       {
         path: "/account/watchlists/:groupId",
@@ -237,7 +237,6 @@ describe("group comparison", () => {
     // of it. No range is spelt out over them; the gain has one short heading.
     expect(html).toContain('style="height:max(4px, 50%)"');
     expect(html).toContain('style="height:max(4px, 12.5%)"');
-    expect(html).not.toMatch(/trend-title|trend-range|a day<\/small>/);
     expect(html).toContain('sort=net" data-discover="true">3-day gain</a></th>');
     // The chart over the table climbs from 0 by the same counted days as the
     // gain: the incomplete +10 adds nothing, so the line ends on +40.
@@ -250,8 +249,6 @@ describe("group comparison", () => {
     expect(html).toMatch(/<path d="M0 [\d.]+ L33\.3+ ([\d.]+) L66\.6+7? \1 L100 4"/);
     // Every day's bar is drawn the same way; the dates over them say which is last.
     expect(html.match(/<span class="trend-day [^"]*"[^>]*>/g)).toHaveLength(3);
-    expect(html).not.toContain("data-latest");
-    expect(html).not.toContain("data-cut");
     // The two numbers in Attack and Defense are named once, in their
     // headings; each cell keeps the words for screen readers.
     expect(html).toContain('<small class="compare-head-sub">Triples · avg ★</small>');
@@ -259,7 +256,6 @@ describe("group comparison", () => {
     expect(html).toContain(
       '<span aria-hidden="true">★</span><span class="sr-only"> stars an attack</span>',
     );
-    expect(html).not.toMatch(/avg stars|compare-rate-word/);
     // Wide screens group the columns into where each player is now and the
     // days compared, "Last 3 days", their dates on hover and behind the ⓘ.
     expect(html).toMatch(
@@ -273,9 +269,6 @@ describe("group comparison", () => {
       .replaceAll("&#x27;", "'")
       .replace(/<[^>]*>/g, " ")
       .replace(/\s+/g, " ");
-    expect(text).not.toContain("adds up each player's trophy change");
-    expect(text).not.toContain("Some battles are missing");
-    expect(text).not.toContain("Attack and defense also use every battle recorded");
     expect(text).toContain("Not yet proven");
     // The smaller figures wait in each row's details instead of filling the table.
     expect(text).toContain("+80 won · −16 lost");

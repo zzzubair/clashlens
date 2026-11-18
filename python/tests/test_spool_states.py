@@ -1,5 +1,6 @@
-"""The spool's named states: collection pause, reservations, the publication
-barrier and where a raw body stands (issue #617, entries 8 to 10)."""
+"""The spool's named states: collection pause, reservations and where a raw
+body stands (issue #617, entries 8 to 10). The publication barrier is tested
+in test_spool.py."""
 
 from __future__ import annotations
 
@@ -7,7 +8,6 @@ import asyncio
 import errno
 import hashlib
 import os
-import threading
 import time
 from pathlib import Path
 
@@ -15,7 +15,7 @@ import pytest
 
 import clashlens.spool as spool_module
 from clashlens.raw_body import RawBodyStage, may_delete, raw_body_stage
-from clashlens.spool import BarrierState, ReservationState, Spool, SpoolError
+from clashlens.spool import ReservationState, Spool, SpoolError
 from clashlens.spool_health import SpoolHealth, SpoolState
 
 
@@ -147,50 +147,6 @@ def test_a_failed_write_returns_the_reservation_to_reserved(
     assert list((tmp_path / "spool" / "tmp").iterdir()) == []
     spool.close()
     assert reservation.state is ReservationState.UNRESERVED
-
-
-def test_cleanup_drains_saves_and_holds_new_ones_back(tmp_path: Path) -> None:
-    barrier = Spool(tmp_path / "spool", max_body_bytes=1024)._barrier
-    assert barrier.state is BarrierState.IDLE
-    cleaning, finish_cleaning = threading.Event(), threading.Event()
-    order: list[str] = []
-
-    def cleanup() -> None:
-        with barrier.cleanup():
-            order.append("cleanup")
-            cleaning.set()
-            assert finish_cleaning.wait(5)
-
-    def late_save() -> None:
-        with barrier.publication():
-            order.append("late save")
-
-    with barrier.publication():
-        assert barrier.state is BarrierState.PUBLISHING
-        cleaner = threading.Thread(target=cleanup)
-        cleaner.start()
-        _wait_for(lambda: barrier.state is BarrierState.DRAINING)
-        saver = threading.Thread(target=late_save)
-        saver.start()
-        time.sleep(0.1)
-        assert order == []
-    assert cleaning.wait(5)
-    assert barrier.state is BarrierState.CLEANING
-    time.sleep(0.1)
-    assert order == ["cleanup"]
-    finish_cleaning.set()
-    cleaner.join(5)
-    saver.join(5)
-    assert order == ["cleanup", "late save"]
-    assert barrier.state is BarrierState.IDLE
-
-
-def _wait_for(condition) -> None:
-    for _attempt in range(500):
-        if condition():
-            return
-        time.sleep(0.01)
-    raise AssertionError("condition never held")
 
 
 @pytest.mark.parametrize(

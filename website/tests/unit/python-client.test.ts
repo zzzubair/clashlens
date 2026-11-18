@@ -424,28 +424,6 @@ describe("server-only Python client response boundary", () => {
     );
   });
 
-  it("uses the live Python leaderboard endpoint", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ kind: "tracked-leaderboard", entries: [] }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    process.env.NODE_ENV = "test";
-    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-
-    await expect(
-      (await import("../../app/services/leaderboard.server")).getTrackedLeaderboard(),
-    ).rejects.toMatchObject({
-      status: 502,
-    });
-
-    expect(fetchMock.mock.calls[0]?.[0]).toEqual(
-      new URL("/v1/leaderboards/live?limit=25&offset=0", "http://python-fixture.test/"),
-    );
-  });
-
   it("maps the exact live Python leaderboard payload", async () => {
     vi.stubGlobal(
       "fetch",

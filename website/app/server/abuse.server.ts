@@ -47,7 +47,7 @@ const windows: Record<RateLimitedRequest, Map<string, RateWindow>> = {
   search: new Map(),
 };
 
-export function rateWindowState(
+function rateWindowState(
   window: RateWindow | undefined,
   limit: number,
   now: number,
