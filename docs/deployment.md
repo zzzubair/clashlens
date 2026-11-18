@@ -1368,6 +1368,8 @@ Listing and previewing are the default; a retry needs both one exact item and
 ./ops failed-items --accept-job-id 123 --reason 'profile shape cannot be parsed'
 ./ops failed-items --accept-job-id 123 --reason 'profile shape cannot be parsed' --apply
 ./ops failed-items --replay-job-id 123 --replay-job-id 124 --reason 'parser v3 replay' --apply
+./ops failed-items --reread-reset 2026-11-17T05:00:00Z --reason 'tier rename re-read'
+./ops failed-items --reread-reset 2026-11-17T05:00:00Z --reason 'tier rename re-read' --apply
 ```
 
 This command starts an ephemeral copy of the pinned Python image with an
@@ -1390,7 +1392,19 @@ investigation. A failed processing job that cannot be repaired can be
 accepted with `--accept-job-id` and a `--reason` of 8 to 500 characters: it
 keeps its failed state and evidence, the acceptance records `ops:` and the host
 account, the time and the reason, and the failed-work alerts stop counting it.
-A job can be accepted once; nothing undoes an acceptance. Transport failures
+A job can be accepted once; nothing undoes an acceptance.
+`--reread-reset` (repeatable, a Reset at 05:00:00 UTC, with a `--reason`)
+asks the same function to re-read, under profile parser v4, each of that
+Reset's pair profiles whose saved result was kept uncertain only for naming a
+renamed Legend tier (see [domain rules](domain.md#identity-and-eligibility)).
+Parser v4 is v3 as fixed on 18 November 2026: a saved response keeps one
+result for each parser name, so a re-read under v3 would keep the old one.
+The re-read saves the new result beside the old, checks the Reset pair again
+and recalculates the Legend day it ended; a day that changes corrects its
+board as any changed day does. Its jobs run at backfill priority, so they
+wait while live work is behind. It asks 500 readings a transaction, never
+lists a reading already asked for, and counts refused readings by reason
+(exit status 1), so a run that stopped can simply be run again. Transport failures
 are evidence governed by the normal work policy and are not manually requeued.
 
 ## Worker processes

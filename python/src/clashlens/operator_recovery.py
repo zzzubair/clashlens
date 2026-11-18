@@ -3,13 +3,23 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Sequence
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
 import psycopg
 from psycopg.errors import LockNotAvailable, QueryCanceled, UniqueViolation
 from psycopg.rows import dict_row
+
+from .job_contracts import (
+    ANALYTICS_RULE_VERSION,
+    DOMAIN_RULE_VERSION,
+    PROCESSING_VERSION,
+    PYTHON_BACKFILL_PRIORITY,
+)
+from .profile import RENAMED_LEGEND_TIERS, RENAMED_TIER_PARSER_VERSION
 
 _INTEGRITY_FAILURES = {
     "archive_catalogue_contradiction",
@@ -110,18 +120,30 @@ def failed_items_command(arguments: Any, database_url: str) -> dict[str, Any]:
         arguments.upload_hash,
         arguments.accept_job_id,
         arguments.replay_job_id,
+        arguments.reread_reset,
     )
-    if arguments.apply and selected == (None, None, None, None):
+    if arguments.apply and selected == (None,) * 5:
         raise ValueError(
-            "--apply requires --work-id, --upload-hash, --accept-job-id or --replay-job-id"
+            "--apply requires --work-id, --upload-hash, --accept-job-id,"
+            " --replay-job-id or --reread-reset"
         )
     if arguments.upload_hash is not None and not re.fullmatch(
         r"[0-9a-f]{64}", arguments.upload_hash
     ):
         raise ValueError("upload hash must be a lowercase SHA-256 digest")
-    if (arguments.reason is None) != (selected[2:] == (None, None)):
-        raise ValueError("--reason goes with --accept-job-id or --replay-job-id")
+    if (arguments.reason is None) != (selected[2:] == (None,) * 3):
+        raise ValueError(
+            "--reason goes with --accept-job-id, --replay-job-id or --reread-reset"
+        )
     with psycopg.connect(database_url) as connection:
+        if arguments.reread_reset is not None:
+            return reread_reset_profiles(
+                connection,
+                resets=arguments.reread_reset,
+                operator=arguments.operator or "",
+                reason=arguments.reason,
+                apply=arguments.apply,
+            )
         if arguments.replay_job_id is not None:
             return replay_failed_jobs(
                 connection,
@@ -138,7 +160,7 @@ def failed_items_command(arguments: Any, database_url: str) -> dict[str, Any]:
                 reason=arguments.reason,
                 apply=arguments.apply,
             )
-        if selected == (None, None, None, None):
+        if selected == (None,) * 5:
             return inspect_failed_items(connection, limit=arguments.limit)
         return retry_failed_item(
             connection,
@@ -437,6 +459,151 @@ def _request_replay(
         entry["outcome"] = "replay_enqueued"
     else:
         entry.update(outcome="refused", reason=f"replay_request_{_text(status)}")
+
+
+# Each Reset pair's saved profile whose result, its newest processing
+# outcome's, was kept uncertain only because it named a renamed Legend tier,
+# not yet asked to be re-read.
+_RENAMED_TIER_READINGS = """
+    SELECT DISTINCT work.profile_observation_id
+    FROM collector_reset_sweeps AS sweep
+    JOIN collector_work AS work
+      ON work.sweep_id = sweep.id AND work.kind = 'reset_baseline'
+    CROSS JOIN LATERAL (
+        SELECT outcome.parser_version
+        FROM observation_processing_outcomes AS outcome
+        WHERE outcome.observation_id = work.profile_observation_id
+          AND outcome.processing_version = %(processing)s
+        ORDER BY outcome.id DESC
+        LIMIT 1
+    ) AS outcome
+    JOIN player_profile_effects AS effect
+      ON effect.observation_id = work.profile_observation_id
+     AND effect.parser_version = outcome.parser_version
+    JOIN player_profile_versions AS profile ON profile.id = effect.profile_version_id
+    WHERE sweep.boundary_at = %(reset)s
+      AND profile.eligibility_reason = 'known_tier_name_conflict'
+      AND (profile.league_tier_id, profile.league_tier_name) IN (
+          SELECT * FROM unnest(%(tier_ids)s::bigint[], %(tier_names)s::text[]))
+      AND NOT EXISTS (
+          SELECT FROM python_replay_requests AS request
+          WHERE request.observation_id = work.profile_observation_id
+            AND request.target_parser_version = %(new)s)
+    ORDER BY 1
+"""
+_REREAD_BATCH = 500
+
+
+def reread_reset_profiles(
+    connection: Any,
+    *,
+    resets: Sequence[datetime],
+    operator: str,
+    reason: str,
+    apply: bool = False,
+) -> dict[str, Any]:
+    """Preview or queue a re-read of each Reset pair's saved profile that
+    profile parser v3 kept uncertain because it named a renamed Legend tier.
+
+    From 16 November 2026, 12:31 UTC, until the fix deployed on 18 November
+    at 10:03 UTC, v3 kept every profile naming "Legend League I", II or III
+    uncertain, so the 17 and 18 November Reset pairs failed and the Legend
+    days they ended, with their Daily boards, stayed unproven. Each such
+    reading of the given Resets is replayed under profile parser v4, the
+    fixed reader, through clashlens_request_python_replay_v2, which records
+    who asked and why, as ``replay_failed_jobs`` does. Its replay saves the
+    reading's new result beside the old one and checks the Reset pair again,
+    which recalculates the day the Reset ended, and a day it changes then
+    corrects its board as any changed day does. The jobs run at backfill
+    priority, so they wait while live work is behind. Readings are asked
+    for 500 a transaction; a reading already asked for is not listed again,
+    so a run that stopped can simply be run again. A preview asks the replay
+    function and rolls back, so it refuses whatever ``apply`` would.
+    """
+    _check_audit(operator, reason)
+    tiers = sorted(RENAMED_LEGEND_TIERS.items())
+    report: dict[str, Any] = {
+        "applied": apply,
+        "outcome": "replay_enqueued" if apply else "preview",
+        "replayed_count": 0,
+        "refused_count": 0,
+        "resets": [],
+    }
+    for reset in dict.fromkeys(resets):
+        with connection.transaction():
+            connection.execute("SET LOCAL statement_timeout = '30s'")
+            readings = [
+                int(row[0])
+                for row in connection.execute(
+                    _RENAMED_TIER_READINGS,
+                    {
+                        "reset": reset,
+                        "processing": PROCESSING_VERSION,
+                        "new": RENAMED_TIER_PARSER_VERSION,
+                        "tier_ids": [tier_id for tier_id, _name in tiers],
+                        "tier_names": [name for _tier_id, name in tiers],
+                    },
+                ).fetchall()
+            ]
+        refused: Counter[str] = Counter()
+        refused_ids: list[int] = []
+        job_ids: list[int] = []
+        entry = {"reset": reset.isoformat(), "readings": len(readings)}
+        report["resets"].append(entry)
+        for start in range(0, len(readings), _REREAD_BATCH):
+            try:
+                with connection.transaction() as transaction:
+                    connection.execute("SET LOCAL lock_timeout = '1s'")
+                    connection.execute("SET LOCAL statement_timeout = '30s'")
+                    connection.execute(
+                        "SET LOCAL SESSION AUTHORIZATION clashlens_replay_request"
+                    )
+                    queued: list[int] = []
+                    for observation_id in readings[start : start + _REREAD_BATCH]:
+                        result: dict[str, Any] = {}
+                        _request_replay(
+                            connection,
+                            {
+                                "observation_id": observation_id,
+                                "parser_version": RENAMED_TIER_PARSER_VERSION,
+                                "processing_version": PROCESSING_VERSION,
+                                "domain_rule_version": DOMAIN_RULE_VERSION,
+                                "analytics_rule_version": ANALYTICS_RULE_VERSION,
+                            },
+                            result,
+                            operator,
+                            reason,
+                        )
+                        if result["outcome"] == "replay_enqueued":
+                            queued.append(result["replay_job_id"])
+                        else:
+                            refused[result["reason"]] += 1
+                            refused_ids.append(observation_id)
+                    connection.execute("RESET SESSION AUTHORIZATION")
+                    connection.execute(
+                        "UPDATE python_processing_jobs SET priority = %s"
+                        " WHERE id = ANY(%s)",
+                        (PYTHON_BACKFILL_PRIORITY, queued),
+                    )
+                    if not apply:
+                        raise psycopg.Rollback(transaction)
+                job_ids.extend(queued)
+            except psycopg.Error as error:
+                refusal = _BATCH_REFUSALS.get(error.sqlstate or "")
+                if refusal is None:
+                    raise
+                report.update(outcome="refused", reason=refusal)
+                break
+        entry["replay_enqueued" if apply else "would_enqueue"] = len(job_ids)
+        if apply and job_ids:
+            entry["replay_job_ids"] = [min(job_ids), max(job_ids)]
+        entry["refused"] = dict(sorted(refused.items()))
+        entry["refused_observation_ids"] = refused_ids[:20]
+        report["replayed_count"] += len(job_ids) if apply else 0
+        report["refused_count"] += sum(refused.values())
+        if report["outcome"] == "refused":
+            break
+    return report
 
 
 def _check_audit(operator: str, reason: str) -> None:

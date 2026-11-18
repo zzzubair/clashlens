@@ -18,7 +18,7 @@ from .domain import (
     anchored_ranked_day,
     validate_season_anchor,
 )
-from .profile import PROFILE_PARSER_VERSION, ParsedProfile
+from .profile import PROFILE_PARSER_VERSIONS, ParsedProfile
 
 
 class AnchorOutcome(StrEnum):
@@ -107,7 +107,7 @@ def _confirmed(connection: Any, *, for_update: bool) -> ConfirmedAnchor | None:
 
 
 def _profile_anchor(profile: ParsedProfile) -> SeasonAnchor:
-    if profile.parser_version == PROFILE_PARSER_VERSION:
+    if profile.parser_version in PROFILE_PARSER_VERSIONS:
         if profile.season_anchor_current_id is None:
             raise DomainRuleError(
                 "invalid_season_anchor", "profile current season is missing"

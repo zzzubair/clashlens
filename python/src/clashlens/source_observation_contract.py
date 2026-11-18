@@ -14,6 +14,11 @@ class SourceObservationContract:
 
 _DEFAULT_PARSER_VERSION = "supercell-source-parser-v2"
 _PROFILE_PARSER_VERSION = "supercell-profile-parser-v3"
+# Profile parser v3 as fixed on 18 November 2026 to read the renamed Legend
+# tiers. Only a re-read of a profile v3 judged before the fix runs under it:
+# a response keeps one result for each parser name, so the new name lets the
+# re-read save its result beside the old one (``operator_recovery``).
+_RENAMED_TIER_PARSER_VERSION = "supercell-profile-parser-v4"
 _SUPPORTED_PARSER_VERSIONS = frozenset(
     {"supercell-source-parser-v1", _DEFAULT_PARSER_VERSION}
 )
@@ -27,7 +32,8 @@ PROFILE_SOURCE_OBSERVATION_CONTRACT = SourceObservationContract(
     schema_version="profile-schema-v1",
     default_parser_version=_PROFILE_PARSER_VERSION,
     supported_parser_versions=frozenset(
-        {*_SUPPORTED_PARSER_VERSIONS, _PROFILE_PARSER_VERSION}
+        {*_SUPPORTED_PARSER_VERSIONS, _PROFILE_PARSER_VERSION,
+         _RENAMED_TIER_PARSER_VERSION}
     ),
 )
 BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT = SourceObservationContract(
