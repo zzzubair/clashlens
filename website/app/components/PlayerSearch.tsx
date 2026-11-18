@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useFetcher, useNavigate } from "react-router";
 
 import { canonicalPlayerPath, noMatchHint, normalizePlayerTag } from "../lib/player-tag";
@@ -273,6 +273,21 @@ export function HeaderSearch() {
 
   useEffect(() => {
     if (expanded) inputRef.current?.focus();
+  }, [expanded]);
+
+  // The panel grows out of the search button, wherever the header puts it:
+  // above the panel on a wide screen, under the phone's sheet. Measured from
+  // layout, not the box on screen, which the opening animation shrinks.
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    const toggle = toggleRef.current;
+    const parent = panel?.offsetParent;
+    if (!expanded || !panel || !toggle || !parent) return;
+    const button = toggle.getBoundingClientRect();
+    const box = parent.getBoundingClientRect();
+    const x = button.left + button.width / 2 - box.left - panel.offsetLeft;
+    const y = Math.max(0, button.top + button.height / 2 - box.top - panel.offsetTop);
+    panel.style.transformOrigin = `${x}px ${y}px`;
   }, [expanded]);
 
   useEffect(() => {

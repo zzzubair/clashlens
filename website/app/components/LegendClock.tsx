@@ -195,14 +195,17 @@ function MarkDetail({
   anchor: DOMRect | null;
   onClose: () => void;
 }) {
+  const opensRight = anchor
+    ? anchor.right + 306 < document.documentElement.clientWidth
+    : true;
+  // It grows out of the mark: from its left side when it opens to the
+  // mark's right, from its right side when it opens to the mark's left.
   const style =
     !phone && anchor
       ? {
-          left:
-            anchor.right + 306 < document.documentElement.clientWidth
-              ? anchor.right + 8
-              : Math.max(8, anchor.left - 298),
+          left: opensRight ? anchor.right + 8 : Math.max(8, anchor.left - 298),
           top: anchor.top - 10,
+          transformOrigin: `${opensRight ? "left" : "right"} ${10 + anchor.height / 2}px`,
         }
       : undefined;
   return (
