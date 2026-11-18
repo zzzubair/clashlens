@@ -234,6 +234,7 @@ export default function App() {
   useRememberShownPage();
   usePreloadInlineAnswerCode();
   usePreloadTabCode(data.crewsEnabled === true);
+  useReplayGrowOnOpen();
   useEffect(() => {
     if (previousPath.current !== location.pathname && !location.hash) {
       document.getElementById("main-content")?.focus({ preventScroll: true });
@@ -249,6 +250,30 @@ export default function App() {
       <Outlet />
     </>
   );
+}
+
+// A closed details element's contents keep their old styles, so its menu's
+// grow (app.css) would play only on the first open. Each time one opens,
+// restart its contents' animations before the next frame is drawn.
+function useReplayGrowOnOpen() {
+  useEffect(() => {
+    const observer = new MutationObserver((changes) => {
+      for (const { target } of changes) {
+        if (!(target instanceof HTMLDetailsElement) || !target.open) continue;
+        for (const panel of target.querySelectorAll<HTMLElement>(":scope > :not(summary)")) {
+          panel.style.animation = "none";
+          void panel.offsetWidth;
+          panel.style.animation = "";
+        }
+      }
+    });
+    observer.observe(document.body, {
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["open"],
+    });
+    return () => observer.disconnect();
+  }, []);
 }
 
 // The pages a tap most often opens: the tabs and a player.
