@@ -69,6 +69,10 @@ def test_support_recovery_is_a_restricted_host_wrapper() -> None:
     assert "CLASHLENS_DATABASE_URL" not in text
     assert re.search(r"--official-(key-file|proxy-url)", text) is None
     assert re.search(r"--[a-z-]*token", text) is None
+    # The denied runs below stop at the root check, so only these two lines
+    # guard the operator permission list and the token prompt call.
+    assert 'grep -Fqx -- "$SUDO_USER" "$OPERATOR_ALLOWLIST"' in text
+    assert "read_recovery_token || status_unavailable" in text
 
     shell = shutil.which("bash")
     assert shell is not None

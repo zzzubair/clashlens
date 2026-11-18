@@ -81,6 +81,24 @@ def test_public_reservation_covers_request_and_publish_without_double_counting(
     assert spool.delete(digest) is False
 
 
+def test_reservation_uses_reconciled_counts_without_rescanning_files(
+    tmp_path: Path,
+) -> None:
+    from unittest import mock
+
+    root = tmp_path / "spool"
+    spool = Spool(root, max_body_bytes=1024, max_bytes=2048, max_objects=2)
+    body = b"cached counts"
+    spool.publish(body, hashlib.sha256(body).hexdigest())
+
+    with mock.patch(
+        "clashlens.spool.os.listdir",
+        side_effect=AssertionError("reservation rescanned the spool"),
+    ):
+        reservation = spool.reserve(512)
+        reservation.release()
+
+
 def test_cached_counts_follow_publish_delete_and_stale_cleanup(tmp_path: Path) -> None:
     root = tmp_path / "spool"
     spool = Spool(root, max_body_bytes=1024, max_bytes=4096, max_objects=4)
