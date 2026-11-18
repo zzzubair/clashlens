@@ -1168,7 +1168,9 @@ def test_deep_profile_history_cannot_hold_the_board_freeze_past_its_budget(
     freeze, pages = boundary_manifest._freeze, []
 
     def budgeted(connection, *args):
-        connection.execute(f"SET LOCAL statement_timeout = '{FREEZE_BUDGET}'")
+        # Without JIT, as production's database runs
+        # (deploy/quadlet/clashlens-postgres.container).
+        connection.execute(f"SET LOCAL statement_timeout = '{FREEZE_BUDGET}'; SET LOCAL jit = off")
         before = connection.execute(_PAGES_READ).fetchone()[0]
         frozen = freeze(connection, *args)
         pages.append(connection.execute(_PAGES_READ).fetchone()[0] - before)
@@ -1237,3 +1239,138 @@ def test_deep_profile_history_cannot_hold_the_board_freeze_past_its_budget(
             assert frozen[1][2] == legacy
         finally:
             database.close()
+
+
+# Responses of a member whose profile is not accepted, after their last
+# accepted one, set by running this on the code before the fix: there the
+# newest-profile lookup checked every one of them.
+UNACCEPTED_RUN = 2_000
+
+
+def _unaccepted_run(connection_info: str, tag: str, count: int) -> None:
+    """Seed ``count`` profile responses of ``tag``, 20 seconds apart up to
+    a minute before DAY_END, each a sighting of one profile that is not
+    accepted, naming Season 0 as a player promoted at a Monday Reset reads
+    until they play, at the day's 6,000."""
+    with psycopg.connect(connection_info) as connection:
+        connection.execute("SET LOCAL session_replication_role = replica")
+        connection.execute(
+            """
+            INSERT INTO collector_observations (
+                occurrence_key, player_id, normalized_tag, endpoint, request_started_at,
+                response_completed_at, http_status, response_hash, archive_reference,
+                archive_catalogue_hash, collector_version, key_label, evidence_headers,
+                request_method, request_path, request_query, paging_envelope_state,
+                source_adapter_version)
+            SELECT 'unaccepted:' || n, player.id, player.normalized_tag, 'profile', at, at,
+                   200, repeat('a', 64), 'archive', repeat('a', 64), 'seed', 'seed', '{}',
+                   'GET', 'path', '', 'not_applicable', 'player-profile-v1'
+            FROM players AS player CROSS JOIN generate_series(1, %(count)s) AS n
+            CROSS JOIN LATERAL (
+                SELECT %(until)s - make_interval(secs => 20 * n) AS at) AS seen
+            WHERE player.normalized_tag = %(tag)s
+            """,
+            {"count": count, "until": DAY_END - timedelta(minutes=1), "tag": tag},
+        )
+        connection.execute(
+            """
+            INSERT INTO player_profile_versions (
+                player_id, observation_id, normalized_tag, endpoint_version, schema_version,
+                parser_version, observed_at, source_http_status, name, trophies,
+                league_tier_id, league_tier_name, eligibility_state, profile_json,
+                source_contract_state, current_league_season_id)
+            SELECT player_id, id, normalized_tag, 'v1', 'v1', 'parser',
+                   response_completed_at, 200, 'Promoted', 6000, 105000036, 'Legend I',
+                   'eligible', '{}', 'conflict', 0
+            FROM collector_observations WHERE occurrence_key = 'unaccepted:' || %s
+            """,
+            (count,),
+        )
+        connection.execute(
+            """
+            INSERT INTO player_profile_effects (
+                profile_version_id, observation_id, effect_kind, observed_at,
+                source_http_status, endpoint_version, schema_version, parser_version)
+            SELECT version.id, response.id, 'current_profile',
+                   response.response_completed_at, 200, 'v1', 'v1', 'parser'
+            FROM collector_observations AS response
+            JOIN player_profile_versions AS version
+              ON version.player_id = response.player_id AND version.name = 'Promoted'
+            WHERE response.occurrence_key LIKE 'unaccepted:%'
+            """
+        )
+        connection.execute("ANALYZE")
+
+
+def test_a_long_run_of_unaccepted_profiles_cannot_slow_the_board_freeze(
+    database_url: str, archive_server, monkeypatch, capsys
+) -> None:
+    # A player promoted at a Monday Reset reads Legend I at 5,000 naming
+    # Season 0, never accepted, until they play. The freeze's newest-profile
+    # lookup checked each such response back to their last accepted one: on
+    # the 16 November 2026 board, 55 of a sample of 500 members checked 3,739
+    # responses, about 85 percent of the lookup's reads.
+    monkeypatch.setattr(board_deadline, "BOARD_DEADLINE", timedelta(days=36500))
+    freeze, pages = boundary_manifest._freeze, []
+
+    def counted(connection, *args):
+        before = connection.execute(_PAGES_READ).fetchone()[0]
+        frozen = freeze(connection, *args)
+        pages.append(connection.execute(_PAGES_READ).fetchone()[0] - before)
+        return frozen
+
+    monkeypatch.setattr(boundary_manifest, "_freeze", counted)
+    with domain_database(database_url) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _swept(connection_info, archive_server, processor)
+            _unaccepted_run(connection_info, "#2PP", UNACCEPTED_RUN)
+            capsys.readouterr()
+            for tag in PLAYERS:
+                assert set(_calculate(database, processor, tag)) <= {"processed"}
+            _build(database, processor)
+            with database.pool.connection() as connection:
+                frozen = connection.execute(
+                    """
+                    SELECT player.normalized_tag, entry.trophies, entry.confidence,
+                           (frozen.input_identity ->> 'profile_version_id')::bigint,
+                           (frozen.input_identity #>> '{profile_snapshot,observation_id}')::bigint
+                    FROM boundary_publication_generations AS generation
+                    CROSS JOIN boundary_publication_manifest_entries(
+                        generation.snapshot_manifest_id) AS frozen
+                    JOIN players AS player ON player.id = frozen.player_id
+                    LEFT JOIN leaderboard_snapshot_entries AS entry
+                      ON entry.snapshot_id = generation.snapshot_id
+                     AND entry.player_id = frozen.player_id
+                    WHERE generation.boundary_at = %s AND generation.generation = 1
+                      AND generation.snapshot_state = 'published'
+                    ORDER BY 1
+                    """,
+                    (DAY_END,),
+                ).fetchall()
+                # Each member's newest accepted profile is still its reading
+                # at the Reset the day began with.
+                readings = connection.execute(
+                    """
+                    SELECT player.normalized_tag, 6000, 'confirmed', version.id, response.id
+                    FROM collector_observations AS response
+                    JOIN players AS player ON player.id = response.player_id
+                    JOIN player_profile_versions AS version
+                      ON version.observation_id = response.id
+                    WHERE response.occurrence_key = player.normalized_tag || %s
+                    ORDER BY 1
+                    """,
+                    (f"-{DAY_START:%d}-profile",),
+                ).fetchall()
+        finally:
+            database.close()
+    assert [(text(row[0]), *row[1:]) for row in frozen] == [
+        (text(row[0]), *row[1:]) for row in readings]
+    # On the code before the fix the freezes read up to 8,179 pages; on the
+    # fix, up to 180.
+    assert max(pages) < PAGE_BUDGET, pages
+    # The freeze's event splits its rows stage into its lookups.
+    event = next(json.loads(line) for line in capsys.readouterr().out.splitlines()
+                 if '"boundary_manifest_frozen"' in line and '"snapshot"' in line)
+    assert abs(sum(event["row_seconds"].values()) - event["seconds"]["rows"]) < 0.01
+    assert "profiles" in event["row_seconds"], event
