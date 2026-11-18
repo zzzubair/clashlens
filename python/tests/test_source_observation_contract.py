@@ -20,6 +20,8 @@ from clashlens.source_observation_contract import (
                     "supercell-source-parser-v1",
                     "supercell-source-parser-v2",
                     "supercell-profile-parser-v3",
+                    # Re-reads of profiles v3 judged before the tier rename fix.
+                    "supercell-profile-parser-v4",
                 }
             ),
         ),

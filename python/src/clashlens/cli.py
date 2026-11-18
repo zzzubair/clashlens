@@ -82,6 +82,22 @@ UUID_PATTERN = re.compile(
 )
 
 
+def _reset_time(value: str) -> datetime:
+    """A Reset given as an ISO 8601 time with its offset: 05:00:00 UTC."""
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        parsed = None
+    if parsed is None or parsed.utcoffset() is None or (
+        parsed.astimezone(UTC).replace(hour=5, minute=0, second=0, microsecond=0)
+        != parsed
+    ):
+        raise argparse.ArgumentTypeError(
+            "a Reset must be an ISO 8601 time at 05:00:00 UTC, such as 2026-11-17T05:00:00Z"
+        )
+    return parsed.astimezone(UTC)
+
+
 def _bounded_int(label: str, minimum: int, maximum: int):
     def parse(value: str) -> int:
         try:
@@ -249,6 +265,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         type=_bounded_int("processing job ID", 1, 9223372036854775807),
     )
+    # A Reset, such as 2026-11-17T05:00:00Z: re-read its pairs' profiles that
+    # profile parser v3 kept uncertain for naming a renamed Legend tier.
+    failed_selector.add_argument("--reread-reset", action="append", type=_reset_time)
     failed_items.add_argument("--reason")
     # ./ops passes the host account; acceptances and replays record it.
     failed_items.add_argument("--operator")
@@ -475,7 +494,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             report = failed_items_command(arguments, database_url(arguments))
             print(json.dumps(report, sort_keys=True, default=str))
-            return 1 if report.get("outcome") == "refused" else 0
+            # A re-read queues the readings it may and counts the ones refused.
+            return 1 if report.get("outcome") == "refused" or report.get("refused_count") else 0
         if arguments.command == "prune-archive":
             import psycopg
 

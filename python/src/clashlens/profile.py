@@ -18,6 +18,10 @@ from .source_observation_contract import PROFILE_SOURCE_OBSERVATION_CONTRACT
 SCHEMA_VERSION = PROFILE_SOURCE_OBSERVATION_CONTRACT.schema_version
 PARSER_VERSION = PROFILE_SOURCE_OBSERVATION_CONTRACT.default_parser_version
 PROFILE_PARSER_VERSION = "supercell-profile-parser-v3"
+# The same reader, for re-reading profiles v3 judged before the Legend tiers'
+# rename was read (``source_observation_contract``).
+RENAMED_TIER_PARSER_VERSION = "supercell-profile-parser-v4"
+PROFILE_PARSER_VERSIONS = (PROFILE_PARSER_VERSION, RENAMED_TIER_PARSER_VERSION)
 SUPPORTED_PARSER_VERSIONS = (
     PROFILE_SOURCE_OBSERVATION_CONTRACT.supported_parser_versions
 )
@@ -178,7 +182,7 @@ def parse_profile(
                 "invalid_season_anchor",
                 "profile current season is missing or malformed",
             )
-        if parser_version == PROFILE_PARSER_VERSION:
+        if parser_version in PROFILE_PARSER_VERSIONS:
             season_anchor = validate_profile_season_anchor(
                 current_season, observed_at=observed_utc
             )
