@@ -1258,26 +1258,26 @@ def test_blog_folder_must_be_a_plain_path(tmp_path, mode_config):
 
 def test_release_fingerprint_leaves_no_listing_behind(tmp_path):
     source = tmp_path / "source"
-    (source / "python").mkdir(parents=True)
+    source.mkdir()
     (source / "ops").write_text("ops\n")
-    unreadable = source / "python" / "unreadable.py"
-    unreadable.write_text("x = 1\n")
-    subprocess.run(["git", "init", "-q", str(source)], check=True)
+    # A release input that cannot be read stops the fingerprint part way.
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    for name, body in (("git", "printf 'ops\\0'"), ("sha256sum", "exit 1")):
+        (tools / name).write_text(f"#!/bin/sh\n{body}\n")
+        (tools / name).chmod(0o700)
     scratch = tmp_path / "scratch"
     scratch.mkdir()
-    unreadable.chmod(0)
-    try:
-        subprocess.run(
-            ["bash", "-c", 'source "$1" help >/dev/null; ROOT=$2; source_fingerprint >/dev/null',
-             "fingerprint-test", str(OPS), str(source)],
-            env=dict(os.environ, TMPDIR=str(scratch)),
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
-    finally:
-        unreadable.chmod(0o644)
+    result = subprocess.run(
+        ["bash", "-c", 'source "$1" help >/dev/null; ROOT=$2; source_fingerprint >/dev/null',
+         "fingerprint-test", str(OPS), str(source)],
+        env=dict(os.environ, TMPDIR=str(scratch), PATH=f"{tools}:{os.environ['PATH']}"),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode != 0
     assert list(scratch.iterdir()) == []
 
 
