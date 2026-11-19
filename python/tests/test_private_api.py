@@ -780,7 +780,6 @@ def test_leaderboard_rejects_misaligned_selectors_and_missing_pages(
             with TestClient(app) as client:
                 for target in (
                     "/v1/leaderboards/live?limit=100&offset=1",
-                    "/v1/leaderboards/live?limit=100&offset=1000100",
                     "/v1/leaderboards/frozen?official_season_id=2026-08",
                 ):
                     assert (

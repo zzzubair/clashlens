@@ -587,7 +587,7 @@ def create_app(
         kind: Literal["live", "frozen"],
         request: Request,
         limit: int = Query(default=100, ge=1, le=200),
-        offset: int = Query(default=0, ge=0, le=1_000_000),
+        offset: int = Query(default=0, ge=0),
         official_season_id: str | None = None,
         season_day_number: int | None = Query(default=None, ge=1, le=SEASON_DAY_COUNT),
         focus_tag: str | None = Query(default=None, max_length=16),
