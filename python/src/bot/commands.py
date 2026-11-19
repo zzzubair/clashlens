@@ -156,13 +156,14 @@ class Commands:
             if status not in (None, replies.WAITING_FOR_RESET) and not has_season:
                 return replies.player_status(self.site, page, status, now, colour)
             # Today's picture, dark when the person's own account chose it,
-            # left out while too many pictures wait to be drawn.
+            # left out while too many pictures wait to be drawn. The reply
+            # carries the drawing, so no database read waits for it.
             day = picture.legend_day(page, ranked_day_for(now).start)
             drawn = None
             if day is not None:
                 dark = account is not None and self.store.dark_picture(account)
                 try:
-                    drawn = picture.drawing(day, dark).result()
+                    drawn = picture.drawing(day, dark)
                 except picture.Busy:
                     log.warning("/stats picture left out: too many pictures waiting")
             return replies.stats_reply(self.site, page, now, colour, drawn)

@@ -835,6 +835,14 @@ def _opponents(
     return opponents
 
 
+def _known(database: ApiDatabase, tag: str) -> bool:
+    """Whether Clash Lens has the player, asked before any shared board read."""
+    with database.pool.connection() as connection:
+        return connection.execute(
+            "SELECT 1 FROM players WHERE normalized_tag = %s", (tag,)
+        ).fetchone() is not None
+
+
 def get_player_today(
     database: ApiDatabase,
     board_cache: DashboardBoard,
@@ -851,6 +859,8 @@ def get_player_today(
     ``board_computed_at`` says when the board was read.
     ``projected_rank_pending`` says the player's place is still to be worked
     out, so the dashboard asks again."""
+    if not _known(database, tag):
+        return None
     day = ranked_day_for(now)
     until = time.monotonic() + board_wait
     board = board_cache.current(database, now, wait=board_wait)
@@ -863,10 +873,6 @@ def get_player_today(
             bool(projection.places) and tag not in projection.places
         )
     with database.pool.connection() as connection:
-        if connection.execute(
-            "SELECT 1 FROM players WHERE normalized_tag = %s", (tag,)
-        ).fetchone() is None:
-            return None
         own_rows = {
             text_value(row[0]): row
             for row in connection.execute(
@@ -929,13 +935,11 @@ def get_player_bases(
     today = ranked_day_for(now)
     if not 1 <= day_number < today.day_number:
         raise ValueError("not an earlier Legend day of this Season")
+    if not _known(database, tag):
+        return None
     day_start = today.start - (today.day_number - day_number) * RANKED_DAY_DURATION
     similar = board_cache.past_day(database, day_start)
     with database.pool.connection() as connection:
-        if connection.execute(
-            "SELECT 1 FROM players WHERE normalized_tag = %s", (tag,)
-        ).fetchone() is None:
-            return None
         own = next(
             iter(
                 connection.execute(

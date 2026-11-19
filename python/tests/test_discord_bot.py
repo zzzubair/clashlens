@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import io
+import itertools
+import threading
 from typing import Any
 
 import discord
@@ -27,11 +29,12 @@ from discord_bot_support import (
 )
 from PIL import Image
 
-from bot import discord_app
+from bot import discord_app, picture
 from bot.__main__ import ConfigError, main, read_token
 from bot.commands import Commands
 from bot.discord_app import DiscordApp, MenuState, build_client
 from bot.replies import GOLD, PLAYER_COLOURS
+from bot.store import Store
 
 OTHER = 100000000000000002
 
@@ -402,3 +405,88 @@ def test_a_menu_closes_after_one_pick_or_when_its_timer_runs_out(store) -> None:
         isinstance(item, discord.ui.Select) for item in started.last["view"].walk_children()
     )
     assert links(started.last) == shown_links
+
+
+def test_stats_pictures_waiting_to_be_drawn_leave_the_read_slots_free(store, monkeypatch) -> None:
+    """While every read slot's /stats waits for its picture, another command
+    still reads and answers, and each /stats then gets its picture."""
+    store.connect(ME, [card("#2PP", "Drift", 5842)])
+    store.pages["#8QQ"] = page("#8QQ", "Lens", [])
+    go = threading.Event()
+
+    def draw(day: dict, dark: bool) -> bytes:
+        go.wait(5)
+        return b"png"
+
+    monkeypatch.setattr(picture, "draw", draw)
+    picture._DRAWER.submit(lambda: None).result(5)  # earlier tests' drawing has ended
+    stats = [FakeInteraction() for _ in range(discord_app.READ_SLOTS)]
+    helped = FakeInteraction()
+
+    async def go_all() -> None:
+        _client, tree = build_client(Commands(store, SITE, now=lambda: NOW))
+        waiting = [
+            asyncio.ensure_future(tree.get_command("stats").callback(interaction, player="#8QQ"))
+            for interaction in stats
+        ]
+        try:
+            while store.reads.count("player_page") < len(stats):
+                await asyncio.sleep(0.01)
+            await asyncio.wait_for(tree.get_command("help").callback(helped), 2)
+        finally:
+            go.set()
+            await asyncio.gather(*waiting)
+
+    asyncio.run(go_all())
+    assert helped.messages
+    assert [interaction.last["pictures"] for interaction in stats] == [
+        ["attachment://legend-day.png"]
+    ] * len(stats)
+
+
+def test_typing_never_holds_every_read_slot(store, monkeypatch) -> None:
+    """Autocomplete still reading after its answer was due leaves slots for
+    commands."""
+    monkeypatch.setattr(discord_app, "AUTOCOMPLETE_SECONDS", 0.05)
+    store.connect(ME, [card("#2PP", "Drift", 5842)])
+    go = threading.Event()
+
+    def search(query: str, now) -> list:
+        go.wait(5)
+        return []
+
+    monkeypatch.setattr(store, "search", search, raising=False)
+    helped = FakeInteraction()
+
+    async def go_all() -> None:
+        app = DiscordApp(Commands(store, SITE, now=lambda: NOW))
+        tree = discord.app_commands.CommandTree(discord.Client(intents=discord.Intents.none()))
+        app.register(tree)
+        try:
+            for _ in range(discord_app.READ_SLOTS):
+                assert await app.any_player_choices(FakeInteraction(), "dri") == []
+            await asyncio.wait_for(tree.get_command("help").callback(helped), 2)
+        finally:
+            go.set()
+        await asyncio.sleep(0.05)
+
+    asyncio.run(go_all())
+    assert helped.messages
+
+
+def test_the_font_check_remembers_a_bounded_number_of_answers() -> None:
+    blanks = "".join(chr(code) for code in range(0x2000, 0x200B))  # each a space
+    picture._draws.cache_clear()
+    for text in itertools.islice(itertools.product(blanks, repeat=5), 16384 + 10):
+        assert picture._draws("name", "".join(text)) is True
+    assert picture._draws.cache_info().currsize <= 16384
+    picture._draws.cache_clear()
+
+
+def test_a_search_longer_than_any_name_reads_nothing() -> None:
+    class Unreachable:
+        @property
+        def pool(self):
+            raise AssertionError("searched the database")
+
+    assert Store(Unreachable()).search("drift" * 17, NOW) == []

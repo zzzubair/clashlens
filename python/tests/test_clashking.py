@@ -164,6 +164,21 @@ def test_requests_are_spaced_and_paused_after_overload() -> None:
     assert client.fetch_legend_history("#2PP") == b"{}"
 
 
+def test_an_unreadable_retry_after_keeps_the_usual_pause() -> None:
+    clock = FakeClock()
+
+    def transport(url: str, timeout: float):
+        return (429, {"Retry-After": "\u00b2"}, b"")
+
+    client = ClashKingClient(transport=transport, clock=clock)
+    with pytest.raises(ClashKingUnavailable):
+        client.fetch_legend_history("#2PP")
+    clock.now += FIRST_BACKOFF_SECONDS - 1
+    assert not client.try_acquire()
+    clock.now += 1
+    assert client.try_acquire()
+
+
 def test_no_answer_pauses_and_disabled_client_never_requests() -> None:
     clock = FakeClock()
 

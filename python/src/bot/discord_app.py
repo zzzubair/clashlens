@@ -14,10 +14,12 @@ the person who typed the command (`Reply.private`) are shown to them alone.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import io
 import logging
 import time
 from collections.abc import Callable
+from concurrent.futures import Future
 from enum import StrEnum
 from typing import Any, TypeVar
 
@@ -38,6 +40,8 @@ T = TypeVar("T")
 AUTOCOMPLETE_SECONDS = 2.0
 # Database reads running at once; the bot's connection pool holds as many.
 READ_SLOTS = 4
+# Of those, the most autocomplete may hold, so commands always have the rest.
+TYPING_SLOTS = 2
 # Dropdowns and buttons stop working after this, inside Discord's 15 minute
 # limit on editing a reply.
 VIEW_SECONDS = 600
@@ -134,6 +138,7 @@ class DiscordApp:
     def __init__(self, commands: Commands) -> None:
         self.commands = commands
         self._slots = asyncio.Semaphore(READ_SLOTS)
+        self._typing = asyncio.Semaphore(TYPING_SLOTS)
 
     async def read(
         self, work: Callable[..., T], *args: Any, deadline: float | None = None
@@ -152,6 +157,21 @@ class DiscordApp:
             raise Slow from error
         except psycopg.OperationalError as error:
             raise Unavailable from error
+
+    async def drawn(self, reply: Reply) -> Reply:
+        """`reply` with each picture still being drawn waited for, after its
+        read gave up its slot; one that could not be drawn is left out."""
+        cards = []
+        for card in reply.cards:
+            if isinstance(card.picture, Future):
+                try:
+                    png: bytes | None = await asyncio.wrap_future(card.picture)
+                except Exception:
+                    log.warning("a reply's picture could not be drawn", exc_info=True)
+                    png = None
+                card = dataclasses.replace(card, picture=png)
+            cards.append(card)
+        return dataclasses.replace(reply, cards=tuple(cards))
 
     def render(
         self, reply: Reply, owner: int, origin: discord.Interaction, *, private: bool
@@ -179,7 +199,7 @@ class DiscordApp:
         try:
             # Acknowledge before any database work: Discord waits 3 seconds.
             await interaction.response.defer(thinking=True)
-            reply = await self.read(work, *args)
+            reply = await self.drawn(await self.read(work, *args))
             if reply.private:
                 await self._private(interaction, reply, shared)
             else:
@@ -270,7 +290,7 @@ class DiscordApp:
                 # This click may edit the message for 15 minutes more, the
                 # first command no longer can.
                 view.origin = interaction
-                reply = await self.read(work)
+                reply = await self.drawn(await self.read(work))
                 if reply.private:
                     # A refusal for the clicker never replaces the message.
                     outcome = "refused"
@@ -301,7 +321,12 @@ class DiscordApp:
     ) -> list[replies.Choice]:
         """One autocomplete read, or no entries when it cannot answer in time."""
         deadline = asyncio.get_running_loop().time() + AUTOCOMPLETE_SECONDS
-        task = asyncio.ensure_future(self.read(work, *args, deadline=deadline))
+
+        async def typed() -> list[replies.Choice]:
+            async with self._typing:
+                return await self.read(work, *args, deadline=deadline)
+
+        task = asyncio.ensure_future(typed())
         # A read already running when the answer is due keeps its slot until
         # it ends; one still waiting for a slot then never runs.
         task.add_done_callback(lambda done: done.cancelled() or done.exception())

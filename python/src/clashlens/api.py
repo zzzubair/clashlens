@@ -587,7 +587,7 @@ def create_app(
         kind: Literal["live", "frozen"],
         request: Request,
         limit: int = Query(default=100, ge=1, le=200),
-        offset: int = Query(default=0, ge=0),
+        offset: int = Query(default=0, ge=0, le=1_000_000),
         official_season_id: str | None = None,
         season_day_number: int | None = Query(default=None, ge=1, le=SEASON_DAY_COUNT),
         focus_tag: str | None = Query(default=None, max_length=16),
@@ -836,7 +836,14 @@ def create_app(
             display_name = normalize_display_name(body.display_name)
         except ValueError as error:
             raise ApiError(422, "invalid_request") from error
-        if len(json.dumps(body.preferences, separators=(",", ":")).encode()) > 4096:
+        try:
+            # JSON as PostgreSQL stores it: no NaN or Infinity.
+            preferences = json.dumps(
+                body.preferences, separators=(",", ":"), allow_nan=False
+            )
+        except ValueError as error:
+            raise ApiError(422, "invalid_request") from error
+        if len(preferences.encode()) > 4096:
             raise ApiError(422, "invalid_request")
         result = api_accounts.update_account(production_database,
             request_binding(

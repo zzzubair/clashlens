@@ -197,6 +197,27 @@ describe("Google OIDC service", () => {
     ).resolves.toEqual({ provider: "google", providerSubject: SUBJECT });
   });
 
+  it("reuses the issuer's discovery for an hour and retries one that failed", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: 1_790_000_000_000 });
+    try {
+      const { deps, discovery } = fakeDeps();
+      await createGoogleOidcService(testConfig(), deps);
+      await createGoogleOidcService(testConfig(), deps);
+      expect(discovery).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(1_790_000_000_000 + 60 * 60 * 1000);
+      await createGoogleOidcService(testConfig(), deps);
+      expect(discovery).toHaveBeenCalledTimes(2);
+
+      discovery.mockRejectedValueOnce(new Error("issuer unavailable"));
+      vi.setSystemTime(1_790_000_000_000 + 2 * 60 * 60 * 1000);
+      await expect(createGoogleOidcService(testConfig(), deps)).rejects.toThrow();
+      await createGoogleOidcService(testConfig(), deps);
+      expect(discovery).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("builds the exact authorization URL with openid-only scope and PKCE S256", async () => {
     const { deps, buildAuthorizationUrl, discovery } = fakeDeps();
     const service = await createGoogleOidcService(testConfig(), deps);

@@ -17,7 +17,7 @@ import threading
 from collections.abc import Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta
-from functools import cache
+from functools import cache, lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -100,7 +100,8 @@ def _ink(font: ImageFont.FreeTypeFont, text: str) -> bytes:
     return image.tobytes()
 
 
-@cache
+# Names bring any characters, so only the most recently checked are kept.
+@lru_cache(maxsize=16384)
 def _draws(name: str, text: str) -> bool:
     """Whether font `name` ("emoji" for colour emoji) draws `text` itself,
     not its box for a missing character."""
@@ -332,28 +333,41 @@ def legend_day(
 # takes about 50 MB while it is drawn, and memory freed on a thread stays
 # kept for that thread, so drawing on the bot's other threads in turn took
 # the bot past the 384 MiB it may use. At most `_MOST_DRAWING` pictures are
-# being drawn or waiting at once: /stats from every read slot, an alert's,
-# and one an alert stopped waiting for; another is not drawn.
+# being drawn or waiting at once, and /stats takes at most `_MOST_FOR_STATS`
+# of them, so attack alerts always have the rest; another is not drawn.
 _DRAWER = ThreadPoolExecutor(max_workers=1, thread_name_prefix="picture")
 _MOST_DRAWING = 6
+_MOST_FOR_STATS = 4
 _DRAWING = threading.BoundedSemaphore(_MOST_DRAWING)
+_FOR_STATS = threading.BoundedSemaphore(_MOST_FOR_STATS)
 
 
 class Busy(Exception):
-    """`_MOST_DRAWING` pictures are being drawn or waiting already."""
+    """Too many pictures are being drawn or waiting already."""
 
 
-def drawing(day: Mapping[str, Any], dark: bool) -> Future[bytes]:
-    """`draw(day, dark)` on the drawing thread, raising Busy when too many
-    pictures wait for it. A picture cancelled before it starts is not drawn."""
-    if not _DRAWING.acquire(blocking=False):
-        raise Busy
+def drawing(day: Mapping[str, Any], dark: bool, *, alert: bool = False) -> Future[bytes]:
+    """`draw(day, dark)` on the drawing thread, for an attack alert or else
+    for /stats, raising Busy when too many pictures wait for it. A picture
+    cancelled before it starts is not drawn."""
+    held = [_DRAWING] if alert else [_FOR_STATS, _DRAWING]
+    taken: list[threading.BoundedSemaphore] = []
     try:
+        for semaphore in held:
+            if not semaphore.acquire(blocking=False):
+                raise Busy
+            taken.append(semaphore)
         future = _DRAWER.submit(lambda: draw(day, dark))
     except BaseException:
-        _DRAWING.release()
+        for semaphore in taken:
+            semaphore.release()
         raise
-    future.add_done_callback(lambda _done: _DRAWING.release())
+
+    def release(_done: Future[bytes]) -> None:
+        for semaphore in taken:
+            semaphore.release()
+
+    future.add_done_callback(release)
     return future
 
 

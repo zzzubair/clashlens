@@ -8,6 +8,7 @@ markup or an @mention in a name cannot ping anyone or break the layout.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import Future
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Any
@@ -77,8 +78,9 @@ class Card:
     button: Link | None = None
     # The box's own small bold top line, in Discord's older layout only.
     title: str | None = None
-    # A PNG between the first two parts, in place of the line.
-    picture: bytes | None = None
+    # A PNG between the first two parts, in place of the line; while still
+    # being drawn, the drawing, waited for after the database reads end.
+    picture: bytes | Future[bytes] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -555,7 +557,7 @@ def stats_reply(
     page: Mapping[str, Any],
     now: datetime,
     colour: int = GOLD,
-    picture: bytes | None = None,
+    picture: bytes | Future[bytes] | None = None,
 ) -> Reply:
     """Today and this Season for one player, from the player page read: one
     compact message anyone in the conversation can forward. Today's trophies

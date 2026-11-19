@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 import secrets
 from enum import StrEnum
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -81,9 +81,14 @@ def link_state(row: Any, link_id: str) -> LinkState:
     return LinkState.CURRENT if text_value(row[0]) == link_id else LinkState.RETIRED
 
 
+# Longer than any allowed value, every part of `show` included, so a full
+# set of settings stays well inside the overlay row's 2,048 bytes.
+_SettingText = Annotated[str, Field(max_length=64)]
+
+
 class OverlayBody(StrictBody):
     tag: str | None = Field(default=None, min_length=1, max_length=16)
-    settings: dict[str, str] = Field(max_length=20)
+    settings: dict[_SettingText, _SettingText] = Field(max_length=20)
 
 
 class NewLinkBody(StrictBody):
@@ -97,7 +102,8 @@ def clean_settings(raw: dict[str, str]) -> dict[str, str]:
     for key, value in raw.items():
         if value in _CHOICES.get(key, ()):
             out[key] = value
-        elif key in _NUMBERS and value.isdigit() and int(value) <= NUMERIC_MAX:
+        elif (key in _NUMBERS and value.isascii() and value.isdigit()
+              and int(value) <= NUMERIC_MAX):
             out[key] = str(int(value))
         elif key == "show" and set(filter(None, value.split(","))) <= _PARTS:
             out[key] = value

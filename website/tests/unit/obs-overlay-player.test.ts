@@ -26,6 +26,7 @@ import type {
 } from "../../app/lib/contracts";
 import type { OverlayPlayer } from "../../app/lib/obs-overlay";
 import { loader } from "../../app/routes/obs-overlay.player";
+import { getOverlayPlayer } from "../../app/services/obs-overlay.server";
 import { PythonApiError } from "../../app/services/python-response.server";
 
 const mocks = vi.hoisted(() => ({
@@ -121,4 +122,21 @@ it("ignores a failed Rank read for a player Clash Lens has not seen", async () =
   mocks.getPlayer.mockRejectedValue(new PythonApiError(404, { error: "not_found" }));
   mocks.searchLeaderboard.mockRejectedValue(new PythonApiError(503, { error: "down" }));
   expect(await overlayFor("#2PR")).toEqual({ tag: "#2PR", state: "missing" });
+});
+
+it("keeps at most 2,000 players' reads, dropping the oldest first", async () => {
+  vi.useFakeTimers({ toFake: ["Date"], now: 1_790_000_000_000 });
+  try {
+    mocks.getPlayer.mockImplementation(async (tag: string) => playerWith(tag, true));
+    await getOverlayPlayer("#OLDEST");
+    await getOverlayPlayer("#OLDEST");
+    expect(mocks.getPlayer).toHaveBeenCalledTimes(1);
+    for (let index = 0; index < 2_000; index += 1) await getOverlayPlayer(`#P${index}`);
+    await getOverlayPlayer("#P1999");
+    expect(mocks.getPlayer).toHaveBeenCalledTimes(2_001);
+    await getOverlayPlayer("#OLDEST");
+    expect(mocks.getPlayer).toHaveBeenCalledTimes(2_002);
+  } finally {
+    vi.useRealTimers();
+  }
 });

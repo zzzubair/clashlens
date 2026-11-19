@@ -15,6 +15,7 @@ from discord_bot_postgres_support import (
 )
 from domain_test_support import as_api_role, domain_database
 
+from bot import store as store_module
 from bot.commands import Commands
 from bot.replies import Site
 from bot.store import Store
@@ -405,6 +406,42 @@ def test_lookup_reads_run_as_the_api_role(database_url: str) -> None:
                     (account.internal_id,),
                 )
             assert store.dark_picture(account) is True
+        finally:
+            bot.close()
+            owner.close()
+
+
+def test_bot_search_reads_a_bounded_list_of_saved_5000_profiles_exact_name_first(
+    database_url: str, monkeypatch
+) -> None:
+    """Players known only from a saved 5,000 profile are read up to a set
+    number, an exact name first even when it sorts last."""
+    monkeypatch.setattr(store_module, "MOST_SAVED_MATCHES", 1)
+    with domain_database(database_url) as connection_info:
+        owner = ApiDatabase(connection_info)
+        bot = ApiDatabase(as_api_role(connection_info))
+        try:
+            for tag, name in (("#2PP", "Aaa Zed"), ("#8QQ", "Bbb Zed"), ("#9RR", "Zed")):
+                seed_profile(owner, tag, 5000)
+                with owner.pool.connection() as connection:
+                    connection.execute(
+                        """
+                        UPDATE player_profile_versions
+                        SET name = %s, source_contract_state = 'conflict',
+                            current_league_season_id = '0',
+                            eligibility_reason = 'confirmed_legend_i'
+                        WHERE normalized_tag = %s
+                        """,
+                        (name, tag),
+                    )
+                    connection.execute(
+                        "UPDATE players SET current_profile_version_id = NULL"
+                        " WHERE normalized_tag = %s",
+                        (tag,),
+                    )
+            with owner.pool.connection() as connection:
+                live_board.save_live_unplayed(connection, NOW)
+            assert [item["name"] for item in Store(bot).search("zed", NOW)] == ["Zed"]
         finally:
             bot.close()
             owner.close()

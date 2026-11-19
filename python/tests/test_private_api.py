@@ -780,6 +780,7 @@ def test_leaderboard_rejects_misaligned_selectors_and_missing_pages(
             with TestClient(app) as client:
                 for target in (
                     "/v1/leaderboards/live?limit=100&offset=1",
+                    "/v1/leaderboards/live?limit=100&offset=1000100",
                     "/v1/leaderboards/frozen?official_season_id=2026-08",
                 ):
                     assert (
@@ -847,6 +848,48 @@ def test_account_metadata_matches_database_and_http_acceptance(database_url: str
                 assert board["entries"] == []
                 assert board["focus_neighbors"] == 5
                 assert board["calendar"] == listing["calendar"]
+        finally:
+            database.close()
+
+
+def test_unusable_account_settings_are_refused_or_dropped_not_failed(
+    database_url: str,
+) -> None:
+    from api_db_organization_support import create_owner
+
+    with migrated_production_database(database_url, include_compact_collector=True) as info:
+        database = ApiDatabase(info)
+        try:
+            create_owner(database)
+            app = create_app(database, keys={("typescript-website", "current"): TS_CURRENT},
+                             clock=lambda: NOW_SECONDS, now=lambda: NOW)
+            with TestClient(app, raise_server_exceptions=False) as client:
+                def call(target, value=None, method="GET"):
+                    body = b"" if value is None else json_body(value)
+                    return client.request(method, target, content=body, headers=signed_headers(
+                        target, method=method, body=body, provider="google",
+                        subject="group-owner-subject"))
+
+                assert call("/v1/account/obs-overlay").status_code == 200
+                # A digit outside ASCII is dropped like any other unknown value.
+                saved = call("/v1/account/obs-overlay",
+                             {"settings": {"w": "\u00b2", "h": "66"}}, "POST")
+                assert saved.status_code == 200, saved.text
+                assert call("/v1/account/obs-overlay").json()["settings"] == {"h": "66"}
+                for settings in ({"show": "trophies," * 500}, {"w": "1" * 5000}):
+                    refused = call("/v1/account/obs-overlay", {"settings": settings}, "POST")
+                    assert (refused.status_code, refused.json()) == (
+                        422, {"error": "invalid_request"})
+                assert call("/v1/account/obs-overlay").json()["settings"] == {"h": "66"}
+
+                account = {"username": "groupowner", "display_name": "Group Owner"}
+                refused = call("/v1/account", {**account, "preferences": {"goal": float("nan")}},
+                               "PATCH")
+                assert (refused.status_code, refused.json()) == (
+                    422, {"error": "invalid_request"})
+                kept = call("/v1/account", {**account, "preferences": {"goal": 1.5}}, "PATCH")
+                assert kept.status_code == 200, kept.text
+                assert kept.json()["preferences"] == {"goal": 1.5}
         finally:
             database.close()
 

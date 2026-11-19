@@ -91,8 +91,10 @@ export function visitorRefusal(
 /** Count one request of this kind, or refuse it; true when it may go on. */
 function admit(kind: RateLimitedRequest, identity: string, now: number): boolean {
   const tracked = windows[kind];
+  // Windows are kept in the order they opened, so expired ones lead.
   for (const [key, window] of tracked) {
-    if (rateWindowState(window, LIMITS[kind], now) === "none") tracked.delete(key);
+    if (rateWindowState(window, LIMITS[kind], now) !== "none") break;
+    tracked.delete(key);
   }
 
   const current = tracked.get(identity);
@@ -102,6 +104,7 @@ function admit(kind: RateLimitedRequest, identity: string, now: number): boolean
     current.count += 1;
     return true;
   }
+  tracked.delete(identity);
   if (tracked.size >= MAX_TRACKED_IDENTITIES) {
     const oldest = tracked.keys().next().value;
     if (oldest !== undefined) tracked.delete(oldest);

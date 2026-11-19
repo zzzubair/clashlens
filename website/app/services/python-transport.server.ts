@@ -1,3 +1,4 @@
+import { readBoundedBody } from "../server/actions.server";
 import type { LoginIdentity } from "../server/auth.server";
 import {
   createProofHeaders,
@@ -86,6 +87,7 @@ export async function requestJsonRaw(
       },
       body: body === undefined ? undefined : Uint8Array.from(body),
       cache: "no-store",
+      redirect: "error",
       signal: AbortSignal.timeout(timeoutMs),
     });
     payload = await readPayload(response);
@@ -108,8 +110,11 @@ async function readPayload(response: Response): Promise<unknown> {
   ) {
     return { error: "malformed" };
   }
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.byteLength > MAX_RESPONSE_BYTES) return { error: "malformed" };
+  const bytes =
+    response.body === null
+      ? new Uint8Array()
+      : await readBoundedBody(response.body, MAX_RESPONSE_BYTES);
+  if (bytes === null) return { error: "malformed" };
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);

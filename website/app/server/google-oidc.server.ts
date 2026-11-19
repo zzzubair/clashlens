@@ -91,6 +91,40 @@ const defaultDiscovery: OidcDiscovery = (issuerUrl, clientId, metadata) =>
     issuerUrl.protocol === "http:" ? { execute: [allowInsecureRequests] } : undefined,
   );
 
+const DISCOVERY_REUSE_MS = 60 * 60 * 1000;
+const discoveries = new WeakMap<
+  OidcDiscovery,
+  Map<string, { value: Promise<unknown>; expiresAtMs: number }>
+>();
+
+/**
+ * The issuer's discovery document, fetched at most once an hour per issuer
+ * and client; a failed fetch is forgotten so the next sign-in tries again.
+ */
+function discoverOnce(
+  discovery: OidcDiscovery,
+  issuerUrl: URL,
+  clientId: string,
+  metadata: { client_secret: string },
+): Promise<unknown> {
+  let byIssuer = discoveries.get(discovery);
+  if (byIssuer === undefined) {
+    byIssuer = new Map();
+    discoveries.set(discovery, byIssuer);
+  }
+  const key = `${issuerUrl.href} ${clientId}`;
+  const nowMs = Date.now();
+  const kept = byIssuer.get(key);
+  if (kept !== undefined && kept.expiresAtMs > nowMs) return kept.value;
+  const value = discovery(issuerUrl, clientId, metadata);
+  const entry = { value, expiresAtMs: nowMs + DISCOVERY_REUSE_MS };
+  byIssuer.set(key, entry);
+  value.catch(() => {
+    if (byIssuer.get(key) === entry) byIssuer.delete(key);
+  });
+  return value;
+}
+
 const defaultBuildAuthorizationUrl: OidcAuthorizationUrlBuilder = (config, parameters) =>
   openidBuildAuthorizationUrl(config as Configuration, parameters);
 
@@ -115,7 +149,7 @@ export async function createGoogleOidcService(
       : config.googleIssuerUrl.toString();
   const clientId = config.googleClientId;
   const redirectUri = redirectUriFor(config.publicOrigin);
-  const discovered = await discovery(config.googleIssuerUrl, clientId, {
+  const discovered = await discoverOnce(discovery, config.googleIssuerUrl, clientId, {
     client_secret: config.googleClientSecret,
   });
 

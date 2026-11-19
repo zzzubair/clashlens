@@ -27,6 +27,8 @@ from clashlens.verification import OfficialVerificationClient
 
 FIXTURES = runpy.run_path(str(Path(__file__).parents[2] / "development/fixtures.py"))
 TAGS = FIXTURES["tags_for"](8)
+# Players Clash Lens already has; the live clan is read only for these.
+KNOWN = FIXTURES["tags_for"](39)
 FINGERPRINT = hashlib.sha256(b"safe-synthetic-live-clan-key").hexdigest()
 
 
@@ -76,6 +78,11 @@ def live_clan_api(
         ) as connection_info:
             database = ApiDatabase(connection_info)
             collector_database = CollectorDatabase(connection_info)
+            with database.pool.connection() as connection:
+                connection.cursor().executemany(
+                    "INSERT INTO players (normalized_tag, active) VALUES (%s, true)",
+                    [(tag,) for tag in KNOWN],
+                )
             api_verification.register_official_credential(database, FINGERPRINT)
             collector_database.register_interactive_key(FINGERPRINT, starts_per_second=25)
             origin = f"http://127.0.0.1:{server.server_port}"
@@ -127,7 +134,7 @@ def test_the_games_clan_shows_and_a_repeat_view_costs_no_request(database_url: s
         assert FakeGame.profile_reads == [TAGS[0]]
         assert database.scalar("SELECT count(*) FROM shared_api_permits") == 1
         # Shown only: nothing about the player is saved.
-        assert database.scalar("SELECT count(*) FROM players") == 0
+        assert database.scalar("SELECT count(*) FROM players") == len(KNOWN)
         assert database.scalar("SELECT count(*) FROM player_profile_versions") == 0
 
 
@@ -164,6 +171,26 @@ def test_no_answer_from_the_game_keeps_the_saved_clan(
         assert state == ("cooldown" if answer == "throttled" else "active")
 
 
+def test_an_unknown_player_takes_no_start_until_clash_lens_has_them(
+    database_url: str,
+) -> None:
+    unknown = TAGS[0]
+    with live_clan_api(database_url) as (client, database, _collector, _origin):
+        with database.pool.connection() as connection:
+            connection.execute("DELETE FROM players WHERE normalized_tag = %s", (unknown,))
+        assert live_clan(client, unknown) == {
+            "tag": unknown, "live": False, "reason": "unknown_player"}
+        assert FakeGame.profile_reads == []
+        assert database.scalar("SELECT count(*) FROM shared_api_permits") == 0
+        # Not remembered: once the player is added, the next view reads them.
+        with database.pool.connection() as connection:
+            connection.execute(
+                "INSERT INTO players (normalized_tag, active) VALUES (%s, true)", (unknown,)
+            )
+        assert live_clan(client, unknown)["live"] is True
+        assert FakeGame.profile_reads == [unknown]
+
+
 def test_no_free_start_keeps_the_saved_clan_without_asking_the_game(
     database_url: str,
 ) -> None:
@@ -189,7 +216,8 @@ def test_live_reads_leave_verification_its_start_and_collection_half_its_share(
         for _attempt in range(3):
             started = time.monotonic()
             live = [
-                api_live_clan.acquire_live_read_permit(database, FINGERPRINT) for _ in range(30)
+                api_live_clan.acquire_live_read_permit(database, FINGERPRINT, TAGS[0])
+                for _ in range(30)
             ]
             collection = [
                 collector.acquire_collector_permit(FINGERPRINT).granted for _ in range(30)

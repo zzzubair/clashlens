@@ -70,8 +70,11 @@ export async function readOverlayLink(link: string): Promise<OverlayLink | null>
   return overlay;
 }
 
-// Every overlay showing a player shares one read of it per 15 seconds.
+// Every overlay showing a player shares one read of it per 15 seconds. Reads
+// are kept oldest first, so expired ones sit at the front, and at most 2,000
+// players are kept; past that the oldest read is dropped.
 const PLAYER_CACHE_MS = 15_000;
+const MAX_CACHED_PLAYERS = 2_000;
 const players = new Map<string, { at: number; value: Promise<OverlayPlayer> }>();
 
 /** One player's live Legend day, trophies and Rank, as the overlay shows it. */
@@ -79,11 +82,21 @@ export function getOverlayPlayer(tag: string): Promise<OverlayPlayer> {
   const now = Date.now();
   const hit = players.get(tag);
   if (hit && now - hit.at < PLAYER_CACHE_MS) return hit.value;
-  for (const [key, entry] of players)
-    if (now - entry.at >= PLAYER_CACHE_MS) players.delete(key);
+  for (const [key, entry] of players) {
+    if (now - entry.at < PLAYER_CACHE_MS) break;
+    players.delete(key);
+  }
+  players.delete(tag);
+  if (players.size >= MAX_CACHED_PLAYERS) {
+    const oldest = players.keys().next().value;
+    if (oldest !== undefined) players.delete(oldest);
+  }
   const value = readPlayer(tag);
-  players.set(tag, { at: now, value });
-  value.catch(() => players.delete(tag));
+  const entry = { at: now, value };
+  players.set(tag, entry);
+  value.catch(() => {
+    if (players.get(tag) === entry) players.delete(tag);
+  });
   return value;
 }
 

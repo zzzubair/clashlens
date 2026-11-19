@@ -16,6 +16,7 @@ import { constantTimeEqual } from "./auth.server";
  * Discord origins.
  */
 
+import { readBoundedBody } from "./actions.server";
 import { isProviderSubject, OAuthCallbackError, type OAuthIntent } from "./auth.server";
 
 import type { WebsiteConfig } from "./config.server";
@@ -61,9 +62,23 @@ type JsonFetcher = (
   init: RequestInit,
 ) => Promise<{ status: number; json: unknown }>;
 
+const DISCORD_TIMEOUT_MS = 10_000;
+const MAX_DISCORD_RESPONSE_BYTES = 64 * 1024;
+
+/** Discord's answers are small and never redirect; anything else reads as no answer. */
 const defaultFetchJson: JsonFetcher = async (url, init) => {
-  const response = await fetch(url, init);
-  const json: unknown = await response.json().catch(() => null);
+  const response = await fetch(url, {
+    ...init,
+    redirect: "error",
+    signal: AbortSignal.timeout(DISCORD_TIMEOUT_MS),
+  });
+  const body = await readBoundedBody(response.body, MAX_DISCORD_RESPONSE_BYTES);
+  let json: unknown = null;
+  try {
+    if (body !== null) json = JSON.parse(new TextDecoder().decode(body));
+  } catch {
+    json = null;
+  }
   return { status: response.status, json };
 };
 
