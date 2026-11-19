@@ -165,15 +165,18 @@ describe("Discord OAuth service", () => {
 
     it("never follow redirects, time out, and stop reading an oversized answer", async () => {
       let cancelled = false;
-      const endless = new ReadableStream<Uint8Array>({
+      let sent = 0;
+      const oversized = new ReadableStream<Uint8Array>({
         pull(controller) {
-          controller.enqueue(new Uint8Array(16 * 1024).fill(32));
+          if (sent === 64) controller.close();
+          else controller.enqueue(new Uint8Array(16 * 1024).fill(32));
+          sent += 1;
         },
         cancel() {
           cancelled = true;
         },
       });
-      const fetchMock = vi.fn(async () => new Response(endless, { status: 200 }));
+      const fetchMock = vi.fn(async () => new Response(oversized, { status: 200 }));
       vi.stubGlobal("fetch", fetchMock);
       const service = await createDiscordOAuthService(config());
       await expect(

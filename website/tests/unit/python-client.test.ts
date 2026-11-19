@@ -259,15 +259,18 @@ describe("server-only Python client response boundary", () => {
 
   it("stops reading an oversized private API answer and never follows a redirect", async () => {
     let cancelled = false;
-    const endless = new ReadableStream<Uint8Array>({
+    let sent = 0;
+    const oversized = new ReadableStream<Uint8Array>({
       pull(controller) {
-        controller.enqueue(new Uint8Array(256 * 1024).fill(32));
+        if (sent === 16) controller.close();
+        else controller.enqueue(new Uint8Array(256 * 1024).fill(32));
+        sent += 1;
       },
       cancel() {
         cancelled = true;
       },
     });
-    const fetchMock = vi.fn().mockResolvedValue(new Response(endless, { status: 200 }));
+    const fetchMock = vi.fn().mockResolvedValue(new Response(oversized, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
