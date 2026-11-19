@@ -1,5 +1,7 @@
 import "../last-days.css";
 
+import { growFromButton } from "./DashboardParts";
+
 /**
  * The heading over a table's daily bars, as Rankings words its own: "Last 7
  * days", with the dates on hover and behind its ⓘ, and how the bars are
@@ -11,7 +13,7 @@ export function LastDays({ count, range }: { count: number; range: string | null
       Last {count} days
       {range === null ? null : (
         <details className="last-days-info">
-          <summary title={range}>
+          <summary title={range} onClick={growFromButton}>
             <span aria-hidden="true">ⓘ</span>
             <span className="sr-only">Which days</span>
           </summary>

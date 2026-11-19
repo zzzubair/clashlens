@@ -440,6 +440,54 @@ body {
   }
 }
 
+/* A menu or note opened from a button grows out of that button, not out of
+   its own middle: each grows from its corner nearest the button. The header
+   search (PlayerSearch.tsx) and the Legend clock's popover (LegendClock.tsx)
+   measure their button and set their own point. Each starts only
+   once it shows, so it plays on every open. */
+@keyframes grow-from-trigger {
+  from {
+    opacity: 0;
+    scale: 0.96;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  :where(
+    .account-menu[open] > .account-menu-panel,
+    .site-menu[open] > .site-menu-panel,
+    .header-search-panel,
+    .search-dropdown,
+    .group-more[open] > .group-more-menu,
+    .group-create[open] > .form-panel,
+    .goal-plan[open] > .goal-plan-menu,
+    .dash-info[open] > .dash-info-body,
+    .dash-divider.is-open .dash-tools,
+    .opponents-strength[open] > .opponents-exact,
+    .player-update-mobile[open] > time,
+    .player-freshness[open] > p,
+    .day-status[open] > .day-status-tip,
+    .last-days-info[open] > .last-days-body,
+    .clock-popover
+  ) {
+    transform-origin: top right;
+    animation: grow-from-trigger 150ms var(--cl-ease-out);
+  }
+  /* The search suggestions hang under the whole box. */
+  .search-dropdown {
+    transform-origin: top;
+  }
+  /* More is the bar's last tab, under the panel. */
+  .site-menu-panel {
+    transform-origin: bottom right;
+  }
+  /* On a narrow phone the update time opens to the right of its words. */
+  @media (max-width: 24rem) {
+    .player-freshness > p {
+      transform-origin: top left;
+    }
+  }
+}
+
 /* Prototype route components. Keep state and provenance readable at every width. */
 .lede {
   max-width: 62ch;
