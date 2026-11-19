@@ -164,6 +164,7 @@ describe("login cookie renewal", () => {
       "max-age=60",
       "x-private, max-age=60",
       'private="Content-Type"',
+      'no-cache="a, private, b", max-age=60',
     ]) {
       const cached = new Response("page", { headers: { "Cache-Control": cacheControl } });
       expect(await visit(cookieIssuedMinutesAgo(120), cached)).toEqual([]);

@@ -79,7 +79,9 @@ export async function renewLoginCookie(
   const renewal = renewedLoginCookie(request);
   const response = await next();
   const cookie = await renewal;
+  // Quoted values are blanked first, so a word inside one is never a directive.
   const directives = (response.headers.get("Cache-Control") ?? "")
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
     .split(",")
     .map((directive) => directive.trim().toLowerCase());
   if (
