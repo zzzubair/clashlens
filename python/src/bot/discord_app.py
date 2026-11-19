@@ -160,16 +160,13 @@ class DiscordApp:
 
     async def drawn(self, reply: Reply) -> Reply:
         """`reply` with each picture still being drawn waited for, after its
-        read gave up its slot; one that could not be drawn is left out."""
+        read gave up its slot."""
         cards = []
         for card in reply.cards:
             if isinstance(card.picture, Future):
-                try:
-                    png: bytes | None = await asyncio.wrap_future(card.picture)
-                except Exception:
-                    log.warning("a reply's picture could not be drawn", exc_info=True)
-                    png = None
-                card = dataclasses.replace(card, picture=png)
+                card = dataclasses.replace(
+                    card, picture=await asyncio.wrap_future(card.picture)
+                )
             cards.append(card)
         return dataclasses.replace(reply, cards=tuple(cards))
 

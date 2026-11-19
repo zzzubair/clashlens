@@ -119,7 +119,8 @@ export function isSameOrigin(request: Request, publicOrigin: URL): boolean {
 
 /**
  * Read a request or response body, stopping once it passes `maxBytes`.
- * Returns null for a missing body or one over the limit.
+ * Returns null for a missing body or one over the limit; the caller decides
+ * whether to cancel the rest.
  */
 export async function readBoundedBody(
   stream: ReadableStream<Uint8Array> | null,
@@ -134,10 +135,7 @@ export async function readBoundedBody(
       const result = await reader.read();
       if (result.done) break;
       total += result.value.byteLength;
-      if (total > maxBytes) {
-        await reader.cancel().catch(() => undefined);
-        return null;
-      }
+      if (total > maxBytes) return null;
       chunks.push(result.value);
     }
   } finally {

@@ -79,11 +79,15 @@ export async function renewLoginCookie(
   const renewal = renewedLoginCookie(request);
   const response = await next();
   const cookie = await renewal;
-  const cacheControl = response.headers.get("Cache-Control") ?? "";
+  const directives = (response.headers.get("Cache-Control") ?? "")
+    .split(",")
+    .map((directive) => directive.trim().toLowerCase());
   if (
     cookie === null ||
-    !/\b(no-store|private)\b/i.test(cacheControl) ||
-    /\bpublic\b/i.test(cacheControl) ||
+    !directives.some(
+      (directive) => directive === "no-store" || directive === "private",
+    ) ||
+    directives.some((directive) => directive.split("=")[0]?.trim() === "public") ||
     response.headers
       .getSetCookie()
       .some((header) => header.startsWith(`${LOGIN_COOKIE_NAME}=`))

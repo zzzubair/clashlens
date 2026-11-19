@@ -73,6 +73,7 @@ const defaultFetchJson: JsonFetcher = async (url, init) => {
     signal: AbortSignal.timeout(DISCORD_TIMEOUT_MS),
   });
   const body = await readBoundedBody(response.body, MAX_DISCORD_RESPONSE_BYTES);
+  if (body === null) await response.body?.cancel().catch(() => undefined);
   let json: unknown = null;
   try {
     if (body !== null) json = JSON.parse(new TextDecoder().decode(body));

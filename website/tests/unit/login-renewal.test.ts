@@ -160,8 +160,14 @@ describe("login cookie renewal", () => {
   it("renews only on responses marked no-store or private", async () => {
     const moved = new Response("page", { status: 301, headers: { Location: "/" } });
     expect(await visit(cookieIssuedMinutesAgo(120), moved)).toEqual([]);
-    const cached = new Response("page", { headers: { "Cache-Control": "max-age=60" } });
-    expect(await visit(cookieIssuedMinutesAgo(120), cached)).toEqual([]);
+    for (const cacheControl of [
+      "max-age=60",
+      "x-private, max-age=60",
+      'private="Content-Type"',
+    ]) {
+      const cached = new Response("page", { headers: { "Cache-Control": cacheControl } });
+      expect(await visit(cookieIssuedMinutesAgo(120), cached)).toEqual([]);
+    }
     const privatePage = new Response("page", {
       headers: { "Cache-Control": "private, no-store" },
     });

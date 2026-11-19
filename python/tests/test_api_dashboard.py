@@ -409,11 +409,11 @@ def test_dashboard_today_ranks_bases_and_automatic_defense(database_url: str) ->
 def test_an_unknown_player_is_not_found_before_any_shared_board_read(
     database_url: str,
 ) -> None:
-    """Today's read answers at once instead of waiting for a slow board, and
-    a bases read is not refused while another day's read is busy."""
+    """Today's read answers without waiting for the board, and a bases read
+    is not refused while another day's read is busy."""
 
     def slow_board(_database: Any, _now: Any, *, wait: float = 0) -> None:
-        time.sleep(wait)
+        raise AssertionError("read the board for a player Clash Lens does not have")
 
     def busy_day(_database: Any, _day_start: Any) -> None:
         raise api_dashboard.PastDayBusy
@@ -426,12 +426,10 @@ def test_an_unknown_player_is_not_found_before_any_shared_board_read(
     ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
-            started = time.monotonic()
             assert api_dashboard.get_player_today(
                 database, board, "#QQQ", now=NOW,
                 board_wait=api_dashboard.BOARD_WAIT_SECONDS,
             ) is None
-            assert time.monotonic() - started < 1
             assert api_dashboard.get_player_bases(
                 database, board, "#QQQ", day_number=earlier_day, now=NOW
             ) is None

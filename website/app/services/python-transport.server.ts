@@ -114,7 +114,10 @@ async function readPayload(response: Response): Promise<unknown> {
     response.body === null
       ? new Uint8Array()
       : await readBoundedBody(response.body, MAX_RESPONSE_BYTES);
-  if (bytes === null) return { error: "malformed" };
+  if (bytes === null) {
+    await response.body?.cancel().catch(() => undefined);
+    return { error: "malformed" };
+  }
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
