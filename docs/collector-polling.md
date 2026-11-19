@@ -162,10 +162,15 @@ regular keys, one request at a time and at most two a second
   not a switch. A 05:00:30 pull where fewer than a quarter of the players
   with a known `previousRank` have moved from it already holds this
   Reset's ranks, as on 12 Oct 2026: it is the Reset's list and there is no
-  poll. With no 05:00:30 pull there is no poll. Polling
-  stops at 06:00; a day never seen to switch pulls no country lists and
-  scores `unknown`;
-- once switched, every country's top 200, with the location list first when
+  poll. A player whose `previousRank` is any position held by the players
+  on their trophies has not moved, because the game orders equal trophies
+  its own way: on 19 Nov 2026, 52 of the 83 players whose `previousRank`
+  differed from their position were only reordered within equal trophies.
+  With no 05:00:30 pull there is no poll and the country lists are pulled
+  from 05:05. Polling stops at 06:00; a day never seen to switch pulls the
+  country lists then, each judged on its own as below, and scores
+  `unknown`;
+- once switched, or as above, every country's top 200, with the location list first when
   the saved one is over 7 days old. A failed pull is tried again 2 minutes
   later, until 07:00. A location list already over 7 days old at the Reset
   is never used: while it can't be refreshed no country list is pulled, and

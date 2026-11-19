@@ -3,10 +3,13 @@
 With ``CLASHLENS_GAME_RANKINGS_ENABLED=true`` the collector pulls, for each
 Reset R, the global top 200 at R+30 s, then every 3 minutes until its
 ``previousRank`` differs from that early pull's, then every country's top 200
-(migration 0099), each again until it too has switched. An early pull that already holds R's ranks is R's list. Untracked Legend I players in country lists are saved as due
-a discovery check. From R+2 h each newly published frozen Daily board for R is
-scored against the pulls: S1-S6 from the 11 Oct 2026 blind review, ``unknown``
-whenever a pull failed or is missing. Schedule, storage and the score's
+(migration 0099), each again until it too has switched. An early pull that
+already holds R's ranks is R's list; with no early pull, or none seen to
+switch by R+1 h, the countries are pulled anyway. Untracked Legend I players
+in country lists are saved as due a discovery check. From R+2 h each newly
+published frozen Daily board for R is scored against the pulls: S1-S6 from
+the 11 Oct 2026 blind review, ``unknown`` whenever a pull failed or is
+missing. Schedule, storage and the score's
 meaning: docs/collector-polling.md, "The game's ranking lists, once a day".
 """
 
@@ -123,13 +126,22 @@ def switched(rows: list[Row], reference: list[Row]) -> bool:
 def holds_reset_ranks(rows: list[Row]) -> bool:
     """Whether a list read just after a Reset already gives that Reset's
     ranks as ``previousRank``: fewer than a quarter of its players have
-    moved from them. Before the game switches, ``previousRank`` holds the
-    Reset before, a day of battles away. On 12 Oct 2026 the 05:00:35 pull
-    gave all 200 players their own rank, so no later poll differed from it
-    and no country list was pulled."""
-    ranked = [(position, row.previous_rank)
-              for position, row in enumerate(rows, 1) if row.previous_rank]
-    moved = sum(position != previous for position, previous in ranked)
+    moved from them. A player whose rank lies among the positions of the
+    players on their trophies has not moved, since the game orders equal
+    trophies its own way. Before the game switches, ``previousRank`` holds
+    the Reset before, a day of battles away. On 12 Oct 2026 the 05:00:35
+    pull gave all 200 players their own rank, so no later poll differed
+    from it and no country list was pulled; on 19 Nov the 05:00:36 pull
+    gave 83 of 200 a rank other than their position, 52 of them only
+    within their trophies, and none of 18 polls to 06:00 differed."""
+    first: dict[int, int] = {}
+    last: dict[int, int] = {}
+    for position, row in enumerate(rows, 1):
+        first.setdefault(row.trophies, position)
+        last[row.trophies] = position
+    ranked = [row for row in rows if row.previous_rank]
+    moved = sum(not first[row.trophies] <= row.previous_rank <= last[row.trophies]
+                for row in ranked)
     return bool(ranked) and moved < SWITCHED_SHARE * len(ranked)
 
 
@@ -176,13 +188,12 @@ class RankingStep(StrEnum):
       from R+3 min pull the global list every 3 minutes until a poll's
       ``previousRank`` has switched from the early list's (saved as
       ``global_reset``), or the early list already holds R's ranks.
-    - ``countries``: R's list seen, before R+2 h: pull the countries (at
+    - ``countries``: R's list seen, or not seen by the end of polling, or
+      no early list saved by R+5 min, before R+2 h: pull the countries (at
       most weekly) and each country's list, a failed one again after 2
       minutes, and one not yet switched (``country_switched``) again after
       2 minutes until R+1 h; a country list's untracked Legend I players go
       to discovery.
-    - ``missed``: before R+2 h, R's list never seen and its window passed:
-      nothing more is pulled.
     - ``scoring``: from R+2 h each newly published Daily board version of R
       is scored once against the pulls (``score_day``), ``unknown`` with
       its reasons whenever a pull failed or is missing; a later version is
@@ -197,7 +208,6 @@ class RankingStep(StrEnum):
     EARLY = "early"
     POLLING = "polling"
     COUNTRIES = "countries"
-    MISSED = "missed"
     SCORING = "scoring"
 
 
@@ -209,11 +219,9 @@ def ranking_step(boundary: datetime, now: datetime, pulls: list[Pull]) -> Rankin
         return RankingStep.EARLY
     if since >= SCORE_FROM:
         return RankingStep.SCORING
-    if _reset_pull(pulls) is not None:
-        return RankingStep.COUNTRIES
-    if early is not None and since < POLL_UNTIL:
+    if early is not None and since < POLL_UNTIL and _reset_pull(pulls) is None:
         return RankingStep.POLLING
-    return RankingStep.MISSED
+    return RankingStep.COUNTRIES
 
 
 def _utc(moment: datetime) -> str:
