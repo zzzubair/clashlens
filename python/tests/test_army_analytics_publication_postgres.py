@@ -32,7 +32,7 @@ from domain_test_support import (
 )
 from psycopg_pool import PoolTimeout
 
-from clashlens import api_analytics, army_rank_bands
+from clashlens import api_analytics, army_rank_bands, army_types
 from clashlens.api_analytics import (
     ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS,
     ARMY_ANALYTICS_PARALLEL_POOL_TIMEOUT_SECONDS,
@@ -40,6 +40,7 @@ from clashlens.api_analytics import (
 )
 from clashlens.api_db import ApiDatabase
 from clashlens.army_analytics import (
+    CATEGORIES,
     ArmyAnalyticsUnavailable,
     build_army_result,
 )
@@ -283,14 +284,22 @@ def test_publication_writer_serves_reproducible_perspective_results(
                     "end": "2026-08-10T05:00:00+00:00", "day_count": 28,
                     "last_day_start": "2026-08-09T05:00:00+00:00"}
                 assert first == expected
-                for category in (
-                    "troops", "spells", "siege", "cc-troops", "cc-composition",
-                    "heroes", "pets", "equipment", "equipment-for-hero",
-                    "hero-pet", "hero-equipment",
-                ):
-                    assert api_analytics.get_army_analytics(
+                by_category = {
+                    category: api_analytics.get_army_analytics(
                         api_reader, _selection(category=category)
-                    ) is not None
+                    )
+                    for category in sorted(CATEGORIES)
+                }
+                assert None not in by_category.values()
+                # Facts read one row per round trip give the same results.
+                with pytest.MonkeyPatch.context() as one_row:
+                    one_row.setattr(api_analytics, "ARMY_ANALYTICS_FACT_BATCH_ROWS", 1)
+                    assert by_category == {
+                        category: api_analytics.get_army_analytics(
+                            api_reader, _selection(category=category)
+                        )
+                        for category in by_category
+                    }
 
                 # Malformed component entries are skipped exactly like the
                 # Python reducer while the aggregate still returns one row.
@@ -821,17 +830,27 @@ def test_correction_with_unchanged_aggregates_changes_deterministic_identity(
 
             busy_api = ApiDatabase(ci, max_size=2)
             busy_api_reader = api_analytics.ArmyAnalyticsReader(busy_api.pool, cache_capacity=0)
-            assert busy_api_reader.troop_slots.acquire(blocking=False)
+            assert busy_api_reader.fact_slots.acquire(blocking=False)
             try:
-                busy_started = monotonic()
-                with pytest.raises(PoolTimeout, match="troop analytics"):
-                    api_analytics.get_army_analytics(busy_api_reader, selection)
-                assert monotonic() - busy_started < (
-                    ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS + 0.5
-                )
+                # One shared limit holds every category that reads battle
+                # facts directly, not just troops.
+                for category in sorted(CATEGORIES | {army_types.CATEGORY}):
+                    busy_started = monotonic()
+                    with pytest.raises(PoolTimeout, match="army analytics capacity"):
+                        api_analytics.get_army_analytics(
+                            busy_api_reader, _selection(category=category)
+                        )
+                    assert monotonic() - busy_started < (
+                        ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS + 0.5
+                    )
             finally:
-                busy_api_reader.troop_slots.release()
+                busy_api_reader.fact_slots.release()
                 busy_api.close()
+            # The API's eight connections admit two such requests at once.
+            wide_reader = api_analytics.ArmyAnalyticsReader(api.pool)
+            assert [
+                wide_reader.fact_slots.acquire(blocking=False) for _ in range(3)
+            ] == [True, True, False]
 
             pool_busy_api = ApiDatabase(ci, max_size=2)
             pool_busy_api_reader = api_analytics.ArmyAnalyticsReader(pool_busy_api.pool, cache_capacity=0)

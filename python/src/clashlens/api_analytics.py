@@ -44,13 +44,15 @@ from .domain import (
 )
 
 ARMY_ANALYTICS_CACHE_CAPACITY = 128
-ARMY_ANALYTICS_QUERY_WORK_MEM = "256MB"
+ARMY_ANALYTICS_QUERY_WORK_MEM = "64MB"
 ARMY_ANALYTICS_REQUEST_TIMEOUT_SECONDS = 5.0
 ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS = 0.1
 # Long enough for the pool to open a connection, or for the page's other
 # reads to finish, on a first open; the read keeps the rest of its budget.
 ARMY_ANALYTICS_PRIMARY_POOL_TIMEOUT_SECONDS = 2.0
 ARMY_ANALYTICS_PARALLEL_POOL_TIMEOUT_SECONDS = 0.3
+# Rows read per round trip when a request reads battle facts directly.
+ARMY_ANALYTICS_FACT_BATCH_ROWS = 2000
 
 
 class ArmyAnalyticsReader:
@@ -71,7 +73,10 @@ class ArmyAnalyticsReader:
         )
         self._cache: OrderedDict[tuple[Any, ...], dict[str, Any]] = OrderedDict()
         self._cache_lock = Lock()
-        self.troop_slots = BoundedSemaphore(max(1, pool.max_size // 2))
+        # Requests that read battle facts directly share a quarter of the
+        # pool (a troop request holds two connections), so the API's other
+        # pages always keep connections free.
+        self.fact_slots = BoundedSemaphore(max(1, pool.max_size // 4))
 
     def cache_get(self, key: tuple[Any, ...]) -> dict[str, Any] | None:
         if not self._cache_capacity:
@@ -279,19 +284,20 @@ def _army_type_season_summary(
 
 
 @contextmanager
-def _army_troop_admission(database: ArmyAnalyticsReader, selection: ArmyAnalyticsSelection, deadline: float):
-    # Top N and rank ranges read saved totals, never the paired connection.
-    if selection.category != "troops" or selection.population.startswith(("top-", "band-")):
+def _army_fact_admission(database: ArmyAnalyticsReader, selection: ArmyAnalyticsSelection, deadline: float):
+    # Top N and rank ranges read saved totals; every other population, in
+    # every category, reads battle facts directly.
+    if selection.population.startswith(("top-", "band-")):
         yield
         return
-    if not database.troop_slots.acquire(
+    if not database.fact_slots.acquire(
         timeout=_army_timeout(deadline, ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS)
     ):
-        raise PoolTimeout("troop analytics capacity is busy")
+        raise PoolTimeout("army analytics capacity is busy")
     try:
         yield
     finally:
-        database.troop_slots.release()
+        database.fact_slots.release()
 
 
 def consistent_top_members(
@@ -326,10 +332,10 @@ def get_army_analytics(
     same players and Legend days."""
     now = datetime.now(tz=UTC) if now is None else now.astimezone(UTC)
     deadline = monotonic() + database.request_timeout_seconds
-    # A bounded pre-checkout gate leaves one paired pool slot per admitted
-    # troop request. Other categories never need the second connection.
+    # A bounded pre-checkout gate caps requests that read battle facts
+    # directly, before they take a pool connection.
     with (
-        _army_troop_admission(database, selection, deadline),
+        _army_fact_admission(database, selection, deadline),
         database.pool.connection(
             timeout=_army_timeout(
                 deadline, ARMY_ANALYTICS_PRIMARY_POOL_TIMEOUT_SECONDS
@@ -776,24 +782,10 @@ def get_army_analytics(
                     deadline=deadline,
                 )
             else:
-                facts_rows = connection.execute(
-                    f"""
-                    SELECT id, battle_id, population_player_id,
-                           battle_time_trophies, stars, destruction_percentage,
-                           army_state, failure_reason,
-                           {component_column} AS component_payload,
-                           unresolved_components, perspective_disagreement,
-                           input_hash, source_ranked_day_version_id
-                    FROM army_analytics_battle_facts_with_armies
-                    WHERE {" AND ".join(fact_filters)}
-                    ORDER BY battle_id
-                    """,
-                    tuple(fact_params),
-                ).fetchall()
                 source_digest = hashlib.sha256()
                 source_digest.update(b'{"facts":[')
 
-                def selected_facts():
+                def selected_facts(facts_rows):
                     separator = b""
                     for row in facts_rows:
                         fact_id = int(row[0])
@@ -829,7 +821,26 @@ def get_army_analytics(
                             "source_ranked_day_version_id": int(row[12]),
                         }
 
-                result = build_army_result(selected_facts(), resolved)
+                # Rows arrive in batches from the server, never all at once;
+                # every row is still read, so plan for the whole result.
+                connection.execute("SET LOCAL cursor_tuple_fraction = 1")
+                with connection.cursor(name="army_analytics_facts") as facts_rows:
+                    facts_rows.itersize = ARMY_ANALYTICS_FACT_BATCH_ROWS
+                    facts_rows.execute(
+                        f"""
+                        SELECT id, battle_id, population_player_id,
+                               battle_time_trophies, stars, destruction_percentage,
+                               army_state, failure_reason,
+                               {component_column} AS component_payload,
+                               unresolved_components, perspective_disagreement,
+                               input_hash, source_ranked_day_version_id
+                        FROM army_analytics_battle_facts_with_armies
+                        WHERE {" AND ".join(fact_filters)}
+                        ORDER BY battle_id
+                        """,
+                        tuple(fact_params),
+                    )
+                    result = build_army_result(selected_facts(facts_rows), resolved)
                 source_digest.update(b'],"selection":')
                 source_digest.update(
                     json.dumps(
@@ -842,7 +853,6 @@ def get_army_analytics(
                 )
                 source_digest.update(b"}")
                 source_hash = source_digest.hexdigest()
-                del facts_rows
             result["missing_trophy_membership_evidence"] = missing_trophies
             result["collection_coverage"] = {
                 **result["collection_coverage"],

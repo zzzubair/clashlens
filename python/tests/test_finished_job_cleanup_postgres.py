@@ -139,7 +139,9 @@ def test_cleanup_role_can_only_delete_finished_jobs(database_url, archive_server
 def test_cleanup_ignores_temporary_tables_the_cleanup_role_creates(database_url, archive_server):
     with domain_database(database_url) as info:
         _jobs(info, 1, archive_server)
-        with psycopg.connect(_as_cleanup_role(info)) as connection:
+        # The cleanup role may not create temporary tables; the database
+        # owner's shadow table still sits first on the session's search path.
+        with psycopg.connect(info) as connection:
             connection.execute(
                 """
                 CREATE TEMPORARY TABLE python_processing_jobs (
@@ -154,6 +156,7 @@ def test_cleanup_ignores_temporary_tables_the_cleanup_role_creates(database_url,
                 )
                 """
             )
+            connection.execute("SET ROLE clashlens_history_retention")
             preview = prune_completed_history(connection, jobs_only=True)
             assert preview["eligible_python_processing_jobs"] == 0
 
