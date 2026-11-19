@@ -11,6 +11,7 @@ from collections import Counter
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import ClassVar
 
 import psycopg
@@ -245,6 +246,8 @@ def _day(info: str, origin: str, tmp_path, times: list[timedelta]) -> list[Count
     database = _database(info)
     try:
         collector = _collector(origin, database, tmp_path)
+        # A saved 200-player list is larger than that collector's 4 KB answers.
+        collector.client.max_body_bytes = 1 << 20
         now = [RESET]
         client = collector.client
         for fetch in (client.fetch_rankings, client.fetch_locations):
@@ -450,7 +453,7 @@ def test_an_early_pull_already_switched_still_pulls_every_country_once(
     assert printed["global_reset_at"] == printed["global_early_at"]
 
 
-def test_a_list_never_seen_to_switch_leaves_the_day_unknown(
+def test_a_list_never_seen_to_switch_still_pulls_every_country_and_leaves_the_day_unknown(
     database_url: str, tmp_path, capsys, monkeypatch
 ) -> None:
     monkeypatch.setattr(game_rankings, "REQUEST_SECONDS", 0.0)
@@ -476,13 +479,98 @@ def test_a_list_never_seen_to_switch_leaves_the_day_unknown(
                 (RESET - timedelta(days=28),),
             ).fetchall()
     assert kept_old == 0
-    # The early pull and polls at 05:03, 05:20 and 05:59; no country list.
+    # The early pull and polls at 05:03, 05:20 and 05:59; at 06:00 each country.
     assert [path.split("?")[0] for path in _Game.asked] == [
         "/v1/locations/global/rankings/players"
-    ] * 4
+    ] * 4 + [
+        "/v1/locations",
+        "/v1/locations/32000087/rankings/players", "/v1/locations/32000249/rankings/players",
+    ]
     assert printed["status"] == "unknown"
-    assert printed["unknown_reasons"] == ["previous_rank_not_switched", "locations_missing"]
-    assert printed["global_reset_at"] is None and printed["countries_pulled"] == 0
+    assert printed["unknown_reasons"] == ["previous_rank_not_switched"]
+    assert printed["global_reset_at"] is None and printed["countries_pulled"] == 2
+
+
+# Official global lists saved on production, rows [tag, trophies, previousRank]
+# under made-up tags: 19 Nov 2026's early list and its 18 polls to 06:00,
+# 17 Nov's early list and the 05:03 poll that switched from it, and the
+# early lists of 10 more mornings.
+MORNINGS = json.loads(
+    (Path(__file__).parents[1] / "testdata" / "global_reset_mornings.json").read_text()
+)["mornings"]
+
+
+def _saved(pull: dict) -> bytes:
+    return _list([(tag, trophies, 40, previous, LEGEND_I)
+                  for tag, trophies, previous in pull["rows"]])
+
+
+def _saved_morning(info: str, origin: str, tmp_path, answers: dict, day: str) -> list[Counter[str]]:
+    """Run the collector's pulls at each saved global list's time, the game answering with it."""
+    counts = []
+    for pull in MORNINGS[day]:
+        answers["/v1/locations/global/rankings/players"] = (200, _saved(pull))
+        counts += _day(info, origin, tmp_path, [timedelta(seconds=pull["seconds_after_reset"])])
+    return counts
+
+
+def test_a_saved_early_list_already_holding_the_resets_ranks_pulls_every_country_at_once(
+    database_url: str, tmp_path, capsys, monkeypatch
+) -> None:
+    # On 19 Nov 2026 the 05:00:36 list already held that Reset's ranks, but
+    # 83 of its 200 players sat at a position other than their previousRank,
+    # 52 only reordered among equal trophies. None of 18 polls to 06:00
+    # differed, so none of the 255 country lists was pulled.
+    monkeypatch.setattr(game_rankings, "REQUEST_SECONDS", 0.0)
+    answers = {
+        "/v1/locations": (200, LOCATIONS),
+        "/v1/locations/32000087/rankings/players": (200, FRANCE),
+        "/v1/locations/32000249/rankings/players": (200, UNITED_STATES),
+    }
+    with domain_database(database_url) as info, _game(answers) as origin:
+        _seed(info)
+        early, *later = _saved_morning(info, origin, tmp_path, answers, "2026-11-19")
+        printed = _printed_score(info, capsys)
+    assert len(later) == 18
+    assert early == Counter(global_early=1, locations=1, country=2, added_to_discovery=2)
+    assert sum(later, Counter()) == Counter()
+    assert [path.split("?")[0] for path in _Game.asked] == [
+        "/v1/locations/global/rankings/players", "/v1/locations",
+        "/v1/locations/32000087/rankings/players", "/v1/locations/32000249/rankings/players",
+    ]
+    assert printed["status"] == "scored" and printed["unknown_reasons"] == []
+    assert printed["global_reset_at"] == printed["global_early_at"]
+    assert printed["countries_pulled"] == 2
+
+
+def test_a_saved_early_list_from_the_reset_before_waits_for_the_poll_that_switches(
+    database_url: str, tmp_path, capsys, monkeypatch
+) -> None:
+    # On 17 Nov 2026 the 05:00:37 list still held 16 November's ranks; the
+    # 05:03 poll was the first to hold 17 November's.
+    monkeypatch.setattr(game_rankings, "REQUEST_SECONDS", 0.0)
+    answers = {
+        "/v1/locations": (200, LOCATIONS),
+        "/v1/locations/32000087/rankings/players": (200, FRANCE),
+        "/v1/locations/32000249/rankings/players": (200, UNITED_STATES),
+    }
+    with domain_database(database_url) as info, _game(answers) as origin:
+        _seed(info)
+        counts = _saved_morning(info, origin, tmp_path, answers, "2026-11-17")
+        printed = _printed_score(info, capsys)
+    assert counts == [Counter(global_early=1),
+                      Counter(global_reset=1, locations=1, country=2, added_to_discovery=2)]
+    assert printed["status"] == "scored"
+    assert printed["global_reset_at"] > printed["global_early_at"]
+
+
+def test_saved_early_lists_hold_the_resets_ranks_only_on_mornings_no_poll_moved_from() -> None:
+    """On 25 Oct, 3 Nov and 19 Nov an hour of polls never differed from the
+    early list; on the other mornings the first poll did, at 05:03."""
+    held = {day for day, pulls in MORNINGS.items()
+            if game_rankings.holds_reset_ranks(game_rankings.read_rows(_saved(pulls[0])))}
+    assert len(MORNINGS) == 12
+    assert held == {"2026-10-25", "2026-11-03", "2026-11-19"}
 
 
 def test_a_failed_country_pull_makes_the_day_unknown(
@@ -582,7 +670,8 @@ def test_an_expired_country_list_leaves_an_empty_board_unknown(
 
 def test_a_resets_ranking_check_steps_from_its_saved_pulls() -> None:
     """Early list, then polls until R's list is seen, then countries until
-    R+2 h, then scoring; a list never seen stops the pulls."""
+    R+2 h, then scoring; with no early list, or one never seen to switch,
+    countries once the polls are over."""
     step, steps = game_rankings.ranking_step, game_rankings.RankingStep
 
     def pull(purpose: str, after: timedelta, body: bytes | None, failure: str | None = None):
@@ -594,11 +683,12 @@ def test_a_resets_ranking_check_steps_from_its_saved_pulls() -> None:
     already = pull("global_early", timedelta(seconds=30), _global(TODAY_RANKS))
     assert step(RESET, RESET + timedelta(seconds=10), []) is steps.EARLY
     assert step(RESET, RESET + timedelta(minutes=2), [failed]) is steps.EARLY
-    assert step(RESET, RESET + timedelta(minutes=6), [failed]) is steps.MISSED
+    assert step(RESET, RESET + timedelta(minutes=6), [failed]) is steps.COUNTRIES
     assert step(RESET, RESET + timedelta(minutes=1), [early]) is steps.POLLING
     assert step(RESET, RESET + timedelta(minutes=10), [early, seen]) is steps.COUNTRIES
     assert step(RESET, RESET + timedelta(minutes=1), [already]) is steps.COUNTRIES
-    assert step(RESET, RESET + timedelta(minutes=61), [early]) is steps.MISSED
+    assert step(RESET, RESET + timedelta(minutes=59), [early]) is steps.POLLING
+    assert step(RESET, RESET + timedelta(minutes=61), [early]) is steps.COUNTRIES
     assert step(RESET, RESET + timedelta(hours=2), [early]) is steps.SCORING
     assert step(RESET, RESET + timedelta(hours=2), [early, seen]) is steps.SCORING
 
