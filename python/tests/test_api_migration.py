@@ -410,3 +410,44 @@ def test_each_migration_records_exactly_its_filename_version(database_url: str) 
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:
             admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+
+
+def test_privileged_functions_pin_search_path_with_pg_temp_last(database_url: str) -> None:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            schema = text(connection.execute("SELECT current_schema()").fetchone()[0])
+            expected = f"search_path=pg_catalog, {schema}, pg_temp"
+
+            def unpinned() -> list[str]:
+                rows = connection.execute(
+                    """
+                    SELECT p.oid::regprocedure::text, COALESCE(p.proconfig, '{}')
+                    FROM pg_proc AS p
+                    WHERE p.prosecdef
+                      AND p.pronamespace = to_regnamespace(current_schema())
+                    """
+                ).fetchall()
+                assert len(rows) > 40
+                return sorted(
+                    text(name)
+                    for name, settings in rows
+                    if [text(setting) for setting in settings
+                        if text(setting).startswith("search_path=")] != [expected]
+                )
+
+            # Checked after every migration ran once, as a deploy runs them,
+            # so a later migration that replaces such a function fails here.
+            assert unpinned() == []
+            assert connection.execute(
+                "SELECT has_database_privilege('public', current_database(), 'TEMP')"
+            ).fetchone() == (False,)
+            # Running the migration again changes nothing.
+            apply_migration(
+                connection,
+                (
+                    ROOT / "deploy/migrations/0145_pin_privileged_function_search_path.sql"
+                ).read_text(encoding="utf-8"),
+            )
+            assert unpinned() == []

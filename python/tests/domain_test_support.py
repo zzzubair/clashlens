@@ -203,6 +203,9 @@ def domain_database(database_url: str, *, clock: Any | None = None) -> Iterator[
     database = f"python_domain_{uuid4().hex}"
     with psycopg.connect(database_url, autocommit=True) as admin:
         admin.execute(f'CREATE DATABASE "{database}" TEMPLATE "{template}"')
+        # A copy takes default database rights, not the template's; match
+        # production, where migration 0145 takes temporary tables from PUBLIC.
+        admin.execute(f'REVOKE TEMPORARY ON DATABASE "{database}" FROM PUBLIC')
     connection_info = make_conninfo(
         database_url, dbname=database, options=f"-c search_path={DOMAIN_SCHEMA}"
     )
