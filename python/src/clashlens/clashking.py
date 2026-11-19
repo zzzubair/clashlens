@@ -276,7 +276,8 @@ class ClashKingClient:
                 MAX_BACKOFF_SECONDS, max(FIRST_BACKOFF_SECONDS, self._backoff * 2)
             )
             pause = self._backoff
-            if retry_after is not None and retry_after.isdigit():
+            if (retry_after is not None and retry_after.isascii()
+                    and retry_after.isdigit()):
                 pause = max(pause, min(MAX_BACKOFF_SECONDS, float(retry_after)))
             self._next_request_at = max(self._next_request_at, self._clock() + pause)
 

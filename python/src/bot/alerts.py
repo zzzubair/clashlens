@@ -591,7 +591,9 @@ class AlertLoop:
         day = await asyncio.to_thread(legend_day)
         if day is None:
             return False
-        drawn = await asyncio.wrap_future(picture.drawing(day, alert["dark_picture"]))
+        drawn = await asyncio.wrap_future(
+            picture.drawing(day, alert["dark_picture"], alert=True)
+        )
         await asyncio.wait_for(self.messenger.add_picture(message, drawn), PICTURE_EDIT_SECONDS)
         return True
 

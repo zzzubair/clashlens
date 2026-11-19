@@ -257,6 +257,31 @@ describe("server-only Python client response boundary", () => {
     ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
   });
 
+  it("stops reading an oversized private API answer and never follows a redirect", async () => {
+    let cancelled = false;
+    let sent = 0;
+    const oversized = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent === 16) controller.close();
+        else controller.enqueue(new Uint8Array(256 * 1024).fill(32));
+        sent += 1;
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const fetchMock = vi.fn().mockResolvedValue(new Response(oversized, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    process.env.NODE_ENV = "test";
+    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+
+    await expect(
+      (await import("../../app/services/leaderboard.server")).getTrackedLeaderboard(),
+    ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
+    expect(cancelled).toBe(true);
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ redirect: "error" });
+  });
+
   it("does not use an environment secret in production", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

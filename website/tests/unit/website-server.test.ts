@@ -114,6 +114,9 @@ beforeEach(async () => {
                   ...(params.kind === "length"
                     ? { "Content-Length": String(Buffer.byteLength(pageText)) }
                     : {}),
+                  ...(params.kind === "private"
+                    ? { "Referrer-Policy": "no-referrer" }
+                    : {}),
                 },
               },
             );
@@ -364,16 +367,27 @@ it("forbids framing on pages, route data, files, refusals and bad requests", asy
   ]) {
     const response = await fetch(`${url}${path}`);
     expect(response.headers.get("content-security-policy")).toBe(
-      "frame-ancestors 'none'",
+      "frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
     );
     expect(response.headers.get("x-frame-options")).toBe("DENY");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("referrer-policy")).toBe(
+      "strict-origin-when-cross-origin",
+    );
   }
+});
+
+it("keeps a route's own stricter Referrer-Policy", async () => {
+  const response = await fetch(`http://127.0.0.1:${port}/responses/private`);
+  expect(response.headers.get("referrer-policy")).toBe("no-referrer");
 });
 
 it("lets only the OBS overlay's preview show inside a Clash Lens page", async () => {
   const url = `http://127.0.0.1:${port}`;
   const preview = await fetch(`${url}/account/obs-overlay/preview?p=2PP`);
-  expect(preview.headers.get("content-security-policy")).toBe("frame-ancestors 'self'");
+  expect(preview.headers.get("content-security-policy")).toBe(
+    "frame-ancestors 'self'; base-uri 'self'; object-src 'none'",
+  );
   expect(preview.headers.get("x-frame-options")).toBe("SAMEORIGIN");
   const overlay = await fetch(`${url}/o/AAAAAAAAAAAAAAAAAAAAAA`);
   expect(overlay.headers.get("x-frame-options")).toBe("DENY");

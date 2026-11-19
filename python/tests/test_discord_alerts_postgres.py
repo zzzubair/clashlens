@@ -211,7 +211,10 @@ def test_an_attack_the_worker_saves_sends_one_dm_with_the_attackers_hit_rate(
             "Not tracked by Clash Lens yet",
         ],
     ])
-    # The last picture is /stats's, of the attacker's day at its moment: Day 2.
+    # The last picture is /stats's, of the attacker's day at its moment: Day 2,
+    # drawn after its reads.
+    [stats_picture] = [card.picture for card in stats.cards if card.picture is not None]
+    stats_picture.result(5)
     *drawn, (stats_day, _) = drawn
     assert (stats_day["day_number"], stats_day["date"]) == (2, day_3 - timedelta(days=1))
     # Each picture is added to the alert it was drawn for: DEFENDER's Day 3

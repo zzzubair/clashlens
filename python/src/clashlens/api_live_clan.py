@@ -63,22 +63,32 @@ class LiveClan:
 
 
 # Reasons no request was made, so the next view asks again.
-_NOT_ASKED = frozenset({"no_key", "key_not_registered", "cap", "key_not_ready", "busy"})
+_NOT_ASKED = frozenset(
+    {"no_key", "unknown_player", "key_not_registered", "cap", "key_not_ready", "busy"}
+)
 
 
-def acquire_live_read_permit(database: ApiDatabase, fingerprint: str) -> str | None:
+def acquire_live_read_permit(
+    database: ApiDatabase, fingerprint: str, normalized_tag: str
+) -> str | None:
     """Take one start from collection's share of the interactive key, never waiting.
 
     Live reads use collection's share, so verification's reserved start is
     never touched, and only while collection's share is less than half used,
-    so Refresh and first-time collection always keep the other half. Returns
-    None with the start taken, otherwise why none was taken: ``busy`` when no
+    so Refresh and first-time collection always keep the other half. Only a
+    player Clash Lens already has is read: the page shows a heading only for
+    one. Returns None with the start taken, otherwise why none was taken:
+    ``unknown_player`` for a tag not in ``players``, ``busy`` when no
     connection was free at once or another start held the key's row.
     """
     try:
         with database.pool.connection(
             timeout=LIVE_CLAN_CONNECTION_WAIT_SECONDS
         ) as connection:
+            if connection.execute(
+                "SELECT 1 FROM players WHERE normalized_tag = %s", (normalized_tag,)
+            ).fetchone() is None:
+                return "unknown_player"
             return _take_permit(connection, fingerprint)
     except (PoolTimeout, LockNotAvailable):
         return "busy"
@@ -166,7 +176,9 @@ class LiveClans:
         """The game's answer; one made without a request is not remembered."""
         if self._reader is None or self._fingerprint is None:
             return LiveClan(False, reason="no_key")
-        refused = acquire_live_read_permit(self._database, self._fingerprint)
+        refused = acquire_live_read_permit(
+            self._database, self._fingerprint, normalized_tag
+        )
         if refused is not None:
             return LiveClan(False, reason=refused)
         try:

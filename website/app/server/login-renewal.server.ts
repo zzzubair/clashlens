@@ -5,7 +5,9 @@
  * extra logout check to one an hour per browser. A logged-out, removed, or
  * unconfirmed login is never renewed, and a response that already sets or
  * clears the login cookie (login, logout, removing a sign-in connection)
- * keeps its own. A response that shared caches may keep never carries one.
+ * keeps its own. Only a response marked `no-store` or `private` carries one,
+ * so a cookie never rides on a response a shared cache may keep, such as a
+ * permanent redirect with no Cache-Control; the page it leads to renews.
  */
 
 import {
@@ -77,9 +79,17 @@ export async function renewLoginCookie(
   const renewal = renewedLoginCookie(request);
   const response = await next();
   const cookie = await renewal;
+  // Quoted values are blanked first, so a word inside one is never a directive.
+  const directives = (response.headers.get("Cache-Control") ?? "")
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+    .split(",")
+    .map((directive) => directive.trim().toLowerCase());
   if (
     cookie === null ||
-    /\bpublic\b/i.test(response.headers.get("Cache-Control") ?? "") ||
+    !directives.some(
+      (directive) => directive === "no-store" || directive === "private",
+    ) ||
+    directives.some((directive) => directive.split("=")[0]?.trim() === "public") ||
     response.headers
       .getSetCookie()
       .some((header) => header.startsWith(`${LOGIN_COOKIE_NAME}=`))

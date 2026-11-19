@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { OAuthCallbackError } from "../../app/server/auth.server";
 import { loadWebsiteConfig } from "../../app/server/config.server";
@@ -158,6 +158,35 @@ describe("Discord OAuth service", () => {
       CLASHLENS_PUBLIC_ORIGIN: "http://127.0.0.1:3000",
     });
     await expect(createDiscordOAuthService(disabled)).rejects.toThrow(/enabled login/);
+  });
+
+  describe("Discord requests", () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    it("never follow redirects, time out, and stop reading an oversized answer", async () => {
+      let cancelled = false;
+      let sent = 0;
+      const oversized = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (sent === 64) controller.close();
+          else controller.enqueue(new Uint8Array(16 * 1024).fill(32));
+          sent += 1;
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+      const fetchMock = vi.fn(async () => new Response(oversized, { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+      const service = await createDiscordOAuthService(config());
+      await expect(
+        service.validateCallback(validParams(), transaction()),
+      ).rejects.toMatchObject({ code: "invalid_callback" });
+      expect(cancelled).toBe(true);
+      const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(init.redirect).toBe("error");
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+    });
   });
 
   it("keeps every error an OAuthCallbackError without provider details", async () => {

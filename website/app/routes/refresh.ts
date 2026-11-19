@@ -2,6 +2,7 @@ import { data } from "react-router";
 import type { RefreshError } from "../lib/contracts";
 import { normalizePlayerTag } from "../lib/player-tag";
 import { isCanonicalUuid } from "../lib/validation";
+import { readBoundedBody } from "../server/actions.server";
 import { getRefreshStatus, requestRefresh } from "../services/players.server";
 
 import type { Route } from "./+types/refresh";
@@ -70,28 +71,8 @@ async function readRefreshForm(
     return null;
   }
 
-  const reader = request.body?.getReader();
-  if (!reader) return null;
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const result = await reader.read();
-      if (result.done) break;
-      total += result.value.byteLength;
-      if (total > MAX_FORM_BODY_BYTES) return null;
-      chunks.push(result.value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  const body = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
+  const body = await readBoundedBody(request.body, MAX_FORM_BODY_BYTES);
+  if (body === null) return null;
   let form: URLSearchParams;
   try {
     form = new URLSearchParams(new TextDecoder("utf-8", { fatal: true }).decode(body));

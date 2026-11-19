@@ -348,7 +348,8 @@ def test_a_picture_read_cut_off_before_it_started_holds_up_no_later_one() -> Non
 def test_pictures_are_drawn_on_one_thread_with_only_a_few_waiting(monkeypatch) -> None:
     """Pictures asked for from any thread are drawn one at a time on the same
     thread, as memory freed on a thread stays kept for it; with 6 drawn or
-    waiting, another is not drawn."""
+    waiting, another is not drawn, and /stats never takes the 2 kept for
+    attack alerts."""
     drawn_on, go = set(), threading.Event()
     picture._DRAWER.submit(lambda: None).result(5)  # earlier tests' drawing has ended
 
@@ -359,13 +360,18 @@ def test_pictures_are_drawn_on_one_thread_with_only_a_few_waiting(monkeypatch) -
 
     monkeypatch.setattr(picture, "draw", draw)
     with ThreadPoolExecutor(6) as askers:
-        waiting = list(askers.map(lambda _: picture.drawing(a_day(), False), range(6)))
+        waiting = list(askers.map(lambda _: picture.drawing(a_day(), False), range(4)))
     with pytest.raises(picture.Busy):
         picture.drawing(a_day(), False)
+    waiting += [picture.drawing(a_day(), False, alert=True) for _ in range(2)]
+    for alert in (True, False):
+        with pytest.raises(picture.Busy):
+            picture.drawing(a_day(), False, alert=alert)
     go.set()
     assert [future.result(5) for future in waiting] == [b"png"] * 6
     assert len(drawn_on) == 1 and threading.get_ident() not in drawn_on
     assert picture.drawing(a_day(), False).result(5) == b"png"
+    assert picture.drawing(a_day(), False, alert=True).result(5) == b"png"
 
 
 def test_the_picture_is_added_to_the_alert_by_editing_it() -> None:

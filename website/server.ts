@@ -63,6 +63,10 @@ Sitemap: ${LIVE_ORIGIN.origin}/sitemap.xml
 `;
 const CLOSED_ROBOTS = "User-agent: *\nDisallow: /\n";
 
+function contentSecurityPolicy(frameAncestors: "'none'" | "'self'"): string {
+  return `frame-ancestors ${frameAncestors}; base-uri 'self'; object-src 'none'`;
+}
+
 export async function createWebsiteServer(
   build: ServerBuild,
   clientDirectory: string,
@@ -95,9 +99,14 @@ export async function createWebsiteServer(
   });
   const handleRequest: RequestListener = async (request, response) => {
     // No other site may show these pages inside a frame, so it cannot overlay
-    // them to trick a click. X-Frame-Options covers older browsers.
-    response.setHeader("Content-Security-Policy", "frame-ancestors 'none'");
+    // them to trick a click. X-Frame-Options covers older browsers. Pages
+    // never use a <base> tag or plugins, browsers keep each answer's declared
+    // type, and other sites see only the origin a visitor came from; a route
+    // may still set a stricter Referrer-Policy of its own.
+    response.setHeader("Content-Security-Policy", contentSecurityPolicy("'none'"));
     response.setHeader("X-Frame-Options", "DENY");
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    response.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
     let url: URL;
     let pathname: string;
     try {
@@ -131,7 +140,7 @@ export async function createWebsiteServer(
     // The OBS overlay's preview, which has nothing to click, shows inside its
     // own account page.
     if (pathname === "/account/obs-overlay/preview") {
-      response.setHeader("Content-Security-Policy", "frame-ancestors 'self'");
+      response.setHeader("Content-Security-Policy", contentSecurityPolicy("'self'"));
       response.setHeader("X-Frame-Options", "SAMEORIGIN");
     }
     const file = files.get(pathname);
@@ -144,7 +153,6 @@ export async function createWebsiteServer(
       const etag = `W/"${metadata.size}-${metadata.mtimeMs}"`;
       const contentType = CONTENT_TYPES[extname(file)] ?? "application/octet-stream";
       response.setHeader("Content-Type", contentType);
-      response.setHeader("X-Content-Type-Options", "nosniff");
       response.setHeader(
         "Cache-Control",
         pathname.startsWith("/assets/")

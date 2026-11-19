@@ -27,6 +27,11 @@ from . import replies
 
 # The website's own freshness limit for a saved player profile.
 FRESHNESS_SECONDS = 900
+# The longest search the website takes; no player's name is longer.
+MAX_SEARCH_LENGTH = 80
+# Players found by name from the saved list of those not played yet this
+# Season, as many as one reply can show.
+MOST_SAVED_MATCHES = 25
 
 
 def link_colours(connection: Any, account_id: int) -> dict[str, int]:
@@ -171,8 +176,15 @@ class Store:
         has not played yet this Season, the profile that ranks them at 5,000.
         Those players are found from the worker's saved list of them, as
         finding them all live took 17 s on 11 October 2026."""
+        if len(query) > MAX_SEARCH_LENGTH:
+            return []
         escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        params = {**live_board.season_params(now), "pattern": f"%{escaped}%"}
+        params = {
+            **live_board.season_params(now),
+            "pattern": f"%{escaped}%",
+            "query": query,
+            "most": MOST_SAVED_MATCHES,
+        }
         exact = query.casefold()
         website = {
             item["tag"]: item
@@ -189,7 +201,9 @@ class Store:
                 JOIN players AS player ON player.id = saved.player_id
                 WHERE saved.official_season_id = %(season_id)s
                   AND saved.name ILIKE %(pattern)s ESCAPE '\\'
-                ORDER BY lower(saved.name), player.normalized_tag
+                ORDER BY lower(saved.name) = lower(%(query)s) DESC,
+                         lower(saved.name), player.normalized_tag
+                LIMIT %(most)s
                 """,
                 params,
             ).fetchall()

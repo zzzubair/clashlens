@@ -156,4 +156,22 @@ describe("login cookie renewal", () => {
     });
     expect(await visit(cookieIssuedMinutesAgo(120), feed)).toEqual([]);
   });
+
+  it("renews only on responses marked no-store or private", async () => {
+    const moved = new Response("page", { status: 301, headers: { Location: "/" } });
+    expect(await visit(cookieIssuedMinutesAgo(120), moved)).toEqual([]);
+    for (const cacheControl of [
+      "max-age=60",
+      "x-private, max-age=60",
+      'private="Content-Type"',
+      'no-cache="a, private, b", max-age=60',
+    ]) {
+      const cached = new Response("page", { headers: { "Cache-Control": cacheControl } });
+      expect(await visit(cookieIssuedMinutesAgo(120), cached)).toEqual([]);
+    }
+    const privatePage = new Response("page", {
+      headers: { "Cache-Control": "private, no-store" },
+    });
+    expect(await visit(cookieIssuedMinutesAgo(120), privatePage)).toHaveLength(1);
+  });
 });

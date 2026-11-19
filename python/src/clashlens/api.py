@@ -836,7 +836,14 @@ def create_app(
             display_name = normalize_display_name(body.display_name)
         except ValueError as error:
             raise ApiError(422, "invalid_request") from error
-        if len(json.dumps(body.preferences, separators=(",", ":")).encode()) > 4096:
+        try:
+            # JSON as PostgreSQL stores it: no NaN or Infinity.
+            preferences = json.dumps(
+                body.preferences, separators=(",", ":"), allow_nan=False
+            )
+        except ValueError as error:
+            raise ApiError(422, "invalid_request") from error
+        if len(preferences.encode()) > 4096:
             raise ApiError(422, "invalid_request")
         result = api_accounts.update_account(production_database,
             request_binding(

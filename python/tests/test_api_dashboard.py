@@ -406,6 +406,37 @@ def test_dashboard_today_ranks_bases_and_automatic_defense(database_url: str) ->
             database.close()
 
 
+def test_an_unknown_player_is_not_found_before_any_shared_board_read(
+    database_url: str,
+) -> None:
+    """Today's read answers without waiting for the board, and a bases read
+    is not refused while another day's read is busy."""
+
+    def slow_board(_database: Any, _now: Any, *, wait: float = 0) -> None:
+        raise AssertionError("read the board for a player Clash Lens does not have")
+
+    def busy_day(_database: Any, _day_start: Any) -> None:
+        raise api_dashboard.PastDayBusy
+
+    board = SimpleNamespace(current=slow_board, past_day=busy_day)
+    earlier_day = ranked_day_for(NOW).day_number - 1
+    assert earlier_day >= 1
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            assert api_dashboard.get_player_today(
+                database, board, "#QQQ", now=NOW,
+                board_wait=api_dashboard.BOARD_WAIT_SECONDS,
+            ) is None
+            assert api_dashboard.get_player_bases(
+                database, board, "#QQQ", day_number=earlier_day, now=NOW
+            ) is None
+        finally:
+            database.close()
+
+
 def test_dashboard_today_leaves_the_loss_unknown_without_yesterday(
     database_url: str,
 ) -> None:

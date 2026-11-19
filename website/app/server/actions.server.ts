@@ -118,6 +118,39 @@ export function isSameOrigin(request: Request, publicOrigin: URL): boolean {
 }
 
 /**
+ * Read a request or response body, stopping once it passes `maxBytes`.
+ * Returns null for a missing body or one over the limit; the caller decides
+ * whether to cancel the rest.
+ */
+export async function readBoundedBody(
+  stream: ReadableStream<Uint8Array> | null,
+  maxBytes: number,
+): Promise<Uint8Array | null> {
+  const reader = stream?.getReader();
+  if (!reader) return null;
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const result = await reader.read();
+      if (result.done) break;
+      total += result.value.byteLength;
+      if (total > maxBytes) return null;
+      chunks.push(result.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body;
+}
+
+/**
  * Read a urlencoded form body with hard bounds on field count, per-field
  * size, and total bytes. Returns a string map with no duplicate names, or
  * null for any missing, oversized, malformed, or duplicate input. File
@@ -142,28 +175,8 @@ export async function parseBoundedFormData(
     return null;
   }
 
-  const reader = request.body?.getReader();
-  if (!reader) return null;
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const result = await reader.read();
-      if (result.done) break;
-      total += result.value.byteLength;
-      if (total > limits.maxTotalBytes) return null;
-      chunks.push(result.value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  const body = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
+  const body = await readBoundedBody(request.body, limits.maxTotalBytes);
+  if (body === null) return null;
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(body);
