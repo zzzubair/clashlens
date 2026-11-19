@@ -121,6 +121,7 @@ if ! transfer_status=$(
         PGSERVICEFILE="$SUPPORT_SERVICE_FILE" \
         PGSERVICE=clashlens_support_transfer \
         PGCONNECT_TIMEOUT=5 \
+        PGOPTIONS='-c statement_timeout=10000 -c lock_timeout=10000' \
         "$PSQL" \
         --no-psqlrc \
         --no-align \

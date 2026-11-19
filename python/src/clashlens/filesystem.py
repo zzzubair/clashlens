@@ -21,7 +21,9 @@ No subprocess, no ctypes, no caching across remounts.
 
 from __future__ import annotations
 
+import errno
 import os
+import stat
 from pathlib import Path
 
 _MOUNTINFO = Path("/proc/self/mountinfo")
@@ -280,6 +282,34 @@ def mount_facts(path: str | Path) -> dict[str, object]:
         os.close(fd)
 
 
+# Every secret file the services read is far shorter than this.
+SECRET_FILE_MAX_BYTES = 4096
+
+
+class FileTooLarge(OSError):
+    """A file longer than its reader allows."""
+
+
+def read_small_file(path: str | Path, max_bytes: int) -> bytes:
+    """A regular file's bytes, refused when `path` is a symbolic link or the
+    file is longer than `max_bytes`. For secrets and other small settings.
+    Opened without waiting, so a pipe or device is refused, not waited on."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(errno.EINVAL, "not a regular file")
+        chunks: list[bytes] = []
+        size = 0
+        while chunk := os.read(fd, 65536):
+            size += len(chunk)
+            if size > max_bytes:
+                raise FileTooLarge(errno.EFBIG, "file is too large")
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
 def filesystem_capacity(
     path: str | Path, *, filesystem_type: str | None = None
 ) -> dict[str, object]:
@@ -316,7 +346,10 @@ def filesystem_capacity(
 
 
 __all__ = [
+    "SECRET_FILE_MAX_BYTES",
+    "FileTooLarge",
     "classify_inode_model",
     "filesystem_capacity",
     "mount_facts",
+    "read_small_file",
 ]

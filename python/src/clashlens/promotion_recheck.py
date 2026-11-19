@@ -354,7 +354,7 @@ async def run(collector: Collector, stop_requested: asyncio.Event) -> None:
     except ValueError as error:
         rate = 0
         print(
-            json.dumps({"event": "promotion_recheck", "status": "failed", "error": repr(error)[:300]}),
+            json.dumps({"event": "promotion_recheck", "status": "failed", "error": type(error).__name__}),
             flush=True,
         )
     if not 0 < rate < math.inf:
@@ -373,7 +373,7 @@ async def run(collector: Collector, stop_requested: asyncio.Event) -> None:
             batch = await check_batch(collector, admit, attempted)
         except Exception as error:  # noqa: BLE001 - retried after a pause
             batch = None
-            print(json.dumps({**event, "status": "failed", "error": repr(error)[:300]}), flush=True)
+            print(json.dumps({**event, "status": "failed", "error": type(error).__name__}), flush=True)
         if batch:
             stretch.update(batch)
             if batch["asked"] == BATCH_SIZE:

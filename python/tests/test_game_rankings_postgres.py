@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import ClassVar
 
 import psycopg
+import pytest
 from domain_test_support import domain_database, seed_battles, store_observation
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from reconciliation_postgres_support import _processor, _profile
@@ -821,3 +822,34 @@ def test_a_country_list_is_judged_switched_against_the_reset_before() -> None:
     # Nine players with a known rank are too few.
     assert judge(rows([*BEFORE_RANKS[:9], 0]), switched_before) is None
     assert judge(rows(BEFORE_RANKS), rows(BEFORE_RANKS, AUSTRIA)) is None
+
+
+_EMPTY_LIST = b'{"items": [], "paging": {"cursors": {}}}'
+
+
+@pytest.mark.parametrize("saved", [
+    # Valid JSON, padded past the 4 MiB the collector keeps of any answer.
+    gzip.compress(_EMPTY_LIST + b" " * (4 << 20)),
+    # A whole answer with other bytes after it.
+    gzip.compress(_EMPTY_LIST) + b"extra",
+], ids=["too-long", "trailing-bytes"])
+def test_a_saved_list_longer_than_any_kept_answer_is_refused(
+    database_url: str, saved: bytes
+) -> None:
+    with domain_database(database_url) as info:
+        with psycopg.connect(info, autocommit=True) as connection:
+            connection.execute(
+                """
+                INSERT INTO game_ranking_pulls (
+                    boundary_at, purpose, location_id, country_code, requested_at,
+                    completed_at, http_status, failure, body_sha256, body_bytes, body_gzip
+                ) VALUES (%s, 'country', 32000087, 'FR', %s, %s, 200, NULL, %s, %s, %s)
+                """,
+                (RESET, RESET, RESET, "0" * 64, len(_EMPTY_LIST), saved),
+            )
+        database = CollectorDatabase(info)
+        try:
+            with pytest.raises(ValueError, match="not one whole kept answer"):
+                game_rankings.previous_lists(database, RESET + timedelta(days=1))
+        finally:
+            database.close()

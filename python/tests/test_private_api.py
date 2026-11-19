@@ -893,6 +893,43 @@ def test_unusable_account_settings_are_refused_or_dropped_not_failed(
             database.close()
 
 
+def test_a_repeated_overlay_save_gets_the_first_answer(database_url: str) -> None:
+    from api_db_organization_support import create_owner
+
+    with migrated_production_database(database_url, include_compact_collector=True) as info:
+        database = ApiDatabase(info)
+        try:
+            create_owner(database)
+            app = create_app(database, keys={("typescript-website", "current"): TS_CURRENT},
+                             clock=lambda: NOW_SECONDS, now=lambda: NOW)
+            with TestClient(app) as client:
+                target = "/v1/account/obs-overlay"
+                identity = {"provider": "google", "subject": "group-owner-subject"}
+                assert client.get(target, headers=signed_headers(target, **identity)).status_code == 200
+                request_id = str(uuid4())
+                body = json_body({"settings": {"h": "66"}})
+                headers = signed_headers(
+                    target, method="POST", body=body, request_id=request_id, **identity)
+                first = client.post(target, content=body, headers=headers)
+                assert (first.status_code, first.json()) == (
+                    200, {"kind": "obs-overlay-saved", "version": 2})
+                assert client.post(target, content=body, headers=headers).json() == first.json()
+                # The same request ID with other settings changes nothing.
+                other = json_body({"settings": {"h": "70"}})
+                reused = client.post(target, content=other, headers=signed_headers(
+                    target, method="POST", body=other, request_id=request_id, **identity))
+                assert (reused.status_code, reused.json()) == (
+                    409, {"error": "request_id_conflict"})
+                saved = client.get(target, headers=signed_headers(target, **identity)).json()
+                assert (saved["version"], saved["settings"]) == (2, {"h": "66"})
+                # The largest set of settings the body allows is still answered.
+                full = json_body({"settings": {f"{n:02}" + "é" * 62: "é" * 64 for n in range(20)}})
+                assert client.post(target, content=full, headers=signed_headers(
+                    target, method="POST", body=full, **identity)).status_code == 200
+        finally:
+            database.close()
+
+
 def test_refresh_display_states_are_served_without_changing_raw_status(database_url: str) -> None:
     contract = json.loads((Path(__file__).parents[2] / "testdata/w6-domain-contract.json").read_text())
     with migrated_production_database(database_url, include_compact_collector=True) as info:

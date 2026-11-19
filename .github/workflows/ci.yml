@@ -149,10 +149,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          version: "0.13.5"
+          python-version: "3.12"
       - name: Install rootless Podman
         run: |
           sudo apt-get update && sudo apt-get install -y podman
           sudo tee /etc/containers/registries.conf.d/docker-hub-mirror.conf <<<"$DOCKER_HUB_MIRROR" >/dev/null
+      - name: Python runtime dependency audit (blocking)
+        working-directory: python
+        run: |
+          uv export --locked --no-dev --no-emit-project --format requirements-txt --output-file /tmp/clashlens-runtime-requirements.txt
+          uv tool run --from pip-audit==2.10.1 pip-audit --strict --disable-pip --progress-spinner off --requirement /tmp/clashlens-runtime-requirements.txt
+      # The other production images build in the main-only full container check.
+      - name: Build production database and relay images
+        run: |
+          podman build --target production --file deploy/postgres/Containerfile --tag clashlens-postgres:ci deploy/postgres
+          podman build --file deploy/egress-proxy/Containerfile --tag clashlens-egress-proxy:ci deploy/egress-proxy
       - name: Build Python check container
         run: podman build --file development/PythonCheck.Containerfile --tag clashlens-python-check:ci .
       - name: Verify packaged operations and support wrappers

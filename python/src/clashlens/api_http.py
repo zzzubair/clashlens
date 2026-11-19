@@ -157,13 +157,15 @@ def safe_uuid(value: str) -> str:
     return str(parsed)
 
 
-def request_target(request: Request) -> str:
-    raw_path = request.scope.get("raw_path", request.url.path.encode("ascii"))
+def raw_request_target(request: Request) -> bytes:
+    raw_path = request.scope.get("raw_path") or request.scope["path"].encode("utf-8")
     query = request.scope.get("query_string", b"")
-    target = raw_path
-    if query:
-        target += b"?" + query
-    return target.decode("ascii")
+    return raw_path + b"?" + query if query else raw_path
+
+
+def request_target(request: Request) -> str:
+    # Only reached after verify_proof accepted the same target as ASCII.
+    return raw_request_target(request).decode("ascii")
 
 
 def json_safe(value: Any) -> Any:

@@ -78,6 +78,7 @@ expect_directive listen 100.64.0.1 'proxy does not listen only on the configured
 expect_directive port 3129 'proxy does not listen only on the configured port'
 expect_directive maxclients 96 'proxy does not allow the 96 connections its callers are budgeted'
 expect_directive connectport 443 'proxy CONNECT port restriction is missing'
+expect_directive filtertype ere 'proxy filter does not use extended patterns'
 [[ "$(stat -c '%a' "$WORK_DIR/tinyproxy.conf")" == "644" ]] || {
   printf 'proxy configuration is not readable by the unprivileged container user\n' >&2
   exit 1

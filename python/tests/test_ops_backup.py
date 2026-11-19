@@ -1238,6 +1238,49 @@ def test_blog_folder_is_mounted_read_only_only_when_configured(
     )
 
 
+def test_blog_folder_must_be_a_plain_path(tmp_path, mode_config):
+    with Path(mode_config["OPS_ENV_FILE"]).open("a") as config:
+        config.write(
+            "CLASHLENS_BLOG_DIR=/home/clashlens/../clashlens-blog\n"
+            "CLASHLENS_BLOG_OWNER=google:owner-1\n"
+        )
+    result = subprocess.run(
+        ["bash", "-c", MODE_CONFIG, "blog-dir-test", str(OPS)],
+        env=dict(mode_config, TEST_MODE="production"),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "must be a normalized absolute path" in result.stderr
+
+
+def test_release_fingerprint_leaves_no_listing_behind(tmp_path):
+    source = tmp_path / "source"
+    (source / "python").mkdir(parents=True)
+    (source / "ops").write_text("ops\n")
+    unreadable = source / "python" / "unreadable.py"
+    unreadable.write_text("x = 1\n")
+    subprocess.run(["git", "init", "-q", str(source)], check=True)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    unreadable.chmod(0)
+    try:
+        subprocess.run(
+            ["bash", "-c", 'source "$1" help >/dev/null; ROOT=$2; source_fingerprint >/dev/null',
+             "fingerprint-test", str(OPS), str(source)],
+            env=dict(os.environ, TMPDIR=str(scratch)),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    finally:
+        unreadable.chmod(0o644)
+    assert list(scratch.iterdir()) == []
+
+
 @pytest.mark.parametrize("configured", [False, True])
 def test_visitor_counting_token_reaches_only_the_website_and_only_when_set(
     tmp_path, mode_config, configured

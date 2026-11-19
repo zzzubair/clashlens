@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import argparse
 import base64
+import threading
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -212,3 +215,84 @@ def test_serve_app_closes_database_pool_when_hmac_loading_fails(
     assert len(closed) == 1
     assert closed[0].pool.closed is True
     _assert_no_key_material(capsys, exc.value)
+
+
+def test_serve_never_writes_request_lines_to_the_log(tmp_path: Path, monkeypatch) -> None:
+    started: list[dict] = []
+    monkeypatch.setattr(cli, "_serve_app", lambda arguments: (object(), None))
+    monkeypatch.setattr(cli.uvicorn, "run", lambda app, **options: started.append(options))
+
+    assert cli.main([*_serve_argv(tmp_path), "--log-level", "info"]) == 0
+    assert started and started[0]["access_log"] is False
+
+
+def _serve_argv(tmp_path: Path) -> list[str]:
+    arguments = _serve_arguments(tmp_path)
+    return [
+        "serve", "--database-url", arguments.database_url,
+        "--secret-file", arguments.secret_file,
+        "--official-key-file", arguments.official_key_file,
+        "--official-proxy-url", arguments.official_proxy_url,
+    ]
+
+
+class _Recorder(BaseHTTPRequestHandler):
+    status = 200
+    body = b'{"ok": true}'
+
+    def log_message(self, *_args) -> None:
+        pass
+
+    def do_GET(self) -> None:
+        self.server.paths.append(self.path)
+        self.send_response(self.status)
+        if self.status == 302:
+            self.send_header("Location", "/elsewhere")
+        self.send_header("Content-Length", str(len(self.body)))
+        self.end_headers()
+        self.wfile.write(self.body)
+
+
+@contextmanager
+def _server(status: int = 200, body: bytes = b'{"ok": true}'):
+    handler = type("Handler", (_Recorder,), {"status": status, "body": body})
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    server.paths = []
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def _probe(tmp_path: Path, url: str) -> str:
+    return cli._probe(cli.build_parser().parse_args([
+        "probe", "--url", url, "--secret-file", _write_secret_file(tmp_path, bytes(range(32))),
+    ]))
+
+
+def test_probe_reads_only_the_address_it_is_given(tmp_path: Path, monkeypatch) -> None:
+    with _server() as target, _server() as proxy:
+        monkeypatch.setenv("http_proxy", f"http://127.0.0.1:{proxy.server_port}")
+        monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{proxy.server_port}")
+        monkeypatch.delenv("no_proxy", raising=False)
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        url = f"http://127.0.0.1:{target.server_port}/v1/players/%232PP"
+        assert _probe(tmp_path, url) == '{"ok": true}'
+    assert target.paths == ["/v1/players/%232PP"]
+    assert proxy.paths == []
+
+    with _server(status=302) as moved:
+        with pytest.raises(RuntimeError, match="probe failed"):
+            _probe(tmp_path, f"http://127.0.0.1:{moved.server_port}/v1/players/%232PP")
+    assert moved.paths == ["/v1/players/%232PP"]
+
+    with _server(body=b"x" * (1024 * 1024 + 1)) as large:
+        with pytest.raises(RuntimeError, match="too large"):
+            _probe(tmp_path, f"http://127.0.0.1:{large.server_port}/v1/players/%232PP")
+
+    for url in ("file:///etc/hostname", "ftp://127.0.0.1/x", "http:///v1/players"):
+        with pytest.raises(RuntimeError, match="http or https"):
+            _probe(tmp_path, url)

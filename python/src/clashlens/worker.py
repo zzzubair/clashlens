@@ -10,7 +10,6 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
 from threading import Event, Lock, Semaphore
 from time import monotonic
 from typing import Any
@@ -80,7 +79,7 @@ from .rankings import (
 )
 from .stage_metrics import StageMetrics
 from .worker_claims import ClaimLedger
-from .worker_liveness import progress_file
+from .worker_liveness import touch_progress_file
 
 MAX_CONCURRENCY = 32
 # Each worker process runs its own Python interpreter, which runs one thread
@@ -412,7 +411,7 @@ def run_processes(commands: list[list[str]], stop_requested: Event) -> int:
     # Each process's health-check file exists from the start, so one stuck
     # before its first job still ages into a failed health check.
     for index in range(1, len(commands) + 1):
-        Path(progress_file(index)).touch()
+        touch_progress_file(index)
     processes: list[subprocess.Popen[bytes]] = []
     try:
         for command in commands:

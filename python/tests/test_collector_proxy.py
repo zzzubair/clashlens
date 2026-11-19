@@ -484,6 +484,31 @@ def _configured_relay_cap(tmp_path: Path) -> int:
     return int(cap)
 
 
+def test_relay_matches_extended_patterns_and_refuses_impossible_addresses(tmp_path):
+    deploy = Path(__file__).resolve().parents[2] / "deploy/egress-proxy/deploy.sh"
+    docker = tmp_path / "docker"
+    docker.write_text('#!/usr/bin/env bash\n[[ "${1:-} ${2:-}" != "container inspect" ]]\n')
+    docker.chmod(0o700)
+
+    def up(listen: str, client: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(deploy), "up"],
+            env={**os.environ, "DOCKER_BIN": str(docker),
+                 "PROXY_STATE_DIR": str(tmp_path / "relay-config"),
+                 "PROXY_LISTEN_IP": listen, "PROXY_CLIENT_IP": client},
+            check=False, capture_output=True, text=True,
+        )
+
+    assert up("100.64.0.1", "100.64.0.255").returncode == 0
+    config = (tmp_path / "relay-config" / "tinyproxy.conf").read_text().splitlines()
+    assert "FilterType ere" in config
+    for listen, client in (("256.64.0.1", "100.64.0.2"), ("100.64.0.1", "100.64.0.999"),
+                           ("100.064.0.1", "100.64.0.2")):
+        refused = up(listen, client)
+        assert refused.returncode != 0
+        assert "must be an IPv4 address" in refused.stderr
+
+
 @pytest.mark.parametrize("over_cap", [False, True])
 def test_full_caller_load_shares_the_relay_within_its_cap_and_budgets(
     relay, monkeypatch, tmp_path, over_cap

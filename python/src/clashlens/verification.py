@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Final
 from urllib.parse import quote, urlsplit
 
+from .filesystem import read_small_file
 from .http_transport import NoRedirectHandler
 
 OFFICIAL_API_ORIGIN: Final = "https://api.clashofclans.com"
@@ -253,7 +254,8 @@ def classify_transport_ambiguity() -> VerificationClassification:
 
 def load_official_api_key_file(path: str | Path) -> bytes:
     try:
-        raw = Path(path).read_bytes()
+        # The key itself is at most 4,096 bytes, plus its line end.
+        raw = read_small_file(path, 4098)
     except OSError as error:
         raise ValueError("official API key file could not be read") from error
     if raw.endswith(b"\r\n"):

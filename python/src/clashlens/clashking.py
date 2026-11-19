@@ -185,9 +185,12 @@ Transport = Callable[[str, float], tuple[int, dict[str, str], bytes]]
 
 def _urllib_transport(url: str, timeout: float) -> tuple[int, dict[str, str], bytes]:
     context = ssl.create_default_context(cafile=certifi.where())
-    # A redirect comes back as a failed fetch instead of leaving api.clashk.ing.
+    # A redirect comes back as a failed fetch instead of leaving api.clashk.ing,
+    # and no proxy from the environment sits in between.
     opener = urllib.request.build_opener(
-        urllib.request.HTTPSHandler(context=context), NoRedirectHandler()
+        urllib.request.ProxyHandler({}),
+        urllib.request.HTTPSHandler(context=context),
+        NoRedirectHandler(),
     )
     request = urllib.request.Request(
         url, headers={"Accept": "application/json", "User-Agent": "ClashLens"}

@@ -1,4 +1,7 @@
-FROM docker.io/library/alpine:3.23
+# Base images are pinned by digest; the tag each one was taken from is noted
+# above it. Update both together.
+# alpine:3.23
+FROM docker.io/library/alpine@sha256:469c9ea410b9215eaee7976ba6c0639039b444be8e5d638f7abbada189971eb2
 
 RUN apk add --no-cache ca-certificates tinyproxy
 

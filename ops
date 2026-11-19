@@ -147,13 +147,17 @@ validate_number() {
   esac || die "$name is invalid"
 }
 
-load_production_config() {
+load_env_file() {
   [[ "$ENV_FILE" == /* ]] || die "app.env path must be absolute"
   validate_directory_ancestry "${ENV_FILE%/*}"
   [[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || die "missing or unsafe app.env; copy the private template named in docs/deployment.md and chmod 600 app.env"
   [[ "$(stat -c '%u' "$ENV_FILE")" == "$(id -u)" ]] || die "app.env must belong to the service account"
   [[ "$(stat -c '%a' "$ENV_FILE")" == 600 ]] || die "app.env must have mode 600"
   load_kv_file "$ENV_FILE" CONFIG
+}
+
+load_production_config() {
+  load_env_file
   local required=(POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD
     CLASHLENS_COLLECTOR_DB_PASSWORD CLASHLENS_WORKER_DB_PASSWORD CLASHLENS_API_DB_PASSWORD
     CLASHLENS_ARCHIVE_ENDPOINT CLASHLENS_ARCHIVE_REGION CLASHLENS_ARCHIVE_INSTANCE_ID
@@ -247,7 +251,7 @@ load_production_config() {
   SPOOL_ROOT=$(setting CLASHLENS_SPOOL_ROOT)
   ARCHIVE_ROOT=
   BLOG_DIR=$(setting CLASHLENS_BLOG_DIR)
-  [[ -z "$BLOG_DIR" || "$BLOG_DIR" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "CLASHLENS_BLOG_DIR must be an absolute path without spaces"
+  [[ -z "$BLOG_DIR" || "$BLOG_DIR" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "CLASHLENS_BLOG_DIR must be an absolute path without spaces"; [[ -z "$BLOG_DIR" ]] || validate_directory_ancestry "$BLOG_DIR"
   WEBSITE_PORT=$(setting CLASHLENS_WEBSITE_PORT 3000)
   HEALTH_PORT=$(setting CLASHLENS_HEALTH_PORT 8081)
   WORKER_LEASE=$(setting CLASHLENS_WORKER_LEASE_SECONDS 60) WORKER_PROCESSES=$(setting CLASHLENS_WORKER_PROCESSES 1)
@@ -559,24 +563,22 @@ source_revision() {
   git -C "$ROOT" rev-parse --verify HEAD^{commit} 2>/dev/null || die "cannot resolve the source revision"
 }
 
-source_fingerprint() {
-  local file relative digest listing found_ops=false
-  listing=$(mktemp)
-  if ! git -C "$ROOT" ls-files -co --exclude-standard -z -- .containerignore Containerfile python website development deploy/migrations deploy/quadlet deploy/postgres ops ops-keep-running.sh | LC_ALL=C sort -z > "$listing"; then
-    rm -f "$listing"
+# A subshell whose exit trap removes the listing however it ends (not local: the trap outlives the scope).
+source_fingerprint() (
+  local file relative digest found_ops=false
+  listing=$(mktemp); trap 'rm -f "$listing"' EXIT
+  git -C "$ROOT" ls-files -co --exclude-standard -z -- .containerignore Containerfile python website development deploy/migrations deploy/quadlet deploy/postgres ops ops-keep-running.sh | LC_ALL=C sort -z > "$listing" || \
     die "cannot enumerate release inputs"
-  fi
   while IFS= read -r -d '' file; do
     relative=$file
     [[ "$relative" != ops ]] || found_ops=true
     file="$ROOT/$relative"
-    [[ -f "$file" ]] || { rm -f "$listing"; die "release input $relative is missing"; }
+    [[ -f "$file" ]] || die "release input $relative is missing"
     digest=$(sha256sum "$file" | cut -d' ' -f1)
     printf '%s\0%s\n' "$relative" "$digest"
   done < "$listing"
-  rm -f "$listing"
   [[ "$found_ops" == true ]] || die "release inputs do not include ops"
-}
+)
 
 image_id() {
   local identifier
@@ -1047,7 +1049,7 @@ configure_database() {
   sql+=' REVOKE ALL PRIVILEGES ON TABLE python_processing_jobs FROM clashlens_python_worker;'
   sql+=' GRANT SELECT (id, lease_generation) ON TABLE python_processing_jobs TO clashlens_python_worker; COMMIT;'
   printf '%s\n' "$sql" | psql_exec_sensitive
-  unset admin_password collector_password worker_password api_password sql
+  unset admin_password collector_password worker_password api_password sql HISTORY_DB_PASSWORD
   local endpoint region bucket instance marker_key marker_hash marker_version
   if [[ "$MODE" == fixture ]]; then endpoint=127.0.0.1:9000; region=us-east-1; bucket=evidence; instance=development; marker_key=clashlens/archive-instance.json; marker_hash=16d586e6c52a90aed1fed855fd03e9ce7257319cfcb5b824cb52015989b52192; marker_version=v1
   else endpoint=$(setting CLASHLENS_ARCHIVE_ENDPOINT); region=$(setting CLASHLENS_ARCHIVE_REGION); bucket=$(setting CLASHLENS_ARCHIVE_BUCKET); instance=$(setting CLASHLENS_ARCHIVE_INSTANCE_ID); marker_key=$(setting CLASHLENS_ARCHIVE_MARKER_KEY); marker_hash=$(setting CLASHLENS_ARCHIVE_MARKER_HASH); marker_version=$(setting CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION); fi
@@ -1449,7 +1451,7 @@ history_prune() {
 alert_check() {
   [[ "$(current_prefix)" == clashlens ]] || die "alert-check is unavailable in fixture mode"
   validate_directory_ancestry "$STATE_DIR"
-  load_kv_file "$ENV_FILE" CONFIG
+  load_env_file
   python3 "$ROOT/python/src/clashlens/alerts.py" "$STATE_DIR" "$ROOT" "$(alert_webhook_file)" \
     "$(setting CLASHLENS_HEALTH_PORT 8081)" "$(setting CLASHLENS_SPOOL_ROOT /srv/clashlens-data/spool)" \
     "$(setting CLASHLENS_SPOOL_MAX_BYTES 17179869184)" "$(setting CLASHLENS_SPOOL_MAX_OBJECTS 1000000)" "$(setting CLASHLENS_PUBLIC_ORIGIN)"

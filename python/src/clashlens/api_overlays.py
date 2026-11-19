@@ -14,6 +14,8 @@ Where a link stands is `LinkState`; whether OBS is watching is
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import secrets
 from enum import StrEnum
@@ -24,9 +26,18 @@ from fastapi.responses import JSONResponse
 from psycopg.types.json import Jsonb
 from pydantic import Field
 
+from . import api_requests
 from .api_db import ApiDatabase
-from .api_http import ApiError, StrictBody, authorize, safe_tag
+from .api_http import (
+    ApiError,
+    StrictBody,
+    authorize,
+    operation_response,
+    request_binding,
+    safe_tag,
+)
 from .api_players import linked_players
+from .api_requests import OperationResult, RequestBinding
 from .collector_overlays import PRESENCE_SQL, ViewerPresence
 from .db_rows import text_value
 
@@ -137,38 +148,53 @@ def get_overlay(database: ApiDatabase, account_id: int) -> dict[str, Any]:
 
 
 def save_overlay(
-    database: ApiDatabase, account_id: int, *, tag: str | None, settings: dict[str, str]
-) -> dict[str, Any]:
-    """Save the overlay's player and settings. Saving the same again is
-    harmless, so a repeated request needs no record of its own."""
+    database: ApiDatabase,
+    binding: RequestBinding,
+    *,
+    tag: str | None,
+    settings: dict[str, str],
+) -> OperationResult:
+    """Save the overlay's player and settings. A repeated request gets the
+    first one's answer."""
     with database.pool.connection() as connection:
         with connection.transaction():
-            player_id = None
-            if tag is not None:
-                link = connection.execute(
-                    """
-                    SELECT link.player_id FROM verified_player_links AS link
-                    JOIN players AS player ON player.id = link.player_id
-                    WHERE player.normalized_tag = %s AND link.account_id = %s
-                    """,
-                    (tag, account_id),
-                ).fetchone()
-                if link is None:
-                    raise ApiError(404, "player_not_verified")
-                player_id = int(link[0])
-            row = connection.execute(
-                """
-                UPDATE obs_overlays
-                SET player_id = %s, settings = %s, version = version + 1,
-                    updated_at = clock_timestamp()
-                WHERE account_id = %s
-                RETURNING version
-                """,
-                (player_id, Jsonb(clean_settings(settings)), account_id),
-            ).fetchone()
+            existing = api_requests.reserve_request(connection, binding)
+            if existing is not None:
+                return existing
+            result = _save(connection, binding.account_id, tag, settings)
+            api_requests.complete_request(connection, binding.request_id, result)
+            return result
+
+
+def _save(
+    connection: Any, account_id: int | None, tag: str | None, settings: dict[str, str]
+) -> OperationResult:
+    player_id = None
+    if tag is not None:
+        link = connection.execute(
+            """
+            SELECT link.player_id FROM verified_player_links AS link
+            JOIN players AS player ON player.id = link.player_id
+            WHERE player.normalized_tag = %s AND link.account_id = %s
+            """,
+            (tag, account_id),
+        ).fetchone()
+        if link is None:
+            return OperationResult(404, {"error": "player_not_verified"})
+        player_id = int(link[0])
+    row = connection.execute(
+        """
+        UPDATE obs_overlays
+        SET player_id = %s, settings = %s, version = version + 1,
+            updated_at = clock_timestamp()
+        WHERE account_id = %s
+        RETURNING version
+        """,
+        (player_id, Jsonb(clean_settings(settings)), account_id),
+    ).fetchone()
     if row is None:
-        raise ApiError(404, "overlay_not_found")
-    return {"kind": "obs-overlay-saved", "version": int(row[0])}
+        return OperationResult(404, {"error": "overlay_not_found"})
+    return OperationResult(200, {"kind": "obs-overlay-saved", "version": int(row[0])})
 
 
 def new_link(database: ApiDatabase, account_id: int, *, replaces: str) -> dict[str, Any]:
@@ -249,12 +275,18 @@ def register_overlay_routes(app: FastAPI, *, database: ApiDatabase | None) -> No
 
     @app.post("/v1/account/obs-overlay")
     def save(body: OverlayBody, request: Request) -> JSONResponse:
-        account_id = account(request, "account.update")
-        assert database is not None
+        context = authorize(request, "account.update", database)
+        assert database is not None and context.account is not None
         tag = None if body.tag is None else safe_tag(body.tag)
-        return JSONResponse(content=save_overlay(
-            database, account_id, tag=tag, settings=body.settings
-        ))
+        # The settings by their digest: a full set can outgrow the replay record.
+        settings = json.dumps(body.settings, sort_keys=True, separators=(",", ":"))
+        binding = request_binding(
+            request, context, "account.update",
+            {"obs_overlay": tag, "settings": hashlib.sha256(settings.encode()).hexdigest()},
+        )
+        return operation_response(
+            save_overlay(database, binding, tag=tag, settings=body.settings)
+        )
 
     @app.post("/v1/account/obs-overlay/link")
     def replace(body: NewLinkBody, request: Request) -> JSONResponse:

@@ -27,6 +27,7 @@ from urllib.parse import urlsplit
 
 from clashlens.api_db import ApiDatabase
 from clashlens.bootstrap import BootstrapError, read_secret_file
+from clashlens.filesystem import SECRET_FILE_MAX_BYTES, read_small_file
 
 from .alerts import AlertLoop, AlertStore
 from .commands import Commands
@@ -75,9 +76,8 @@ def load_config(environ: Mapping[str, str]) -> Config:
 def read_token(path: str) -> str:
     """The bot token, checked for shape only; it is never printed or logged."""
     try:
-        with open(path, encoding="utf-8") as file:
-            token = file.read(512)
-    except OSError as error:
+        token = read_small_file(path, SECRET_FILE_MAX_BYTES).decode("utf-8")
+    except (OSError, UnicodeDecodeError) as error:
         raise ConfigError("the Discord bot token file cannot be read") from error
     token = token.strip()
     if not token or len(token) >= 512 or any(char.isspace() for char in token):

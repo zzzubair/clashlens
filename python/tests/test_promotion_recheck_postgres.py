@@ -650,3 +650,5 @@ def test_an_unusable_rate_keeps_the_recheck_off_until_stopped(
     lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     expected = [{"event": "promotion_recheck", "status": "failed"}] if setting == "20/s" else []
     assert [{key: line[key] for key in ("event", "status")} for line in lines] == expected
+    # The log names the kind of failure, never the text that caused it.
+    assert all(line["error"] == "ValueError" and setting not in json.dumps(line) for line in lines)

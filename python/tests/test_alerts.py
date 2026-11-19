@@ -666,16 +666,27 @@ def test_command_boundary_missing_webhook_fails_without_printing_config(tmp_path
         f"CLASHLENS_API_KEY_HOST_DIR={tmp_path}\n"
         "UNRELATED_SECRET=must-not-appear-in-output\n"
     )
-    result = subprocess.run(
-        [str(ROOT / "ops"), "alert-check"],
-        env=dict(
-            os.environ, OPS_ENV_FILE=str(config), XDG_STATE_HOME=str(tmp_path / "state")
-        ),
-        capture_output=True,
-        text=True,
-        timeout=15,
-        check=False,
-    )
+
+    def alert_check() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(ROOT / "ops"), "alert-check"],
+            env=dict(
+                os.environ, OPS_ENV_FILE=str(config), XDG_STATE_HOME=str(tmp_path / "state")
+            ),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+
+    # Settings others can read are refused before anything uses them.
+    config.chmod(0o644)
+    result = alert_check()
+    assert result.returncode != 0
+    assert "app.env must have mode 600" in result.stderr
+    assert "must-not-appear" not in result.stdout + result.stderr
+    config.chmod(0o600)
+    result = alert_check()
     assert result.returncode != 0
     assert "Webhook file" in result.stderr
     assert "must-not-appear" not in result.stdout + result.stderr

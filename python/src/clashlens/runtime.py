@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 from typing import Any
 
 from .archive import S3ArchiveReader, SpoolFirstReader
+from .filesystem import SECRET_FILE_MAX_BYTES, read_small_file
 
 
 def open_archive(
@@ -76,7 +76,7 @@ def database_url(arguments: argparse.Namespace) -> str:
 def file_value(path: str, inline_value: str, label: str) -> str:
     if path:
         try:
-            value = Path(path).read_bytes()
+            value = read_small_file(path, SECRET_FILE_MAX_BYTES)
         except OSError as error:
             raise ValueError(f"{label} file could not be read") from error
         if value.endswith(b"\n"):

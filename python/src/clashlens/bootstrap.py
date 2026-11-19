@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from .db import CONTRACT_VERSION
+from .filesystem import FileTooLarge, read_small_file
 from .profile import ProfileParseError, normalize_player_tag
 
 MANIFEST_MAX_BYTES = 1 << 20
@@ -52,30 +53,11 @@ def _read_strict_file(path: str, label: str, *, max_bytes: int) -> bytes:
     failures all raise BootstrapError.
     """
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        return read_small_file(path, max_bytes)
+    except FileTooLarge as error:
+        raise BootstrapError(f"{label}_file_exceeds_size_limit") from error
     except OSError as error:
         raise BootstrapError(f"{label}_file_could_not_be_read") from error
-    try:
-        try:
-            size = os.fstat(fd).st_size
-        except OSError as error:
-            raise BootstrapError(f"{label}_file_could_not_be_read") from error
-        if size > max_bytes:
-            raise BootstrapError(f"{label}_file_exceeds_size_limit")
-        chunks: list[bytes] = []
-        while True:
-            try:
-                chunk = os.read(fd, 65536)
-            except OSError as error:
-                raise BootstrapError(f"{label}_file_could_not_be_read") from error
-            if not chunk:
-                break
-            chunks.append(chunk)
-            if sum(len(part) for part in chunks) > max_bytes:
-                raise BootstrapError(f"{label}_file_exceeds_size_limit")
-        return b"".join(chunks)
-    finally:
-        os.close(fd)
 
 
 def parse_manifest(

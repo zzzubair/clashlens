@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
+from .filesystem import SECRET_FILE_MAX_BYTES, read_small_file
+
 PROOF_VERSION = "clashlens-hmac-v1"
 AUDIENCE = "clashlens-python-private-api"
 ALLOWED_PROVIDERS = frozenset({"discord", "google"})
@@ -60,7 +62,7 @@ class InvalidProof(ValueError):
 
 def load_secret_file(path: str | Path) -> bytes:
     try:
-        raw = Path(path).read_bytes()
+        raw = read_small_file(path, SECRET_FILE_MAX_BYTES)
     except OSError as error:
         raise ValueError("HMAC secret file could not be read") from error
     if raw.endswith(b"\n"):

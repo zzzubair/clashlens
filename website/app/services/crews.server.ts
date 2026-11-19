@@ -176,6 +176,8 @@ export function changeCrewMember(
   key: string,
 ) {
   requireCrewId(crewId);
+  if (normalizeUsername(username) === null)
+    throw new PythonApiError(400, { error: "invalid_input" });
   return writeCrew(
     identity,
     "PATCH",
@@ -279,6 +281,8 @@ export function revokeCrewInvite(
   key: string,
 ) {
   requireCrewId(crewId);
+  if (!isCanonicalUuid(inviteId))
+    throw new PythonApiError(400, { error: "invalid_input" });
   return writeCrew(
     identity,
     "DELETE",

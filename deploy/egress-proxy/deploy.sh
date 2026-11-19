@@ -20,9 +20,15 @@ die() {
   exit 1
 }
 
+# Four numbers from 0 to 255, without leading zeros.
+is_ipv4() {
+  local octet='(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
+  [[ "$1" =~ ^$octet\.$octet\.$octet\.$octet$ ]]
+}
+
 require_settings() {
-  [[ "$PROXY_LISTEN_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "PROXY_LISTEN_IP must be an IPv4 address"
-  [[ "$PROXY_CLIENT_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "PROXY_CLIENT_IP must be an IPv4 address"
+  is_ipv4 "$PROXY_LISTEN_IP" || die "PROXY_LISTEN_IP must be an IPv4 address"
+  is_ipv4 "$PROXY_CLIENT_IP" || die "PROXY_CLIENT_IP must be an IPv4 address"
   [[ "$PROXY_PORT" =~ ^[0-9]+$ ]] || die "PROXY_PORT must be a port number"
   (( PROXY_PORT >= 1 && PROXY_PORT <= 65535 )) || die "PROXY_PORT is outside the valid range"
   command -v "$DOCKER_BIN" >/dev/null 2>&1 || die "Docker is required"
@@ -53,6 +59,7 @@ Allow $PROXY_CLIENT_IP
 ConnectPort 443
 Filter "/etc/tinyproxy/filter"
 FilterDefaultDeny Yes
+FilterType ere
 FilterURLs On
 DisableViaHeader Yes
 EOF

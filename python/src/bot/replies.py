@@ -7,6 +7,7 @@ markup or an @mention in a name cannot ping anyone or break the layout.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass, replace
@@ -151,11 +152,18 @@ class Site:
         return f"{self.player(tag)}?day={day_start.date().isoformat()}#battle-{battle_id}"
 
 
+# Where Discord would start a link, an invite or a <t:...> timestamp.
+_LINK_START = re.compile(r"(?i)(?<=:)//|(?<=discord\.gg)/|(?<=discord\.com)/|(?<=<)")
+
+
 def safe(text: str | None) -> str:
-    """A game or account name as plain text: no markup, no pings."""
+    """A game or account name as plain text: no markup, links, timestamps or
+    pings. A zero-width space breaks each link start without showing."""
+    text = " ".join((text or "").split())
     if not text:
         return "Unnamed"
-    return escape_mentions(escape_markdown(" ".join(text.split())))
+    text = escape_markdown(text, ignore_links=False)
+    return escape_mentions(_LINK_START.sub(lambda match: "\u200b" + match.group(0), text))
 
 
 def isolated(text: str) -> str:
@@ -463,9 +471,13 @@ def bad_tag() -> Reply:
     return say("That doesn't look like a player tag.", private=True)
 
 
+# Longer than any game name; what someone typed is cut to this.
+MAX_NAME_SHOWN = 50
+
+
 def no_such_player(name: str) -> Reply:
     return say(
-        f"Clash Lens doesn't know a player called {safe(name)}. "
+        f"Clash Lens doesn't know a player called {safe(name[:MAX_NAME_SHOWN])}. "
         "Pick one from the list or use their tag.",
         private=True,
     )

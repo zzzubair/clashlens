@@ -19,9 +19,12 @@ when any one of them, or any thread in one, is stuck.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import glob
 import json
 import os
+import stat
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Collection
@@ -36,13 +39,35 @@ STUCK_SECONDS = 1200.0
 # The longest finished build took 844 s; before 6 Oct some ran 63 minutes.
 LONG_RUNNING_STUCK_SECONDS = 3600.0
 MARK_INTERVAL_SECONDS = 5.0
-# The health check runs inside the worker's container, which has its own /tmp.
-PROGRESS_FILE = "/tmp/clashlens-worker-progress"
+# The health check runs inside the worker's container, which has its own /tmp,
+# as the same user, so the files sit in a folder only that user can open.
+PROGRESS_FILE = "/tmp/clashlens-worker/progress"
 
 
 def progress_file(process_index: int = 0) -> str:
     """The progress file of one worker process; 0 is a worker on its own."""
     return f"{PROGRESS_FILE}-{process_index}" if process_index else PROGRESS_FILE
+
+
+def _private_folder(path: str) -> str:
+    """The folder holding `path`, made on first use; refused unless it is a
+    real folder of this user's that no one else can open."""
+    folder = os.path.dirname(path)
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    found = os.lstat(folder)
+    if (
+        not stat.S_ISDIR(found.st_mode)
+        or found.st_uid != os.getuid()
+        or found.st_mode & 0o077
+    ):
+        raise PermissionError(f"{folder} is not a private folder")
+    return folder
+
+
+def touch_progress_file(process_index: int) -> None:
+    path = progress_file(process_index)
+    _private_folder(path)
+    Path(path).touch()
 
 
 class ProgressMark:
@@ -74,10 +99,18 @@ class ProgressMark:
                 ]
                 for thread, marked_at in self._marks.items()
             }
-            temporary = Path(self.path + ".new")
             try:
-                temporary.write_text(json.dumps(limits))
-                os.replace(temporary, self.path)
+                descriptor, temporary = tempfile.mkstemp(
+                    dir=_private_folder(self.path), prefix=".progress-", suffix=".new"
+                )
+                try:
+                    with os.fdopen(descriptor, "w") as file:
+                        file.write(json.dumps(limits))
+                    os.replace(temporary, self.path)
+                except BaseException:
+                    with contextlib.suppress(OSError):
+                        os.unlink(temporary)
+                    raise
             except OSError:
                 pass  # A file that stops changing reads as stuck, which is right.
 

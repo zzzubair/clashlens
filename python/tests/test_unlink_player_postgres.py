@@ -57,7 +57,13 @@ def test_unlinking_a_player_takes_it_off_only_that_account(site: Site) -> None:
             site, "first", switch, "#2PP", "POST", "/v1/account/discord-alerts", on=True
         ).status_code == 200
     api_overlays.get_overlay(site.api, first)
-    api_overlays.save_overlay(site.api, first, tag="#2PP", settings={})
+    saved = api_overlays.save_overlay(site.api, RequestBinding(
+        request_id=str(uuid4()), caller="typescript-website", provider="google",
+        provider_subject="subject-first", account_id=first, operation="account.update",
+        method="POST", request_target="/v1/account/obs-overlay",
+        identity={"obs_overlay": "#2PP", "settings": {}},
+    ), tag="#2PP", settings={})
+    assert saved.status_code == 200
 
     # Nobody else can unlink it, and nothing changes when they try.
     assert _unlink(site, "other", "#2PP").payload == {"error": "player_not_verified"}

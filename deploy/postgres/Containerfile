@@ -1,19 +1,30 @@
-FROM docker.io/library/golang:1.26 AS wal-g
+# Base images are pinned by digest; the tag each one was taken from is noted
+# above it. Update both together.
+# golang:1.26
+FROM docker.io/library/golang@sha256:5ebd6e7dc13f9e273ed9470679eb295d8b6e7de3b6379c8a5e17a9e6c3eabd38 AS wal-g
 WORKDIR /build
 # Build without libc so PostgreSQL can keep its existing Alpine collation rules.
 ADD https://github.com/wal-g/wal-g/archive/refs/tags/v3.0.9.tar.gz /tmp/wal-g.tar.gz
 RUN echo 'b06bc26c4865c07d0c269101910f63c7eedd03790b7c054a7da0980a7a9cc31d  /tmp/wal-g.tar.gz' | sha256sum -c - \
     && tar -xzf /tmp/wal-g.tar.gz --strip-components=1
 # v3.0.9 is wal-g's latest release; raise its bundled modules past known advisories.
+# The resulting module list must be exactly the one reviewed, and every
+# downloaded module must match it.
 RUN go get golang.org/x/net@v0.60.0 golang.org/x/crypto@v0.57.0 \
     google.golang.org/grpc@v1.83.2 go.opentelemetry.io/otel/sdk@v1.45.0 \
-    && go mod tidy
+    && go mod tidy \
+    && printf '%s  %s\n' \
+        421732bd6969b34f78277aa5dbaff7c6fe14bdc9936eea14b88439395cfe7d8e go.mod \
+        6748ab926800398e2311a9e1870304f967822af190b843b3b8cfe86204872332 go.sum \
+        | sha256sum -c - \
+    && go mod verify
 RUN CGO_ENABLED=0 GOEXPERIMENT=jsonv2 go build -mod=readonly -p=2 -trimpath \
     -ldflags='-s -w -X github.com/wal-g/wal-g/cmd/pg.walgVersion=v3.0.9' \
     -o /wal-g ./main/pg
 
 # Fixture releases stop here; only production backups need wal-g.
-FROM docker.io/library/postgres:18-alpine AS fixture
+# postgres:18-alpine
+FROM docker.io/library/postgres@sha256:ff64c9e3bdf8e2120107d3559de8db314e8305f7e38c5105903c6295876738ff AS fixture
 COPY pg_hba.conf /etc/clashlens/pg_hba.conf
 
 FROM fixture AS production
