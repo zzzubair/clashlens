@@ -1187,8 +1187,12 @@ def test_measurement_snapshot_and_projection_labels(database_url: str) -> None:
                     "PARTITION OF issue82_storage_probe_partition "
                     "FOR VALUES FROM (0) TO (100)"
                 )
+                # A table whose name only works quoted is measured all the same.
+                connection.execute('CREATE TABLE "Storage Probe" (id bigint)')
+                connection.execute('INSERT INTO "Storage Probe" VALUES (1), (2)')
                 connection.commit()
                 snapshot = measure_season_storage(connection, SEASON)
+                assert snapshot["tables"]["Storage Probe"]["rows"] == 2
                 assert snapshot["tables"]["player_season_summaries"]["rows"] == 1
                 sequence = snapshot["tables"]["issue82_storage_probe_seq"]
                 assert sequence["relation_kind"] == "S"

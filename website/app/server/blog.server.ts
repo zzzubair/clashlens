@@ -333,6 +333,17 @@ export async function blogOrigin(request: Request): Promise<string> {
   return (await configuredOrigin()) ?? new URL(request.url).origin;
 }
 
+/** The origin the feed's and site map's links use, and how long caches may
+ * keep them: one taken from the request's own address is never kept for others. */
+export async function feedOrigin(
+  request: Request,
+): Promise<{ origin: string; cacheControl: string }> {
+  const configured = await configuredOrigin();
+  return configured === null
+    ? { origin: new URL(request.url).origin, cacheControl: "no-store" }
+    : { origin: configured, cacheControl: "public, max-age=300" };
+}
+
 /** The configured public origin, or null when the site settings cannot be read. */
 async function configuredOrigin(): Promise<string | null> {
   try {

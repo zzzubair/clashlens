@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import uuid4
 
 import psycopg
 import pytest
@@ -17,6 +18,7 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from clashlens import api_overlays, collector_overlays
 from clashlens.api_db import ApiDatabase
 from clashlens.api_http import ApiError
+from clashlens.api_requests import OperationResult, RequestBinding
 from clashlens.collector_db import REVISIT_INTERVAL, CollectorDatabase
 
 # Before 04:55 UTC, so regular checks are open.
@@ -35,6 +37,18 @@ def _players(connection_info: str, *tags: str) -> dict[str, int]:
             )
             for tag in tags
         }
+
+
+def _save(api: ApiDatabase, account_id: int, *, tag: str | None,
+          settings: dict[str, str]) -> OperationResult:
+    """One save from the website, as a new request."""
+    binding = RequestBinding(
+        request_id=str(uuid4()), caller="typescript-website", provider="discord",
+        provider_subject=DISCORD_ID, account_id=account_id, operation="account.update",
+        method="POST", request_target="/v1/account/obs-overlay",
+        identity={"obs_overlay": tag, "settings": settings},
+    )
+    return api_overlays.save_overlay(api, binding, tag=tag, settings=settings)
 
 
 def _as_collector(connection_info: str) -> CollectorDatabase:
@@ -74,16 +88,16 @@ def test_overlay_saves_reads_by_link_and_a_new_link_retires_the_old(database_url
             assert api_overlays.get_overlay(api, mine)["link"] == first["link"]
 
             # Another account's player is never shown.
-            with pytest.raises(ApiError) as refused:
-                api_overlays.save_overlay(api, mine, tag="#8PY", settings={})
-            assert refused.value.status_code == 404
+            refused = _save(api, mine, tag="#8PY", settings={})
+            assert (refused.status_code, refused.payload) == (
+                404, {"error": "player_not_verified"})
 
-            saved = api_overlays.save_overlay(
+            saved = _save(
                 api, mine, tag="#2PP",
                 settings={"w": "1110", "h": "66", "font": "esports", "bg": "glitter",
                           "show": "trophies,rank", "script": "<b>", "x": "-4"},
             )
-            assert saved["version"] == 2
+            assert saved.payload["version"] == 2
             shown = api_overlays.read_link(api, first["link"])
             assert shown == {
                 "kind": "obs-overlay-link",
@@ -134,7 +148,7 @@ def test_an_open_overlays_player_is_checked_first_30_seconds_apart(database_url:
             mine = _account(owner, "discord", DISCORD_ID, "drift")
             _verify(owner, mine, "#2PP")
             link = api_overlays.get_overlay(api, mine)["link"]
-            api_overlays.save_overlay(api, mine, tag="#2PP", settings={})
+            _save(api, mine, tag="#2PP", settings={})
             # Saving alone does not mark it open: only OBS reading the link does.
             assert collector_overlays.players_in_use(collector) == []
             api_overlays.read_link(api, link)
@@ -212,7 +226,7 @@ def test_viewer_presence_moves_with_reads_the_clock_and_new_links(database_url: 
                 # No player chosen: OBS reading the link writes nothing.
                 api_overlays.read_link(api, link)
                 assert state() == ("closed", None)
-                api_overlays.save_overlay(api, mine, tag="#2PP", settings={})
+                _save(api, mine, tag="#2PP", settings={})
                 assert state() == ("closed", None)
                 # CLOSED -> JUST_SEEN on a read.
                 api_overlays.read_link(api, link)
@@ -247,7 +261,7 @@ def test_viewer_presence_moves_with_reads_the_clock_and_new_links(database_url: 
                 api_overlays.read_link(api, new)
                 assert state()[0] == "just_seen"
                 # Choosing no player closes it at once.
-                api_overlays.save_overlay(api, mine, tag=None, settings={})
+                _save(api, mine, tag=None, settings={})
                 assert state()[0] == "closed"
                 assert collector_overlays.players_in_use(collector) == []
         finally:

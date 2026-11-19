@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -80,6 +81,44 @@ def test_invalid_private_proof_has_a_safe_error_envelope() -> None:
 
     assert response.status_code == 401
     assert response.json() == {"error": "invalid_proof"}
+
+
+def _unsigned_get(app, **scope_changes) -> tuple[int, bytes]:
+    """One unsigned GET straight through the app, with request-line bytes a
+    test client would refuse to send."""
+    sent: list[dict] = []
+
+    async def receive() -> dict:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: dict) -> None:
+        sent.append(message)
+
+    scope = {
+        "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+        "method": "GET", "scheme": "http", "root_path": "", "query_string": b"",
+        "path": "/v1/players/#2PP", "raw_path": b"/v1/players/%232PP",
+        "headers": [(b"host", b"testserver")],
+        "client": ("127.0.0.1", 1), "server": ("testserver", 80),
+        **scope_changes,
+    }
+    # None leaves the key out, as a server without it would.
+    scope = {key: value for key, value in scope.items() if value is not None}
+    asyncio.run(app(scope, receive, send))
+    start = next(message for message in sent if message["type"] == "http.response.start")
+    body = b"".join(message.get("body", b"") for message in sent
+                    if message["type"] == "http.response.body")
+    return start["status"], body
+
+
+def test_a_request_line_outside_ascii_is_an_invalid_proof_not_a_failure() -> None:
+    app = _app(FakeDatabase())
+    refused = (401, b'{"error":"invalid_proof"}')
+
+    assert _unsigned_get(app, raw_path=b"/v1/players/\xc3\xa9") == refused
+    assert _unsigned_get(app, raw_path=b"/v1/players/x", query_string="q=é".encode()) == refused
+    # A server that leaves out the raw request line.
+    assert _unsigned_get(app, path="/v1/players/\u00e9", raw_path=None) == refused
 
 
 def test_operator_metrics_are_private_bounded_and_preserve_response_paths(monkeypatch) -> None:

@@ -1,6 +1,10 @@
-FROM python:3.12-slim AS dependencies
+# Base images are pinned by digest; the tag each one was taken from is noted
+# above it. Update both together.
+# python:3.12-slim
+FROM docker.io/library/python@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54 AS dependencies
 
-COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /usr/local/bin/
+# uv 0.13.5
+COPY --from=ghcr.io/astral-sh/uv@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff /uv /uvx /usr/local/bin/
 WORKDIR /opt/clashlens
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 COPY pyproject.toml uv.lock ./
@@ -9,11 +13,13 @@ RUN uv sync --locked --no-dev --no-install-project
 # The Noto fonts the Discord bot's attack alert picture falls back to for
 # names in other scripts, symbols and emoji (src/bot/picture.py): about 34 MB
 # of the packages' few hundred.
-FROM python:3.12-slim AS fonts
+# python:3.12-slim
+FROM docker.io/library/python@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54 AS fonts
 RUN apt-get update \
     && apt-get install -y --no-install-recommends fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji
 
-FROM python:3.12-slim
+# python:3.12-slim
+FROM docker.io/library/python@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54
 
 # FriBiDi lets Pillow lay out text with the website font's features and
 # right-to-left names.

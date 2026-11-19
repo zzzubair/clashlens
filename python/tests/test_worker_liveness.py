@@ -336,3 +336,22 @@ def test_a_worker_process_stuck_before_its_first_job_still_fails_the_health_chec
     exit_code, payload = _ready(_arguments(tmp_path, spool_root=root), capsys)
     assert exit_code == 1
     assert payload["reason"] == "worker_stuck"
+
+
+def test_progress_is_written_only_into_a_folder_no_one_else_can_open(
+    tmp_path, monkeypatch
+) -> None:
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    shared.chmod(0o777)
+    monkeypatch.setattr(worker_liveness, "PROGRESS_FILE", str(shared / "progress"))
+    worker_liveness.ProgressMark()()
+    assert list(shared.iterdir()) == []
+
+    private = tmp_path / "private" / "progress"
+    monkeypatch.setattr(worker_liveness, "PROGRESS_FILE", str(private))
+    worker_liveness.touch_progress_file(1)
+    worker_liveness.ProgressMark()()
+    assert private.parent.stat().st_mode & 0o777 == 0o700
+    assert sorted(path.name for path in private.parent.iterdir()) == ["progress", "progress-1"]
+    assert "MainThread" in json.loads(private.read_text())

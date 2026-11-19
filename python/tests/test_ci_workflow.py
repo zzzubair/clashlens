@@ -416,7 +416,7 @@ def test_website_job_uses_node_24_lockfile_and_browser_acceptance_gate(
             assert call["cwd"] == str(command_workspace[0] / "website")
 
 
-def test_pr_packaging_builds_only_python_and_runs_packaged_tests(
+def test_pr_packaging_audits_builds_and_runs_packaged_tests(
     command_workspace,
 ) -> None:
     job = _workflow()["jobs"]["containers"]
@@ -438,13 +438,43 @@ def test_pr_packaging_builds_only_python_and_runs_packaged_tests(
     assert builds == [
         [
             "build",
+            "--target",
+            "production",
+            "--file",
+            "deploy/postgres/Containerfile",
+            "--tag",
+            "clashlens-postgres:ci",
+            "deploy/postgres",
+        ],
+        [
+            "build",
+            "--file",
+            "deploy/egress-proxy/Containerfile",
+            "--tag",
+            "clashlens-egress-proxy:ci",
+            "deploy/egress-proxy",
+        ],
+        [
+            "build",
             "--file",
             "development/PythonCheck.Containerfile",
             "--tag",
             "clashlens-python-check:ci",
             ".",
-        ]
+        ],
     ]
+    # The packages the services run with are checked against known advisories
+    # before anything is built.
+    requirements = "/tmp/clashlens-runtime-requirements.txt"
+    audit = [call for call in _calls(command_workspace) if call["command"] == "uv"][:2]
+    assert [(call["command"], call["args"]) for call in audit] == [
+        ("uv", ["export", "--locked", "--no-dev", "--no-emit-project", "--format",
+                "requirements-txt", "--output-file", requirements]),
+        ("uv", ["tool", "run", "--from", "pip-audit==2.10.1", "pip-audit", "--strict",
+                "--disable-pip", "--progress-spinner", "off", "--requirement", requirements]),
+    ]
+    assert {call["cwd"] for call in audit} == {str(command_workspace[0] / "python")}
+    assert operations.index(("uv", audit[1]["args"])) < operations.index(("podman", builds[0]))
     assert operations[-2:] == [
         (
             "podman",

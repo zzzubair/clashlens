@@ -89,6 +89,28 @@ def test_link_adds_second_provider_and_resolves_through_both(
             database.close()
 
 
+def test_link_and_unlink_for_a_missing_account_answer_not_found(database_url: str) -> None:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            for change, operation in (
+                (provider_membership.link_provider, "providers.link"),
+                (provider_membership.unlink_provider, "providers.unlink"),
+            ):
+                result = change(database,
+                    binding(subject="d-sub-9", provider="discord", operation=operation),
+                    account_id=999_999,
+                    provider="discord",
+                    provider_subject="d-sub-9",
+                )
+                assert (result.status_code, result.payload) == (
+                    404, {"error": "account_not_found"})
+        finally:
+            database.close()
+
+
 def test_link_refuses_identity_owned_by_another_account(database_url: str) -> None:
     with migrated_production_database(
         database_url, include_compact_collector=True

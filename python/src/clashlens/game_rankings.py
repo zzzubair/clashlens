@@ -23,6 +23,7 @@ import hashlib
 import json
 import os
 import time
+import zlib
 from bisect import bisect_left, bisect_right
 from collections import Counter
 from collections.abc import Callable
@@ -382,9 +383,23 @@ def load_pulls(
         ).fetchall()
     return [
         Pull(row[0], row[1], row[2], row[3],
-             None if row[4] is None else gzip.decompress(row[4]))
+             None if row[4] is None else _gunzip(row[4]))
         for row in rows
     ]
+
+
+# Saved bodies come from answers of at most 4 MiB (collector_http.py).
+_MAX_BODY_BYTES = 4 << 20
+
+
+def _gunzip(saved: bytes) -> bytes:
+    """A saved body unpacked, refused when it would be longer than any
+    answer the collector keeps."""
+    unpacker = zlib.decompressobj(wbits=31)  # gzip framing
+    body = unpacker.decompress(saved, _MAX_BODY_BYTES + 1)
+    if len(body) > _MAX_BODY_BYTES or not unpacker.eof or unpacker.unused_data:
+        raise ValueError("saved ranking body is not one whole kept answer")
+    return body
 
 
 def _latest(pulls: list[Pull], purpose: str, location_id: int | None = None) -> Pull | None:
@@ -422,7 +437,7 @@ def previous_lists(
             """,
             {"before": boundary - _DAY, "not_switched": NOT_SWITCHED, "location": location_id},
         ).fetchall()
-    return {location: read_rows(gzip.decompress(body)) for location, body in rows}
+    return {location: read_rows(_gunzip(body)) for location, body in rows}
 
 
 def _last_try(pulls: list[Pull], purpose: str, location_id: int | None = None) -> datetime | None:
@@ -766,7 +781,7 @@ async def run(collector: Collector, stop_requested: asyncio.Event) -> None:
                 if pruned:
                     print(json.dumps({**event, "status": "pruned", "pulls": pruned}), flush=True)
         except Exception as error:  # noqa: BLE001 - tried again next tick
-            print(json.dumps({**event, "status": "failed", "error": repr(error)[:300]}), flush=True)
+            print(json.dumps({**event, "status": "failed", "error": type(error).__name__}), flush=True)
         try:
             await asyncio.wait_for(stop_requested.wait(), timeout=TICK_SECONDS)
         except TimeoutError:

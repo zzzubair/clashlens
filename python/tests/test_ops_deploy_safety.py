@@ -8,6 +8,7 @@ alerts switched off."""
 
 import configparser
 import os
+import re
 import subprocess
 import sys
 import time
@@ -156,6 +157,19 @@ def test_a_rejected_unit_file_stops_nothing_and_changes_nothing(stack) -> None:
     assert not result.stops
     # Written only into a scratch folder, which is gone again.
     assert not result.rendered and not result.staged
+
+
+def test_the_private_api_is_reachable_only_from_inside_the_pod() -> None:
+    unit = configparser.ConfigParser(interpolation=None, strict=False, allow_no_value=True)
+    unit.optionxform = str
+    unit.read(ROOT / "deploy/quadlet/clashlens-api.container")
+    command = unit["Container"]["Exec"].split()
+    assert command[command.index("--host") + 1] == "127.0.0.1"
+    # Its one caller, the website, shares the pod and its loopback address.
+    assert set(re.findall(r"CLASHLENS_PYTHON_API_URL=(\S+)", OPS.read_text())) == {
+        "http://127.0.0.1:8000"
+    }
+    assert ":8000" not in (ROOT / "deploy/quadlet/clashlens.pod").read_text()
 
 
 @pytest.fixture

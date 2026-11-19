@@ -16,6 +16,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from psycopg import sql
+
 from .archive_retention import RECOVERY_WINDOW_DAYS
 from .domain import SEASON_DAY_COUNT
 from .season_finalization_guard import close_blockers
@@ -44,10 +46,10 @@ _RELKIND_LABELS = {
 }
 
 
-def _application_relations(connection: Any) -> list[tuple[str, str]]:
+def _application_relations(connection: Any) -> list[tuple[str, str, int]]:
     rows = connection.execute(
         """
-        SELECT c.relname, c.relkind
+        SELECT c.relname, c.relkind, c.oid
         FROM pg_class AS c
         JOIN pg_namespace AS n ON n.oid = c.relnamespace
         WHERE n.nspname = current_schema()
@@ -57,7 +59,7 @@ def _application_relations(connection: Any) -> list[tuple[str, str]]:
         """,
         (list(_MIGRATION_RELATIONS),),
     ).fetchall()
-    return [(_text(row[0]), _text(row[1])) for row in rows]
+    return [(_text(row[0]), _text(row[1]), int(row[2])) for row in rows]
 
 
 def _check_season_id(season_id: str) -> str:
@@ -191,7 +193,7 @@ def finalize_season_detail(
         try:
             digest = current_days_digest(connection, player_id, season_id)
         except Exception as error:  # noqa: BLE001 - reported, blocks finalization
-            failures.append({"player_id": player_id, "error": str(error)[:200]})
+            failures.append({"player_id": player_id, "error": type(error).__name__})
             continue
         if digest is None:
             failures.append({"player_id": player_id, "error": "projection_missing"})
@@ -218,7 +220,7 @@ def finalize_season_detail(
                 connection, season_id, lens, recount=True
             )
         except Exception as error:  # noqa: BLE001 - reported, blocks finalization
-            failures.append({"lens": lens, "error": str(error)[:200]})
+            failures.append({"lens": lens, "error": type(error).__name__})
             continue
         for category in sorted(HISTORY_CATEGORIES):
             key = f"{lens}:{category}"
@@ -758,23 +760,23 @@ def measure_season_storage(
     zero cost.
     """
     tables: dict[str, Any] = {}
-    for table, relkind in _application_relations(connection):
+    for table, relkind, oid in _application_relations(connection):
         # Partition parents have no relation file; counting their children
         # again would overstate both rows and allocation. Sequences have
         # allocation but are not queryable as ordinary tables.
         if relkind == "p":
             size = heap = count = 0
         else:
-            size = connection.execute(
-                "SELECT pg_total_relation_size(to_regclass(%s))", (table,)
-            ).fetchone()[0]
-            heap = connection.execute(
-                "SELECT pg_relation_size(to_regclass(%s))", (table,)
-            ).fetchone()[0]
+            size, heap = connection.execute(
+                "SELECT pg_total_relation_size(%s::oid), pg_relation_size(%s::oid)",
+                (oid, oid),
+            ).fetchone()
             count = (
                 0
                 if relkind == "S"
-                else connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+                else connection.execute(
+                    sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table))
+                ).fetchone()[0]
             )
         tables[table] = {
             "relation_kind": relkind,

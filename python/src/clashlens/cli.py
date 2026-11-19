@@ -44,6 +44,7 @@ from .collector_db import CollectorDatabase
 from .collector_http import ApiKey, KeyPool, OfficialApiClient, ProviderFailure
 from .db import CONTRACT_VERSION, Database
 from .hmac_proof import load_secret_file, request_headers
+from .http_transport import NoRedirectHandler
 from .operating import (
     WORKER_SNAPSHOT_INTERVAL_SECONDS,
     WorkerMetrics,
@@ -692,6 +693,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 host=arguments.host,
                 port=arguments.port,
                 log_level=arguments.log_level,
+                # Request lines carry private link and invite codes.
+                access_log=False,
             )
             return 0
         if arguments.command == "probe":
@@ -1370,8 +1373,14 @@ def _run_recover_discord(arguments: argparse.Namespace) -> int:
     return 0 if status == "attached" else 1
 
 
+# The private API never answers more than this (api.py).
+_PROBE_MAX_BYTES = 1024 * 1024
+
+
 def _probe(arguments: argparse.Namespace) -> str:
     target = urlsplit(arguments.url)
+    if target.scheme not in {"http", "https"} or not target.hostname:
+        raise RuntimeError("saved-data probe needs an http or https address")
     raw_target = target.path or "/"
     if target.query:
         raw_target += "?" + target.query
@@ -1382,11 +1391,16 @@ def _probe(arguments: argparse.Namespace) -> str:
         request_id=str(uuid4()),
     )
     request = urllib.request.Request(arguments.url, headers=headers, method="GET")
+    # Straight to the address given: no proxy from the environment, no redirect.
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}), NoRedirectHandler()
+    )
     try:
-        with urllib.request.urlopen(
-            request, timeout=arguments.timeout_seconds
-        ) as response:
-            return response.read().decode("utf-8")
+        with opener.open(request, timeout=arguments.timeout_seconds) as response:
+            body = response.read(_PROBE_MAX_BYTES + 1)
+        if len(body) > _PROBE_MAX_BYTES:
+            raise RuntimeError("saved-data probe answer is too large")
+        return body.decode("utf-8")
     except (OSError, UnicodeDecodeError) as error:
         raise RuntimeError("saved-data probe failed") from error
 

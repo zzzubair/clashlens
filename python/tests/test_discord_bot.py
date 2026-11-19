@@ -274,6 +274,20 @@ def test_player_names_cannot_ping_or_add_formatting(store) -> None:
     assert not (mentions.everyone or mentions.users or mentions.roles)
 
 
+def test_player_names_cannot_become_links_or_timestamps(store) -> None:
+    store.connect(ME, [card("#2PP", "Drift", 5842), card("#8QQ", "Lens", 5100)])
+    store.pages["#2PP"] = page("#2PP", "https://x.example discord.gg/abc <t:1:R>", [])
+    store.pages["#8QQ"] = page("#8QQ", " \t ", [])
+    title = run_command(store, "stats", FakeInteraction(), player="#2PP")["text"].split("\n")[0]
+    for live in ("://", "discord.gg/", "<t:"):
+        assert live not in title
+    assert title.replace("\u200b", "") == "### https://x.example discord.gg/abc <t:1:R> #2PP"
+    blank = run_command(store, "stats", FakeInteraction(), player="#8QQ")["text"]
+    assert blank.startswith("### Unnamed #8QQ")
+    typed = run_command(store, "stats", FakeInteraction(), player="x" * 500)["text"]
+    assert len(typed) < 200
+
+
 def test_a_default_player_no_longer_verified_gives_way_to_the_first(store) -> None:
     store.connect(ME, [card("#2PP", "Drift", 5842), card("#8QQ", "Lens", 5100)])
     store.mains[1] = "#8QQ"

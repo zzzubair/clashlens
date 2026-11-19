@@ -1,5 +1,5 @@
 vi.mock("../../app/server/public-origin.server", () => ({
-  getPublicOrigin: () => new URL("https://clashlens.example"),
+  getPublicOrigin: () => mocks.getPublicOrigin(),
 }));
 import {
   mkdir,
@@ -26,6 +26,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 
 const mocks = vi.hoisted(() => ({
   readLoginIdentity: vi.fn(),
+  getPublicOrigin: vi.fn(),
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -103,6 +104,7 @@ function signIn(identity: typeof OWNER | null) {
 beforeEach(() => {
   vi.stubEnv("CLASHLENS_BLOG_DIR", FIXTURE_DIR);
   vi.stubEnv("CLASHLENS_BLOG_OWNER", "discord:123, google:owner-subject");
+  mocks.getPublicOrigin.mockReturnValue(new URL("https://clashlens.example"));
   signIn(null);
 });
 
@@ -470,6 +472,28 @@ describe("blog feed", () => {
     expect(xml).toContain("<pubDate>Sun, 20 Sep 2026 00:00:00 GMT</pubDate>");
     expect(xml).toContain("<dc:creator>Clash Lens</dc:creator>");
     expect(xml).toContain(`<atom:link href="${ORIGIN}/blog/rss.xml" rel="self"`);
+  });
+
+  it("is kept by caches only when its links use the configured origin", async () => {
+    const read = async (loader: typeof feedLoader | typeof sitemapLoader, path: string) =>
+      (await (loader as typeof feedLoader)({
+        request: new Request(`http://other.example${path}`),
+      } as Parameters<typeof feedLoader>[0])) as Response;
+    for (const [loader, path] of [
+      [feedLoader, "/blog/rss.xml"],
+      [sitemapLoader, "/sitemap.xml"],
+    ] as const) {
+      mocks.getPublicOrigin.mockReturnValue(new URL(ORIGIN));
+      const configured = await read(loader, path);
+      expect(configured.headers.get("Cache-Control")).toBe("public, max-age=300");
+      expect(await configured.text()).not.toContain("other.example");
+      mocks.getPublicOrigin.mockImplementation(() => {
+        throw new Error("CLASHLENS_PUBLIC_ORIGIN is not set");
+      });
+      const fallback = await read(loader, path);
+      expect(fallback.headers.get("Cache-Control")).toBe("no-store");
+      expect(await fallback.text()).toContain("http://other.example/");
+    }
   });
 
   it("escapes text and stays valid with no posts", () => {

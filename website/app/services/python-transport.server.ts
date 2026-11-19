@@ -64,6 +64,12 @@ export async function requestJsonRaw(
   }: PythonRequestOptions,
 ): Promise<{ status: number; payload: unknown }> {
   const config = getConfig();
+  const url = new URL(target, config.baseUrl);
+  // The address fetched must be the one signed: no "." or ".." segments
+  // folded away on the way.
+  if (url.pathname !== target.split("?", 1)[0]) {
+    throw new PythonApiError(400, { error: "invalid_input" });
+  }
   const proof = createProofHeaders({
     key: config.key,
     caller: config.caller,
@@ -79,7 +85,7 @@ export async function requestJsonRaw(
   let response: Response | undefined;
   let payload: unknown;
   try {
-    response = await fetch(new URL(target, config.baseUrl), {
+    response = await fetch(url, {
       method,
       headers: {
         ...proof.headers,

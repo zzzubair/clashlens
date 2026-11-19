@@ -1,4 +1,7 @@
-FROM docker.io/library/node:24.22.1-bookworm-slim AS build
+# Base images are pinned by digest; the tag each one was taken from is noted
+# above it. Update both together.
+# node:24.22.1-bookworm-slim
+FROM docker.io/library/node@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c AS build
 
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -19,7 +22,8 @@ RUN npx playwright install --with-deps chromium webkit
 ENV CLASHLENS_E2E_EXTERNAL_STACK=1
 CMD ["sh", "-c", "npm test && npm run build:verify && npx playwright test"]
 
-FROM docker.io/library/node:24.22.1-bookworm-slim AS runtime
+# node:24.22.1-bookworm-slim
+FROM docker.io/library/node@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c AS runtime
 
 ENV NODE_ENV=production \
     CLASHLENS_PYTHON_HMAC_SECRET_FILE=/run/secrets/clashlens-python-hmac

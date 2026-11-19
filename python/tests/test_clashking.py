@@ -207,6 +207,40 @@ def test_at_most_two_requests_run_at_once() -> None:
     assert client.try_acquire()
 
 
+def test_requests_go_straight_out_whatever_proxy_the_environment_names(monkeypatch) -> None:
+    servers: dict[str, list[str]] = {"target": [], "proxy": []}
+
+    def recorder(name: str) -> ThreadingHTTPServer:
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def do_GET(self):
+                servers[name].append(self.path)
+                self.send_response(200)
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        return server
+
+    target, proxy = recorder("target"), recorder("proxy")
+    try:
+        for name in ("http_proxy", "HTTP_PROXY"):
+            monkeypatch.setenv(name, f"http://127.0.0.1:{proxy.server_port}")
+        for name in ("no_proxy", "NO_PROXY"):
+            monkeypatch.delenv(name, raising=False)
+        url = f"http://127.0.0.1:{target.server_port}/legend-history"
+        assert _urllib_transport(url, 2.0)[0] == 200
+    finally:
+        for server in (target, proxy):
+            server.shutdown()
+            server.server_close()
+    assert servers == {"target": ["/legend-history"], "proxy": []}
+
+
 def test_redirects_are_not_followed() -> None:
     paths: list[str] = []
 

@@ -22,6 +22,8 @@ def test_support_transfer_is_a_restricted_host_wrapper() -> None:
     assert "CLASHLENS_DATABASE_URL" not in text
     assert "token" not in text.lower()
     assert re.search(r"(?<!SUDO_)\$\{?USER\b", text) is None
+    # A stuck database answers unavailable within seconds, as replay-request does.
+    assert "PGOPTIONS='-c statement_timeout=10000 -c lock_timeout=10000'" in text
 
     shell = shutil.which("bash")
     assert shell is not None

@@ -2,18 +2,23 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from pathlib import Path
 
 import pytest
 
+from bot.__main__ import ConfigError, read_token
 from clashlens.hmac_proof import (
     InvalidProof,
     SigningInput,
     build_signing_bytes,
+    load_secret_file,
     request_headers,
     sign,
     verify_proof,
 )
+from clashlens.runtime import file_value
+from clashlens.verification import load_official_api_key_file
 
 VECTORS_PATH = (
     Path(__file__).resolve().parents[2] / "testdata" / "private-api-hmac-v1.json"
@@ -176,3 +181,33 @@ def test_request_headers_verify_against_shared_vectors() -> None:
             now=int(vector["issued_at"]),
         )
         assert proof.caller == caller
+
+
+def test_secret_files_are_read_only_as_short_regular_files(tmp_path: Path) -> None:
+    secret = base64.urlsafe_b64encode(bytes(range(32))).rstrip(b"=") + b"\n"
+    readers = {
+        "hmac": (load_secret_file, secret, ValueError),
+        "official": (load_official_api_key_file, b"official-key\n", ValueError),
+        "url": (lambda path: file_value(str(path), "", "database URL"),
+                b"postgresql://db/clashlens\n", ValueError),
+        "token": (read_token, b"bot-token\n", ConfigError),
+    }
+    for name, (read, value, refused) in readers.items():
+        real = tmp_path / f"{name}.real"
+        real.write_bytes(value)
+        assert read(str(real))
+        link = tmp_path / f"{name}.link"
+        link.symlink_to(real)
+        with pytest.raises(refused):
+            read(str(link))
+        long = tmp_path / f"{name}.long"
+        long.write_bytes(value + b"#" * 8192)
+        with pytest.raises(refused):
+            read(str(long))
+        with pytest.raises(refused):
+            read(str(tmp_path))
+        # A pipe nothing writes to is refused at once, not waited on.
+        pipe = tmp_path / f"{name}.pipe"
+        os.mkfifo(pipe)
+        with pytest.raises(refused):
+            read(str(pipe))

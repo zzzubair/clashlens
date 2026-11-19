@@ -42,8 +42,8 @@ from .api_http import (
     authorize,
     json_safe,
     operation_response,
+    raw_request_target,
     request_binding,
-    request_target,
     safe_tag,
     safe_uuid,
 )
@@ -254,7 +254,7 @@ def create_app(
                 proof = verify_proof(
                     headers=request.scope.get("headers", []),
                     method=request.method,
-                    raw_target=request_target(request).encode("ascii"),
+                    raw_target=raw_request_target(request),
                     body=body,
                     keys=keys,
                     now=int(clock()),
