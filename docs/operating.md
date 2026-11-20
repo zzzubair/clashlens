@@ -1100,6 +1100,16 @@ back to the earlier code, follow the
 [rollback](deployment.md#existing-service-lifecycle) steps; never reverse a
 migration.
 
+PostgreSQL and the one-off containers (`failed-items`, `archive-prune`,
+`history-prune` and the fixture's player setup) run with only the system
+privileges they need and cannot change their image's files: PostgreSQL writes its data volume,
+`/tmp` and `/run/postgresql`, the others their mounts and `/tmp`. If one of them
+fails with `Operation not permitted`, `Permission denied` or `Read-only file
+system`, roll back those settings: revert the container lines in
+`deploy/quadlet/clashlens-postgres.container` and `run_once` in `./ops`, then
+`./ops build` and `./ops up` (both with `--fixture` for the fixture). The
+database's data stays in its volume either way.
+
 **Recovered:** 15 minutes after an `./ops up` succeeds.
 
 ### Untracked Legend I battlers
