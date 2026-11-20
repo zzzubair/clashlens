@@ -121,7 +121,7 @@ def _report(
 
 def _saved_day(
     connection, player_id: int, day: datetime, season: str = SEASON, version: int = 1,
-    rule: str = RECONCILIATION_RULE_VERSION,
+    rule: str = RECONCILIATION_RULE_VERSION, confidence: str = "exact",
 ) -> None:
     """Save a day result built, as reconciliation does, from the newest
     saved result of the day before."""
@@ -133,7 +133,7 @@ def _saved_day(
             reconciliation_rule_version, result_hash, version, state, confidence,
             input_hash, evidence_complete, coverage_complete, input_evidence
         ) VALUES (%s, %s, %s, %s, 1, 'legend-season-anchor-v1', %s, %s, %s,
-                  'Complete', 'exact', %s, true, true,
+                  'Complete', %s, %s, true, true,
                   jsonb_build_object('previous_day', jsonb_build_object('version_id', (
                       SELECT id FROM ranked_day_versions
                       WHERE player_id = %s AND ranked_day_start = %s
@@ -141,7 +141,7 @@ def _saved_day(
                   ))))
         """,
         (player_id, day, day + DAY, season, rule,
-         f"{version:x}" * 64, version, "a" * 64, player_id, day - DAY),
+         f"{version:x}" * 64, version, confidence, "a" * 64, player_id, day - DAY),
     )
 
 
@@ -549,7 +549,7 @@ def test_campaign_keeps_days_a_finished_fix_left_stale(database_url: str) -> Non
                 (moved, opponent, day3, day2, evidence_id),
             )
             # Both moved days already show the move, but day 4 was built
-            # from day 3's result before the move was rebuilt.
+            # from day 3's result before the move was rebuilt, which differs.
             for day, battles in ((day2, [{"source_evidence_id": evidence_id}]), (day3, [])):
                 connection.execute(
                     "INSERT INTO api_player_daily_logs (player_id, ranked_day_start,"
@@ -559,7 +559,7 @@ def test_campaign_keeps_days_a_finished_fix_left_stale(database_url: str) -> Non
                 )
             for day in (day2, day3, day4, day5):
                 _saved_day(connection, moved, day)
-            _saved_day(connection, moved, day3, version=2)
+            _saved_day(connection, moved, day3, version=2, confidence="inferred")
             # A 2-star/55% report already read again under the new payout,
             # whose saved day still counts the old one.
             _report(connection, paid, opponent, day2, rule=TROPHY_ALLOCATION_RULE_VERSION)

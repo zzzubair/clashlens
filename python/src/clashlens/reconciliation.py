@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 from typing import Any
@@ -106,7 +106,6 @@ class PreviousRankedDay:
     ranked_day_start: datetime | None = None
     state: str | None = None
     confidence: str | None = None
-    input_hash: str | None = None
     # The automatic defense loss that day's Reset reading had not yet applied
     # (see ``_settled_start``), and the Reset evidence the reading came from.
     unsettled_automatic_loss: int = 0
@@ -1376,31 +1375,37 @@ def _input_evidence(
 
 
 def _previous_day_evidence(previous: PreviousRankedDay | None) -> dict[str, Any] | None:
+    """Every value the calculation reads from the day before, and the saved
+    result it read them from."""
     if previous is None:
         return None
-    evidence: dict[str, Any] = {
-        "complete": previous.complete,
-        "observed_defense_count": previous.observed_defense_count,
-        "observed_defense_loss": previous.observed_defense_loss,
-        "shield_run_length": previous.shield_run_length,
-        "coverage_complete": previous.coverage_complete,
-        "shield_state": previous.shield_state,
-        "version_id": previous.version_id,
-        "ranked_day_start": (
-            previous.ranked_day_start.isoformat()
-            if previous.ranked_day_start is not None
-            else None
-        ),
-        "state": previous.state,
-        "confidence": previous.confidence,
-        "input_hash": previous.input_hash,
-    }
-    if previous.unsettled_automatic_loss:
-        evidence["unsettled_automatic_loss"] = previous.unsettled_automatic_loss
-        evidence["end_baseline_id"] = previous.end_baseline_id
-    if previous.zero_result_defense_slots:
-        evidence["zero_result_defense_slots"] = previous.zero_result_defense_slots
-    if previous.reset_reading_correction:
-        evidence["reset_reading_correction"] = previous.reset_reading_correction
-        evidence["end_baseline_id"] = previous.end_baseline_id
+    evidence = asdict(previous)
+    if previous.ranked_day_start is not None:
+        evidence["ranked_day_start"] = previous.ranked_day_start.isoformat()
     return evidence
+
+
+# Where a battle's saved report came from: the poll that saved it and when.
+_POLL_KEYS = frozenset({"source_observation_id", "source_observed_at"})
+
+
+def fingerprint(evidence: Mapping[str, Any]) -> dict[str, Any]:
+    """The part of a day's input evidence its saved result's hash covers.
+
+    Saved with the result but left out: which saved result of the day before
+    the values came from, which poll saved each battle's report, and the
+    battle logs that covered the day. A result worked out again from another
+    saved result of the day before holding the same values, or from more logs
+    showing the same battles, decides the same, so it is not saved again; the
+    logs' gaps count through the result's own failure reasons."""
+    covered = {key: value for key, value in evidence.items() if key != "coverage_observations"}
+    if covered.get("previous_day") is not None:
+        covered["previous_day"] = {
+            key: value for key, value in covered["previous_day"].items() if key != "version_id"}
+    covered["start_baseline_evidence"] = {
+        key: value for key, value in (covered.get("start_baseline_evidence") or {}).items()
+        if key != "previous_day_version_id"}
+    covered["contributions"] = [
+        {key: value for key, value in battle.items() if key not in _POLL_KEYS}
+        for battle in covered.get("contributions") or ()]
+    return covered

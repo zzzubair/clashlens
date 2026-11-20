@@ -29,6 +29,7 @@ from .job_contracts import (
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
 )
+from .ranked_day_inputs import PREVIOUS_DAY_VALUES
 from .reconciliation import RECONCILIATION_RULE_VERSION
 
 # First check 30 minutes after the Reset, then every 10 minutes until every
@@ -128,15 +129,17 @@ ORDER BY pair.player_id, pair.ranked_day_start
 """
 
 # A saved day in the window, or today's saved day, whose latest result was
-# built from an older version of the previous day than the one now current,
-# for example after a rolled-back correction whose first day an existing job
-# then recalculated. Saved days are read player by player, so only the window
-# is read however many days are kept. A day's version numbers are unique. Each
-# latest result is looked up, one at a time, by its version number joined to
-# the previous day's version it should have been built from: that pair is
-# indexed, so no result's stored input is unpacked, and no other index can
-# answer the lookup.
-_OUTDATED_DAYS = """
+# built from values of the previous day other than the current result's, for
+# example after a rolled-back correction whose first day an existing job then
+# recalculated. Saved days are read player by player, so only the window is
+# read however many days are kept. A day's version numbers are unique. Each
+# latest result is first looked up by its version number joined to the
+# previous day's current result: that pair is indexed, so a result built from
+# the current one is found without unpacking its stored input. Only a result
+# built from another one, as any result kept because the day before was saved
+# again with the same values, has the result it was built from read and
+# compared with the current one (``ranked_day_inputs.PREVIOUS_DAY_VALUES``).
+_OUTDATED_DAYS = f"""
 SELECT player.id, saved.ranked_day_start
 FROM players AS player
 CROSS JOIN LATERAL (
@@ -174,7 +177,20 @@ LEFT JOIN LATERAL (
           = built.version::text || ':' || previous.id::text
     LIMIT 1
 ) AS built_from ON true
-WHERE built_from.current IS NULL
+-- CASE reads the values only when the indexed match failed.
+WHERE CASE WHEN built_from.current IS NULL THEN (
+      SELECT ROW({PREVIOUS_DAY_VALUES}) FROM ranked_day_versions
+      WHERE id = (
+          SELECT (version.input_evidence -> 'previous_day' ->> 'version_id')::bigint
+          FROM ranked_day_versions AS version
+          WHERE version.player_id = player.id
+            AND version.ranked_day_start = saved.ranked_day_start
+            AND version.reconciliation_rule_version = %(rule)s
+            AND version.version = built.version
+      )
+  ) IS DISTINCT FROM (
+      SELECT ROW({PREVIOUS_DAY_VALUES}) FROM ranked_day_versions WHERE id = previous.id
+  ) ELSE false END
 """
 
 

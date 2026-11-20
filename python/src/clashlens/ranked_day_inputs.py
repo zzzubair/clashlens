@@ -292,31 +292,28 @@ def load_contributions(
     )
 
 
+# Everything a day's calculation reads from the day before's saved result:
+# results that hold the same values give the next day the same inputs
+# (``late_battle_sweep``, ``domain_repair``).
+PREVIOUS_DAY_VALUES = """
+    state, confidence, defense_count, observed_defense_loss, coverage_complete,
+    shield_state, shield_duration_days, end_baseline_id,
+    COALESCE((formula_components ->> 'unsettled_automatic_loss')::int, 0),
+    COALESCE((input_evidence ->> 'zero_result_defense_slots')::int, 0),
+    COALESCE((formula_components ->> 'next_start_reading_correction')::int, 0),
+    expected_next_start_trophies, failure_reasons,
+    COALESCE(automatic_defense_loss, 0), final_trophies_before_reset,
+    automatic_defense_evidence_state
+"""
+
+
 def load_previous_day(
     connection: Any, player_id: int, ranked_day: RankedDay
 ) -> PreviousRankedDay | None:
     """The latest saved calculation of the day before, under the current rule."""
     previous_row = connection.execute(
-        """
-        SELECT
-            id,
-            state,
-            confidence,
-            defense_count,
-            observed_defense_loss,
-            coverage_complete,
-            shield_state,
-            shield_duration_days,
-            input_hash,
-            end_baseline_id,
-            COALESCE((formula_components ->> 'unsettled_automatic_loss')::int, 0),
-            COALESCE((input_evidence ->> 'zero_result_defense_slots')::int, 0),
-            COALESCE((formula_components ->> 'next_start_reading_correction')::int, 0),
-            expected_next_start_trophies,
-            failure_reasons,
-            COALESCE(automatic_defense_loss, 0),
-            final_trophies_before_reset,
-            automatic_defense_evidence_state
+        f"""
+        SELECT id, {PREVIOUS_DAY_VALUES}
         FROM ranked_day_versions
         WHERE player_id = %s AND ranked_day_start = %s
           AND reconciliation_rule_version = %s
@@ -331,7 +328,7 @@ def load_previous_day(
     ).fetchone()
     if previous_row is None:
         return None
-    reasons = previous_row[14] if isinstance(previous_row[14], list) else []
+    reasons = previous_row[13] if isinstance(previous_row[13], list) else []
     state = text_value(previous_row[1])
     # Continuous logs, a saved Legend day, no 9th attack or defense and no
     # disputed battle: every battle of that day is known, whether or not its
@@ -347,9 +344,9 @@ def load_previous_day(
     # slots of a day with none used or on a first Legend day with fewer
     # attacks than defenses, leaves an end no reading settled unable to start
     # the next day, as does a reading that disagreed.
-    slots = int(previous_row[3]) + int(previous_row[11])
+    slots = int(previous_row[3]) + int(previous_row[10])
     end_known = battles_known and (state == "Complete" or state == "Partial" and 0 < slots and not (
-        slots < MAX_DAILY_DEFENSES and text_value(previous_row[17]) == "not_applicable"))
+        slots < MAX_DAILY_DEFENSES and text_value(previous_row[16]) == "not_applicable"))
     return (
         PreviousRankedDay(
             complete=state == "Complete" and bool(previous_row[5]),
@@ -363,24 +360,19 @@ def load_previous_day(
             ranked_day_start=ranked_day.start - timedelta(days=1),
             state=state,
             confidence=text_value(previous_row[2]),
-            input_hash=(
-                text_value(previous_row[8])
-                if previous_row[8] is not None
-                else None
-            ),
             end_baseline_id=(
-                int(previous_row[9]) if previous_row[9] is not None else None
+                int(previous_row[8]) if previous_row[8] is not None else None
             ),
-            unsettled_automatic_loss=int(previous_row[10]),
-            zero_result_defense_slots=int(previous_row[11]),
-            reset_reading_correction=int(previous_row[12]),
-            automatic_loss=int(previous_row[15]),
+            unsettled_automatic_loss=int(previous_row[9]),
+            zero_result_defense_slots=int(previous_row[10]),
+            reset_reading_correction=int(previous_row[11]),
+            automatic_loss=int(previous_row[14]),
             final_trophies=(
-                int(previous_row[16]) if previous_row[16] is not None else None
+                int(previous_row[15]) if previous_row[15] is not None else None
             ),
             expected_next_start=(
-                int(previous_row[13])
-                if end_known and previous_row[13] is not None
+                int(previous_row[12])
+                if end_known and previous_row[12] is not None
                 else None
             ),
             battles_known=battles_known,
