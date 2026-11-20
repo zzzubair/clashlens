@@ -18,6 +18,7 @@ from reset_scenarios_postgres_support import (
     SEASON,
     Battle,
     _ranked,
+    _results,
     _story,
     attacks,
     day,
@@ -42,10 +43,11 @@ def test_a_day_saved_again_rebuilds_only_what_its_row_changes(
 
     - The 05:30 proof changes UNPROVEN's mark, not its battles: the board is
       rebuilt once, its army records are kept.
-    - SAVED_AGAIN is read at 5,000 five more times, an hour apart, and
-      CONTRADICTED at 4,963 once, 37 lower than any automatic loss the rule
-      expects, which makes its day Inconsistent. Each reading saves a day
-      again with the same Reset total and mark: nothing is rebuilt.
+    - SAVED_AGAIN is read at 5,000 five more times, an hour apart: its
+      Reset reading still decides its day, so no result is saved again.
+      CONTRADICTED is read at 4,963 once, 37 lower than any automatic loss
+      the rule expects, which makes its day Inconsistent with the same Reset
+      total and mark: nothing is rebuilt.
     - SAVED_AGAIN's attack for 30 at 04:58 first shows in its battle log at
       13:01: its Reset total moves to 5,030, and the board and its army
       records are rebuilt exactly once more."""
@@ -83,8 +85,8 @@ def test_a_day_saved_again_rebuilds_only_what_its_row_changes(
                    UNPROVEN: (5030, "uncertain")}
     board = {**first_board, UNPROVEN: (5030, "confirmed")}
     entries, versions, results, contradicted = saved_again
-    # Each reading saved a day again.
-    assert (results, contradicted) == (5, "Inconsistent")
+    # A later reading of a proven day saves no new result.
+    assert (results, contradicted) == (0, "Inconsistent")
     # Published (boards, army records): UNPROVEN's mark changed, its battles
     # did not, so a new board and the same armies. The days saved again
     # change nothing. A late battle changes both.
@@ -111,16 +113,3 @@ def _versions(connection_info: str, boundary: datetime) -> tuple[int, int]:
             """,
             (boundary,),
         ).fetchone()
-
-
-def _results(connection_info: str, start: datetime, tag: str) -> int:
-    """How many results the player's day from ``start`` has saved."""
-    with psycopg.connect(connection_info) as connection:
-        return connection.execute(
-            """
-            SELECT count(*) FROM ranked_day_versions AS day
-            JOIN players AS player ON player.id = day.player_id
-            WHERE day.ranked_day_start = %s AND player.normalized_tag = %s
-            """,
-            (start, tag),
-        ).fetchone()[0]

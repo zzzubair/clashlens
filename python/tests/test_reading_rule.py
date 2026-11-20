@@ -81,7 +81,8 @@ def test_a_reading_short_of_some_attack_gains_waits_for_a_later_match() -> None:
 
     assert (result.outcome, result.exact, result.clean) == ("verified", True, True)
     assert result.reading is not None and result.reading.read_at == at(20)
-    assert result.lagged == ("attack-1",)
+    # The lag decided nothing, so the saved result does not record it.
+    assert result.lagged == ()
     # Alone, it confirms nothing and contradicts nothing.
     alone = verdict(Reading(at(2), 5920, reset_reading=True))
     assert (alone.outcome, alone.lagged) == ("unverified", ("attack-1",))
@@ -100,16 +101,19 @@ def test_only_the_latest_attacks_can_lag() -> None:
     # The profile catches up when the player stops attacking, so it can lack
     # the +35 attack at 09:00, or both, but not the earlier +20 alone.
     day = (*DAY_BATTLES, Effect("attack-2", 35, RESET - timedelta(hours=20)))
-    lag_35 = verdict(Reading(at(2), 5940, reset_reading=True), Reading(at(20), 5905),
-                     day=day, end=5975)
-    lag_55 = verdict(Reading(at(2), 5920, reset_reading=True), Reading(at(20), 5905),
-                     day=day, end=5975)
+    lag_35 = verdict(Reading(at(2), 5940, reset_reading=True), day=day, end=5975)
+    lag_55 = verdict(Reading(at(2), 5920, reset_reading=True), day=day, end=5975)
     earlier = verdict(Reading(at(2), 5955, reset_reading=True), Reading(at(20), 5905),
                       day=day, end=5975)
 
-    assert (lag_35.outcome, lag_35.lagged) == ("verified", ("attack-2",))
-    assert (lag_55.outcome, lag_55.lagged) == ("verified", ("attack-1", "attack-2"))
+    assert (lag_35.outcome, lag_35.lagged) == ("unverified", ("attack-2",))
+    assert (lag_55.outcome, lag_55.lagged) == ("unverified", ("attack-1", "attack-2"))
     assert (earlier.outcome, earlier.residual) == ("contradicted", 50)
+    # A later reading showing the loss proves the day either way.
+    for lagging in (5940, 5920):
+        later = verdict(Reading(at(2), lagging, reset_reading=True), Reading(at(20), 5905),
+                        day=day, end=5975)
+        assert (later.outcome, later.exact, later.lagged) == ("verified", True, ())
 
 
 def test_a_reading_equal_to_an_earlier_point_of_the_timeline_is_set_aside() -> None:
@@ -499,6 +503,36 @@ def test_a_late_credit_for_a_new_day_attack_is_the_lag_not_a_disagreement() -> N
     result = verdict(Reading(at(30), 5870), new_day=new_day)
 
     assert (result.outcome, result.lagged) == ("unverified", ("next-attack",))
+
+
+def test_the_first_clean_match_showing_the_final_loss_decides() -> None:
+    # 05:02 proves the end before the loss; 05:20 and 05:40 both show it
+    # landed. The 05:20 one decides, and the 05:40 one moves nothing.
+    readings = (Reading(at(2), 5940, reset_reading=True), Reading(at(20), 5870))
+    result = verdict(*readings)
+
+    assert (result.outcome, result.reading, result.loss) == ("verified", readings[1], LOSS)
+    assert verdict(*readings, Reading(at(40), 5870)) == result
+
+
+def test_a_later_lag_of_new_day_attacks_after_the_guess_leaves_it_standing() -> None:
+    # As #20GCYC90Q on 10 November 2026: the 05:04 reading shows the day's
+    # end with a new-day defense of 10 from 05:01 in flight, a guess. Three
+    # new-day attacks of 30 from 05:20 land, and a 05:45 reading, the loss
+    # landed, still lacks their 90: it says nothing of the guess.
+    defense = Effect("next-defense", -10, at(1))
+    new_day = (defense, *(Effect(f"next-attack-{n}", 30, at(20 + 5 * n)) for n in range(3)))
+    guess = Reading(at(4), 5940)
+    result = verdict(guess, Reading(at(45), 5860), new_day=new_day)
+
+    assert (result.outcome, result.reading, result.exact, result.lagged) == (
+        "verified", guess, False, ())
+    # One stamped before the guess was read may be missing from it too: the
+    # guess at 05:15 read an attack of 30 from 05:12, in flight, as not shown.
+    early = (replace(new_day[1], lands_from=at(12)),)
+    held = verdict(Reading(at(15), 5940), Reading(at(45), 5870), new_day=early)
+    assert (held.outcome, held.lagged) == ("unverified", ("next-attack-0",))
+    assert held.reading is not None and held.reading.read_at == at(45)
 
 
 def test_readings_before_and_after_a_loss_both_confirm_across_the_weekly_raise() -> None:
