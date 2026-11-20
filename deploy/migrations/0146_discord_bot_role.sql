@@ -8,7 +8,8 @@
 -- Crews, overlay links or alert switches.
 -- ./ops gives the role a fresh password and login on every production `up`,
 -- as it does for finished-job cleanup (migration 0053); here it cannot log in.
--- Nothing is stored or rewritten, and running it again changes nothing.
+-- Nothing is stored or rewritten. ./ops applies it once; run again by hand,
+-- it changes nothing but the login, which the next `up` gives back.
 BEGIN;
 
 DO $$
