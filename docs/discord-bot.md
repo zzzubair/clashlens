@@ -66,13 +66,15 @@ login while the missing grant is fixed:
    change `Secret=clashlens-discord-bot-database-url,` to
    `Secret=clashlens-api-database-url,` (the rest of the line stays).
 2. `systemctl --user daemon-reload && systemctl --user restart clashlens-discord-bot.service`
-3. `./ops logs discord-bot` shows `connected to Discord as application …`
-   and no `permission denied`.
+3. Run `/stats` and `/alerts` in Discord, then check
+   `./ops logs discord-bot --since "5 min ago"` shows no `permission denied`.
 
 The next `./ops up` writes the unit from the repository again, so the lasting
-fix is a migration with the missing grant, or reverting this change in the
-repository before that `up`. The role and its grants can stay: nothing else
-logs in as it.
+fix is a migration with the missing grant, or the same one-line change to
+[`clashlens-discord-bot.container`](../deploy/quadlet/clashlens-discord-bot.container)
+in the repository, deployed with `./ops build` and `./ops up`. Keep migration
+0146 in place: `up` refuses a release missing a migration the database already
+has. The role and its grants can stay; nothing else logs in as it.
 
 ## How messages look
 

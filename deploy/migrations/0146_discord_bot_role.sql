@@ -37,8 +37,6 @@ GRANT SELECT ON TABLE
     player_season_summaries, live_unplayed_profiles, live_attack_tallies,
     leaderboard_snapshots, leaderboard_snapshot_entries,
     boundary_publication_generations, boundary_publication_generation_members,
-    boundary_publication_manifests, boundary_publication_manifest_rows,
-    api_frozen_leaderboards, api_frozen_leaderboard_entries,
     collector_work, python_processing_jobs
     TO clashlens_discord_bot;
 GRANT SELECT (scope, identity_key, endpoint, last_observation_id, last_success_at,

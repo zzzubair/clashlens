@@ -455,10 +455,9 @@ def test_privileged_functions_pin_search_path_with_pg_temp_last(database_url: st
 
 # What the Discord bot's code reads, and the two logs it writes.
 BOT_READS = {
-    "account_default_players", "account_provider_identities", "api_frozen_leaderboard_entries",
-    "api_frozen_leaderboards", "api_player_daily_logs", "boundary_publication_generation_members",
-    "boundary_publication_generations", "boundary_publication_manifest_rows",
-    "boundary_publication_manifests", "clash_lens_accounts", "collector_response_state",
+    "account_default_players", "account_provider_identities", "api_player_daily_logs",
+    "boundary_publication_generation_members", "boundary_publication_generations",
+    "clash_lens_accounts", "collector_response_state",
     "collector_work", "discord_alert_dark_picture", "discord_attack_alerts",
     "discord_day_summary_on", "leaderboard_snapshot_entries", "leaderboard_snapshots",
     "league_week_dirty", "live_attack_tallies", "live_unplayed_profiles",
