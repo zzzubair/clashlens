@@ -74,6 +74,8 @@ class Battle:
     legend: bool = True
     opponent: bool = True
     army: str | None = None
+    # The opponent's name as the game shows it, which they can change.
+    opponent_name: str = "Opponent"
 
 
 def attacks(start: datetime, *amounts: int, army: str | None = None) -> list[Battle]:
@@ -138,7 +140,7 @@ class Player:
                 "battleTimestamp": battle.at.strftime("%Y%m%dT%H%M%S.000Z"),
                 "stars": stars, "destructionPercentage": destruction,
                 "opponentPlayerTag": f"#{_tag(index + 1)}",
-                "opponentName": "Opponent",
+                "opponentName": battle.opponent_name,
             })
             if not battle.opponent:
                 items[-1].update(opponentPlayerTag=None, battleTime=0)

@@ -50,6 +50,7 @@ from .reconciliation import (
     BattleContribution,
     ReconciliationInput,
     ReconciliationResult,
+    fingerprint,
     reconcile_ranked_day,
     serialize_ranked_day_battles,
 )
@@ -605,7 +606,7 @@ def recalculate_ranked_day(
         "season_day_number": season_day_number,
         "boundary_kind": boundary_kind,
         "rule_versions": rule_versions,
-        "input_evidence": result.input_evidence,
+        "input_evidence": fingerprint(result.input_evidence),
     }
     input_hash = hashlib.sha256(
         json.dumps(
@@ -618,7 +619,7 @@ def recalculate_ranked_day(
         json.dumps(
             {
                 "input_hash": input_hash,
-                "result": result_data,
+                "result": {**result_data, "input_evidence": input_payload["input_evidence"]},
                 "rule_versions": rule_versions,
             },
             sort_keys=True,

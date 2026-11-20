@@ -343,9 +343,10 @@ def test_a_result_made_current_again_before_cleanup_stays_unchanged_after_it(
     database_url: str, archive_server
 ) -> None:
     # The day's result goes A, B, then back to A before any cleanup, so the
-    # last copy is saved as A made current again over B. After the day and
-    # the day after it are cleaned, recalculating with the same inputs must
-    # find that result unchanged.
+    # last copy is saved as A made current again over B, and so is the day
+    # after it, built from A's values again: cleanup keeps every copy. After
+    # it runs, recalculating with the same inputs must find that result
+    # unchanged.
     with domain_database(database_url) as connection_info:
         database, processor = _sweep_processor(connection_info, archive_server)
         try:
@@ -375,7 +376,7 @@ def test_a_result_made_current_again_before_cleanup_stays_unchanged_after_it(
 
             assert _compact(
                 connection_info, boundary + timedelta(minutes=52)
-            )["deleted_versions"] >= 1
+            )["deleted_versions"] == 0
             with psycopg.connect(connection_info) as connection:
                 kept = _copies(connection, OPPONENT, DAY)
                 assert [row[0] for row in kept] == [first, disputed, restored]

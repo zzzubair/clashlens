@@ -103,6 +103,7 @@ from .domain import (
     TROPHY_ALLOCATION_RULE_VERSION,
 )
 from .job_contracts import PYTHON_BACKFILL_PRIORITY
+from .ranked_day_inputs import PREVIOUS_DAY_VALUES
 from .reconciliation import RECONCILIATION_RULE_VERSION
 from .season_lifecycle import SEASON_CLOSE_WAIT
 from .source_observation_contract import BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT
@@ -868,14 +869,20 @@ WITH selected AS (
               AND saved.ranked_day_start = s.ranked_day_start
     WHERE s.stars = 2 AND s.destruction_percentage = 55 AND saved.old_payout
     UNION ALL
-    -- A saved day built from an earlier result of the day before it.
+    -- A saved day built from an earlier result of the day before it whose
+    -- values differ from the newest one's.
     SELECT saved.player_id, saved.ranked_day_start, 'dependency'
     FROM saved
     JOIN newest AS previous
       ON previous.player_id = saved.player_id
      AND previous.ranked_day_start = saved.ranked_day_start - interval '1 day'
     WHERE saved.ranked_day_start >= %(start)s
-      AND saved.built_from IS DISTINCT FROM previous.id::text
+      AND CASE WHEN saved.built_from IS DISTINCT FROM previous.id::text
+          THEN (SELECT ROW({previous_day_values}) FROM ranked_day_versions
+                WHERE id = saved.built_from::bigint)
+               IS DISTINCT FROM (SELECT ROW({previous_day_values}) FROM ranked_day_versions
+                                 WHERE id = previous.id)
+          ELSE false END
 ), days AS (
     SELECT v.player_id, v.ranked_day_start, min(v.official_season_id) AS season,
            coalesce(array_agg(DISTINCT t.reason) FILTER (WHERE t.reason IS NOT NULL),
@@ -961,7 +968,8 @@ def _inventory(connection: Any, season_id: str, start: datetime, now: datetime) 
         "decoder": DECODER_VERSION,
     }
     items = []
-    query = _INVENTORY.format(unfinished_moves=UNFINISHED_MOVES)
+    query = _INVENTORY.format(
+        unfinished_moves=UNFINISHED_MOVES, previous_day_values=PREVIOUS_DAY_VALUES)
     for row in connection.execute(query, parameters).fetchall():
         item = dict(zip(_COLUMNS, row, strict=True))
         item.update(kind=text_value(item["kind"]),

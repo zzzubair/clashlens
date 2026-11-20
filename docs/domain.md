@@ -323,6 +323,7 @@ Stage 4: Legend days, Daily board members and tracking follow it, and the Live L
   1. The day's own start Reset reading does not yet start the day's shared history of explanations. So after it showed a previous-day credit, the previous day's automatic loss or a weekly raise, a later reading during the day that lacks that credit, shows the loss not yet landed, or shows the raise undone can still be read as a late credit or a loss still to land. Measured on production, read-only, on 9 October 2026: of 54,571 finished days of the current Season (5 to 8 October), no day had a reading between 05:15 and the player's first battle that differed from its start by exactly such an amount (0 days).
   2. A profile skipped because a newer one was processed first, or kept only as unchanged from the last saved one, is a reading never taken, as the reading rule above says (decisions R5 and R22).
   3. A reading with more than 6 battles possibly in flight is not judged, so a value no combination explains does not contradict the day (`MAX_AMBIGUOUS_BATTLES` in `reading_rule.py`).
+- A day's calculation saves a new result only when what it decided changes: its numbers, state, reasons and battles with their reports, and the values it used from the day before (its end, next start, automatic loss, unsettled loss, battle counts and state). Which saved result of the day before held those values, which poll first saved each battle's report, and the battle logs that covered the day are kept with the result as evidence but do not make it new: before 22 November 2026 they did, so a day before saved again with the same numbers had every later day of the Season saved again by the late-battle check or its next recalculation. A result saved before then is saved once more the first time its day is worked out again.
 - Each saved result records the reconciliation rule version label it was built under (currently `legend-ranked-day-reconciliation-v3`). The label is raised only when every saved result must be rebuilt; a narrower rule change, such as Season Day 1 averaging its own defenses, counting "no opponent, no battle" rows, counting any shared saved row as battle-log overlap, charging a zero-defense day or settling a Reset reading from a later one, keeps the label and raises the day-rule revision instead, and the Season's saved days and boards are then recalculated once with `republish-current-season --repair`; see [operating](operating.md).
 - A **confirmed automatic defense adjustment** requires continuous battle-log coverage for the previous and current days (on a Season's Day 1, Day 1 alone) plus valid start and end reset baselines whose trophy values jointly isolate the adjustment. Trophy reconciliation alone does not prove its cause.
 - Show the adjustment separately from battle events and identify whether it is calculated or confirmed.
@@ -361,10 +362,11 @@ Stage 4: Legend days, Daily board members and tracking follow it, and the Live L
   corrected, because the recalculation supports only the current and previous
   Season. A saved day in those 7 days, or
   today if it already has a saved result, whose latest result was built from
-  an older version of the day before it than the
-  one now current also counts as a mismatch, so a rolled-back correction whose
-  first day another recalculation then fixed still has its later days
-  recalculated. For each player with a mismatch in
+  values of the day before it other than those its current result holds also
+  counts as a mismatch, so a rolled-back correction whose first day another
+  recalculation then fixed still has its later days recalculated. A result
+  built from an earlier result of the day before that holds the same values
+  (`ranked_day_inputs.PREVIOUS_DAY_VALUES`) is not a mismatch. For each player with a mismatch in
   those 7 days, in one database transaction, the worker recalculates and
   publishes that day and then every later day that already has a saved result,
   oldest first, because each day's result uses the day before it. It never
