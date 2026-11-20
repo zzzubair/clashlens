@@ -969,8 +969,8 @@
   }
 }
 
-/* Live's update line opens with a green pulse, apart from the ember dot that
-   marks an old row. */
+/* Live's update line opens with a flat green dot, apart from the ember dot
+   that marks an old row. */
 .live-pip {
   display: inline-block;
   width: 0.5rem;
@@ -978,21 +978,6 @@
   margin: 0 0.45rem 0.1em 0.1rem;
   border-radius: 50%;
   background: var(--cl-positive);
-  box-shadow: 0 0 0 0 var(--cl-positive);
-  animation: live-pip 2.4s ease-out infinite;
-}
-
-@keyframes live-pip {
-  70%,
-  100% {
-    box-shadow: 0 0 0 0.4rem transparent;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .live-pip {
-    animation: none;
-  }
 }
 
 /* Live and At Reset, and the same switch on Crew and watchlist boards. */

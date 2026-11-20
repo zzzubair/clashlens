@@ -1,5 +1,13 @@
 import { useRef } from "react";
-import { data, Form, redirect, useActionData, useLoaderData } from "react-router";
+import {
+  data,
+  Form,
+  redirect,
+  useActionData,
+  useLoaderData,
+  useLocation,
+  useNavigation,
+} from "react-router";
 
 import { type BackHandle } from "../components/BackLink";
 import { FormResult } from "../components/CrewForms";
@@ -100,12 +108,23 @@ export async function action({ request, params }: Route.ActionArgs) {
 export default function CrewSettingsRoute() {
   const { crew, error, idempotencyKey: loadedKey } = useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
+  const location = useLocation();
+  const navigation = useNavigation();
   const sizeInput = useRef<HTMLInputElement>(null);
+  const submittingIntent =
+    navigation.state === "submitting" ? navigation.formData?.get("intent") : null;
+  const submittingInvite =
+    navigation.state === "submitting" ? navigation.formData?.get("invite") : null;
   if (crew === null) {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell narrow-shell crew-page">
         <h1>Crew unavailable</h1>
         {error ? <ErrorNotice error={error} /> : null}
+        <p className="hero-actions">
+          <a className="button secondary" href={location.pathname}>
+            Try again
+          </a>
+        </p>
       </main>
     );
   }
@@ -152,8 +171,12 @@ export default function CrewSettingsRoute() {
             key={crew.name}
           />
         </div>
-        <button type="submit" className="button secondary">
-          Save name
+        <button
+          type="submit"
+          className="button secondary"
+          disabled={submittingIntent === "rename"}
+        >
+          {submittingIntent === "rename" ? "Saving name…" : "Save name"}
         </button>
       </Form>
 
@@ -196,8 +219,12 @@ export default function CrewSettingsRoute() {
             {crew.used} in use, so {smallest} to {MAX_CREW_SIZE}
           </p>
         </div>
-        <button type="submit" className="button secondary">
-          Save size
+        <button
+          type="submit"
+          className="button secondary"
+          disabled={submittingIntent === "resize"}
+        >
+          {submittingIntent === "resize" ? "Saving size…" : "Save size"}
         </button>
       </Form>
 
@@ -218,8 +245,17 @@ export default function CrewSettingsRoute() {
                 <Form method="post">
                   {hidden("revoke")}
                   <input type="hidden" name="invite" value={invite.inviteId} />
-                  <button type="submit" className="button secondary">
-                    Turn off
+                  <button
+                    type="submit"
+                    className="button secondary"
+                    disabled={
+                      submittingIntent === "revoke" &&
+                      submittingInvite === invite.inviteId
+                    }
+                  >
+                    {submittingIntent === "revoke" && submittingInvite === invite.inviteId
+                      ? "Turning off…"
+                      : "Turn off"}
                   </button>
                 </Form>
               </li>
@@ -249,8 +285,12 @@ export default function CrewSettingsRoute() {
                 </select>
                 <p className="form-help">You become an admin.</p>
               </div>
-              <button type="submit" className="button danger-button">
-                Hand over
+              <button
+                type="submit"
+                className="button danger-button"
+                disabled={submittingIntent === "transfer"}
+              >
+                {submittingIntent === "transfer" ? "Handing over…" : "Hand over"}
               </button>
             </Form>
           </details>
@@ -266,8 +306,12 @@ export default function CrewSettingsRoute() {
             Delete {crew.name} for all {crew.members.length}{" "}
             {crew.members.length === 1 ? "Clasher" : "Clashers"}
           </label>
-          <button type="submit" className="button danger-button">
-            Delete crew
+          <button
+            type="submit"
+            className="button danger-button"
+            disabled={submittingIntent === "delete"}
+          >
+            {submittingIntent === "delete" ? "Deleting crew…" : "Delete crew"}
           </button>
         </Form>
       ) : null}

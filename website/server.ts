@@ -157,7 +157,9 @@ export async function createWebsiteServer(
         "Cache-Control",
         pathname.startsWith("/assets/")
           ? "public, max-age=31536000, immutable"
-          : "public, max-age=3600",
+          : pathname.startsWith("/fonts/") || pathname.startsWith("/images/")
+            ? "public, max-age=604800, stale-while-revalidate=86400"
+            : "public, max-age=3600",
       );
       response.setHeader("ETag", etag);
       response.setHeader("Content-Length", metadata.size);

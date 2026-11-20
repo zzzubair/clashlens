@@ -108,7 +108,7 @@
   bottom: calc((var(--cl-header-h) - 2.5rem) / -2);
   left: 0.6rem;
   height: 2px;
-  background: linear-gradient(90deg, var(--cl-brand-yellow), var(--cl-brand-orange));
+  background: var(--cl-action);
   border-radius: 2px 2px 0 0;
   content: "";
 }
@@ -130,19 +130,17 @@
 
 /* ---------- Buttons ---------- */
 
-/* Primary: the logo's yellow-to-orange, dark text, a lit top edge. */
+/* Primary: solid flat ember button, dark text, no glow or sheen. */
 :root
   :is(
     .button:not(.secondary, .button-secondary, .danger-button, [aria-current]),
     .button-primary
   ) {
   color: var(--cl-brand-night);
-  background: var(--cl-brand-fill);
+  background: var(--cl-action);
   border: 0;
   border-radius: var(--cl-radius);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.45),
-    inset 0 -1px 0 rgb(120 40 0 / 0.25);
+  box-shadow: none;
   font-weight: 650;
   letter-spacing: -0.005em;
   text-shadow: none;
@@ -248,7 +246,7 @@
   background: #c62828;
   border: 0;
   border-radius: var(--cl-radius);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2);
+  box-shadow: none;
   font-weight: 650;
 }
 
@@ -359,45 +357,12 @@
     0 1px 2px rgb(0 0 0 / 0.5);
 }
 
-/* ---------- Surfaces: depth in three levels ----------
-   1. Each page's one hero (below): the ember glass with a small, soft
-      glow, the only glow on the page.
-   2. A sheet, the panel for the rest of a page's blocks: one flat fill,
-      never a gradient, with tighter corners than the hero's. Dark: a faint
-      warm see-through fill with a light inner top edge, no drawn edge and
-      no shadow. Light: an ivory fill on the sand page, finished like glass
-      by a warm 1px hairline, a faint ember line along its top and a soft
-      warm shadow. Module cards (dashboard cards, crew boards and watchlist
-      cards) swap that top line for a warm highlight
-      that fades out toward both sides (--cl-card-top), a faint inner ring
-      lighter at the top and fading down (--cl-card-rim) and a faint ember
-      tint behind their header (--cl-card-head). No other glow.
-   3. A page's main table or list (.open-board, under Tables): no box at
-      all, on the page itself, with a clear header row and a hairline
-      (--cl-sheet-line) under each row.
-   Tables and lists inside a sheet stay open, split by hairlines; a sheet
-   never holds another box. --cl-card-fill is the sheet's fill for page
-   rules that still name it, and --cl-sheet-solid the same colour made
-   opaque, for a sticky row that must hide what scrolls under it. There is
-   no backdrop blur: it would pin the fixed pop-ups inside a card (the
-   Legend clock's) to that card, and over the plain page it changes
-   nothing. */
+/* ---------- Surfaces: flat colours with hairline edges, no glows ---------- */
 :root {
   --cl-sheet-fill: rgb(255 253 249 / 0.94);
   --cl-sheet-solid: #fffdf9;
   --cl-sheet-line: rgb(170 100 40 / 0.17);
   --cl-sheet-border: var(--cl-sheet-line);
-  --cl-sheet-edge: inset 0 1px 0 rgb(255 160 80 / 0.3);
-  --cl-sheet-shadow:
-    0 1px 2px rgb(170 100 40 / 0.07), 0 12px 32px -16px rgb(190 110 40 / 0.24);
-  --cl-card-top: linear-gradient(
-    90deg,
-    transparent 6%,
-    rgb(255 150 60 / 0.6),
-    transparent 94%
-  );
-  --cl-card-head: linear-gradient(180deg, rgb(255 138 31 / 0.05), transparent 4.5rem);
-  --cl-card-rim: linear-gradient(180deg, rgb(225 140 60 / 0.24), transparent 60%);
   --cl-card-fill: var(--cl-sheet-fill);
   --cl-card-quiet: 0 0 transparent;
   /* The Clasher's own row, and a row a jump opened: one ember wash on every
@@ -409,16 +374,6 @@
   --cl-sheet-solid: #141110;
   --cl-sheet-line: rgb(255 226 200 / 0.09);
   --cl-sheet-border: transparent;
-  --cl-sheet-edge: inset 0 1px 0 rgb(255 232 210 / 0.08);
-  --cl-sheet-shadow: 0 0 transparent;
-  --cl-card-top: linear-gradient(
-    90deg,
-    transparent 6%,
-    rgb(255 196 140 / 0.26),
-    transparent 94%
-  );
-  --cl-card-head: linear-gradient(180deg, rgb(255 140 40 / 0.045), transparent 4.5rem);
-  --cl-card-rim: linear-gradient(180deg, rgb(255 226 200 / 0.13), transparent 60%);
   --cl-you-wash: rgb(255 140 40 / 0.12);
 }
 :root
@@ -451,36 +406,15 @@
   background: var(--cl-sheet-fill);
   border: 1px solid var(--cl-sheet-border);
   border-radius: var(--cl-card-radius);
-  box-shadow: var(--cl-sheet-edge), var(--cl-sheet-shadow);
+  box-shadow: none;
 }
-/* Level 2: the top highlight sits on the card's top edge, over its border,
-   and a 1px ring just inside the edge (--cl-card-rim) is lighter at the top
-   and fades out down the sides. */
 :root :is(.dash-card, .crew-board, .group-card) {
   position: relative;
-  background:
-    var(--cl-card-top) top / 100% 1px no-repeat border-box,
-    var(--cl-card-head),
-    var(--cl-sheet-fill);
-  box-shadow: var(--cl-sheet-shadow);
+  background: var(--cl-sheet-fill);
+  box-shadow: none;
 }
-:root :is(.dash-card, .crew-board, .group-card)::after {
-  position: absolute;
-  inset: 0;
-  padding: 1px;
-  background: var(--cl-card-rim);
-  border-radius: max(0px, calc(var(--cl-card-radius) - 1px));
-  content: "";
-  pointer-events: none;
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-}
-/* Pop-ups are real frosted glass over the page, including a form that opens
-   from a button (New watchlist): a sheet's fill would let the rows under it
-   show through. */
+/* Pop-ups stay opaque over the page, including a form that opens from a button
+   (New watchlist), so rows under it never show through. */
 :root :is(.search-dropdown, .header-search-panel, details > .form-panel) {
   background: var(--cl-glass-strong);
   border: 1px solid var(--cl-card-line);
@@ -493,73 +427,23 @@
   overflow: hidden;
 }
 /* ---------- Each page's one hero panel ----------
-   The panel a page is about is the one raised thing on it. Dark: smoked
-   glass that blurs the page behind, a warm sheen in the corner the light
-   comes from, an edge lit from the top left in the logo's orange, a bright
-   inner top edge and an ember glow round it. Light: a clean near-white card
-   with the same lit edge, a soft ember glow and a crisp, soft shadow. */
+   Flat surface with a clean hairline edge; no glow, no lit rim, no halo. */
 :root {
-  --cl-hero-fill:
-    radial-gradient(120% 95% at 0% 0%, rgb(255 176 90 / 0.12), transparent 60%),
-    linear-gradient(180deg, rgb(255 255 255 / 0.97), rgb(255 252 248 / 0.92));
-  --cl-hero-edge: linear-gradient(
-    135deg,
-    rgb(240 130 30 / 0.75),
-    rgb(240 130 30 / 0.18) 34%,
-    rgb(240 130 30 / 0.08) 68%,
-    rgb(250 180 80 / 0.5)
-  );
-  --cl-hero-shine: inset 0 1px 0 rgb(255 255 255);
-  /* Rounder than a sheet's, so the one hero reads apart from the sheets. */
-  --cl-hero-radius: 22px;
-  --cl-hero-halo:
-    0 0 20px -6px rgb(255 130 30 / 0.28), 0 1px 2px rgb(170 100 40 / 0.12),
-    0 8px 18px -10px rgb(180 100 40 / 0.22);
-}
-:root[data-theme="dark"] {
-  --cl-hero-fill:
-    radial-gradient(120% 100% at 0% 0%, rgb(255 150 60 / 0.17), transparent 60%),
-    linear-gradient(180deg, rgb(255 236 218 / 0.085), rgb(255 236 218 / 0.035));
-  --cl-hero-edge: linear-gradient(
-    135deg,
-    rgb(255 170 70 / 0.7),
-    rgb(255 150 60 / 0.16) 34%,
-    rgb(255 150 60 / 0.05) 68%,
-    rgb(255 196 100 / 0.36)
-  );
-  --cl-hero-shine: inset 0 1px 0 rgb(255 226 192 / 0.24);
-  --cl-hero-halo: 0 0 24px -6px rgb(255 120 30 / 0.24);
+  --cl-hero-radius: 20px;
 }
 :root :is(.dash-card[data-card="legend-day"], .crew-head, .front-teaser) {
   position: relative;
-  background: var(--cl-hero-fill);
-  border: 1px solid transparent;
+  background: var(--cl-sheet-fill);
+  border: 1px solid var(--cl-sheet-border);
   border-radius: var(--cl-hero-radius);
-  box-shadow: var(--cl-hero-shine), var(--cl-hero-halo);
-  -webkit-backdrop-filter: blur(22px) saturate(1.5);
-  backdrop-filter: blur(22px) saturate(1.5);
-}
-/* The lit edge: a gradient ring, masked to the 1px border. */
-:root :is(.dash-card[data-card="legend-day"], .crew-head, .front-teaser)::after {
-  position: absolute;
-  inset: -1px;
-  padding: 1px;
-  background: var(--cl-hero-edge);
-  border-radius: inherit;
-  content: "";
-  pointer-events: none;
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
+  box-shadow: none;
 }
 :root .player-page .player-hero {
   position: relative;
   background: var(--cl-sheet-fill);
   border: 1px solid var(--cl-sheet-border);
   border-radius: var(--cl-hero-radius);
-  box-shadow: var(--cl-sheet-edge), var(--cl-sheet-shadow);
+  box-shadow: none;
   padding: 1.25rem 1.5rem 0.9rem;
 }
 /* Inside a sheet, never another box: a sheet within a sheet is just a
@@ -703,7 +587,7 @@
     .log-rank[data-podium-rank="1"] .rank-mark,
     .rank-mark[data-podium-rank="1"]
   ) {
-  background: linear-gradient(180deg, #ffe38a, #f2b51d);
+  background: #f2c33a;
 }
 :root
   :is(
@@ -711,7 +595,7 @@
     .log-rank[data-podium-rank="2"] .rank-mark,
     .rank-mark[data-podium-rank="2"]
   ) {
-  background: linear-gradient(180deg, #f1ebe4, #bcafa2);
+  background: #d6ccc1;
 }
 :root
   :is(
@@ -719,7 +603,7 @@
     .log-rank[data-podium-rank="3"] .rank-mark,
     .rank-mark[data-podium-rank="3"]
   ) {
-  background: linear-gradient(180deg, #f4c19c, #c9814f);
+  background: #dc9d6c;
 }
 
 /* ---------- Badges ---------- */
@@ -787,20 +671,7 @@
 
 /* A top-level page's heading (Rankings, Analytics, Watchlists, Crews), the
    same on each: the big display title, at most one short line under it, and
-   a page control, if any, on the right. It sits in a soft round glow of
-   ember light like the home page's, so a page opens with the brand, not
-   bare text; a long flat band read as a smudge on the light sand. The glow
-   is a border image reaching out to the screen's edges: drawn past the
-   page's sides, it never makes the page scroll sideways. It starts a
-   screen's width left of the heading, so it centres 8rem into the title
-   however wide the heading is, and its height follows the heading's, so it
-   fades out before its top and bottom on any screen. */
-:root {
-  --cl-page-hero-glow: rgb(255 170 70 / 0.2);
-}
-:root[data-theme="dark"] {
-  --cl-page-hero-glow: rgb(255 120 30 / 0.14);
-}
+   a page control, if any, on the right. Flat background, no glow. */
 :root .page-hero {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -808,12 +679,6 @@
   align-items: end;
   margin: 0 0 1.75rem;
   padding: 1rem 0 0.25rem;
-  border-image: radial-gradient(
-      18rem 60% at calc(100vw + 8rem) 44%,
-      var(--cl-page-hero-glow),
-      transparent 80%
-    )
-    fill 0 / 0 / 2.5rem 100vw 4rem;
 }
 :root .page-hero > :is(h1, p) {
   grid-column: 1;

@@ -52,7 +52,14 @@ export default function CrewsRoute() {
         <p>Invite-only groups of Legend accounts with shared boards.</p>
       </header>
       {error ? (
-        <ErrorNotice error={error} />
+        <>
+          <ErrorNotice error={error} />
+          <p className="hero-actions">
+            <a className="button secondary" href="/crews">
+              Try again
+            </a>
+          </p>
+        </>
       ) : (
         <p className="crew-create">
           {max !== undefined && crews.length < max ? (
@@ -87,7 +94,15 @@ export default function CrewsRoute() {
             </li>
           ))}
         </ul>
-      ) : null}
+      ) : error ? null : (
+        <div className="empty-state">
+          <h2>No crews yet</h2>
+          <p>
+            Start your own crew above to share live and daily Legend boards, or open an
+            invite link from a crew member to join theirs.
+          </p>
+        </div>
+      )}
     </main>
   );
 }

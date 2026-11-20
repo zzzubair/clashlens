@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Form, Link } from "react-router";
+import { Form, Link, useNavigation } from "react-router";
 
 /** The account menu's pages, after the profile and before Sign out. */
 const MENU_PAGES = [
@@ -25,6 +25,9 @@ export function AccountMenu({
 }) {
   const menuRef = useRef<HTMLDetailsElement>(null);
   const toggleRef = useRef<HTMLElement>(null);
+  const navigation = useNavigation();
+  const signingOut =
+    navigation.state === "submitting" && navigation.formAction === "/logout";
 
   function close() {
     if (menuRef.current) menuRef.current.open = false;
@@ -107,7 +110,9 @@ export function AccountMenu({
         <li>
           <Form method="post" action="/logout">
             <input type="hidden" name="idempotencyKey" value={logoutIdempotencyKey} />
-            <button type="submit">Sign out</button>
+            <button type="submit" disabled={signingOut}>
+              {signingOut ? "Signing out…" : "Sign out"}
+            </button>
           </Form>
         </li>
       </ul>

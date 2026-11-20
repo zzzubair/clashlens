@@ -1013,7 +1013,9 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     // Legend day: the page's trophies and battles, the read's range and open defenses.
     const day = text(cards["legend-day"]!);
     // The tab shows whose day it is; the card names the player for screen readers only.
-    expect(day).toContain("Legend day 9 , Lens Main Trophies 5,370 Net today –");
+    expect(day).toContain("Legend day 9 , Lens Main");
+    expect(day).toContain("What Projected place means");
+    expect(day).toContain("Trophies 5,370 Net today –");
     expect(cards["legend-day"]).toMatch(/sr-only">, (<!-- -->)?Lens Main</);
     expect(cards["legend-day"]!.match(/Lens Main/g)).toHaveLength(1);
     expect(day).toContain("Last Reset #318 Now #316 Projected place #240 at Reset");
@@ -1046,7 +1048,9 @@ describe("dashboard cards, from Python's replies through the reads to the page",
 
     // Armies on offense: one army, so the two hit rates big.
     const armiesOffense = text(cards["armies-offense"]!);
-    expect(armiesOffense).toContain("Armies on offense 3 days 7 days");
+    expect(armiesOffense).toContain("Armies on offense");
+    expect(armiesOffense).toContain("What the columns mean");
+    expect(armiesOffense).toContain("3 days 7 days");
     expect(armiesOffense).not.toContain("Custom");
     expect(armiesOffense).toContain("Thrower Your hit rate 75% Legends 50%");
     expect(armiesOffense).not.toContain("Tripled");
@@ -1130,7 +1134,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
     const data = await load();
     const cards = cardsIn(await render(data));
     expect(text(cards["group-watch"]!)).toContain(
-      "This card could not be loaded right now. Reload the page to try again.",
+      "This card could not be loaded right now. Try again",
     );
     // A missing last-Season finish leaves the graph standing.
     expect(text(cards["season-graph"]!)).toContain("Last Season finish –");
@@ -1138,8 +1142,7 @@ describe("dashboard cards, from Python's replies through the reads to the page",
   });
 
   it("shows a failed read as unavailable, not as nothing saved", async () => {
-    const unavailable =
-      "This card could not be loaded right now. Reload the page to try again.";
+    const unavailable = "This card could not be loaded right now. Try again";
     python.down = ["/v1/leaderboards/frozen"];
     const data = await load();
     expect(data.cards.goal).not.toBeNull();

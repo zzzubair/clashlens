@@ -1252,7 +1252,7 @@ describe("dashboard page", () => {
       "group-watch:m",
     ]);
     expect(text(html)).toContain(
-      "Goal This card could not be loaded right now. Reload the page to try again.",
+      "Goal This card could not be loaded right now. Try again",
     );
     expect(html).not.toContain("Use our layout");
   });

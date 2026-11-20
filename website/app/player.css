@@ -58,7 +58,7 @@
     align-items: center;
     box-sizing: border-box;
     height: var(--jump-h);
-    margin: -2rem -1rem 1rem;
+    margin: -1rem -1rem 1rem;
     padding: 0 1rem;
     background: color-mix(in srgb, var(--cl-paper) 97%, transparent);
     border-bottom: 1px solid var(--cl-card-line);
@@ -77,6 +77,14 @@
     font-size: 0.875rem;
     -webkit-tap-highlight-color: transparent;
   }
+  @media (pointer: coarse) {
+    :root:has(.player-jumps) {
+      --jump-h: 3.5rem;
+    }
+    .player-page .player-jumps .button {
+      min-height: 2.75rem;
+    }
+  }
   /* The switch's lifted option (brand.css), which marks only
      aria-current="page"; here the current part is a location. */
   .player-page .player-jumps .button[aria-current="location"] {
@@ -89,9 +97,7 @@
   }
   :root[data-theme="dark"] .player-page .player-jumps .button[aria-current="location"] {
     background: rgb(255 236 218 / 0.13);
-    box-shadow:
-      inset 0 1px 0 rgb(255 255 255 / 0.07),
-      0 1px 2px rgb(0 0 0 / 0.5);
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.5);
   }
 }
 .player-page h2 {
@@ -442,7 +448,6 @@
   height: 0.65rem;
   background: var(--cl-action-text);
   border: 2px solid var(--cl-paper);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--cl-action-text) 25%, transparent);
 }
 /* The day under the pointer: a hairline down the chart and its numbers. */
 .player-page .trophy-line-cross {

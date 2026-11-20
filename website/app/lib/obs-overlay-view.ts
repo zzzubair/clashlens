@@ -620,17 +620,31 @@ export function mountOverlay(
   }
 
   // ---------- live data ----------
+  let stopped = false;
+  const inflight = new Set<AbortController>();
+  const timedFetch = async (url: string): Promise<Response> => {
+    const controller = new AbortController();
+    inflight.add(controller);
+    const timeout = setTimeout(() => controller.abort(), 12_000);
+    try {
+      return await fetch(url, { cache: "no-store", signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+      inflight.delete(controller);
+    }
+  };
   const playerUrl = (tag: string) =>
     `/resources/players/${encodeURIComponent(`#${tag}`)}/overlay`;
   async function readPlayer(tag: string): Promise<View> {
-    const res = await fetch(playerUrl(tag), { cache: "no-store" });
+    const res = await timedFetch(playerUrl(tag));
     const next = (await res.json()) as View;
     if (!res.ok) throw new Error(next.error ?? "error");
     return next;
   }
 
   // Whether `tag` is still the player the overlay reads.
-  const reading = (tag: string) => overlaySource(cfg) === "player" && cfg.tag === tag;
+  const reading = (tag: string) =>
+    !stopped && overlaySource(cfg) === "player" && cfg.tag === tag;
 
   async function poll() {
     cancel(pollTimer);
@@ -758,9 +772,8 @@ export function mountOverlay(
     const follow = async () => {
       let wait = SETTINGS_POLL_MS;
       try {
-        const res = await fetch(`/o/${encodeURIComponent(link)}/settings`, {
-          cache: "no-store",
-        });
+        const res = await timedFetch(`/o/${encodeURIComponent(link)}/settings`);
+        if (stopped) return;
         if (res.status === 404) {
           // A replaced link shows nothing, and checks rarely.
           cancel(pollTimer);
@@ -793,7 +806,7 @@ export function mountOverlay(
       } catch {
         // Keep showing the last settings.
       }
-      later(follow, wait);
+      if (!stopped) later(follow, wait);
     };
     void follow();
   } else {
@@ -804,6 +817,9 @@ export function mountOverlay(
   }
 
   return () => {
+    stopped = true;
+    for (const controller of inflight) controller.abort();
+    inflight.clear();
     clock.stop();
     clearInterval(tick);
     window.removeEventListener("message", onMessage);

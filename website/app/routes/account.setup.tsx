@@ -1,5 +1,12 @@
 import { useState, type FormEvent } from "react";
-import { data, Form, redirect, useActionData, useLoaderData } from "react-router";
+import {
+  data,
+  Form,
+  redirect,
+  useActionData,
+  useLoaderData,
+  useNavigation,
+} from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import {
@@ -178,6 +185,11 @@ export function headers() {
 export default function AccountSetupRoute() {
   const loaderData = useLoaderData<typeof loader>();
   const actionData = useActionData<SetupActionData>();
+  const navigation = useNavigation();
+  const creating =
+    navigation.state === "submitting" && navigation.formAction !== "/logout";
+  const switching =
+    navigation.state === "submitting" && navigation.formAction === "/logout";
   const initialValues = actionData?.values ?? { username: "", displayName: "" };
   const [clientErrors, setClientErrors] = useState<{
     username?: string;
@@ -226,7 +238,7 @@ export default function AccountSetupRoute() {
       {actionData?.generalError ? <ErrorNotice error={actionData.generalError} /> : null}
 
       <section className="form-panel" aria-label="Account setup form">
-        <form method="post" className="stack-form" onSubmit={handleSubmit} noValidate>
+        <Form method="post" className="stack-form" onSubmit={handleSubmit} noValidate>
           <input
             type="hidden"
             name="idempotencyKey"
@@ -276,17 +288,25 @@ export default function AccountSetupRoute() {
               <p className="form-help">Shown on your profile. 1–80 characters.</p>
             )}
           </div>
-          <button type="submit" className="button button-primary">
-            Create account
+          <button
+            type="submit"
+            className="button button-primary"
+            disabled={creating || switching}
+          >
+            {creating ? "Creating account…" : "Create account"}
           </button>
-        </form>
+        </Form>
       </section>
 
       <Form method="post" action="/logout" className="account-buttons">
         <input type="hidden" name="idempotencyKey" value={loaderData.idempotencyKey} />
         <input type="hidden" name="signUp" value={loaderData.returnPath} />
-        <button type="submit" className="button button-secondary">
-          Not you? Use a different sign-in
+        <button
+          type="submit"
+          className="button button-secondary"
+          disabled={creating || switching}
+        >
+          {switching ? "Switching…" : "Not you? Use a different sign-in"}
         </button>
       </Form>
     </main>

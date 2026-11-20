@@ -1,6 +1,9 @@
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
+import { MemoryRouter } from "react-router";
 import { describe, expect, it } from "vitest";
 
-import { suggestionsView } from "../../app/components/PlayerSearch";
+import { SearchSuggestions, suggestionsView } from "../../app/components/PlayerSearch";
 import type { PlayerSearchLoaderData } from "../../app/lib/player-search-data";
 
 const answer = (query: string, failed = false): PlayerSearchLoaderData => ({
@@ -44,5 +47,36 @@ describe("search suggestions", () => {
     expect(suggestionsView("ali", "", { state: "idle", data: failed }).state).toBe(
       "closed",
     );
+  });
+
+  it("offers an inline Try again button on error and opens bare tags without a leading #", () => {
+    const failedHtml = renderToString(
+      createElement(
+        MemoryRouter,
+        null,
+        createElement(SearchSuggestions, {
+          id: "test-search-failed",
+          data: answer("ali", true),
+          loading: false,
+          onRetry: () => {},
+        }),
+      ),
+    );
+    expect(failedHtml).toContain("Search unavailable.");
+    expect(failedHtml).toContain(">Try again</button>");
+
+    const bareTagHtml = renderToString(
+      createElement(
+        MemoryRouter,
+        null,
+        createElement(SearchSuggestions, {
+          id: "test-search-tag",
+          data: answer("2py0lq"),
+          loading: false,
+        }),
+      ),
+    );
+    expect(bareTagHtml.replaceAll("<!-- -->", "")).toContain("Open #2PY0LQ");
+    expect(bareTagHtml).toContain('href="/players/%232PY0LQ"');
   });
 });

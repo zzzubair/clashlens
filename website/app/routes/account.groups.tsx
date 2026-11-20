@@ -691,7 +691,12 @@ function GroupCard({
       {panel === "edit" ? null : count > 0 ? (
         <Members group={group} preview={preview} days={loaderData.previewDays ?? null} />
       ) : (
-        <p className="muted group-members">No players yet.</p>
+        <p className="muted group-members">
+          No players yet.{" "}
+          <a className="group-text-button" {...toggle("add")}>
+            Add a player
+          </a>
+        </p>
       )}
     </li>
   );

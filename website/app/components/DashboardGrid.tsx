@@ -70,6 +70,7 @@ interface ViewContext {
   basesDay: BasesDay;
   saving: boolean;
   pickGroup: (groupId: string) => void;
+  retryCard: (card: keyof CardDataMap) => void;
 }
 
 const CARD_VIEWS: {
@@ -169,8 +170,18 @@ function cardBody(
   );
   if (context.viewAs !== null && ACCOUNT_CARDS.includes(card))
     return note("Your Watchlists stay off while you view as another player.");
-  const failed = note(
-    "This card could not be loaded right now. Reload the page to try again.",
+  const failed = (
+    <>
+      <CardHead icon={CARDS[card].icon} title={title} />
+      <CardNote>This card could not be loaded right now.</CardNote>
+      <button
+        type="button"
+        className="button button-secondary dash-small-button"
+        onClick={() => context.retryCard(card)}
+      >
+        Try again
+      </button>
+    </>
   );
   const loading = <div aria-busy="true">{note("Loading…")}</div>;
   const read = reads?.[card];
@@ -415,6 +426,9 @@ function SettingsDialog({
       className="dash-dialog dash-settings"
       aria-labelledby="dash-settings-title"
       onClose={onClose}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) dialog.current?.close();
+      }}
     >
       <form
         method="dialog"
@@ -552,6 +566,9 @@ function AddSheet({
       className="dash-dialog dash-add-sheet"
       aria-labelledby="dash-add-title"
       onClose={onClose}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) dialog.current?.close();
+      }}
     >
       <header className="dash-dialog-head">
         <h2 id="dash-add-title">Add a card</h2>
@@ -603,14 +620,23 @@ function FirstVisit({
   onPick: (choice: "default" | "own") => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
+  const picked = useRef(false);
   useEffect(() => {
     dialog.current?.showModal();
   }, []);
+  const choose = (choice: "default" | "own") => {
+    picked.current = true;
+    onPick(choice);
+    dialog.current?.close();
+  };
   return (
     <dialog
       ref={dialog}
       className="dash-dialog dash-welcome"
       aria-labelledby="dash-welcome-title"
+      onClose={() => {
+        if (!picked.current) onPick("default");
+      }}
     >
       <h2 id="dash-welcome-title">Your dashboard</h2>
       <p className="dash-muted">
@@ -622,10 +648,7 @@ function FirstVisit({
           type="button"
           className="dash-welcome-option"
           disabled={saving}
-          onClick={() => {
-            onPick("default");
-            dialog.current?.close();
-          }}
+          onClick={() => choose("default")}
         >
           <span className="dash-welcome-badge">Recommended</span>
           <b>Use our layout</b>
@@ -635,10 +658,7 @@ function FirstVisit({
           type="button"
           className="dash-welcome-option"
           disabled={saving}
-          onClick={() => {
-            onPick("own");
-            dialog.current?.close();
-          }}
+          onClick={() => choose("own")}
         >
           <b>
             <DashboardIcon name="plus" /> Build my own
@@ -845,6 +865,7 @@ export function Dashboard({
     basesDay,
     saving,
     pickGroup: (groupId) => save({ ...settings, group: groupId }),
+    retryCard: (card) => dispatchCards({ type: "outdated", cards: [card] }),
   };
   const firstVisit = settings.layout === null && !editing && viewAs === null;
   const error = answer?.error;

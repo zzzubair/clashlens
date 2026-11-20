@@ -267,7 +267,10 @@ export default function ObsOverlayRoute() {
           <h2>Link a player first</h2>
           <p className="obs-help">
             The overlay shows one of your verified players.{" "}
-            <Link to="/account/verify-player">Link a player</Link>, then come back here.
+            <Link to="/account/verify-player?return=%2Faccount%2Fobs-overlay">
+              Link a player
+            </Link>
+            , then come back here.
           </p>
         </section>
       ) : (
@@ -495,7 +498,9 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
   const [place, setPlace] = useState<Place>(() => clamp(initial.current.place));
   const [link, setLink] = useState(overlay.link);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("untouched");
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<null | "copied" | "selected">(null);
+  const [confirmReplace, setConfirmReplace] = useState(false);
+  const [replacing, setReplacing] = useState(false);
   const [preview, setPreview] = useState<PreviewLink>({ kind: "waiting" });
   const [guides, setGuides] = useState<Guides>({
     v: null,
@@ -579,23 +584,25 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
   const queryRef = useRef(query);
   queryRef.current = query;
 
+  const saveNow = () => {
+    void runAutosave(
+      autosave,
+      () => latest.current,
+      (next) =>
+        post<{ version: number }>({
+          intent: "save",
+          tag: next.tag ?? "",
+          settings: JSON.stringify(next.settings),
+        }),
+      setSaveStatus,
+    );
+  };
+
   // Saved on Clash Lens against the private link, 0.3 seconds after the last
   // change, one save at a time: the newest choices go once the one sending lands.
   useEffect(() => {
     if (savedJson === autosave.current.saved) return;
-    const timer = setTimeout(() => {
-      void runAutosave(
-        autosave,
-        () => latest.current,
-        (next) =>
-          post<{ version: number }>({
-            intent: "save",
-            tag: next.tag ?? "",
-            settings: JSON.stringify(next.settings),
-          }),
-        setSaveStatus,
-      );
-    }, 300);
+    const timer = setTimeout(saveNow, 300);
     return () => clearTimeout(timer);
   }, [savedJson]);
 
@@ -642,30 +649,30 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
   }
 
   async function replaceLink() {
-    if (
-      !window.confirm(
-        "Make a new link? The old one is deleted for good and shows nothing from now on, so you'll need to paste the new one into OBS.",
-      )
-    )
-      return;
+    if (replacing) return;
+    setReplacing(true);
     try {
       const made = await post<{ link: string }>({ intent: "new-link", replaces: link });
       setLink(made.link);
+      setConfirmReplace(false);
       setSaveStatus("linkMade");
     } catch {
       setSaveStatus("linkNotMade");
+    } finally {
+      setReplacing(false);
     }
   }
 
   async function copy() {
     try {
       await navigator.clipboard.writeText(address);
+      setCopyState("copied");
     } catch {
       const input = document.getElementById("obs-address") as HTMLInputElement | null;
       input?.select();
+      setCopyState("selected");
     }
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
+    setTimeout(() => setCopyState(null), 2500);
   }
 
   const box = { left: place.x, top: place.y, width: place.w, height: place.h };
@@ -1022,16 +1029,49 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
             >
               {SAVE_STATUS[saveStatus].text}
             </span>
-            {copied ? (
-              <span className="obs-copied">Copied. Paste it into OBS.</span>
+            {saveStatus === "notSaved" ? (
+              <button type="button" className="button button-secondary" onClick={saveNow}>
+                Try again
+              </button>
             ) : null}
-            <button
-              type="button"
-              className="button button-secondary obs-replace"
-              onClick={replaceLink}
-            >
-              Make a new link
-            </button>
+            {copyState === "copied" ? (
+              <span className="obs-copied">Copied. Paste it into OBS.</span>
+            ) : copyState === "selected" ? (
+              <span className="obs-copied">
+                Selected. Press Copy, then paste into OBS.
+              </span>
+            ) : null}
+            {confirmReplace ? (
+              <span className="obs-replace" role="group" aria-label="Confirm new link">
+                <span className="obs-help">
+                  The old link stops working immediately. Make a new link?{" "}
+                </span>
+                <button
+                  type="button"
+                  className="button button-primary"
+                  disabled={replacing}
+                  onClick={() => void replaceLink()}
+                >
+                  {replacing ? "Making link…" : "Yes, make new link"}
+                </button>{" "}
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  disabled={replacing}
+                  onClick={() => setConfirmReplace(false)}
+                >
+                  Cancel
+                </button>
+              </span>
+            ) : (
+              <button
+                type="button"
+                className="button button-secondary obs-replace"
+                onClick={() => setConfirmReplace(true)}
+              >
+                Make a new link
+              </button>
+            )}
           </div>
           <div className="obs-dims">
             <div className="obs-dim">
@@ -1183,12 +1223,19 @@ function steps(fit: Fit, w: number, h: number): ReactNode[] {
 /** The save route's own JSON answer. Anything else throws, a redirect to sign
  * in included. */
 async function post<T>(values: Record<string, string>): Promise<T> {
-  const res = await fetch(SAVE, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams(values),
-    redirect: "manual",
-  });
-  if (!res.ok) throw new Error(String(res.status));
-  return (await res.json()) as T;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const res = await fetch(SAVE, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(values),
+      redirect: "manual",
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(String(res.status));
+    return (await res.json()) as T;
+  } finally {
+    clearTimeout(timeout);
+  }
 }

@@ -18,7 +18,10 @@ export function PageSearch({
 }) {
   const suggestions = usePlayerSuggestions(query);
   const { setQuery } = suggestions;
-  const searching = useNavigation().state !== "idle";
+  const navigation = useNavigation();
+  const searching =
+    navigation.state !== "idle" &&
+    (!navigation.location || navigation.location.pathname === "/search");
 
   useEffect(() => {
     setQuery(query);
@@ -86,6 +89,8 @@ export function PageSearch({
             id="player-search-suggestions"
             data={suggestions.data}
             loading={suggestions.loading}
+            onRetry={suggestions.retry}
+            onSelect={suggestions.dismiss}
           />
         ) : null}
       </Form>

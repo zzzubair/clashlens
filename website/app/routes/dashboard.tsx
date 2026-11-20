@@ -8,6 +8,7 @@ import {
   useFetcher,
   useLoaderData,
   useNavigation,
+  useRevalidator,
   useSearchParams,
 } from "react-router";
 import { BattleStatistics } from "../components/BattleStatistics";
@@ -505,6 +506,7 @@ function SignedInDashboard({
   const switching = switchingTo(useNavigation(), loaderData.players);
   // Saves live above each player's cards, so one still lands after a switch.
   const fetcher = useFetcher<DashboardActionData>();
+  const revalidator = useRevalidator();
   // Settings saved since this load; the next load reads them back.
   const [saved, setSaved] = useState<{
     from: DashboardSettings;
@@ -551,7 +553,15 @@ function SignedInDashboard({
       ) : null}
       {loaderData.playersUnavailable ? (
         <p className="notice notice-warning" role="status">
-          Your linked players could not be loaded. Cards show again on the next load.
+          Your linked players could not be loaded.{" "}
+          <button
+            type="button"
+            className="button button-secondary dash-small-button"
+            disabled={revalidator.state !== "idle"}
+            onClick={() => void revalidator.revalidate()}
+          >
+            {revalidator.state !== "idle" ? "Retrying…" : "Try again"}
+          </button>
         </p>
       ) : null}
       {selected === null ? (

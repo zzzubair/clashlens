@@ -1,4 +1,12 @@
-import { data, Link, redirect, useActionData, useLoaderData } from "react-router";
+import {
+  data,
+  Form,
+  Link,
+  redirect,
+  useActionData,
+  useLoaderData,
+  useNavigation,
+} from "react-router";
 
 import type { BackHandle } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
@@ -236,6 +244,12 @@ export function headers() {
 export default function AccountSettingsRoute() {
   const page = useLoaderData<typeof loader>();
   const answer = useActionData<SettingsActionData>();
+  const navigation = useNavigation();
+  const submittingIntent =
+    navigation.state === "submitting" ? navigation.formData?.get("intent") : null;
+  const submittingTag =
+    navigation.state === "submitting" ? navigation.formData?.get("tag") : null;
+  const savingName = submittingIntent === "display-name";
   if (page.error) {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
@@ -259,7 +273,7 @@ export default function AccountSettingsRoute() {
 
       <section className="settings-group" aria-labelledby="settings-profile">
         <h2 id="settings-profile">Profile</h2>
-        <form method="post" className="settings-row settings-name" noValidate>
+        <Form method="post" className="settings-row settings-name" noValidate>
           <input type="hidden" name="intent" value="display-name" />
           <input type="hidden" name="idempotencyKey" value={key} />
           <div className="settings-label">
@@ -284,11 +298,15 @@ export default function AccountSettingsRoute() {
                 answer?.displayNameError ? "settings-display-name-error" : undefined
               }
             />
-            <button type="submit" className="button button-secondary">
-              Save
+            <button
+              type="submit"
+              className="button button-secondary"
+              disabled={savingName}
+            >
+              {savingName ? "Saving…" : "Save"}
             </button>
           </div>
-        </form>
+        </Form>
         <div className="settings-row">
           <div className="settings-label">
             <span>Username</span>
@@ -314,6 +332,9 @@ export default function AccountSettingsRoute() {
                   key={player.tag}
                   player={player}
                   isDefault={page.defaultPlayer === player.tag}
+                  savingDefault={
+                    submittingIntent === "default-player" && submittingTag === player.tag
+                  }
                   idempotencyKey={key}
                 />
               ))}
@@ -375,10 +396,12 @@ export default function AccountSettingsRoute() {
 function PlayerRow({
   player,
   isDefault,
+  savingDefault,
   idempotencyKey,
 }: {
   player: VerifiedPlayer;
   isDefault: boolean;
+  savingDefault: boolean;
   idempotencyKey: string;
 }) {
   const id = `settings-player-${player.tag.slice(1)}`;
@@ -394,18 +417,19 @@ function PlayerRow({
             <span aria-hidden="true">✓</span> Default
           </span>
         ) : (
-          <form method="post" className="inline-form">
+          <Form method="post" className="inline-form">
             <input type="hidden" name="intent" value="default-player" />
             <input type="hidden" name="tag" value={player.tag} />
             <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
             <button
               type="submit"
               className="button button-secondary"
+              disabled={savingDefault}
               aria-describedby={`${id} settings-default-help`}
             >
-              Make default
+              {savingDefault ? "Saving…" : "Make default"}
             </button>
-          </form>
+          </Form>
         )}
         <Link
           className="button button-secondary"

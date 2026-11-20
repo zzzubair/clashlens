@@ -478,8 +478,15 @@
     display: none;
   }
 
-  /* A watchlist keeps every column on a phone, at the smallest type. */
+  /* A watchlist scrolls horizontally inside its card on narrow phones instead
+     of crushing numbers to ellipses. */
+  .group-table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
   .group-table {
+    min-width: 24rem;
     font-size: 0.8125rem;
   }
 

@@ -204,8 +204,7 @@ export default function CrewRoute() {
         <CrewDay live={boards.boards.live} />
       </section>
 
-      {/* The dock sticks under the top bar; its bar fills in only once stuck
-          (crews.css), so the header's glow fades out behind the switch. */}
+      {/* The dock sticks under the top bar; its bar fills in only once stuck (crews.css). */}
       <div className="crew-tabs-dock">
         <div className="crew-tabs-bar">
           <nav aria-label="Boards" className="leaderboard-view-switch crew-tabs">

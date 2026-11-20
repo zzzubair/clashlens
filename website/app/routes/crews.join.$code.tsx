@@ -205,6 +205,11 @@ export default function JoinCrewRoute() {
       <main id="main-content" tabIndex={-1} className="page-shell narrow-shell crew-page">
         <h1>Crew invite</h1>
         <ErrorNotice error={error} />
+        <p className="hero-actions">
+          <a className="button secondary" href={`/crews/join/${code}`}>
+            Try again
+          </a>
+        </p>
       </main>
     );
   }
@@ -378,13 +383,15 @@ function JoinForm({
           (hydrated && (count === 0 || tooMany)) || navigation.state === "submitting"
         }
       >
-        {!hydrated
-          ? "Join with the picked players"
-          : count === 0
-            ? "Pick at least one player"
-            : tooMany
-              ? `Pick at most ${open}`
-              : `Join with ${count} ${count === 1 ? "player" : "players"}`}
+        {navigation.state === "submitting"
+          ? "Joining…"
+          : !hydrated
+            ? "Join with the picked players"
+            : count === 0
+              ? "Pick at least one player"
+              : tooMany
+                ? `Pick at most ${open}`
+                : `Join with ${count} ${count === 1 ? "player" : "players"}`}
       </button>
       <Link className="crew-link-button" to={linkAccount}>
         Link another player
