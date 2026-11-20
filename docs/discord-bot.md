@@ -27,8 +27,9 @@ and plain errors are private to the person.
 - One container, `clashlens-discord-bot`, in the Clash Lens pod, from the same
   Python image as the API. It opens one connection out to Discord (the
   "gateway") and listens on no port, so it adds no public endpoint.
-- It reads Clash Lens data with the private API's own read code and the API's
-  database login, so numbers in Discord match the website. While it runs it
+- It reads Clash Lens data with the private API's own read code, so numbers in
+  Discord match the website, under its own database login; see
+  [Database login](#database-login). While it runs it
   also sends the attack alert DMs Clashers turn on, and the Legend day
   summary; its only writes are their delivery logs, see
   [architecture](architecture.md).
@@ -45,6 +46,35 @@ and plain errors are private to the person.
 - Links in replies use the website address in `CLASHLENS_PUBLIC_ORIGIN`.
   Without it the bot stops at startup and its log names the missing setting.
 - Memory is capped at 384 MiB and CPU at half a core.
+
+## Database login
+
+The bot logs in to PostgreSQL as `clashlens_discord_bot` (migration 0146), not
+as the private API. It may read only the tables the bot's code reads, run the
+one function that lists due attack alerts, and write only its two delivery
+logs, so it cannot change accounts, sign-in connections, verified players,
+defaults, Watchlists, Crews, overlay links or alert switches. Each production
+`./ops up` gives that role a new random password and stores the address in the
+Podman secret `clashlens-discord-bot-database-url`, which only the bot's
+container mounts. A new read in the bot's code needs a `GRANT` in a new
+migration; without one the bot's log shows `permission denied for table …`.
+
+If the bot cannot read something after a deploy, put it back on the API's
+login while the missing grant is fixed:
+
+1. Edit `~/.config/containers/systemd/clashlens-discord-bot.container` and
+   change `Secret=clashlens-discord-bot-database-url,` to
+   `Secret=clashlens-api-database-url,` (the rest of the line stays).
+2. `systemctl --user daemon-reload && systemctl --user restart clashlens-discord-bot.service`
+3. Run `/stats` and `/alerts` in Discord, then check
+   `./ops logs discord-bot --since "5 min ago"` shows no `permission denied`.
+
+The next `./ops up` writes the unit from the repository again, so the lasting
+fix is a migration with the missing grant, or the same one-line change to
+[`clashlens-discord-bot.container`](../deploy/quadlet/clashlens-discord-bot.container)
+in the repository, deployed with `./ops build` and `./ops up`. Keep migration
+0146 in place: `up` refuses a release missing a migration the database already
+has. The role and its grants can stay; nothing else logs in as it.
 
 ## How messages look
 

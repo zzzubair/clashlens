@@ -451,3 +451,99 @@ def test_privileged_functions_pin_search_path_with_pg_temp_last(database_url: st
                 ).read_text(encoding="utf-8"),
             )
             assert unpinned() == []
+
+
+# What the Discord bot's code reads, and the two logs it writes.
+BOT_READS = {
+    "account_default_players", "account_provider_identities", "api_player_daily_logs",
+    "boundary_publication_generation_members", "boundary_publication_generations",
+    "clash_lens_accounts", "collector_response_state",
+    "collector_work", "discord_alert_dark_picture", "discord_attack_alerts",
+    "discord_day_summary_on", "leaderboard_snapshot_entries", "leaderboard_snapshots",
+    "league_week_dirty", "live_attack_tallies", "live_unplayed_profiles",
+    "player_league_history_entries", "player_league_weeks", "player_profile_effects",
+    "player_profile_versions", "player_season_summaries", "players", "python_processing_jobs",
+    "ranked_day_versions", "site_owner_accounts", "verified_player_links",
+}
+BOT_WRITES = {"discord_attack_alert_deliveries", "discord_day_summary_deliveries"}
+
+
+def test_the_discord_bot_role_reads_what_the_bot_shows_and_writes_only_its_delivery_logs(
+    database_url: str,
+) -> None:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+
+            def granted() -> tuple[set[str], set[tuple[str, str]], set[str], tuple]:
+                relations = connection.execute(
+                    """
+                    SELECT c.relname,
+                           has_table_privilege('clashlens_discord_bot', c.oid, 'SELECT')
+                           OR has_any_column_privilege('clashlens_discord_bot', c.oid, 'SELECT'),
+                           ARRAY(SELECT kind FROM unnest(ARRAY['INSERT', 'UPDATE', 'DELETE',
+                                                               'TRUNCATE', 'REFERENCES',
+                                                               'TRIGGER']) AS kind
+                                 WHERE has_table_privilege('clashlens_discord_bot', c.oid, kind)
+                                    OR (kind IN ('INSERT', 'UPDATE', 'REFERENCES')
+                                        AND has_any_column_privilege(
+                                            'clashlens_discord_bot', c.oid, kind)))
+                    FROM pg_class AS c
+                    WHERE c.relnamespace = to_regnamespace(current_schema())
+                      AND c.relkind IN ('r', 'p', 'v', 'm')
+                      -- Extension views, such as pg_stat_statements, are open to every role.
+                      AND NOT EXISTS (SELECT 1 FROM pg_depend AS d
+                                      WHERE d.objid = c.oid AND d.deptype = 'e')
+                    """
+                ).fetchall()
+                functions = connection.execute(
+                    """
+                    SELECT p.proname FROM pg_proc AS p
+                    WHERE p.pronamespace = to_regnamespace(current_schema())
+                      AND p.prosecdef AND p.prorettype <> 'trigger'::regtype
+                      AND has_function_privilege('clashlens_discord_bot', p.oid, 'EXECUTE')
+                    """
+                ).fetchall()
+                role = connection.execute(
+                    """
+                    SELECT rolcanlogin, rolsuper, rolinherit, rolcreaterole, rolcreatedb,
+                           rolreplication, rolbypassrls
+                    FROM pg_roles WHERE rolname = 'clashlens_discord_bot'
+                    """
+                ).fetchone()
+                return (
+                    {text(name) for name, reads, _writes in relations if reads},
+                    {(text(name), kind) for name, _reads, writes in relations for kind in writes},
+                    {text(name) for (name,) in functions},
+                    role,
+                )
+
+            expected = (
+                BOT_READS | BOT_WRITES,
+                {(name, kind) for name in BOT_WRITES for kind in ("INSERT", "UPDATE", "DELETE")},
+                {"clashlens_discord_attack_alerts_due"},
+                (False, False, False, False, False, False, False),
+            )
+            assert granted() == expected
+            # Running the migration again changes nothing.
+            apply_migration(
+                connection,
+                (ROOT / "deploy/migrations/0146_discord_bot_role.sql").read_text(encoding="utf-8"),
+            )
+            assert granted() == expected
+
+            # As the bot, a change to what a Clasher set up on the website is refused.
+            connection.execute("SET ROLE clashlens_discord_bot")
+            for statement in (
+                "UPDATE clash_lens_accounts SET display_name = 'x'",
+                "DELETE FROM verified_player_links",
+                "DELETE FROM account_default_players",
+                "DELETE FROM discord_attack_alerts",
+                "DELETE FROM crews",
+                "SELECT count(*) FROM obs_overlays",
+                "SELECT count(*) FROM private_api_requests",
+            ):
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    connection.execute(statement)
+            connection.execute("RESET ROLE")

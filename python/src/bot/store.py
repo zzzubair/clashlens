@@ -1,7 +1,8 @@
 """Clash Lens data for the bot, read with the private API's own code.
 
-The bot connects as the API's database role and calls the same reads the
-website's pages use, so a number in Discord matches the number on the site.
+The bot connects with its own database role, which may read what these reads
+need, and calls the same reads the website's pages use, so a number in
+Discord matches the number on the site.
 It writes nothing: the default player is chosen on the website. Every read takes the moment
 of the command, so one reply never mixes two Legend days.
 """

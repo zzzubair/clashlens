@@ -1,5 +1,5 @@
 """/stats end to end: saved game data through the real worker to published
-Daily boards, then the bot's Season totals read as the API's database role.
+Daily boards, then the bot's Season totals read as the bot's own database role.
 See docs/testing.md."""
 
 from __future__ import annotations
@@ -7,7 +7,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from discord_bot_postgres_support import DISCORD_ID, _account
-from domain_test_support import as_api_role, domain_database
+from domain_test_support import as_bot_role, domain_database
 from reset_scenarios_postgres_support import (
     SEASON,
     Player,
@@ -76,17 +76,17 @@ def test_stats_totals_every_saved_day_and_never_hides_a_missing_one(
         assert season_days(later)[-2:] == [None, None]
 
         owner = ApiDatabase(connection_info)
-        api = ApiDatabase(as_api_role(connection_info))
+        bot = ApiDatabase(as_bot_role(connection_info))
         try:
             _account(owner, "discord", DISCORD_ID, "drift")
-            store = Store(api)
+            store = Store(bot)
             commands = Commands(
                 store, Site("https://clashlens.test"), now=lambda: day_3 - timedelta(minutes=1)
             )
             full = commands.stats(DISCORD_ID, FULL)
             late = commands.stats(DISCORD_ID, LATE)
         finally:
-            api.close()
+            bot.close()
             owner.close()
 
     assert board is not None

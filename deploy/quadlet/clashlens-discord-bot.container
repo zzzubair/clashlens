@@ -13,8 +13,9 @@ Label=org.clashlens.managed=ops
 Image=@@PYTHON_IMAGE@@
 Pull=never
 ContainerName=@@PREFIX@@-discord-bot
-# The bot runs the private API's read code with the API's database role.
-Secret=clashlens-api-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400
+# The bot runs the private API's read code with its own database role,
+# which may read only what the bot shows and write only its delivery logs.
+Secret=clashlens-discord-bot-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400
 Secret=clashlens-discord-bot-token,type=mount,target=/run/secrets/discord-bot-token,uid=10001,gid=10001,mode=0400
 Environment=CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url
 Environment=CLASHLENS_DISCORD_BOT_TOKEN_FILE=/run/secrets/discord-bot-token
