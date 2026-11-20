@@ -1,4 +1,4 @@
-import { Form, redirect, useLoaderData, useNavigation } from "react-router";
+import { Form, Link, redirect, useLoaderData, useNavigation } from "react-router";
 
 import type { BackHandle } from "../components/BackLink";
 import { SavedLine } from "../components/SavedLine";
@@ -303,7 +303,10 @@ function AlertRows({
   if (alerts.players.length === 0) {
     return (
       <p className="form-help">
-        <a href="/account/verify-player">Link a player</a> to get alerts in Discord.
+        <Link to={`/account/verify-player?return=${encodeURIComponent(PAGE)}`}>
+          Link a player
+        </Link>{" "}
+        to get alerts in Discord.
       </p>
     );
   }
@@ -374,6 +377,8 @@ function AlertRows({
         alt="An attack alert's picture: the Legend day's trophies and rank since the Reset, then each attack and defense."
         width={1200}
         height={860}
+        loading="lazy"
+        decoding="async"
       />
     </>
   );

@@ -79,6 +79,11 @@ it("signed out offers Sign in back to this page and Join Discord in a new tab", 
   expect(header).toContain("opens in a new tab");
   expect(header).not.toContain("account-menu");
   expect(header).not.toContain("Sign out");
+
+  const withQuery = await renderHeader(SIGNED_OUT, "/leaderboards/tracked?day=12");
+  expect(withQuery).toContain(
+    'href="/login?returnPath=%2Fleaderboards%2Ftracked%3Fday%3D12" data-discover="true">Sign in</a>',
+  );
 });
 
 it("on a sign-in page, Sign in passes on where the Clasher was going", async () => {

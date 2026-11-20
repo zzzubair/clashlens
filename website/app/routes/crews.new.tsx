@@ -247,7 +247,10 @@ export default function NewCrewRoute() {
       ) : accounts.length === 0 ? (
         <p className="notice crew-notice-action">
           <span>Link a Clash of Clans account to make a crew.</span>
-          <Link className="button button-primary" to="/account/verify-player">
+          <Link
+            className="button button-primary"
+            to="/account/verify-player?return=%2Fcrews%2Fnew"
+          >
             Link an account
           </Link>
         </p>
@@ -361,9 +364,21 @@ export default function NewCrewRoute() {
               <p id="crew-accounts-error" className="field-error" role="alert">
                 {errors.accounts}
               </p>
+            ) : firstJoinable === undefined ? (
+              <p className="form-help">
+                None of your linked accounts are in Legend League right now.{" "}
+                <Link to="/account/verify-player?return=%2Fcrews%2Fnew">
+                  Link a Legend League account
+                </Link>{" "}
+                to start a crew.
+              </p>
             ) : null}
           </fieldset>
-          <button type="submit" className="button button-primary" disabled={creating}>
+          <button
+            type="submit"
+            className="button button-primary"
+            disabled={creating || firstJoinable === undefined}
+          >
             {creating ? "Creating crew…" : "Create crew"}
           </button>
         </Form>

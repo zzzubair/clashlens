@@ -1,6 +1,7 @@
 import { legendDayDate, validDay } from "../lib/legend-log-data";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import {
+  Link,
   redirect,
   useFetcher,
   useLoaderData,
@@ -528,10 +529,19 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     let controller: AbortController | null = null;
     const late = () => cancelled || Date.now() >= deadline;
 
+    const startedAt = Date.now();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleNext = () => {
+      if (late()) return;
+      const interval = Date.now() - startedAt < 5_000 ? 500 : 1_500;
+      timer = setTimeout(() => void poll(), interval);
+    };
+
     const poll = async () => {
       if (late() || inFlight) return;
       inFlight = true;
       controller = new AbortController();
+      const timeout = setTimeout(() => controller?.abort(), 8_000);
       try {
         const response = await fetch(
           `${refreshResourcePath}?workId=${encodeURIComponent(workId)}`,
@@ -548,20 +558,23 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         const failed = late() ? null : pollThrew(error);
         if (failed) dispatchRefresh(failed);
       } finally {
+        clearTimeout(timeout);
         inFlight = false;
         controller = null;
+        scheduleNext();
       }
     };
 
-    const timer = setInterval(() => void poll(), 500);
     void poll();
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      if (timer !== null) clearTimeout(timer);
       controller?.abort();
     };
   }, [deadline, player?.tag, refreshResourcePath, workId]);
 
+  const revalidatorState = useRef(revalidator.state);
+  revalidatorState.current = revalidator.state;
   const completedWorkId =
     refresh.phase !== "idle" && visibleStatus?.state === "complete"
       ? visibleStatus.workId
@@ -569,7 +582,9 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
   useEffect(() => {
     if (completedWorkId === null) return;
     const timers = [0, 3_000, 8_000].map((delay) =>
-      setTimeout(() => void revalidate(), delay),
+      setTimeout(() => {
+        if (revalidatorState.current === "idle") void revalidate();
+      }, delay),
     );
     return () => timers.forEach(clearTimeout);
   }, [completedWorkId, revalidate]);
@@ -582,6 +597,11 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           {data.lookupError ? <ErrorNotice error={data.lookupError} /> : null}
           {data.error ? <ErrorNotice error={data.error} /> : null}
           <p>Check the tag and try again.</p>
+          <p>
+            <Link className="button button-secondary" to="/search">
+              Search for a player
+            </Link>
+          </p>
         </main>
       );
     }

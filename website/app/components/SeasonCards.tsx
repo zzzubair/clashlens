@@ -356,12 +356,8 @@ function SeasonChart({
         <path className="graph-gap" d={dotted} />
         <path className="graph-line" d={solid} />
         {points.map((point) => (
-          <circle
+          <g
             key={point.day}
-            className="graph-point"
-            cx={x(point.day)}
-            cy={y(point.value)}
-            r={tip === point.day ? 7 : 5}
             tabIndex={0}
             role="button"
             aria-label={`Day ${point.day}: ${mode === "trophies" ? count(point.value) : `#${count(point.value)}`}`}
@@ -369,8 +365,22 @@ function SeasonChart({
             onMouseLeave={() => onTip(null)}
             onFocus={() => onTip(point.day)}
             onBlur={() => onTip(null)}
-            onClick={() => onTip(point.day)}
-          />
+            onClick={() => onTip(tip === point.day ? null : point.day)}
+          >
+            <circle
+              cx={x(point.day)}
+              cy={y(point.value)}
+              r={16}
+              fill="transparent"
+              style={{ cursor: "pointer" }}
+            />
+            <circle
+              className="graph-point"
+              cx={x(point.day)}
+              cy={y(point.value)}
+              r={tip === point.day ? 7 : 5}
+            />
+          </g>
         ))}
       </svg>
       {tipPoint && tipDay ? (

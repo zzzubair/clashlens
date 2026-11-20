@@ -166,8 +166,8 @@ export default function GroupCompareRoute() {
         ) : null}
         {tooLarge !== null ? (
           <p>
-            Comparisons show up to 20 players at once ({tooLarge}). Edit the group or make
-            a smaller one for the players you want side by side.
+            Comparisons show up to 20 players at once ({tooLarge}). Edit the watchlist or
+            make a smaller one for the players you want side by side.
           </p>
         ) : null}
         {error ? <ErrorNotice error={error} /> : null}
@@ -932,6 +932,7 @@ function Trend({ days, scale }: { days: DayResult[]; scale: number }) {
           key={day.start}
           className={`trend-day ${direction(day)}${index === active ? " trend-active" : ""}`}
           onMouseEnter={() => setActive(index)}
+          onClick={() => setActive((current) => (current === index ? null : index))}
         >
           <DayBar day={day} scale={scale} />
         </span>

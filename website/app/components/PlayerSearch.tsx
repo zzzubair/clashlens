@@ -54,11 +54,16 @@ export function usePlayerSuggestions(initialQuery = "") {
     request(value, SEARCH_DEBOUNCE_MS);
   }
 
+  function retry() {
+    request(query, 0);
+  }
+
   return {
     query,
     setQuery,
     change,
     dismiss,
+    retry,
     open: state !== "closed",
     data,
     loading: fetcher.state !== "idle",
@@ -101,17 +106,29 @@ export function SearchSuggestions({
   id,
   data,
   loading,
+  onRetry,
+  onSelect,
 }: {
   id: string;
   data: PlayerSearchLoaderData | undefined;
   loading: boolean;
+  onRetry?: () => void;
+  onSelect?: () => void;
 }) {
   const search = data?.search;
   const results = search?.results.slice(0, 5) ?? [];
   const users = search?.users.slice(0, 3) ?? [];
+  const pastedBareTag =
+    search &&
+    !search.exactTag &&
+    !search.query.startsWith("#") &&
+    /^[0289PYLQGRJCUV]{6,15}$/i.test(search.query)
+      ? normalizePlayerTag(`#${search.query}`)
+      : null;
+  const candidateTag = search?.exactTag ?? pastedBareTag;
   const unknownExactTag =
-    search?.exactTag && !results.some((result) => result.tag === search.exactTag)
-      ? search.exactTag
+    candidateTag && !results.some((result) => result.tag === candidateTag)
+      ? candidateTag
       : null;
 
   return (
@@ -128,7 +145,16 @@ export function SearchSuggestions({
       onMouseDown={(event) => event.preventDefault()}
     >
       {loading && !search ? <p className="search-dropdown-status">Searching…</p> : null}
-      {data?.error ? <p className="search-dropdown-status">Search unavailable.</p> : null}
+      {data?.error ? (
+        <p className="search-dropdown-status">
+          Search unavailable.{" "}
+          {onRetry ? (
+            <button type="button" className="button button-secondary" onClick={onRetry}>
+              Try again
+            </button>
+          ) : null}
+        </p>
+      ) : null}
       {!loading &&
       search &&
       results.length === 0 &&
@@ -146,6 +172,7 @@ export function SearchSuggestions({
                 className="search-suggestion search-suggestion-profile"
                 data-testid="search-suggestion"
                 to={`/users/${encodeURIComponent(user.username)}`}
+                onClick={onSelect}
               >
                 <span className="search-suggestion-player">
                   <strong>
@@ -165,10 +192,11 @@ export function SearchSuggestions({
           ))}
           {results.map((result) => (
             <li key={result.tag}>
-              <a
+              <Link
                 className="search-suggestion"
                 data-testid="search-suggestion"
-                href={canonicalPlayerPath(result.tag)}
+                to={canonicalPlayerPath(result.tag)}
+                onClick={onSelect}
               >
                 <span className="search-suggestion-player">
                   <strong>
@@ -196,21 +224,22 @@ export function SearchSuggestions({
                     </>
                   )}
                 </span>
-              </a>
+              </Link>
             </li>
           ))}
           {unknownExactTag ? (
             <li>
-              <a
+              <Link
                 className="search-suggestion"
                 data-testid="search-suggestion"
-                href={canonicalPlayerPath(unknownExactTag)}
+                to={canonicalPlayerPath(unknownExactTag)}
+                onClick={onSelect}
               >
                 <span className="search-suggestion-player">
                   <strong>Open {unknownExactTag}</strong>
                   <small>Player tag</small>
                 </span>
-              </a>
+              </Link>
             </li>
           ) : null}
         </ul>
@@ -424,6 +453,8 @@ export function HeaderSearch() {
                 id="header-search-suggestions"
                 data={suggestions.data}
                 loading={suggestions.loading}
+                onRetry={suggestions.retry}
+                onSelect={() => collapse(false)}
               />
             ) : null}
             <button

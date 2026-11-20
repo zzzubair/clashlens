@@ -199,13 +199,17 @@ function MarkDetail({
     ? anchor.right + 306 < document.documentElement.clientWidth
     : true;
   // It grows out of the mark: from its left side when it opens to the
-  // mark's right, from its right side when it opens to the mark's left.
+  // mark's right, from its right side when it opens to the mark's left,
+  // clamped inside the viewport vertically so it never clips off-screen.
+  const clampedTop = anchor
+    ? Math.max(8, Math.min(anchor.top - 10, window.innerHeight - 160))
+    : 8;
   const style =
     !phone && anchor
       ? {
           left: opensRight ? anchor.right + 8 : Math.max(8, anchor.left - 298),
-          top: anchor.top - 10,
-          transformOrigin: `${opensRight ? "left" : "right"} ${10 + anchor.height / 2}px`,
+          top: clampedTop,
+          transformOrigin: `${opensRight ? "left" : "right"} ${Math.max(0, anchor.top - clampedTop + anchor.height / 2)}px`,
         }
       : undefined;
   return (
@@ -290,7 +294,7 @@ export function LegendClock({
   const detail = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const phoneQuery = window.matchMedia("(max-width: 40rem)");
+    const phoneQuery = window.matchMedia("(max-width: 40rem), (pointer: coarse)");
     const compactQuery = window.matchMedia("(max-width: 64rem)");
     const update = () => {
       setPhone(phoneQuery.matches);
@@ -313,13 +317,18 @@ export function LegendClock({
       if (event.type === "click" && target?.closest(".clock-mark, .clock-detail")) return;
       setOpen(null);
     };
+    const onScroll = () => {
+      if (!phone) setOpen(null);
+    };
     document.addEventListener("keydown", close);
     document.addEventListener("click", close);
+    window.addEventListener("scroll", onScroll, { passive: true });
     return () => {
       document.removeEventListener("keydown", close);
       document.removeEventListener("click", close);
+      window.removeEventListener("scroll", onScroll);
     };
-  }, [open]);
+  }, [open, phone]);
 
   const resetMs = nowMs === null ? null : dayEndMs;
   const dayStart = resetMs === null ? null : dayStartMs;

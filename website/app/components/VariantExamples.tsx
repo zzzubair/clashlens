@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { useFetcher } from "react-router";
 
 import { battles, formatRate, starRate, type ArmyRow } from "../lib/army-stats";
 import type { ArmyVariantExamples } from "../lib/contracts";
@@ -206,24 +205,55 @@ function VariantExamples({
   attacks: number;
   url: string;
 }) {
-  // Loaded again each time the variant opens; closing it drops what loaded.
-  const fetcher = useFetcher<VariantExamplesResponse>({ key: url });
-  const { load } = fetcher;
+  // Loaded via fetch (not a router fetcher) so a dropped connection or 502
+  // stays inside this variant instead of replacing the Analytics page.
+  const [answer, setAnswer] = useState<VariantExamplesResponse | undefined>(undefined);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
-    void load(url);
-  }, [load, url]);
-  const read = variantExamplesRead(fetcher.data);
+    setAnswer(undefined);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15_000);
+    let active = true;
+    void fetch(url, {
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error(String(response.status));
+        return response.json() as Promise<VariantExamplesResponse>;
+      })
+      .then((payload) => {
+        if (active) setAnswer(payload);
+      })
+      .catch(() => {
+        if (active) setAnswer({ examples: null });
+      })
+      .finally(() => clearTimeout(timeout));
+    return () => {
+      active = false;
+      clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [url, attempt]);
+  const read = variantExamplesRead(answer);
   return (
     <div
       className="analytics-examples"
       aria-live="polite"
-      aria-busy={fetcher.state !== "idle"}
+      aria-busy={read.phase === "loading"}
     >
       {read.phase === "loading" ? (
         <p className="analytics-examples-rule">Loading armies…</p>
       ) : read.phase === "failed" ? (
         <p className="analytics-examples-rule">
-          These armies could not load. Close and open {label} to try again.
+          These armies could not load.{" "}
+          <button
+            type="button"
+            className="button button-secondary"
+            onClick={() => setAttempt((count) => count + 1)}
+          >
+            Try again
+          </button>
         </p>
       ) : (
         <ExampleArmies id={id} label={label} attacks={attacks} examples={read.examples} />

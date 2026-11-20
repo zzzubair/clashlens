@@ -382,6 +382,13 @@
   font-size: 1.1rem;
 }
 
+@media (pointer: coarse) {
+  .clock-detail-head button {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+}
+
 .clock-detail-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto 2.6rem;

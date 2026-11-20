@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Form, useFetcher, useSearchParams } from "react-router";
+import { Form, useFetcher, useNavigation, useSearchParams } from "react-router";
 
 import type { InviteLink } from "../lib/crew-contracts";
 import { LocalTimestamp } from "./Provenance";
@@ -52,7 +52,7 @@ export function CrewInvite({
         <input type="hidden" name="intent" value="invite" />
         <input type="hidden" name="idempotencyKey" value={key} />
         <button type="submit" className="button button-primary" disabled={busy}>
-          Invite
+          {busy ? "Loading link…" : "Invite"}
         </button>
       </fetcher.Form>
       {open ? (
@@ -71,8 +71,8 @@ export function CrewInvite({
                 Your current link keeps working.
                 {canEdit ? " Turn links off in Edit." : ""}
               </p>
-              <button type="submit" className="crew-link-button">
-                Make another link
+              <button type="submit" className="crew-link-button" disabled={busy}>
+                {busy ? "Creating link…" : "Make another link"}
               </button>
             </fetcher.Form>
           ) : null}
@@ -225,6 +225,11 @@ export function ConfirmForm({
   idempotencyKey: string;
   fields?: Record<string, string>;
 }) {
+  const navigation = useNavigation();
+  const busy =
+    navigation.state === "submitting" &&
+    navigation.formData?.get("intent") === intent &&
+    navigation.formData?.get("idempotencyKey") === idempotencyKey;
   return (
     <details className={icon ? "crew-confirm crew-row-confirm" : "crew-confirm"}>
       {icon ? (
@@ -241,8 +246,8 @@ export function ConfirmForm({
         {Object.entries(fields).map(([name, value]) => (
           <input key={name} type="hidden" name={name} value={value} />
         ))}
-        <button type="submit" className="button danger-button">
-          {confirm}
+        <button type="submit" className="button danger-button" disabled={busy}>
+          {busy ? "Working…" : confirm}
         </button>
       </Form>
     </details>

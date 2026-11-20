@@ -83,7 +83,15 @@ export function useBasesDay(tag: string) {
   // Days whose read is on its way: a day has one read at a time.
   const asking = useRef(new Set<number>());
   const pause = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => clearTimeout(pause.current), []);
+  const controllers = useRef(new Set<AbortController>());
+  useEffect(
+    () => () => {
+      clearTimeout(pause.current);
+      for (const controller of controllers.current) controller.abort();
+      controllers.current.clear();
+    },
+    [],
+  );
   return {
     chosen,
     read,
@@ -100,11 +108,24 @@ export function useBasesDay(tag: string) {
       });
       pause.current = setTimeout(() => {
         asking.current.add(next);
+        const controller = new AbortController();
+        controllers.current.add(controller);
+        const timeout = setTimeout(() => controller.abort(), 15_000);
         // Not a router fetcher: its failed read would replace the whole page with an error.
-        void fetch(basesPath(tag, next), { headers: { Accept: "application/json" } })
-          .then((response) => response.json() as Promise<BasesResponse>)
+        void fetch(basesPath(tag, next), {
+          headers: { Accept: "application/json" },
+          signal: controller.signal,
+        })
+          .then((response) => {
+            if (!response.ok) throw new Error(String(response.status));
+            return response.json() as Promise<BasesResponse>;
+          })
           .then(({ bases }) => bases ?? null)
           .catch(() => null)
+          .finally(() => {
+            clearTimeout(timeout);
+            controllers.current.delete(controller);
+          })
           .then((bases) => {
             asking.current.delete(next);
             setRead((old) => new Map(old).set(next, bases));
@@ -386,6 +407,15 @@ export function OpponentsCard({
       <>
         {head}
         <CardNote>{note}</CardNote>
+        {earlier && past === null && day !== null ? (
+          <button
+            type="button"
+            className="button button-secondary dash-small-button"
+            onClick={() => days.choose(day)}
+          >
+            Try again
+          </button>
+        ) : null}
       </>
     );
   // Hardest first within each strength: held most, or gave up least a defense.

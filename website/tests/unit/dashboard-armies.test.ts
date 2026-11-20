@@ -340,7 +340,9 @@ describe("Armies on offense", () => {
     const plain = await render(
       createElement(ArmiesOnOffenseCard, { data: { tag: TAG, armies } }),
     );
-    expect(plain).toContain("Armies on offense 3 days 7 days Season");
+    expect(plain).toContain("Armies on offense");
+    expect(plain).toContain("What the columns mean");
+    expect(plain).toContain("3 days 7 days Season");
     expect(plain).toContain("Whole Season · 24 days · 2 with army data · 1 attack");
 
     // A Season read must say it is one, and cannot cover a whole 28 days
