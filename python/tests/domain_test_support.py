@@ -147,10 +147,17 @@ def production_worker_grants() -> list[str]:
 
 def as_api_role(connection_info: str) -> str:
     """Connect as the production data-service role, not the test owner."""
+    return _as_role(connection_info, "clashlens_python_api")
+
+
+def as_bot_role(connection_info: str) -> str:
+    """Connect as the production Discord bot's role, not the test owner."""
+    return _as_role(connection_info, "clashlens_discord_bot")
+
+
+def _as_role(connection_info: str, role: str) -> str:
     options = conninfo_to_dict(connection_info).get("options", "")
-    return make_conninfo(
-        connection_info, options=f"{options} -c role=clashlens_python_api".strip()
-    )
+    return make_conninfo(connection_info, options=f"{options} -c role={role}".strip())
 
 
 DOMAIN_SCHEMA = "python_domain"

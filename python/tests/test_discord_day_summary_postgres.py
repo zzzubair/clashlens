@@ -1,5 +1,5 @@
 """Legend day summaries end to end: saved game data through the real worker to
-a published Daily board, then the bot's summary loop, run as the API's
+a published Daily board, then the bot's summary loop, run as the bot's own
 database role, sending to a fake Discord. See docs/testing.md."""
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from typing import Any
 import psycopg
 from discord_alerts_postgres_support import SITE, FakeDiscord, _summary_switch, _switch
 from discord_bot_postgres_support import DISCORD_ID, _account, _verify
-from domain_test_support import as_api_role, domain_database
+from domain_test_support import as_api_role, as_bot_role, domain_database
 from reset_scenarios_postgres_support import (
     PREVIOUS_SEASON,
     SEASON,
@@ -38,10 +38,10 @@ NAME = "Synthetic Legend I"
 SETTINGS = "  ·  [Summary settings](https://clashlens.test/account/discord-alerts)"
 
 
-def _loop(api: ApiDatabase, discord: FakeDiscord, at: datetime,
+def _loop(bot: ApiDatabase, discord: FakeDiscord, at: datetime,
           store: Store | None = None) -> SummaryLoop:
     """A freshly started bot's summary loop at `at`, as after a restart."""
-    return SummaryLoop(Summaries(api, store or Store(api), SITE, now=lambda: at), discord)
+    return SummaryLoop(Summaries(bot, store or Store(bot), SITE, now=lambda: at), discord)
 
 
 class _OffDuringOutage(FakeDiscord):
@@ -105,6 +105,7 @@ def test_one_summary_a_day_from_the_published_board_for_each_player_turned_on(
 
         owner = ApiDatabase(connection_info)
         api = ApiDatabase(as_api_role(connection_info))
+        bot = ApiDatabase(as_bot_role(connection_info))
         discord = FakeDiscord()
         try:
             mine = _account(owner, "discord", DISCORD_ID, "drift")
@@ -115,19 +116,19 @@ def test_one_summary_a_day_from_the_published_board_for_each_player_turned_on(
             # published its board yet.
             story.reset(day_3, {FULL: (5060, SEASON), LATE: (4920, SEASON)}, run=False)
             _verify(owner, mine, LATE)
-            before_board = asyncio.run(_loop(api, discord, after_reset).tick())
+            before_board = asyncio.run(_loop(bot, discord, after_reset).tick())
             story.reads(day_3 + timedelta(minutes=20), {FULL: 5060, LATE: 4920})
             story.run_worker()
             story.wait(timedelta(hours=1))
             board = story.served_board(day_3)
             earlier_board = story.served_board(day_2)
-            unasked = asyncio.run(_loop(api, discord, after_reset).tick())
+            unasked = asyncio.run(_loop(bot, discord, after_reset).tick())
             for tag in (FULL, LATE):
                 assert _summary_switch(api, mine, tag, True) == 200
-            first = _loop(api, discord, after_reset)
+            first = _loop(bot, discord, after_reset)
             sent = [asyncio.run(first.tick()) for _ in range(2)]
             # A restarted bot looks again at once and finds it logged.
-            restarted = asyncio.run(_loop(api, discord, after_reset).tick())
+            restarted = asyncio.run(_loop(bot, discord, after_reset).tick())
             day_3_dms = list(discord.sent)
 
             assert _summary_switch(api, mine, LATE, False) == 200
@@ -138,7 +139,7 @@ def test_one_summary_a_day_from_the_published_board_for_each_player_turned_on(
             story.run_worker()
             story.wait(timedelta(hours=1))
             discord.sent.clear()
-            day_4_sent = asyncio.run(_loop(api, discord, day_4 + timedelta(minutes=30)).tick())
+            day_4_sent = asyncio.run(_loop(bot, discord, day_4 + timedelta(minutes=30)).tick())
             day_4_dms = list(discord.sent)
 
             assert _summary_switch(api, mine, LATE, True) == 200
@@ -148,12 +149,13 @@ def test_one_summary_a_day_from_the_published_board_for_each_player_turned_on(
             story.run_worker()
             story.wait(timedelta(hours=1))
             fifth = _OffDuringOutage(lambda: _summary_switch(api, mine, LATE, False))
-            day_5_sent = asyncio.run(_loop(api, fifth, day_5 + timedelta(minutes=30)).tick())
+            day_5_sent = asyncio.run(_loop(bot, fifth, day_5 + timedelta(minutes=30)).tick())
             with owner.pool.connection() as connection:
                 logged = connection.execute(
                     "SELECT reset_at, state FROM discord_day_summary_deliveries ORDER BY id"
                 ).fetchall()
         finally:
+            bot.close()
             api.close()
             owner.close()
 
@@ -215,8 +217,8 @@ def test_one_summary_a_day_from_the_published_board_for_each_player_turned_on(
 class _CorrectedAfterFirstRead(Store):
     """The bot's player page reads; `correct` runs once, right after the first."""
 
-    def __init__(self, api: ApiDatabase, correct: Callable[[], None]) -> None:
-        super().__init__(api)
+    def __init__(self, bot: ApiDatabase, correct: Callable[[], None]) -> None:
+        super().__init__(bot)
         self.correct: Callable[[], None] | None = correct
 
     def player_page(self, tag: str, now: datetime) -> dict[str, Any] | None:
@@ -307,6 +309,7 @@ def test_a_monday_summary_from_one_board_while_it_is_corrected(
 
         owner = ApiDatabase(connection_info)
         api = ApiDatabase(as_api_role(connection_info))
+        bot = ApiDatabase(as_bot_role(connection_info))
         discord = FakeDiscord()
         try:
             mine = _account(owner, "discord", DISCORD_ID, "drift")
@@ -315,8 +318,9 @@ def test_a_monday_summary_from_one_board_while_it_is_corrected(
                 assert _summary_switch(api, mine, tag, True) == 200
             at = monday + timedelta(hours=2)
             sent = asyncio.run(
-                _loop(api, discord, at, _CorrectedAfterFirstRead(api, correct)).tick())
+                _loop(bot, discord, at, _CorrectedAfterFirstRead(bot, correct)).tick())
         finally:
+            bot.close()
             api.close()
             owner.close()
 

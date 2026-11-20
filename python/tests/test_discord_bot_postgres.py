@@ -1,4 +1,4 @@
-"""The bot's reads and its one write, run as the API's database role."""
+"""The bot's reads, run as the bot's own database role."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from discord_bot_postgres_support import (
     _account,
     _verify,
 )
-from domain_test_support import as_api_role, domain_database
+from domain_test_support import as_api_role, as_bot_role, domain_database
 
 from bot import store as store_module
 from bot.commands import Commands
@@ -48,7 +48,7 @@ def _set_default(database: ApiDatabase, account, tag: str) -> bool:
 def test_bot_lists_every_verified_player_past_500(database_url: str) -> None:
     with domain_database(database_url) as connection_info:
         owner = ApiDatabase(connection_info)
-        bot = ApiDatabase(as_api_role(connection_info))
+        bot = ApiDatabase(as_bot_role(connection_info))
         try:
             mine = _account(owner, "discord", DISCORD_ID, "drift")
             letters = "0289PYLQGRJCUV"
@@ -79,7 +79,8 @@ def test_bot_finds_discord_accounts_and_uses_a_default_only_while_verified(
 ) -> None:
     with domain_database(database_url) as connection_info:
         owner = ApiDatabase(connection_info)
-        bot = ApiDatabase(as_api_role(connection_info))
+        bot = ApiDatabase(as_bot_role(connection_info))
+        api = ApiDatabase(as_api_role(connection_info))
         try:
             for tag in ("#2PP", "#8QQ", "#9RR"):
                 seed_profile(owner, tag, 5100)
@@ -100,11 +101,11 @@ def test_bot_finds_discord_accounts_and_uses_a_default_only_while_verified(
 
             # With none chosen, the first verified player is the default.
             assert store.default_tag(account) == "#2PP"
-            assert _set_default(bot, account, "#9RR") is False
+            assert _set_default(api, account, "#9RR") is False
             assert store.default_tag(account) == "#2PP"
-            assert _set_default(bot, account, "#8QQ") is True
+            assert _set_default(api, account, "#8QQ") is True
             assert store.default_tag(account) == "#8QQ"
-            assert _set_default(bot, account, "#2PP") is True
+            assert _set_default(api, account, "#2PP") is True
             assert store.default_tag(account) == "#2PP"
 
             # Unverifying the default forgets it: the first player left is the default.
@@ -116,14 +117,14 @@ def test_bot_finds_discord_accounts_and_uses_a_default_only_while_verified(
                 )
             assert store.default_tag(account) == "#8QQ"
             # The website reads the same default.
-            summary = api_accounts.get_multi_account_summary(bot, mine)
+            summary = api_accounts.get_multi_account_summary(api, mine)
             assert summary is not None and summary["default_player"] == "#8QQ"
             # Verified again, it comes after #8QQ.
             _verify(owner, mine, "#2PP")
             assert store.default_tag(account) == "#8QQ"
 
             # Verifying the default again on the same account keeps it.
-            assert _set_default(bot, account, "#2PP") is True
+            assert _set_default(api, account, "#2PP") is True
             _verify(owner, mine, "#2PP")
             assert store.default_tag(account) == "#2PP"
             # A default moved to another account and back is forgotten.
@@ -131,7 +132,7 @@ def test_bot_finds_discord_accounts_and_uses_a_default_only_while_verified(
             _verify(owner, mine, "#2PP")
             assert store.default_tag(account) == "#8QQ"
             # So is one unverified and verified again.
-            assert _set_default(bot, account, "#2PP") is True
+            assert _set_default(api, account, "#2PP") is True
             with owner.pool.connection() as connection:
                 connection.execute(
                     "DELETE FROM verified_player_links"
@@ -144,9 +145,9 @@ def test_bot_finds_discord_accounts_and_uses_a_default_only_while_verified(
                 connection.execute(
                     "DELETE FROM verified_player_links WHERE account_id = %s", (theirs,)
                 )
-            summary = api_accounts.get_multi_account_summary(bot, theirs)
+            summary = api_accounts.get_multi_account_summary(api, theirs)
             assert summary is not None and summary["default_player"] is None
-            # The API role may run the player page and live board reads too.
+            # The bot's role may run the player page and live board reads too.
             page = store.player_page("#8QQ", NOW)
             (card,) = [card for card in store.players(account, NOW) if card["tag"] == "#8QQ"]
             assert (page["tag"], page["state"], page["reason"], page["rank"]) == (
@@ -154,13 +155,15 @@ def test_bot_finds_discord_accounts_and_uses_a_default_only_while_verified(
             )
         finally:
             bot.close()
+            api.close()
             owner.close()
 
 
 def test_with_none_chosen_the_default_is_the_first_tracked_player(database_url: str) -> None:
     with domain_database(database_url) as connection_info:
         owner = ApiDatabase(connection_info)
-        bot = ApiDatabase(as_api_role(connection_info))
+        bot = ApiDatabase(as_bot_role(connection_info))
+        api = ApiDatabase(as_api_role(connection_info))
         try:
             # #L82 was linked first but Clash Lens doesn't track it yet.
             with owner.pool.connection() as connection:
@@ -177,7 +180,7 @@ def test_with_none_chosen_the_default_is_the_first_tracked_player(database_url: 
 
             # Settings and /stats both use the tracked player, and nothing
             # takes over from it, since #L82 isn't tracked.
-            summary = api_accounts.get_multi_account_summary(bot, mine)
+            summary = api_accounts.get_multi_account_summary(api, mine)
             assert summary is not None
             assert (summary["default_player"], summary["next_default_player"]) == ("#2PP", None)
             assert store.default_tag(account) == "#2PP"
@@ -185,10 +188,10 @@ def test_with_none_chosen_the_default_is_the_first_tracked_player(database_url: 
             assert commands.stats(DISCORD_ID).text.startswith("### ")
             assert "#L82" not in commands.stats(DISCORD_ID).text
             # A chosen default stays chosen, tracked or not.
-            assert _set_default(bot, account, "#L82") is True
+            assert _set_default(api, account, "#L82") is True
             assert store.default_tag(account) == "#L82"
             # Unlinking it would hand /stats to the tracked player.
-            summary = api_accounts.get_multi_account_summary(bot, mine)
+            summary = api_accounts.get_multi_account_summary(api, mine)
             assert summary is not None
             assert (summary["default_player"], summary["next_default_player"]) == (
                 "#L82", "#2PP",
@@ -201,19 +204,20 @@ def test_with_none_chosen_the_default_is_the_first_tracked_player(database_url: 
                 connection.execute(
                     "UPDATE players SET active = false WHERE normalized_tag = '#2PP'"
                 )
-            summary = api_accounts.get_multi_account_summary(bot, mine)
+            summary = api_accounts.get_multi_account_summary(api, mine)
             assert summary is not None
             assert (summary["default_player"], summary["next_default_player"]) == (None, None)
             assert commands.stats(DISCORD_ID).text.startswith("Which linked account?")
         finally:
             bot.close()
+            api.close()
             owner.close()
 
 
 def test_bot_shows_a_player_who_has_not_played_yet_at_5000(database_url: str) -> None:
     with domain_database(database_url) as connection_info:
         owner = ApiDatabase(connection_info)
-        bot = ApiDatabase(as_api_role(connection_info))
+        bot = ApiDatabase(as_bot_role(connection_info))
         try:
             # Legend I at 5,000 with no Legend battle, in a profile naming
             # Season 0 that the game sends before sign-up and is rejected.
@@ -263,7 +267,8 @@ def test_bot_shows_a_player_who_has_not_played_yet_at_5000(database_url: str) ->
 def test_a_default_saved_during_a_transfer_is_not_kept(database_url: str) -> None:
     with domain_database(database_url) as connection_info:
         owner = ApiDatabase(connection_info)
-        bot = ApiDatabase(as_api_role(connection_info))
+        bot = ApiDatabase(as_bot_role(connection_info))
+        api = ApiDatabase(as_api_role(connection_info))
         try:
             seed_profile(owner, "#2PP", 5100)
             seed_profile(owner, "#8QQ", 5100)
@@ -283,7 +288,7 @@ def test_a_default_saved_during_a_transfer_is_not_kept(database_url: str) -> Non
                             " WHERE normalized_tag = '#8QQ')",
                             (theirs,),
                         )
-                        saving = pool.submit(_set_default, bot, account, "#8QQ")
+                        saving = pool.submit(_set_default, api, account, "#8QQ")
                         # The save waits for the transfer instead of reading the old owner.
                         with pytest.raises(TimeoutError):
                             saving.result(timeout=1)
@@ -293,13 +298,14 @@ def test_a_default_saved_during_a_transfer_is_not_kept(database_url: str) -> Non
             assert store.default_tag(account) == "#2PP"
         finally:
             bot.close()
+            api.close()
             owner.close()
 
 
 def test_bot_finds_a_player_who_has_not_played_yet_by_name(database_url: str) -> None:
     with domain_database(database_url) as connection_info:
         owner = ApiDatabase(connection_info)
-        bot = ApiDatabase(as_api_role(connection_info))
+        bot = ApiDatabase(as_bot_role(connection_info))
         try:
             # Drifter is Legend I at 5,000 with no Legend battle, known only
             # from the rejected Season 0 profile the game sends before sign-up.
@@ -341,7 +347,7 @@ def test_bot_names_and_dates_a_player_by_the_profile_their_page_shows(
 ) -> None:
     with domain_database(database_url) as connection_info:
         owner = ApiDatabase(connection_info)
-        bot = ApiDatabase(as_api_role(connection_info))
+        bot = ApiDatabase(as_bot_role(connection_info))
         try:
             # An accepted 5,000 profile named Drifter II, then a newer Season 0
             # one at 5,000 named Drifter, which the player's page shows.
@@ -386,10 +392,10 @@ def test_bot_names_and_dates_a_player_by_the_profile_their_page_shows(
             owner.close()
 
 
-def test_lookup_reads_run_as_the_api_role(database_url: str) -> None:
+def test_lookup_reads_run_as_the_bot_role(database_url: str) -> None:
     with domain_database(database_url) as connection_info:
         owner = ApiDatabase(connection_info)
-        bot = ApiDatabase(as_api_role(connection_info))
+        bot = ApiDatabase(as_bot_role(connection_info))
         try:
             for tag, trophies in (("#2PP", 5100), ("#8QQ", 5300), ("#9RR", 5200)):
                 seed_profile(owner, tag, trophies)
@@ -419,7 +425,7 @@ def test_bot_search_reads_a_bounded_list_of_saved_5000_profiles_exact_name_first
     monkeypatch.setattr(store_module, "MOST_SAVED_MATCHES", 1)
     with domain_database(database_url) as connection_info:
         owner = ApiDatabase(connection_info)
-        bot = ApiDatabase(as_api_role(connection_info))
+        bot = ApiDatabase(as_bot_role(connection_info))
         try:
             for tag, name in (("#2PP", "Aaa Zed"), ("#8QQ", "Bbb Zed"), ("#9RR", "Zed")):
                 seed_profile(owner, tag, 5000)

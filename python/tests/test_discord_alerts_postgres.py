@@ -1,5 +1,5 @@
 """Attack alerts end to end: saved game data through the real worker, then the
-bot's alert loop, run as the API's database role, sending to a fake Discord.
+bot's alert loop, run as the bot's own database role, sending to a fake Discord.
 See docs/testing.md."""
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from discord_alerts_support import (
     stand_in_discord,
 )
 from discord_bot_postgres_support import DISCORD_ID, _account, _verify
-from domain_test_support import as_api_role, domain_database
+from domain_test_support import as_api_role, as_bot_role, domain_database
 from reset_scenarios_postgres_support import (
     RESULTS,
     SEASON,
@@ -79,12 +79,16 @@ def _dark_picture_switch(database: ApiDatabase, account_id: int, on: bool) -> in
 
 
 @contextmanager
-def _alerts_on(database_url: str) -> Iterator[tuple[str, ApiDatabase, int, int]]:
+def _alerts_on(
+    database_url: str,
+) -> Iterator[tuple[str, ApiDatabase, ApiDatabase, int, int]]:
     """The account's one verified player, #2PP, with alerts on for an hour and
-    no confirmation due: (connection info, API database, account, player id)."""
+    no confirmation due: (connection info, API database, bot database,
+    account, player id)."""
     with domain_database(database_url) as connection_info:
         owner = ApiDatabase(connection_info)
         api = ApiDatabase(as_api_role(connection_info))
+        bot = ApiDatabase(as_bot_role(connection_info))
         try:
             with psycopg.connect(connection_info, autocommit=True) as connection:
                 player = connection.execute(
@@ -99,8 +103,9 @@ def _alerts_on(database_url: str) -> Iterator[tuple[str, ApiDatabase, int, int]]
                     "UPDATE discord_attack_alerts SET enabled_at = enabled_at - interval '1 hour',"
                     " confirm_requested_at = confirm_requested_at - interval '1 hour'"
                 )
-            yield connection_info, api, mine, player
+            yield connection_info, api, bot, mine, player
         finally:
+            bot.close()
             api.close()
             owner.close()
 
@@ -148,11 +153,12 @@ def test_an_attack_the_worker_saves_sends_one_dm_with_the_attackers_hit_rate(
 
         owner = ApiDatabase(connection_info)
         api = ApiDatabase(as_api_role(connection_info))
+        bot = ApiDatabase(as_bot_role(connection_info))
         try:
             mine = _account(owner, "discord", DISCORD_ID, "drift")
             _verify(owner, mine, DEFENDER)
             assert _switch(api, mine, DEFENDER, True) == 200
-            store = Store(api)
+            store = Store(bot)
             discord = FakeDiscord()
             drawn: list[tuple[dict, bool]] = []
             draw = picture.draw
@@ -160,7 +166,7 @@ def test_an_attack_the_worker_saves_sends_one_dm_with_the_attackers_hit_rate(
                 "bot.picture.draw", lambda day, dark: drawn.append((day, dark)) or draw(day, dark)
             )
             loop = AlertLoop(
-                AlertStore(api, store), discord, SITE,
+                AlertStore(bot, store), discord, SITE,
                 now=lambda: day_3 - timedelta(minutes=1),
             )
             before = asyncio.run(loop.tick())
@@ -177,6 +183,7 @@ def test_an_attack_the_worker_saves_sends_one_dm_with_the_attackers_hit_rate(
             stats = Commands(store, SITE, now=lambda: day_3 - timedelta(minutes=1)).stats(
                 DISCORD_ID, attacker)
         finally:
+            bot.close()
             api.close()
             owner.close()
 
@@ -261,6 +268,7 @@ def test_alerts_follow_the_switch_skip_stale_battles_and_retry_only_outages(
     with domain_database(database_url) as connection_info:
         owner = ApiDatabase(connection_info)
         api = ApiDatabase(as_api_role(connection_info))
+        bot = ApiDatabase(as_bot_role(connection_info))
         try:
             with psycopg.connect(connection_info, autocommit=True) as connection:
                 ids = {
@@ -289,7 +297,7 @@ def test_alerts_follow_the_switch_skip_stale_battles_and_retry_only_outages(
             defend("#2PP", saved_ago=timedelta(minutes=70))
             defend("#8QQ")
             discord = FakeDiscord()
-            loop = AlertLoop(AlertStore(api, Store(api)), discord, SITE, now=lambda: now)
+            loop = AlertLoop(AlertStore(bot, Store(bot)), discord, SITE, now=lambda: now)
             quiet = asyncio.run(loop.tick())
 
             discord.refusing[DISCORD_ID] = "no_shared_server"
@@ -315,6 +323,7 @@ def test_alerts_follow_the_switch_skip_stale_battles_and_retry_only_outages(
                     " ORDER BY battle_id"
                 ).fetchall()
         finally:
+            bot.close()
             api.close()
             owner.close()
 
@@ -339,8 +348,8 @@ def test_the_dark_picture_switch_draws_each_next_picture_dark_until_turned_off(
 ) -> None:
     """The picture is light until the Clasher turns the dark picture on; the
     next alert's picture is then dark, and after turning it off, light again."""
-    with _alerts_on(database_url) as (connection_info, api, mine, player):
-        alerts = AlertStore(api, Store(api))
+    with _alerts_on(database_url) as (connection_info, api, bot, mine, player):
+        alerts = AlertStore(bot, Store(bot))
         # The battles here are seeded without the worker, so the defender's
         # day is the one already saved.
         monkeypatch.setattr(alerts, "legend_day", lambda _alert, _now: a_day())
@@ -369,6 +378,7 @@ def test_turning_alerts_on_confirms_once_and_reconnecting_tries_again(
     with domain_database(database_url) as connection_info:
         owner = ApiDatabase(connection_info)
         api = ApiDatabase(as_api_role(connection_info))
+        bot = ApiDatabase(as_bot_role(connection_info))
         try:
             with psycopg.connect(connection_info, autocommit=True) as connection:
                 player = connection.execute(
@@ -379,7 +389,7 @@ def test_turning_alerts_on_confirms_once_and_reconnecting_tries_again(
             _verify(owner, mine, "#2PP")
             discord = FakeDiscord()
             discord.refusing[DISCORD_ID] = "no_shared_server"
-            loop = AlertLoop(AlertStore(api, Store(api)), discord, SITE)
+            loop = AlertLoop(AlertStore(bot, Store(bot)), discord, SITE)
             assert _switch(api, mine, "#2PP", True) == 200
             refused = [asyncio.run(loop.tick()) for _ in range(2)]
             shown = api_discord_alerts.get_attack_alerts(api, mine)["undelivered"]
@@ -409,6 +419,7 @@ def test_turning_alerts_on_confirms_once_and_reconnecting_tries_again(
             cleared = api_discord_alerts.get_attack_alerts(api, mine)["undelivered"]
             confirmed = [asyncio.run(loop.tick()) for _ in range(2)]
         finally:
+            bot.close()
             api.close()
             owner.close()
 
@@ -433,9 +444,9 @@ def test_a_dm_discord_did_not_take_is_tried_again_only_within_two_minutes(
     longer."""
     monkeypatch.setattr("bot.alerts.RETRY_SECONDS", 0.0)
     monkeypatch.setattr("bot.alerts.NONCE_SECONDS", 1.0)
-    with _alerts_on(database_url) as (connection_info, api, mine, player):
+    with _alerts_on(database_url) as (connection_info, api, bot, mine, player):
         discord = FakeDiscord()
-        loop = AlertLoop(AlertStore(api, Store(api)), discord, SITE)
+        loop = AlertLoop(AlertStore(bot, Store(bot)), discord, SITE)
         discord.outages = 100
         _defend(connection_info, player)
         within = [asyncio.run(loop.tick()) for _ in range(2)]
@@ -473,11 +484,11 @@ def test_a_rate_limit_longer_than_a_dms_time_left_fails_it_at_once(
     def answer(n: int) -> web.Response:
         return _rate_limited(60.0) if n == 1 else delivered(n)
 
-    with _alerts_on(database_url) as (connection_info, api, _mine, player):
+    with _alerts_on(database_url) as (connection_info, _api, bot, _mine, player):
 
         async def scenario() -> tuple[int, float, list[dict]]:
             async with stand_in_discord(monkeypatch, answer) as (client, sends):
-                loop = AlertLoop(AlertStore(api, Store(api)), DiscordMessenger(client), SITE)
+                loop = AlertLoop(AlertStore(bot, Store(bot)), DiscordMessenger(client), SITE)
                 await asyncio.to_thread(_defend, connection_info, player)
                 await asyncio.to_thread(_defend, connection_info, player)
                 started = time.monotonic()
@@ -501,9 +512,9 @@ def test_dms_waiting_for_discord_outlast_a_failed_round(
     """Two DMs wait for Discord when a database error ends the round that
     would try them again; the next round still tries and delivers both."""
     monkeypatch.setattr("bot.alerts.RETRY_SECONDS", 0.0)
-    with _alerts_on(database_url) as (connection_info, api, _mine, player):
+    with _alerts_on(database_url) as (connection_info, _api, bot, _mine, player):
         discord = FakeDiscord()
-        alerts = AlertStore(api, Store(api))
+        alerts = AlertStore(bot, Store(bot))
         loop = AlertLoop(alerts, discord, SITE)
         discord.outages = 2
         _defend(connection_info, player)
@@ -526,7 +537,7 @@ def test_dms_waiting_for_discord_outlast_a_failed_round(
 def test_the_page_lists_every_verified_player(database_url: str) -> None:
     """A player with alerts on stays on the page, to be turned off, however
     many players sort before it."""
-    with _alerts_on(database_url) as (connection_info, api, mine, _player):
+    with _alerts_on(database_url) as (connection_info, api, _bot, mine, _player):
         with psycopg.connect(connection_info, autocommit=True) as connection:
             tags = [
                 row[0]
@@ -579,7 +590,7 @@ def test_each_switch_turns_on_and_off_and_repeating_a_turn_changes_nothing(
     """Turning a switch on that is already on keeps when it went on, so no
     second confirmation is owed; turning it off twice leaves it off, and on
     again starts it from now."""
-    with _alerts_on(database_url) as (connection_info, api, mine, _player):
+    with _alerts_on(database_url) as (connection_info, api, _bot, mine, _player):
         def went_on() -> tuple | None:
             with psycopg.connect(connection_info, autocommit=True) as connection:
                 return connection.execute(

@@ -68,8 +68,9 @@ confidence rules, rankings, or cohort membership.
 Integrations needing Clash Lens data use the private API rather than reading
 the database or archive. The one exception is the Clash Lens Discord bot
 ([`python/src/bot`](../python/src/bot)): it reads the database directly by
-running the private API's own read code with the API's database login, so its
-numbers match the website. Settings such as the default player, attack
+running the private API's own read code with its own database login, so its
+numbers match the website. That login (migration 0146) may read only the
+tables the bot's code reads and write only its two delivery logs. Settings such as the default player, attack
 alerts and the Legend day summary are saved through the website. The bot's
 only writes are its two delivery logs: the attack alert log
 (`discord_attack_alert_deliveries`, migration 0108), which records each alert
@@ -257,7 +258,7 @@ all. Their database connections are budgeted: each process's
 `--database-pool-size` is at most 16, and processes times (pool size plus the
 two maintenance connections and the maintenance lock's one) may not exceed
 38. With the collector's 32, the uploads process's 4, the API's 8, the
-Discord bot's 6 (its own pool under the API's database login: 4 for commands,
+Discord bot's 6 (its own pool under its own database login: 4 for commands,
 1 for attack alerts, 1 for Legend day summaries) and two for operators, the
 application budget is 90 of PostgreSQL's 100 (checked on 8 October 2026);
 with the bot off it is 84. With the bot on, the 10 outside the budget, 7

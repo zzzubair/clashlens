@@ -828,6 +828,7 @@ PRODUCTION_RESOURCES = {
             "hmac-current", "hmac-previous", "login-secret", "google-client-secret", "discord-client-secret",
             "walg-config", "archive-operator-database-url", "archive-operator-access-key",
             "archive-operator-secret-key", "history-operator-database-url", "discord-bot-token",
+            "discord-bot-database-url",
         )},
         "unrelated-secret": "",
     },
@@ -1142,7 +1143,7 @@ def test_finished_job_cleanup_timer_runs_only_in_production(tmp_path, mode_confi
 
 
 @pytest.mark.parametrize("mode", ["production", "fixture"])
-def test_finished_job_cleanup_role_gets_a_fresh_login_only_in_production(tmp_path, mode_config, mode):
+def test_cleanup_and_bot_roles_get_a_fresh_login_only_in_production(tmp_path, mode_config, mode):
     store = tmp_path / "podman-secrets"
     store.mkdir()
     statements = tmp_path / "statements.sql"
@@ -1171,18 +1172,22 @@ def test_finished_job_cleanup_role_gets_a_fresh_login_only_in_production(tmp_pat
             check=False,
         )
         assert result.returncode == 0, result.stderr
-        secret = store / "clashlens-history-operator-database-url"
-        if mode == "fixture":
-            assert not secret.exists()
-            assert "clashlens_history_retention" not in statements.read_text()
-            return
-        password = re.fullmatch(
-            r"postgresql://clashlens_history_retention:([0-9a-f]{64})@127\.0\.0\.1:5432/clashlens\?sslmode=disable",
-            secret.read_text(),
-        ).group(1)
-        assert f"ALTER ROLE clashlens_history_retention WITH LOGIN PASSWORD '{password}';" in statements.read_text()
-        passwords.append(password)
-    assert passwords[0] != passwords[1]
+        for name, role in (
+            ("history-operator", "clashlens_history_retention"),
+            ("discord-bot", "clashlens_discord_bot"),
+        ):
+            secret = store / f"clashlens-{name}-database-url"
+            if mode == "fixture":
+                assert not secret.exists()
+                assert role not in statements.read_text()
+                continue
+            password = re.fullmatch(
+                rf"postgresql://{role}:([0-9a-f]{{64}})@127\.0\.0\.1:5432/clashlens\?sslmode=disable",
+                secret.read_text(),
+            ).group(1)
+            assert f"ALTER ROLE {role} WITH LOGIN PASSWORD '{password}';" in statements.read_text()
+            passwords.append(password)
+    assert len(set(passwords)) == len(passwords)
 
 
 def test_finished_job_cleanup_runs_one_batch_as_its_own_role_without_waiting(runtime, mode_config, tmp_path):
@@ -1326,7 +1331,8 @@ def test_discord_bot_is_installed_but_started_only_when_turned_on(
     assert "--entrypoint=python" in bot["Container"]["PodmanArgs"]
     assert bot["Container"]["Exec"] == ["-m", "bot", "run"]
     secrets = " ".join(bot["Container"]["Secret"])
-    assert "clashlens-api-database-url," in secrets
+    assert "clashlens-discord-bot-database-url," in secrets
+    assert "clashlens-api-database-url," not in secrets
     assert "clashlens-discord-bot-token," in secrets
     assert "PublishPort" not in bot["Container"]
     # Only the configured website address reaches the bot; with none set the bot refuses to start.

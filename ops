@@ -464,7 +464,7 @@ guard_existing_resources() {
     clashlens-collector-archive-access-key clashlens-collector-archive-secret-key clashlens-worker-archive-access-key clashlens-worker-archive-secret-key
     clashlens-normal-api-keys clashlens-interactive-api-keys clashlens-interactive-1 clashlens-hmac-current clashlens-hmac-previous
     clashlens-login-secret clashlens-google-client-secret clashlens-discord-client-secret clashlens-init-database-url clashlens-walg-config
-    clashlens-archive-operator-database-url clashlens-archive-operator-access-key clashlens-archive-operator-secret-key clashlens-history-operator-database-url clashlens-discord-bot-token"
+    clashlens-archive-operator-database-url clashlens-archive-operator-access-key clashlens-archive-operator-secret-key clashlens-history-operator-database-url clashlens-discord-bot-token clashlens-discord-bot-database-url"
   # One listing and one label read per kind (two calls per name took 25 s); anything unexpected, a failed listing included, falls back to guard_resource.
   for kind in container pod network volume secret; do
     if [[ "$kind" == container ]]; then list=(--all --format '{{.Names}}'); else list=(--format '{{.Name}}'); fi
@@ -948,8 +948,8 @@ prepare_secrets() {
     replace_secret clashlens-collector-archive-secret-key "$(setting CLASHLENS_ARCHIVE_SECRET_KEY)"
     replace_secret clashlens-worker-archive-access-key "$(setting CLASHLENS_WORKER_ARCHIVE_ACCESS_KEY)"
     replace_secret clashlens-worker-archive-secret-key "$(setting CLASHLENS_WORKER_ARCHIVE_SECRET_KEY)"
-    HISTORY_DB_PASSWORD=$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n') # new each up; see configure_database
-    replace_secret clashlens-history-operator-database-url "postgresql://clashlens_history_retention:$HISTORY_DB_PASSWORD@127.0.0.1:5432/$POSTGRES_DB?sslmode=disable"
+    HISTORY_DB_PASSWORD=$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n'); BOT_DB_PASSWORD=$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n') # new each up; see configure_database
+    replace_secret clashlens-history-operator-database-url "postgresql://clashlens_history_retention:$HISTORY_DB_PASSWORD@127.0.0.1:5432/$POSTGRES_DB?sslmode=disable"; replace_secret clashlens-discord-bot-database-url "postgresql://clashlens_discord_bot:$BOT_DB_PASSWORD@127.0.0.1:5432/$POSTGRES_DB?sslmode=disable"
     local secret_dir name key_value normal_keys= interactive_key
     secret_dir=$(setting CLASHLENS_API_KEY_HOST_DIR)
     for name in ${REGULAR_KEY_NAMES//,/ }; do
@@ -1044,12 +1044,12 @@ configure_database() {
   sql+=" ALTER ROLE clashlens_python_api WITH LOGIN PASSWORD $api_password;"
   if archive_retention_enabled; then sql+=" ALTER ROLE clashlens_archive_retention WITH LOGIN PASSWORD $(sql_literal "${CONFIG[CLASHLENS_ARCHIVE_RETENTION_DB_PASSWORD]}");"
   else sql+=' ALTER ROLE clashlens_archive_retention WITH NOLOGIN PASSWORD NULL;'; fi
-  # Only production runs finished-job cleanup; its role keeps the fixture's NOLOGIN.
-  [[ "$MODE" != production ]] || sql+=" ALTER ROLE clashlens_history_retention WITH LOGIN PASSWORD $(sql_literal "$HISTORY_DB_PASSWORD");"
+  # Only production runs finished-job cleanup and the Discord bot; their roles keep the fixture's NOLOGIN.
+  [[ "$MODE" != production ]] || sql+=" ALTER ROLE clashlens_history_retention WITH LOGIN PASSWORD $(sql_literal "$HISTORY_DB_PASSWORD"); ALTER ROLE clashlens_discord_bot WITH LOGIN PASSWORD $(sql_literal "$BOT_DB_PASSWORD");"
   sql+=' REVOKE ALL PRIVILEGES ON TABLE python_processing_jobs FROM clashlens_python_worker;'
   sql+=' GRANT SELECT (id, lease_generation) ON TABLE python_processing_jobs TO clashlens_python_worker; COMMIT;'
   printf '%s\n' "$sql" | psql_exec_sensitive
-  unset admin_password collector_password worker_password api_password sql HISTORY_DB_PASSWORD
+  unset admin_password collector_password worker_password api_password sql HISTORY_DB_PASSWORD BOT_DB_PASSWORD
   local endpoint region bucket instance marker_key marker_hash marker_version
   if [[ "$MODE" == fixture ]]; then endpoint=127.0.0.1:9000; region=us-east-1; bucket=evidence; instance=development; marker_key=clashlens/archive-instance.json; marker_hash=16d586e6c52a90aed1fed855fd03e9ce7257319cfcb5b824cb52015989b52192; marker_version=v1
   else endpoint=$(setting CLASHLENS_ARCHIVE_ENDPOINT); region=$(setting CLASHLENS_ARCHIVE_REGION); bucket=$(setting CLASHLENS_ARCHIVE_BUCKET); instance=$(setting CLASHLENS_ARCHIVE_INSTANCE_ID); marker_key=$(setting CLASHLENS_ARCHIVE_MARKER_KEY); marker_hash=$(setting CLASHLENS_ARCHIVE_MARKER_HASH); marker_version=$(setting CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION); fi
