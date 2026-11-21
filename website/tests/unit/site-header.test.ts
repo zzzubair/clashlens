@@ -90,6 +90,14 @@ it("signed out offers Sign in back to this page and Join Discord in a new tab", 
   expect(withQuery).toContain(
     'href="/login?returnPath=%2Fleaderboards%2Ftracked%3Fday%3D12" data-discover="true">Sign in</a>',
   );
+  const afterLogout = await renderHeader(SIGNED_OUT, "/?saved=logout");
+  expect(afterLogout).toContain(
+    'href="/login?returnPath=%2F" data-discover="true">Sign in</a>',
+  );
+  const unrecordedLogout = await renderHeader(SIGNED_OUT, "/?logout=unrecorded");
+  expect(unrecordedLogout).toContain(
+    'href="/login?returnPath=%2F" data-discover="true">Sign in</a>',
+  );
 });
 
 it("on a sign-in page, Sign in passes on where the Clasher was going", async () => {

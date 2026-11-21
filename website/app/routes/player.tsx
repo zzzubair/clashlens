@@ -538,7 +538,8 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         if (late()) return;
         dispatchRefresh(pollAnswer(response.ok, payload, workId, player?.tag));
       } catch (error) {
-        const failed = late() ? null : pollThrew(error);
+        if (signal.aborted || late()) return;
+        const failed = pollThrew(error);
         if (failed) dispatchRefresh(failed);
       }
     }, late);

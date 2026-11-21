@@ -563,6 +563,15 @@ function PageLoading() {
 // Sign-in pages already offer both ways in, so they pass on where the
 // Clasher was going (their own returnPath) instead of coming back to themselves.
 const SIGN_IN_PAGES = new Set(["/login", "/signup", "/account/setup"]);
+const TRANSIENT_RETURN_PARAMS = ["saved", "logout"] as const;
+
+function currentReturnPath(pathname: string, search: string): string {
+  if (!search) return pathname;
+  const params = new URLSearchParams(search);
+  for (const key of TRANSIENT_RETURN_PARAMS) params.delete(key);
+  const kept = params.toString();
+  return kept ? `${pathname}?${kept}` : pathname;
+}
 
 // The same top bar on every page, error pages included. Without the root
 // data (the server failed before it), it shows the signed-out menu. The
@@ -572,7 +581,7 @@ function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
   const location = useLocation();
   const back = SIGN_IN_PAGES.has(location.pathname)
     ? new URLSearchParams(location.search).get("returnPath")
-    : `${location.pathname}${location.search}`;
+    : currentReturnPath(location.pathname, location.search);
   const signIn = back ? `/login?returnPath=${encodeURIComponent(back)}` : "/login";
   // A busy moment can leave the account's name unread (see
   // loadRootNavigation); the menu keeps the name it already showed for the
