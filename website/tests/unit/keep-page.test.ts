@@ -3,6 +3,7 @@ import { renderToString } from "react-dom/server";
 import {
   createMemoryRouter,
   data,
+  redirect,
   UNSAFE_FrameworkContext,
   type MiddlewareFunction,
 } from "react-router";
@@ -12,8 +13,10 @@ import {
   LOGGED_OUT,
   keepPageOnLostConnection,
   rememberShownPage,
+  retryShownPage,
   usePreloadInlineAnswerCode,
 } from "../../app/lib/keep-page";
+import { CARDS_FROM_LOAD, cardRefreshStep } from "../../app/components/DashboardState";
 
 const PAGE = "/players/%23LY2QQ9L9Q";
 const GROUPS = "/account/groups";
@@ -56,13 +59,7 @@ async function openPage(failure: () => unknown, path = PAGE) {
               throw data(failure());
             },
           },
-          {
-            id: "search",
-            path: "resources/players/search",
-            loader: () => {
-              throw failure();
-            },
-          },
+          { id: "logout", path: "logout", action: () => redirect("/") },
           {
             id: "home",
             index: true,
@@ -165,22 +162,9 @@ it("shows Refresh as unavailable when its request loses the connection", async (
   expect(router.state.loaderData.root).toEqual(LOGGED_OUT);
 });
 
-it("shows search as unavailable when its request loses the connection", async () => {
-  const router = await openPage(() => new TypeError("Load failed"));
-  const answer = await fetched(router, "search", () =>
-    router.fetch("search", "player", "/resources/players/search?q=+Zub+"),
-  );
-  expect(answer).toEqual({
-    query: "Zub",
-    search: null,
-    error: UNAVAILABLE,
-  });
-  expect(router.state.errors).toBeNull();
-});
-
-// Without this code already downloaded, a first search or Refresh made offline
-// makes React Router reload the page into the browser's offline screen.
-it("has the page download the code for search and Refresh up front", () => {
+// Without this code already downloaded, a first Refresh made offline makes
+// React Router reload the page into the browser's offline screen.
+it("has the page download the code for Refresh up front", () => {
   const route = (module: string, imports: string[] = []) => ({ module, imports });
   const manifest = {
     routes: {
@@ -203,11 +187,7 @@ it("has the page download the code for search and Refresh up front", () => {
   const preloaded = [...html.matchAll(/<link rel="modulepreload" href="([^"]+)"/g)].map(
     (match) => match[1],
   );
-  expect(preloaded.sort()).toEqual([
-    "/assets/player-search.js",
-    "/assets/refresh.js",
-    "/assets/shared.js",
-  ]);
+  expect(preloaded).toEqual(["/assets/refresh.js"]);
 });
 
 it("shows the error again, not an empty page, on Back after a failed profile", async () => {
@@ -221,9 +201,25 @@ it("shows the error again, not an empty page, on Back after a failed profile", a
 
 it("keeps the shown dashboard when Try again on linked players loses the connection", async () => {
   const router = await openPage(() => new TypeError("Load failed"), "/");
-  await router.revalidate();
+  await retryShownPage(() => router.revalidate());
   expect(router.state.errors).toBeNull();
   expect(router.state.loaderData.home).toEqual({ players: ["#LY2QQ9L9Q"] });
+});
+
+it("never keeps the dashboard when its read after sign-out loses the connection", async () => {
+  const router = await openPage(() => new TypeError("Load failed"), "/");
+  const formData = new FormData();
+  formData.set("idempotencyKey", "key");
+  await router.navigate("/logout", { formMethod: "post", formData });
+  expect(router.state.errors).toEqual({ root: new TypeError("Load failed") });
+  expect(router.state.loaderData.home).toBeUndefined();
+});
+
+it("never keeps the dashboard on a background re-read that loses the connection", async () => {
+  const router = await openPage(() => new TypeError("Load failed"), "/");
+  await router.revalidate();
+  expect(router.state.errors).toEqual({ root: new TypeError("Load failed") });
+  expect(router.state.loaderData.home).toBeUndefined();
 });
 
 it("shows a dashboard card as unavailable when its Try again loses the connection", async () => {
@@ -234,4 +230,25 @@ it("shows a dashboard card as unavailable when its Try again loses the connectio
   expect(answer).toEqual(UNAVAILABLE);
   expect(router.state.errors).toBeNull();
   expect(router.state.loaderData.home).toEqual({ players: ["#LY2QQ9L9Q"] });
+});
+
+it("shows a dashboard card as unavailable again when a second Try again loses the connection", async () => {
+  const router = await openPage(() => new TypeError("Load failed"), "/");
+  const card = "goal" as never;
+  let state = CARDS_FROM_LOAD;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    state = cardRefreshStep(state, { type: "outdated", cards: [card] });
+    state = cardRefreshStep(state, { type: "requested", cards: state.stale });
+    const answer = await fetched(router, "card", () =>
+      router.fetch("card", "home", "/?index&player=%23LY2QQ9L9Q&cards=goal"),
+    );
+    expect(answer).toEqual(UNAVAILABLE);
+    state = cardRefreshStep(state, {
+      type: "answered",
+      answer: answer as never,
+      tag: "#LY2QQ9L9Q",
+    });
+    expect(state.stale).toEqual([]);
+    expect(state.refreshed).toEqual({ goal: null });
+  }
 });

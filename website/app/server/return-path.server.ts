@@ -1,4 +1,4 @@
-import { isSafeReturnPath, MAX_RETURN_PATH_LENGTH } from "./auth.server";
+import { isSafeReturnPath } from "./auth.server";
 /**
  * Same-origin return-path validation for login redirects.
  *
@@ -27,7 +27,7 @@ export function safeReturnPath(
   origin: URL,
 ): string | null {
   if (typeof value !== "string") return null;
-  if (value.length === 0 || value.length > MAX_RETURN_PATH_LENGTH) return null;
+  if (value.length === 0) return null;
   value = pagePathOfDataRequest(value);
   if (!isSafeReturnPath(value)) return null;
   let parsed: URL;

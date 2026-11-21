@@ -13,7 +13,12 @@ import { useBackState } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { PageSearch } from "../components/PageSearch";
 import type { SearchResponse, WebsiteErrorResponse } from "../lib/contracts";
-import { canonicalPlayerPath, noMatchHint, searchedPlayerTag } from "../lib/player-tag";
+import {
+  canonicalPlayerPath,
+  noMatchHint,
+  possiblePlayerTag,
+  searchedPlayerTag,
+} from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
 
 export interface SearchLoaderData {
@@ -104,8 +109,17 @@ export default function Search() {
 
 function SearchResults({ search, busy }: { search: SearchResponse; busy: boolean }) {
   const users = search.users;
+  const tagChoice = search.exactTag ? null : possiblePlayerTag(search.query);
   return (
     <div className="search-results" aria-live="polite" aria-busy={busy}>
+      {tagChoice && !search.results.some((result) => result.tag === tagChoice) ? (
+        <section>
+          <h3>Player tag</h3>
+          <a className="button button-secondary" href={canonicalPlayerPath(tagChoice)}>
+            Open {tagChoice}
+          </a>
+        </section>
+      ) : null}
       {users.length > 0 ? (
         <section aria-labelledby="profile-search-title">
           <h3 id="profile-search-title">Clash Lens profiles</h3>

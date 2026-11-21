@@ -5,7 +5,9 @@ vi.mock("../../app/services/python-transport.server", () => ({
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
+  createMemoryRouter,
   createStaticHandler,
+  RouterProvider,
   createStaticRouter,
   StaticRouterProvider,
 } from "react-router";
@@ -161,6 +163,34 @@ describe("Discord attack alerts settings", () => {
     expect(html).toContain("Connect Discord first");
     expect(html).toContain('name="intent" value="connect-discord"');
     expect(html).not.toContain('role="switch"');
+  });
+
+  it("greys out Connect Discord while the handoff to Discord starts", async () => {
+    providers = ["google"];
+    const path = "/account/discord-alerts";
+    const router = createMemoryRouter(
+      [
+        {
+          path,
+          Component: AlertsRoute,
+          loader: alertsLoader as never,
+          action: () => new Promise(() => {}),
+        },
+      ],
+      { initialEntries: [path] },
+    );
+    await vi.waitFor(() => expect(router.state.initialized).toBe(true));
+    const formData = new FormData();
+    formData.set("intent", "connect-discord");
+    formData.set("idempotencyKey", KEY);
+    void router.navigate(path, { formMethod: "post", formData });
+    await vi.waitFor(() => expect(router.state.navigation.state).toBe("submitting"));
+    const html = renderToString(createElement(RouterProvider, { router })).replaceAll(
+      "<!-- -->",
+      "",
+    );
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Opening Discord…<\/button>/);
+    expect(html).not.toContain(">Connect Discord</button>");
   });
 
   it("says Discord connected after connecting it from this page", async () => {

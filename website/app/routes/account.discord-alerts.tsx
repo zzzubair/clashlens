@@ -235,17 +235,19 @@ function ConnectDiscord({
   label: string;
   primary?: boolean;
 }) {
+  const handingOff = useNavigation().formData?.get("intent") === "connect-discord";
   return (
-    <form method="post">
+    <Form method="post">
       <input type="hidden" name="intent" value="connect-discord" />
       <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
       <button
         type="submit"
         className={`button ${primary ? "button-primary" : "button-secondary"}`}
+        disabled={handingOff}
       >
-        {label}
+        {handingOff ? "Opening Discord…" : label}
       </button>
-    </form>
+    </Form>
   );
 }
 

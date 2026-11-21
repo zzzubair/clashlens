@@ -15,8 +15,9 @@ import {
   releaseDrag,
   ReplaceLinkConfirm,
   runAutosave,
-  SAVE_STATUS,
+  post,
   startDrag,
+  StatusLine,
   type Autosave,
   type Choices,
   type Place,
@@ -204,6 +205,58 @@ it("offers Try again and says the result is unconfirmed after a lost new-link re
   expect(confirm(false)).toContain("Yes, make new link");
   expect(confirm(true)).toContain("Try again");
   expect(confirm(true)).not.toContain("Yes, make new link");
-  expect(SAVE_STATUS.linkUnconfirmed.text).toMatch(/couldn.t confirm/i);
-  expect(SAVE_STATUS.linkUnconfirmed.text).toMatch(/may already be retired/i);
+});
+
+it("keeps an unconfirmed new link in view after a later save lands", async () => {
+  const shown: SaveStatus[] = [];
+  const autosave = { current: { phase: "idle", saved: "choices 0" } as Autosave };
+  await runAutosave(
+    autosave,
+    () => choices(1),
+    async () => ({}),
+    (s) => shown.push(s),
+  );
+  const html = renderToString(
+    createElement(StatusLine, { saveStatus: shown.at(-1)!, linkStatus: "unconfirmed" }),
+  );
+  expect(html).toContain("Saved.");
+  expect(html).toMatch(/couldn&#x27;t confirm the new link/i);
+  expect(html).toMatch(/may already be retired/i);
+});
+
+it("stops sending saves and aborts the one in flight when the editor goes away", async () => {
+  const page = new AbortController();
+  const signals: AbortSignal[] = [];
+  const fetchMock = vi.fn(
+    (_url: string, init: RequestInit) =>
+      new Promise<Response>((resolve, reject) => {
+        signals.push(init.signal!);
+        if (signals.length === 1) resolve(Response.json({ version: 1 }));
+        else init.signal!.addEventListener("abort", () => reject(init.signal!.reason));
+      }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  let n = 1;
+  const shown: SaveStatus[] = [];
+  const autosave = { current: { phase: "idle", saved: "choices 0" } as Autosave };
+  const run = runAutosave(
+    autosave,
+    () => choices(n),
+    async (next) => {
+      const reply = await post({ intent: "save", settings: next.json }, page.signal);
+      n += 1;
+      return reply;
+    },
+    (s) => shown.push(s),
+  );
+  await vi.waitFor(() => expect(signals).toHaveLength(2));
+  page.abort();
+  await run;
+  expect(signals[1].aborted).toBe(true);
+  expect(shown.at(-1)).toBe("notSaved");
+  await expect(
+    post({ intent: "new-link", replaces: "old" }, page.signal),
+  ).rejects.toThrow();
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  vi.unstubAllGlobals();
 });

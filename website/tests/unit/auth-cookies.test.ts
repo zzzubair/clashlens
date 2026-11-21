@@ -27,6 +27,7 @@ import {
 } from "../../app/server/auth-cookies.server";
 import type { LoginIdentity } from "../../app/server/auth.server";
 import {
+  MAX_RETURN_PATH_LENGTH,
   OAUTH_TRANSACTION_LIFETIME_SECONDS,
   createOAuthTransaction,
 } from "../../app/server/auth.server";
@@ -480,10 +481,16 @@ describe("cookie header attributes", () => {
   });
 
   it("keeps cookie values well below the 4 KB browser limit", () => {
-    const longReturnPath = `/${"players/".repeat(20)}`; // bounded at 200 characters
-    const transaction = createOAuthTransaction(longReturnPath.slice(0, 200), 1_750_000);
+    const longReturnPath = `/${"players/".repeat(MAX_RETURN_PATH_LENGTH / 8)}`;
+    const transaction = createOAuthTransaction(
+      longReturnPath.slice(0, MAX_RETURN_PATH_LENGTH),
+      1_750_000,
+    );
     const value = createOAuthTransactionCookieValue(transaction, KEY);
     expect(Buffer.byteLength(value, "utf8")).toBeLessThan(4096);
+    expect(parseOAuthTransactionCookieValue(value, KEY, 1_750_000)?.returnPath).toBe(
+      transaction.returnPath,
+    );
   });
 });
 

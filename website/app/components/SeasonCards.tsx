@@ -271,15 +271,47 @@ export function SeasonGraphCard({ data }: { data: SeasonGraphData }) {
   );
 }
 
-export function stepDay(
-  points: { day: number }[],
-  tip: number | null,
-  move: -1 | 1,
-): number | null {
-  if (points.length === 0) return null;
-  const at = points.findIndex((point) => point.day === tip);
-  const from = at === -1 ? points.length - 1 : at + move;
-  return points[Math.min(points.length - 1, Math.max(0, from))].day;
+export function stepIndex(count: number, at: number | null, move: -1 | 1): number | null {
+  if (count === 0) return null;
+  return at === null ? count - 1 : Math.min(count - 1, Math.max(0, at + move));
+}
+
+export const STEP_SIZE = { minWidth: "2.75rem", minHeight: "2.75rem" };
+
+/** Thumb-sized Earlier and Later buttons that move a chart's readout one day. */
+export function DaySteps({
+  count,
+  at,
+  onStep,
+}: {
+  count: number;
+  at: number | null;
+  onStep: (index: number | null) => void;
+}) {
+  return (
+    <span className="graph-steps">
+      <button
+        type="button"
+        className="button button-secondary"
+        style={STEP_SIZE}
+        aria-label="Earlier day"
+        disabled={count === 0 || at === 0}
+        onClick={() => onStep(stepIndex(count, at, -1))}
+      >
+        ‹ Earlier
+      </button>
+      <button
+        type="button"
+        className="button button-secondary"
+        style={STEP_SIZE}
+        aria-label="Later day"
+        disabled={count === 0 || at === count - 1}
+        onClick={() => onStep(stepIndex(count, at, 1))}
+      >
+        Later ›
+      </button>
+    </span>
+  );
 }
 
 export function SeasonChart({
@@ -419,26 +451,11 @@ export function SeasonChart({
           </span>
         ) : null}
       </div>
-      <div className="graph-steps">
-        <button
-          type="button"
-          className="button button-secondary"
-          aria-label="Earlier day"
-          disabled={points.length === 0 || tip === points[0].day}
-          onClick={() => onTip(stepDay(points, tip, -1))}
-        >
-          ‹ Earlier
-        </button>
-        <button
-          type="button"
-          className="button button-secondary"
-          aria-label="Later day"
-          disabled={points.length === 0 || tip === points[points.length - 1].day}
-          onClick={() => onTip(stepDay(points, tip, 1))}
-        >
-          Later ›
-        </button>
-      </div>
+      <DaySteps
+        count={points.length}
+        at={tip === null ? null : points.findIndex((point) => point.day === tip)}
+        onStep={(index) => onTip(index === null ? null : points[index].day)}
+      />
     </>
   );
 }

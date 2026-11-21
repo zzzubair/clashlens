@@ -1,4 +1,8 @@
-import { isSafeReturnPath, type LoginIdentity } from "./auth.server"; /**
+import {
+  isSafeReturnPath,
+  MAX_RETURN_PATH_LENGTH,
+  type LoginIdentity,
+} from "./auth.server"; /**
  * Server-only signed browser cookies for Google and Discord logins and one-time
  * OAuth transactions.
  *
@@ -301,7 +305,7 @@ export function parseOAuthTransactionCookieValue(
 ): OAuthTransaction | null {
   assertKey(key);
   if (!Number.isSafeInteger(nowSeconds)) return null;
-  const parsed = parseValue(value, key, 512);
+  const parsed = parseValue(value, key, MAX_RETURN_PATH_LENGTH + 512);
   if (!isRecord(parsed)) return null;
   if (
     parsed.v !== COOKIE_VERSION ||

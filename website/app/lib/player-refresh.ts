@@ -175,6 +175,38 @@ export function pollAnswer(
   return { type: "polled", status: payload };
 }
 
+/**
+ * Checks Refresh status every half second until `late`, one read at a time,
+ * each read cancelled after 8 seconds. Returns a stop that cancels the read
+ * underway.
+ */
+export function pollStatus(
+  check: (signal: AbortSignal) => Promise<void>,
+  late: () => boolean,
+): () => void {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let controller: AbortController | null = null;
+  const run = async () => {
+    if (stopped || late()) return;
+    controller = new AbortController();
+    const timeout = setTimeout(() => controller?.abort(), 8_000);
+    try {
+      await check(controller.signal);
+    } finally {
+      clearTimeout(timeout);
+      controller = null;
+      if (!stopped && !late()) timer = setTimeout(() => void run(), 500);
+    }
+  };
+  void run();
+  return () => {
+    stopped = true;
+    if (timer !== null) clearTimeout(timer);
+    controller?.abort();
+  };
+}
+
 /** A status read that threw, unless it was cancelled on purpose. */
 export function pollThrew(error: unknown): PlayerRefreshEvent | null {
   return error instanceof DOMException && error.name === "AbortError"

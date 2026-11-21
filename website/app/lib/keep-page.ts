@@ -10,7 +10,6 @@ import {
 
 import type { WebsiteErrorResponse } from "./contracts";
 import type { RootLoaderData } from "../lib/root-data";
-import type { PlayerSearchLoaderData } from "../lib/player-search-data";
 
 // What the header shows when the account cannot be read.
 export const LOGGED_OUT: RootLoaderData = {
@@ -29,6 +28,17 @@ export function rememberShownPage(url: string) {
   shownPage = url;
 }
 
+let retryingPage: string | null = null;
+
+export async function retryShownPage(revalidate: () => Promise<void>) {
+  retryingPage = shownPage;
+  try {
+    await revalidate();
+  } finally {
+    retryingPage = null;
+  }
+}
+
 export function useRememberShownPage() {
   const { pathname, search } = useLocation();
   useEffect(() => {
@@ -44,7 +54,7 @@ export function useRememberShownPage() {
 // the requests that answer inline with the page, so they still work offline.
 export function usePreloadInlineAnswerCode() {
   const manifest = useContext(UNSAFE_FrameworkContext)?.manifest;
-  for (const id of ["routes/player-search", "routes/refresh"]) {
+  for (const id of ["routes/refresh"]) {
     const route = manifest?.routes[id];
     if (route === undefined) continue;
     for (const href of [route.module, ...(route.imports ?? [])]) preloadModule(href);
@@ -69,39 +79,34 @@ function lostConnection(result: unknown) {
   );
 }
 
-const UNAVAILABLE: WebsiteErrorResponse = {
-  error: {
-    code: "unavailable",
-    message: "Saved data is still available, but the live service is unavailable.",
-  },
-};
-
-// Refresh, search and dashboard card reads show their own unavailable notice,
-// as when the service is down.
-function inlineAnswer({ pathname, searchParams }: URL) {
-  if (/^\/resources\/players\/[^/]+\/refresh$/.test(pathname)) return UNAVAILABLE;
-  if (pathname === "/" && searchParams.has("cards")) return UNAVAILABLE;
-  if (pathname === "/resources/players/search") {
-    const answer: PlayerSearchLoaderData = {
-      query: (searchParams.get("q") ?? "").trim(),
-      search: null,
-      error: UNAVAILABLE,
+// Refresh and dashboard card reads show their own unavailable notice, as when
+// the service is down. Each failed read gets its own answer.
+function inlineAnswer({ pathname, searchParams }: URL): WebsiteErrorResponse | undefined {
+  if (
+    /^\/resources\/players\/[^/]+\/refresh$/.test(pathname) ||
+    (pathname === "/" && searchParams.has("cards"))
+  )
+    return {
+      error: {
+        code: "unavailable",
+        message: "Saved data is still available, but the live service is unavailable.",
+      },
     };
-    return answer;
-  }
   return undefined;
 }
 
-// Player profiles and the dashboard reread their own data in the background,
-// such as when a phone wakes or a Clasher presses Try again. A re-read that cannot reach the website leaves the profile as the
-// browser already has it, and the next re-read tries again; only a page the
-// browser has not shown yet can fail. The header never keeps an account it
-// could not read, so it shows signed out. Other pages show the error as before.
+// Player profiles reread their own data in the background, such as when a phone
+// wakes, and the dashboard when a Clasher presses its linked-players Try again.
+// A re-read that cannot reach the website leaves the page as the browser
+// already has it, and the next re-read tries again; only a page the browser has
+// not shown yet can fail. The header never keeps an account it could not read,
+// so it shows signed out. Other pages show the error as before.
 function keepPage(
   request: Request,
   results: Record<string, DataStrategyResult>,
 ): Record<string, DataStrategyResult> {
   const url = new URL(request.url);
+  const page = url.pathname + url.search;
   const lost = Object.keys(results).filter(
     (id) => results[id].type === "error" && lostConnection(results[id].result),
   );
@@ -114,8 +119,8 @@ function keepPage(
     };
   if (
     request.method !== "GET" ||
-    !(url.pathname.startsWith("/players/") || url.pathname === "/") ||
-    shownPage !== url.pathname + url.search
+    shownPage !== page ||
+    !(url.pathname.startsWith("/players/") || retryingPage === page)
   )
     return results;
   return Object.fromEntries(
@@ -133,6 +138,7 @@ function keepPage(
 export const keepPageOnLostConnection: MiddlewareFunction<
   Record<string, DataStrategyResult>
 > = async ({ request }, next) => {
+  if (request.method !== "GET") retryingPage = null;
   const results = keepPage(request, await next());
   if (
     !request.signal.aborted &&

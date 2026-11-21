@@ -45,6 +45,7 @@ export default function CrewsRoute() {
   const { list, error } = useLoaderData<typeof loader>();
   const crews = list?.crews ?? [];
   const max = list?.maxCrews;
+  const canCreate = max !== undefined && crews.length < max;
   return (
     <main id="main-content" tabIndex={-1} className="page-shell crew-page">
       <header className="page-hero">
@@ -60,9 +61,9 @@ export default function CrewsRoute() {
             </a>
           </p>
         </>
-      ) : (
+      ) : crews.length > 0 ? (
         <p className="crew-create">
-          {max !== undefined && crews.length < max ? (
+          {canCreate ? (
             <Link className="button button-primary" to="/crews/new">
               Create a crew
             </Link>
@@ -75,7 +76,7 @@ export default function CrewsRoute() {
             {crews.length} of {max} crews
           </span>
         </p>
-      )}
+      ) : null}
       {crews.length > 0 ? (
         <ul className="crew-list">
           {crews.map((crew) => (
@@ -98,9 +99,16 @@ export default function CrewsRoute() {
         <div className="empty-state">
           <h2>No crews yet</h2>
           <p>
-            Start your own crew above to share live and daily Legend boards, or open an
-            invite link from a crew member to join theirs.
+            Start a crew to share live and daily Legend boards, or open an invite link
+            from a crew member to join theirs.
           </p>
+          {canCreate ? (
+            <p className="hero-actions">
+              <Link className="button button-primary" to="/crews/new">
+                Create a crew
+              </Link>
+            </p>
+          ) : null}
         </div>
       )}
     </main>

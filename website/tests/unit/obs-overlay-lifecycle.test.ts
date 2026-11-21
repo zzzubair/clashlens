@@ -98,7 +98,7 @@ it("keeps a retired link blank and stops polling after a late player reply", asy
   expect(fetchMock).toHaveBeenCalledTimes(4);
 });
 
-function stalledBody(signal: AbortSignal) {
+function stalledBody(signal: AbortSignal, status = 200) {
   return new Response(
     new ReadableStream({
       start(controller) {
@@ -107,8 +107,33 @@ function stalledBody(signal: AbortSignal) {
         );
       },
     }),
+    { status },
   );
 }
+
+it("clears a retired link at once when its 404 body stalls", async () => {
+  fetchMock.mockImplementation(async (url: string, init: RequestInit) => {
+    if (url.startsWith("/resources/"))
+      return Response.json({ state: "legend", name: "Nova", trophies: 5300 });
+    return fetchMock.mock.calls.length === 1
+      ? Response.json({
+          version: 1,
+          tag: "#2PP",
+          settings: { w: "366", h: "222" },
+          settingsContract: DOMAIN.overlay,
+        })
+      : stalledBody(init.signal!, 404);
+  });
+  mount("saved-link");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(stage.innerHTML).toContain("Nova");
+  await vi.advanceTimersByTimeAsync(3_000);
+  expect(fetchMock).toHaveBeenCalledTimes(3);
+  expect(stage.innerHTML).toBe("");
+  expect((fetchMock.mock.calls[2][1] as RequestInit).signal!.aborted).toBe(true);
+  await vi.advanceTimersByTimeAsync(59_999);
+  expect(fetchMock).toHaveBeenCalledTimes(3);
+});
 
 it("times out a player reply that stalls after its headers and keeps polling", async () => {
   fetchMock.mockImplementation(async (_url: string, init: RequestInit) =>

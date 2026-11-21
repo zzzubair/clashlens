@@ -1,7 +1,9 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
+  createMemoryRouter,
   createStaticHandler,
+  RouterProvider,
   createStaticRouter,
   StaticRouterProvider,
   type RouteObject,
@@ -164,6 +166,34 @@ function location(thrown: unknown): string | null {
   return (thrown as Response).headers.get("Location");
 }
 
+/** Settings while a form with `fields` is still waiting for its answer. */
+async function sending(
+  path: string,
+  Component: () => unknown,
+  fields: Record<string, string>,
+) {
+  const router = createMemoryRouter(
+    [
+      {
+        path,
+        Component: Component as never,
+        loader: settingsLoader as never,
+        action: () => new Promise(() => {}),
+      },
+    ],
+    { initialEntries: [path] },
+  );
+  await vi.waitFor(() => expect(router.state.initialized).toBe(true));
+  const formData = new FormData();
+  for (const [name, value] of Object.entries(fields)) formData.set(name, value);
+  void router.navigate(path, { formMethod: "post", formData });
+  await vi.waitFor(() => expect(router.state.navigation.state).toBe("submitting"));
+  return renderToString(createElement(RouterProvider, { router })).replaceAll(
+    "<!-- -->",
+    "",
+  );
+}
+
 describe("Settings", () => {
   it("shows the name, the Clash players with the default, and each sign-in", async () => {
     const html = await settings();
@@ -185,6 +215,31 @@ describe("Settings", () => {
     expect(html.match(/>Make default</g)).toHaveLength(1);
     expect(html).not.toContain(IDENTITY.providerSubject);
     expect(settingsHeaders()).toEqual({ "Cache-Control": "no-store" });
+  });
+
+  it("greys out only the sign-in button that was pressed while its handoff starts", async () => {
+    const html = await sending("/account/settings", SettingsRoute, {
+      intent: "link",
+      provider: "discord",
+    });
+    expect(html.match(/<button[^>]*disabled=""[^>]*>[^<]*/g)).toEqual([
+      expect.stringMatching(/>Disconnect$/),
+      expect.stringMatching(/>Opening Discord…$/),
+    ]);
+  });
+
+  it("says Disconnecting on the sign-in being removed, not Opening", async () => {
+    client.getAccount.mockResolvedValue({
+      ...ACCOUNT,
+      providers: ["google", "discord"],
+    });
+    const html = await sending("/account/settings", SettingsRoute, {
+      intent: "unlink",
+      provider: "google",
+    });
+    expect(html.match(/<button[^>]*disabled=""[^>]*>[^<]*/g)).toEqual([
+      expect.stringMatching(/>Disconnecting…$/),
+    ]);
   });
 
   it("marks each sign-in connected or not, and keeps the only one", async () => {

@@ -40,7 +40,7 @@ vi.mock("../../app/services/group-players.server", () => ({
 }));
 
 import App, { loader as rootLoader } from "../../app/root";
-import { loader as listLoader } from "../../app/routes/crews";
+import CrewsRoute, { loader as listLoader } from "../../app/routes/crews";
 import CrewRoute, {
   loader as crewLoader,
   shouldRevalidate,
@@ -534,6 +534,31 @@ describe("crew page", () => {
     expect(html).toMatch(
       new RegExp(`class="back-link" href="/crews/${CREW_ID}\\?period=week"[^]*?Red Dawn`),
     );
+  });
+});
+
+describe("crews list", () => {
+  it("puts Create a crew inside the empty state, and leaves it out when no more are allowed", async () => {
+    const page = async (maxCrews: number) => {
+      const handler = createStaticHandler([
+        {
+          path: "/crews",
+          Component: CrewsRoute,
+          loader: () => ({ list: { crews: [], maxCrews }, error: null }),
+        },
+      ]);
+      return renderStaticRoute(
+        handler,
+        await handler.query(new Request(`${ORIGIN}/crews`)),
+      );
+    };
+    const open = await page(5);
+    expect(open).not.toContain("above");
+    expect(open.match(/>Create a crew</g)).toHaveLength(1);
+    expect(open).toMatch(/class="empty-state"[^]*href="\/crews\/new"[^]*Create a crew/);
+    const full = await page(0);
+    expect(full).toContain("No crews yet");
+    expect(full).not.toContain('href="/crews/new"');
   });
 });
 

@@ -289,26 +289,33 @@ export default function ObsOverlayRoute() {
  *   lands, until the newest choices are saved.
  * - `saved`: the newest choices are saved; OBS follows within 3 seconds.
  * - `notSaved`: a save failed; the next change tries again.
- * - `linkMade`: a new link was made.
- * - `linkUnconfirmed`: the reply to making a new link was lost, so the old
- *   link may already be retired; trying again returns the current link.
  *
  * `OverlaySetup` owns it; leaving the page drops unsaved choices still in
- * their 0.3-second pause.
+ * their 0.3-second pause and stops any save still sending.
  */
-export type SaveStatus =
-  "untouched" | "saving" | "saved" | "notSaved" | "linkMade" | "linkUnconfirmed";
+export type SaveStatus = "untouched" | "saving" | "saved" | "notSaved";
 
-export const SAVE_STATUS: Record<SaveStatus, { text: string; ok: boolean }> = {
+const SAVE_STATUS: Record<SaveStatus, { text: string; ok: boolean }> = {
   untouched: { text: "Changes save by themselves.", ok: false },
   saving: { text: "Saving…", ok: false },
   saved: { text: "Saved. Your overlay in OBS updates within 3 seconds.", ok: true },
   notSaved: { text: "Not saved. Check your connection.", ok: false },
-  linkMade: {
+};
+
+/**
+ * How the last new-link request went, kept apart from saving so a save that
+ * lands later cannot hide it: `made`, or `unconfirmed` when the reply was lost
+ * and the old link may already be retired (trying again returns the current
+ * link). Null before any new link is asked for.
+ */
+export type LinkStatus = "made" | "unconfirmed" | null;
+
+const LINK_STATUS: Record<"made" | "unconfirmed", { text: string; ok: boolean }> = {
+  made: {
     text: "New link made. The old one is deleted and shows nothing. Paste the new one into OBS.",
     ok: true,
   },
-  linkUnconfirmed: {
+  unconfirmed: {
     text: "Couldn't confirm the new link. The old one may already be retired. Try again to get the current link.",
     ok: false,
   },
@@ -503,6 +510,8 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
   const [place, setPlace] = useState<Place>(() => clamp(initial.current.place));
   const [link, setLink] = useState(overlay.link);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("untouched");
+  const [linkStatus, setLinkStatus] = useState<LinkStatus>(null);
+  const page = useRef<AbortController | null>(null);
   const [copyState, setCopyState] = useState<null | "copied" | "selected">(null);
   const [confirmReplace, setConfirmReplace] = useState(false);
   const [replacing, setReplacing] = useState(false);
@@ -589,16 +598,25 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
   const queryRef = useRef(query);
   queryRef.current = query;
 
+  useEffect(() => {
+    const controller = new AbortController();
+    page.current = controller;
+    return () => controller.abort();
+  }, []);
+
   const saveNow = () => {
     void runAutosave(
       autosave,
       () => latest.current,
       (next) =>
-        post<{ version: number }>({
-          intent: "save",
-          tag: next.tag ?? "",
-          settings: JSON.stringify(next.settings),
-        }),
+        post<{ version: number }>(
+          {
+            intent: "save",
+            tag: next.tag ?? "",
+            settings: JSON.stringify(next.settings),
+          },
+          page.current?.signal,
+        ),
       setSaveStatus,
     );
   };
@@ -657,12 +675,15 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
     if (replacing) return;
     setReplacing(true);
     try {
-      const made = await post<{ link: string }>({ intent: "new-link", replaces: link });
+      const made = await post<{ link: string }>(
+        { intent: "new-link", replaces: link },
+        page.current?.signal,
+      );
       setLink(made.link);
       setConfirmReplace(false);
-      setSaveStatus("linkMade");
+      setLinkStatus("made");
     } catch {
-      setSaveStatus("linkUnconfirmed");
+      setLinkStatus("unconfirmed");
     } finally {
       setReplacing(false);
     }
@@ -1023,17 +1044,17 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
               value={address}
               aria-label="Overlay address"
             />
-            <button type="button" className="button button-primary" onClick={copy}>
+            <button
+              type="button"
+              className="button button-primary"
+              disabled={linkStatus === "unconfirmed"}
+              onClick={copy}
+            >
               Copy
             </button>
           </div>
           <div className="obs-under">
-            <span
-              className={`obs-saved${SAVE_STATUS[saveStatus].ok ? " ok" : ""}`}
-              role="status"
-            >
-              {SAVE_STATUS[saveStatus].text}
-            </span>
+            <StatusLine saveStatus={saveStatus} linkStatus={linkStatus} />
             {saveStatus === "notSaved" ? (
               <button type="button" className="button button-secondary" onClick={saveNow}>
                 Try again
@@ -1049,7 +1070,7 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
             {confirmReplace ? (
               <ReplaceLinkConfirm
                 replacing={replacing}
-                unconfirmed={saveStatus === "linkUnconfirmed"}
+                unconfirmed={linkStatus === "unconfirmed"}
                 onConfirm={() => void replaceLink()}
                 onCancel={() => setConfirmReplace(false)}
               />
@@ -1210,6 +1231,25 @@ function steps(fit: Fit, w: number, h: number): ReactNode[] {
   return items.map((item, index) => <li key={index}>{item}</li>);
 }
 
+/** How saving went, and beside it how the last new-link request went. */
+export function StatusLine({
+  saveStatus,
+  linkStatus,
+}: {
+  saveStatus: SaveStatus;
+  linkStatus: LinkStatus;
+}) {
+  const lines = [
+    SAVE_STATUS[saveStatus],
+    ...(linkStatus ? [LINK_STATUS[linkStatus]] : []),
+  ];
+  return lines.map((line) => (
+    <span key={line.text} className={`obs-saved${line.ok ? " ok" : ""}`} role="status">
+      {line.text}
+    </span>
+  ));
+}
+
 /** Asks before replacing the private link; after a lost reply, pressing again
  * fetches whichever link is now current. */
 export function ReplaceLinkConfirm({
@@ -1250,9 +1290,15 @@ export function ReplaceLinkConfirm({
 
 /** The save route's own JSON answer. Anything else throws, a redirect to sign
  * in included. */
-async function post<T>(values: Record<string, string>): Promise<T> {
+export async function post<T>(
+  values: Record<string, string>,
+  page?: AbortSignal,
+): Promise<T> {
+  if (page?.aborted) throw new DOMException("Left the page", "AbortError");
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
+  const leave = () => controller.abort();
+  page?.addEventListener("abort", leave);
   try {
     const res = await fetch(SAVE, {
       method: "POST",
@@ -1265,5 +1311,6 @@ async function post<T>(values: Record<string, string>): Promise<T> {
     return (await res.json()) as T;
   } finally {
     clearTimeout(timeout);
+    page?.removeEventListener("abort", leave);
   }
 }

@@ -628,7 +628,11 @@ export function mountOverlay(
     const timeout = setTimeout(() => controller.abort(), 12_000);
     try {
       const res = await fetch(url, { cache: "no-store", signal: controller.signal });
-      return { ok: res.ok, status: res.status, text: await res.text() };
+      if (!res.ok) {
+        controller.abort();
+        return { ok: false, status: res.status, text: "" };
+      }
+      return { ok: true, status: res.status, text: await res.text() };
     } finally {
       clearTimeout(timeout);
       inflight.delete(controller);
@@ -638,9 +642,8 @@ export function mountOverlay(
     `/resources/players/${encodeURIComponent(`#${tag}`)}/overlay`;
   async function readPlayer(tag: string): Promise<View> {
     const res = await timedRead(playerUrl(tag));
-    const next = JSON.parse(res.text) as View;
-    if (!res.ok) throw new Error(next.error ?? "error");
-    return next;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return JSON.parse(res.text) as View;
   }
 
   // Whether `tag` is still the player the overlay reads.

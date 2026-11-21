@@ -23,6 +23,7 @@ vi.mock("../../app/server/auth-guard.server", () => ({
   requireLogin: mocks.requireLogin,
 }));
 
+import { DaySteps } from "../../app/components/SeasonCards";
 import GroupCompareRoute, {
   loader,
   TrendBars,
@@ -252,6 +253,11 @@ describe("group comparison", () => {
     expect(html).toMatch(/<path d="M0 [\d.]+ L33\.3+ ([\d.]+) L66\.6+7? \1 L100 4"/);
     // Every day's bar is drawn the same way; the dates over them say which is last.
     expect(html.match(/<span class="trend-day [^"]*"[^>]*>/g)).toHaveLength(3);
+    expect(
+      html.match(
+        /<button[^>]*style="min-width:2.75rem;min-height:2.75rem"[^>]*aria-label="(Earlier|Later) day"/g,
+      ),
+    ).toHaveLength(2);
     // The two numbers in Attack and Defense are named once, in their
     // headings; each cell keeps the words for screen readers.
     expect(html).toContain('<small class="compare-head-sub">Triples · avg ★</small>');
@@ -642,5 +648,34 @@ describe("Watchlist Trend on touch screens", () => {
       preventDefault: vi.fn(),
     });
     expect(onActive).toHaveBeenLastCalledWith(null);
+  });
+
+  it("steps through every day with thumb-sized Earlier and Later buttons", () => {
+    const step = (at: number | null, label: string) => {
+      const onStep = vi.fn();
+      const strip = DaySteps({ count: days.length, at, onStep }) as Bar;
+      const button = (strip.props.children as Bar[]).find(
+        (child) => child.props["aria-label"] === label,
+      )!;
+      const style = button.props.style as { minWidth: string; minHeight: string };
+      expect(parseFloat(style.minWidth) * 16).toBeGreaterThanOrEqual(44);
+      expect(parseFloat(style.minHeight) * 16).toBeGreaterThanOrEqual(44);
+      if (button.props.disabled) return "disabled";
+      (button.props.onClick as () => void)();
+      return onStep.mock.calls.at(-1)![0] as number | null;
+    };
+    expect(step(null, "Earlier day")).toBe(2);
+    expect(step(2, "Earlier day")).toBe(1);
+    expect(step(1, "Earlier day")).toBe(0);
+    expect(step(0, "Earlier day")).toBe("disabled");
+    expect(step(0, "Later day")).toBe(1);
+    expect(step(1, "Later day")).toBe(2);
+    expect(step(2, "Later day")).toBe("disabled");
+    const onActive = vi.fn();
+    (bars(1, onActive).strip.props.onKeyDown as (event: object) => void)({
+      key: "ArrowRight",
+      preventDefault: vi.fn(),
+    });
+    expect(onActive).toHaveBeenLastCalledWith(2);
   });
 });

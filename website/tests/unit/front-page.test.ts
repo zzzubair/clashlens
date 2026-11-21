@@ -99,6 +99,7 @@ it("labels Clash Lens profiles so they do not look like game players", async () 
       query: "Nova",
       error: null,
       search: {
+        query: "Nova",
         exactTag: null,
         users: [{ username: "nova_star", displayName: "Nova", linkedPlayerCount: 2 }],
         results: [{ tag: "#2PP", name: "Nova", clan: "Test clan", trophies: 5000 }],
@@ -141,7 +142,9 @@ it("leaves search help to the placeholder and keeps a short tag hint when nothin
   );
   expect(html).toContain('placeholder="Name, @username or #tag"');
   expect(html).toContain("<h3>No players or profiles found</h3>");
-  expect(html).toContain("<p>Enter a full #tag to look up anyone.</p>");
+  expect(html).toContain(
+    "<p>Enter a full #tag (the # is optional) to look up anyone.</p>",
+  );
   const dropdown = renderToString(
     createElement(
       MemoryRouter,
@@ -154,7 +157,7 @@ it("leaves search help to the placeholder and keeps a short tag hint when nothin
     ),
   );
   expect(dropdown).toContain(
-    "No players or profiles found. <!-- -->Enter a full #tag to look up anyone.",
+    "No players or profiles found. <!-- -->Enter a full #tag (the # is optional) to look up anyone.",
   );
 });
 
@@ -480,6 +483,34 @@ describe("search loading", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("keeps a letter-only word a name search and offers it as a player tag", async () => {
+    const searchPlayers = vi.fn().mockResolvedValue({ ...search, query: "YQQ" });
+    mocks.createPythonClient.mockReturnValue({ searchPlayers });
+    const loaded = await searchLoader({
+      request: new Request("https://clashlens.example/search?q=YQQ"),
+      context: visitor("203.0.113.9"),
+    } as never);
+    expect(loaded).not.toBeInstanceOf(Response);
+    expect(searchPlayers).toHaveBeenCalledTimes(1);
+    const html = (await renderHome(loaded, "?q=YQQ")).replaceAll("<!-- -->", "");
+    expect(html).toContain('href="/players/%23YQQ"');
+    expect(html).toContain("Open #YQQ");
+    expect(html).toContain("<h3>No players or profiles found</h3>");
+
+    const curry = (
+      await renderHome(
+        {
+          leaderboard: null,
+          query: "Ali",
+          error: null,
+          search: { ...search, query: "Ali" },
+        },
+        "?q=Ali",
+      )
+    ).replaceAll("<!-- -->", "");
+    expect(curry).not.toContain("Open #");
   });
 
   it("shows a failed search as an error", async () => {
