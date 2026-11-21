@@ -701,7 +701,7 @@ CLASHLENS_BACKUP_CREDENTIAL_FILE=/srv/clashlens-secrets/clashlens-backup-r2.env
 
 Use a fresh cluster prefix for a new database or a major PostgreSQL upgrade.
 Never share it with a scratch database. WAL-G owns `basebackups_005/` and
-`wal_005/` below that prefix. Leave bucket lifecycle deletion disabled.
+`wal_005/` below that prefix. Leave bucket lifecycle deletion disabled. To encrypt backups before upload, see [encrypted database backups](backup-encryption.md).
 
 The credential file contains only `AWS_ACCESS_KEY_ID=...` and
 `AWS_SECRET_ACCESS_KEY=...`, without quotes. It must belong to the service
@@ -851,7 +851,7 @@ Create a temporary Podman secret containing the same JSON settings as the backup
 configuration, substituting only the read-only credentials. Do not print it.
 Use a new empty named volume, a unique container name, no production pod and no
 published port. Run WAL-G as OS user `postgres`, mounting the secret at
-`/run/secrets/walg.json` with uid/gid 70 and mode 0400.
+`/run/secrets/walg.json` with uid/gid 70 and mode 0400. A prefix ending in `-pgp` also needs the private key: see [encrypted backup restore](backup-encryption.md#restore).
 
 1. Run `wal-g --config /run/secrets/walg.json backup-list --detail --json`.
    Choose the newest backup whose **finish time precedes the desired recovery
