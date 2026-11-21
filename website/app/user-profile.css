@@ -21,14 +21,12 @@
 .profile-id .player-tag {
   margin: 0.2rem 0 0;
 }
-/* The badge, or the Clasher's crest, with the page's one glow: small and
-   soft, as the profile's header is its hero. */
+/* The badge, or the Clasher's crest, flat with no glow. */
 .profile-avatar {
   display: grid;
   flex: none;
   place-items: center;
   font-size: 1.3rem;
-  filter: drop-shadow(0 4px 10px color-mix(in srgb, var(--cl-action) 30%, transparent));
 }
 /* The badge stands as tall as the crest would. */
 .profile-avatar img {

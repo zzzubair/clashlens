@@ -1,6 +1,7 @@
 import { legendDayDate, validDay } from "../lib/legend-log-data";
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
+  Link,
   redirect,
   useFetcher,
   useLoaderData,
@@ -70,6 +71,8 @@ import {
 import {
   REFRESH_IDLE,
   automaticRefreshFor,
+  followUpRead,
+  pollStatus,
   lookupWaitTick,
   playerRefreshStep,
   pollAnswer,
@@ -524,55 +527,45 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
   useEffect(() => {
     if (!workId || refreshResourcePath === null || deadline === null) return;
     let cancelled = false;
-    let inFlight = false;
-    let controller: AbortController | null = null;
     const late = () => cancelled || Date.now() >= deadline;
-
-    const poll = async () => {
-      if (late() || inFlight) return;
-      inFlight = true;
-      controller = new AbortController();
+    const stop = pollStatus(async (signal) => {
       try {
         const response = await fetch(
           `${refreshResourcePath}?workId=${encodeURIComponent(workId)}`,
-          {
-            cache: "no-store",
-            headers: { Accept: "application/json" },
-            signal: controller.signal,
-          },
+          { cache: "no-store", headers: { Accept: "application/json" }, signal },
         );
         const payload: unknown = await response.json();
         if (late()) return;
         dispatchRefresh(pollAnswer(response.ok, payload, workId, player?.tag));
       } catch (error) {
-        const failed = late() ? null : pollThrew(error);
+        if (signal.aborted || late()) return;
+        const failed = pollThrew(error);
         if (failed) dispatchRefresh(failed);
-      } finally {
-        inFlight = false;
-        controller = null;
       }
-    };
-
-    const timer = setInterval(() => void poll(), 500);
-    void poll();
+    }, late);
     return () => {
       cancelled = true;
-      clearInterval(timer);
-      controller?.abort();
+      stop();
     };
   }, [deadline, player?.tag, refreshResourcePath, workId]);
 
+  const revalidatorState = useRef(revalidator.state);
+  revalidatorState.current = revalidator.state;
   const completedWorkId =
     refresh.phase !== "idle" && visibleStatus?.state === "complete"
       ? visibleStatus.workId
       : null;
+  const followUp = useMemo(() => followUpRead(() => void revalidate()), [revalidate]);
   useEffect(() => {
     if (completedWorkId === null) return;
     const timers = [0, 3_000, 8_000].map((delay) =>
-      setTimeout(() => void revalidate(), delay),
+      setTimeout(() => followUp.request(revalidatorState.current !== "idle"), delay),
     );
     return () => timers.forEach(clearTimeout);
-  }, [completedWorkId, revalidate]);
+  }, [completedWorkId, followUp]);
+  useEffect(() => {
+    if (revalidator.state === "idle") followUp.settled();
+  }, [revalidator.state, followUp]);
 
   if (trackedPlayer === null) {
     if (data.requestedTag === null) {
@@ -582,6 +575,11 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           {data.lookupError ? <ErrorNotice error={data.lookupError} /> : null}
           {data.error ? <ErrorNotice error={data.error} /> : null}
           <p>Check the tag and try again.</p>
+          <p>
+            <Link className="button button-secondary" to="/search">
+              Search for a player
+            </Link>
+          </p>
         </main>
       );
     }

@@ -97,3 +97,101 @@ it("keeps a retired link blank and stops polling after a late player reply", asy
   await vi.advanceTimersByTimeAsync(1);
   expect(fetchMock).toHaveBeenCalledTimes(4);
 });
+
+function stalledBody(signal: AbortSignal, status = 200) {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        signal.addEventListener("abort", () =>
+          controller.error(new DOMException("aborted", "AbortError")),
+        );
+      },
+    }),
+    { status },
+  );
+}
+
+it("clears a retired link at once when its 404 body stalls", async () => {
+  fetchMock.mockImplementation(async (url: string, init: RequestInit) => {
+    if (url.startsWith("/resources/"))
+      return Response.json({ state: "legend", name: "Nova", trophies: 5300 });
+    return fetchMock.mock.calls.length === 1
+      ? Response.json({
+          version: 1,
+          tag: "#2PP",
+          settings: { w: "366", h: "222" },
+          settingsContract: DOMAIN.overlay,
+        })
+      : stalledBody(init.signal!, 404);
+  });
+  mount("saved-link");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(stage.innerHTML).toContain("Nova");
+  await vi.advanceTimersByTimeAsync(3_000);
+  expect(fetchMock).toHaveBeenCalledTimes(3);
+  expect(stage.innerHTML).toBe("");
+  expect((fetchMock.mock.calls[2][1] as RequestInit).signal!.aborted).toBe(true);
+  await vi.advanceTimersByTimeAsync(59_999);
+  expect(fetchMock).toHaveBeenCalledTimes(3);
+});
+
+it("times out a player reply that stalls after its headers and keeps polling", async () => {
+  fetchMock.mockImplementation(async (_url: string, init: RequestInit) =>
+    stalledBody(init.signal!),
+  );
+  mount(null);
+  message({
+    origin: ORIGIN,
+    data: { type: "cl-overlay-settings", contract: DOMAIN.overlay, search: "?p=2PP" },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(12_000);
+  expect((fetchMock.mock.calls[0][1] as RequestInit).signal!.aborted).toBe(true);
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
+it("times out stalled link settings, follows again, and aborts the read on teardown", async () => {
+  fetchMock.mockImplementation(async (_url: string, init: RequestInit) =>
+    stalledBody(init.signal!),
+  );
+  mount("saved-link");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(12_000 + 3_000);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  const second = (fetchMock.mock.calls[1][1] as RequestInit).signal!;
+  expect(second.aborted).toBe(false);
+  stop?.();
+  stop = undefined;
+  expect(second.aborted).toBe(true);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
+it("schedules nothing when a demo's player read is aborted by teardown", async () => {
+  fetchMock.mockImplementation(
+    (_url: string, init: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init.signal!.addEventListener("abort", () => reject(init.signal!.reason));
+      }),
+  );
+  mount(null);
+  message({
+    origin: ORIGIN,
+    data: {
+      type: "cl-overlay-settings",
+      contract: DOMAIN.overlay,
+      search: "?p=2PP&w=366&h=222&demo=1",
+    },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  const before = stage.innerHTML;
+  stop?.();
+  stop = undefined;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(vi.getTimerCount()).toBe(0);
+  expect(stage.innerHTML).toBe(before);
+});

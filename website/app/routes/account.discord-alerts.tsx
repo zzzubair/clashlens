@@ -1,4 +1,4 @@
-import { Form, redirect, useLoaderData, useNavigation } from "react-router";
+import { Form, Link, redirect, useLoaderData, useNavigation } from "react-router";
 
 import type { BackHandle } from "../components/BackLink";
 import { SavedLine } from "../components/SavedLine";
@@ -235,17 +235,19 @@ function ConnectDiscord({
   label: string;
   primary?: boolean;
 }) {
+  const handingOff = useNavigation().formData?.get("intent") === "connect-discord";
   return (
-    <form method="post">
+    <Form method="post">
       <input type="hidden" name="intent" value="connect-discord" />
       <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
       <button
         type="submit"
         className={`button ${primary ? "button-primary" : "button-secondary"}`}
+        disabled={handingOff}
       >
-        {label}
+        {handingOff ? "Opening Discord…" : label}
       </button>
-    </form>
+    </Form>
   );
 }
 
@@ -303,7 +305,10 @@ function AlertRows({
   if (alerts.players.length === 0) {
     return (
       <p className="form-help">
-        <a href="/account/verify-player">Link a player</a> to get alerts in Discord.
+        <Link to={`/account/verify-player?return=${encodeURIComponent(PAGE)}`}>
+          Link a player
+        </Link>{" "}
+        to get alerts in Discord.
       </p>
     );
   }
@@ -374,6 +379,8 @@ function AlertRows({
         alt="An attack alert's picture: the Legend day's trophies and rank since the Reset, then each attack and defense."
         width={1200}
         height={860}
+        loading="lazy"
+        decoding="async"
       />
     </>
   );

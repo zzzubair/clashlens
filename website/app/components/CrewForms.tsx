@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Form, useFetcher, useSearchParams } from "react-router";
+import { Form, useFetcher, useNavigation, useSearchParams } from "react-router";
 
 import type { InviteLink } from "../lib/crew-contracts";
 import { LocalTimestamp } from "./Provenance";
@@ -52,7 +52,7 @@ export function CrewInvite({
         <input type="hidden" name="intent" value="invite" />
         <input type="hidden" name="idempotencyKey" value={key} />
         <button type="submit" className="button button-primary" disabled={busy}>
-          Invite
+          {busy ? "Loading link…" : "Invite"}
         </button>
       </fetcher.Form>
       {open ? (
@@ -71,8 +71,8 @@ export function CrewInvite({
                 Your current link keeps working.
                 {canEdit ? " Turn links off in Edit." : ""}
               </p>
-              <button type="submit" className="crew-link-button">
-                Make another link
+              <button type="submit" className="crew-link-button" disabled={busy}>
+                {busy ? "Creating link…" : "Make another link"}
               </button>
             </fetcher.Form>
           ) : null}
@@ -203,6 +203,16 @@ export function FormResult({
   );
 }
 
+/** Whether the page is sending a form whose fields include every one of these. */
+export function useSubmitting(fields: Record<string, string>): boolean {
+  const navigation = useNavigation();
+  const sent = navigation.state === "submitting" ? navigation.formData : undefined;
+  return (
+    sent !== undefined &&
+    Object.entries(fields).every(([name, value]) => sent.get(name) === value)
+  );
+}
+
 /**
  * A button that asks before it acts: it opens a short question with the
  * real button under it. A disclosure, so it works without JavaScript.
@@ -225,6 +235,7 @@ export function ConfirmForm({
   idempotencyKey: string;
   fields?: Record<string, string>;
 }) {
+  const busy = useSubmitting({ intent, idempotencyKey, ...fields });
   return (
     <details className={icon ? "crew-confirm crew-row-confirm" : "crew-confirm"}>
       {icon ? (
@@ -241,8 +252,8 @@ export function ConfirmForm({
         {Object.entries(fields).map(([name, value]) => (
           <input key={name} type="hidden" name={name} value={value} />
         ))}
-        <button type="submit" className="button danger-button">
-          {confirm}
+        <button type="submit" className="button danger-button" disabled={busy}>
+          {busy ? "Working…" : confirm}
         </button>
       </Form>
     </details>

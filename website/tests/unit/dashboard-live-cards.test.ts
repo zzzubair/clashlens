@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it, expect } from "vitest";
 import { updatedAgo } from "../../app/lib/age-format";
-import { LegendClock, clockMarks } from "../../app/components/LegendClock";
+import { LegendClock, clockMarks, popoverTop } from "../../app/components/LegendClock";
 import { LegendDayCard } from "../../app/components/LegendDayCard";
 import type { PlayerDay } from "../../app/lib/dashboard";
 import { emptyDay, fight, linked } from "../fixtures/dashboard-data";
@@ -121,12 +121,12 @@ describe("Legend day card", () => {
 
   it("shows the projected place beside the outer range, labelled its range", () => {
     const html = render(emptyDay({}), { best: 1, worst: 12_270 }, 3000);
-    expect(html).toContain("Projected place #3,000 at Reset. ");
     expect(html).toContain(
-      "left, and gets closer through the day. Next Reset range best #1 worst #12,270",
+      "Projected place #3,000 at Reset Next Reset range best #1 worst #12,270",
     );
+    expect(html.match(/hundreds of places out/g)).toHaveLength(1);
     expect(html).toContain(
-      "An estimate from how players in your spot finished on recent days. It can be hundreds of places out while battles are left, and gets closer through the day.",
+      "What Projected place means Projected place estimates your rank at the next Reset",
     );
     // Before any day's examples are saved, only the outer range shows.
     expect(render(emptyDay({}))).not.toContain("Projected");
@@ -197,4 +197,13 @@ describe("Legend day card", () => {
       expect(html).toContain("Next Reset best #95 – worst #760");
     }
   });
+});
+
+it("keeps a tall group of battles on screen when its mark sits low", () => {
+  const viewport = 700;
+  const eightBattles = 9 * 36;
+  const top = popoverTop(640, eightBattles, viewport);
+  expect(top + eightBattles).toBeLessThanOrEqual(viewport - 8);
+  expect(popoverTop(200, eightBattles, viewport)).toBe(190);
+  expect(popoverTop(4, 120, viewport)).toBe(8);
 });

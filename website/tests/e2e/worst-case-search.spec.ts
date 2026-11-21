@@ -15,8 +15,7 @@ const worstCaseNames = [
 // synthetic names and clan are swapped for worst-case ones and a worst-case
 // profile is added on the way to the browser.
 async function serveWorstCaseSearch(page: Page) {
-  await page.route(/\.data\?/, async (route) => {
-    const response = await route.fetch();
+  const rewrite = (input: unknown): unknown => {
     let index = 0;
     const edit = (value: unknown): unknown => {
       if (typeof value === "string") {
@@ -39,11 +38,21 @@ async function serveWorstCaseSearch(page: Page) {
       }
       return result;
     };
-    const data = edit(decodePageData<unknown>(await response.text()));
+    const data = edit(input);
     expect(index, "the response includes synthetic players to replace").toBeGreaterThan(
       0,
     );
+    return data;
+  };
+  await page.route(/\.data\?/, async (route) => {
+    const response = await route.fetch();
+    const data = rewrite(decodePageData<unknown>(await response.text()));
     await route.fulfill({ response, body: encodePageData(data) });
+  });
+  await page.route(/\/resources\/players\/search\?/, async (route) => {
+    const response = await route.fetch();
+    const data = rewrite(await response.json());
+    await route.fulfill({ response, json: data });
   });
 }
 

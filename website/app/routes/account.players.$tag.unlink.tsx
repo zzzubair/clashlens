@@ -1,4 +1,12 @@
-import { data, Link, redirect, useActionData, useLoaderData } from "react-router";
+import {
+  data,
+  Form,
+  Link,
+  redirect,
+  useActionData,
+  useLoaderData,
+  useNavigation,
+} from "react-router";
 
 import type { BackHandle } from "../components/BackLink";
 import { SavedLine } from "../components/SavedLine";
@@ -117,6 +125,8 @@ export function headers() {
 export default function UnlinkPlayerRoute() {
   const loaded = useLoaderData<typeof loader>();
   const answer = useActionData<typeof action>();
+  const navigation = useNavigation();
+  const unlinking = navigation.state === "submitting";
   const failed = answer && "idempotencyKey" in answer ? answer : null;
   const handOver = answer && "handOver" in answer ? answer.handOver : loaded.handOver;
   const { player, nextDefault } = loaded;
@@ -185,19 +195,19 @@ export default function UnlinkPlayerRoute() {
             </div>
           </>
         ) : (
-          <form method="post" className="hero-actions">
+          <Form method="post" className="hero-actions">
             <input
               type="hidden"
               name="idempotencyKey"
               value={failed?.idempotencyKey ?? loaded.idempotencyKey}
             />
-            <button type="submit" className="button button-primary">
-              Unlink {name}
+            <button type="submit" className="button button-primary" disabled={unlinking}>
+              {unlinking ? `Unlinking ${name}…` : `Unlink ${name}`}
             </button>
             <Link className="button button-secondary" to={SETTINGS}>
               Cancel
             </Link>
-          </form>
+          </Form>
         )}
       </section>
     </main>

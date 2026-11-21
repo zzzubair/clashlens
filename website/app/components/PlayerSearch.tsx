@@ -1,41 +1,108 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Link, useFetcher, useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 
-import { canonicalPlayerPath, noMatchHint, normalizePlayerTag } from "../lib/player-tag";
+import {
+  canonicalPlayerPath,
+  noMatchHint,
+  possiblePlayerTag,
+  searchedPlayerTag,
+} from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
 import type { PlayerSearchLoaderData } from "../lib/player-search-data";
 import { moveFocusWithArrows } from "./ArrowKeys";
 import { TrophyMark } from "./LeaderboardShared";
 
 const SEARCH_DEBOUNCE_MS = 180;
+export const SEARCH_TIMEOUT_MS = 10_000;
+
+/**
+ * Asks for suggestions for `query`. A failed, refused or slower than
+ * `SEARCH_TIMEOUT_MS` request answers as Search unavailable; one cancelled
+ * through `signal` answers null.
+ */
+export async function loadPlayerSuggestions(
+  query: string,
+  signal: AbortSignal,
+  timeoutMs = SEARCH_TIMEOUT_MS,
+): Promise<PlayerSearchLoaderData | null> {
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  signal.addEventListener("abort", cancel);
+  const timeout = setTimeout(cancel, timeoutMs);
+  try {
+    const response = await fetch(
+      `/resources/players/search?q=${encodeURIComponent(query)}`,
+      { headers: { Accept: "application/json" }, signal: controller.signal },
+    );
+    return (await response.json()) as PlayerSearchLoaderData;
+  } catch {
+    if (signal.aborted) return null;
+    return {
+      query,
+      search: null,
+      error: { error: { code: "unavailable", message: "Search did not answer." } },
+    };
+  } finally {
+    clearTimeout(timeout);
+    signal.removeEventListener("abort", cancel);
+  }
+}
 
 /**
  * Typed text plus the suggestions fetched for it. Nothing is requested until
  * the user types, and only after a short pause, so idle search boxes cost no
- * requests.
+ * requests. Typing again, dismissing or leaving the page cancels the request
+ * still running.
  */
 export function usePlayerSuggestions(initialQuery = "") {
-  const fetcher = useFetcher<PlayerSearchLoaderData>();
   const [query, setQuery] = useState(initialQuery);
   const [requestedQuery, setRequestedQuery] = useState("");
+  const [answer, setAnswer] = useState<PlayerSearchLoaderData | undefined>(undefined);
+  const [loading, setLoading] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const running = useRef<AbortController | null>(null);
 
   useEffect(
     () => () => {
       if (timer.current !== null) clearTimeout(timer.current);
+      running.current?.abort();
     },
     [],
   );
 
-  const { state, data } = suggestionsView(query, requestedQuery, fetcher);
+  const { state, data } = suggestionsView(query, requestedQuery, {
+    state: loading ? "loading" : "idle",
+    data: answer,
+  });
+
+  function cancel() {
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = null;
+    running.current?.abort();
+    running.current = null;
+    setLoading(false);
+  }
 
   function dismiss() {
-    if (timer.current !== null) clearTimeout(timer.current);
+    cancel();
     setRequestedQuery("");
   }
 
+  function start(trimmed: string) {
+    const controller = new AbortController();
+    running.current = controller;
+    setRequestedQuery(trimmed);
+    setLoading(true);
+    void loadPlayerSuggestions(trimmed, controller.signal).then((result) => {
+      if (running.current !== controller || result === null) return;
+      running.current = null;
+      setAnswer(result);
+      setLoading(false);
+    });
+  }
+
   function request(value: string, delay: number) {
-    if (timer.current !== null) clearTimeout(timer.current);
+    cancel();
 
     const trimmed = value.trim();
     if (trimmed === "" || value.length > MAX_SEARCH_QUERY_LENGTH) {
@@ -43,10 +110,8 @@ export function usePlayerSuggestions(initialQuery = "") {
       return;
     }
 
-    timer.current = setTimeout(() => {
-      setRequestedQuery(trimmed);
-      void fetcher.load(`/resources/players/search?q=${encodeURIComponent(trimmed)}`);
-    }, delay);
+    if (delay === 0) start(trimmed);
+    else timer.current = setTimeout(() => start(trimmed), delay);
   }
 
   function change(value: string) {
@@ -54,14 +119,19 @@ export function usePlayerSuggestions(initialQuery = "") {
     request(value, SEARCH_DEBOUNCE_MS);
   }
 
+  function retry() {
+    request(query, 0);
+  }
+
   return {
     query,
     setQuery,
     change,
     dismiss,
+    retry,
     open: state !== "closed",
     data,
-    loading: fetcher.state !== "idle",
+    loading,
   };
 }
 
@@ -101,17 +171,22 @@ export function SearchSuggestions({
   id,
   data,
   loading,
+  onRetry,
+  onSelect,
 }: {
   id: string;
   data: PlayerSearchLoaderData | undefined;
   loading: boolean;
+  onRetry?: () => void;
+  onSelect?: () => void;
 }) {
   const search = data?.search;
   const results = search?.results.slice(0, 5) ?? [];
   const users = search?.users.slice(0, 3) ?? [];
+  const candidateTag = data ? (search?.exactTag ?? possiblePlayerTag(data.query)) : null;
   const unknownExactTag =
-    search?.exactTag && !results.some((result) => result.tag === search.exactTag)
-      ? search.exactTag
+    candidateTag && !results.some((result) => result.tag === candidateTag)
+      ? candidateTag
       : null;
 
   return (
@@ -128,7 +203,21 @@ export function SearchSuggestions({
       onMouseDown={(event) => event.preventDefault()}
     >
       {loading && !search ? <p className="search-dropdown-status">Searching…</p> : null}
-      {data?.error ? <p className="search-dropdown-status">Search unavailable.</p> : null}
+      {data?.error ? (
+        <p className="search-dropdown-status">
+          Search unavailable.{" "}
+          {onRetry ? (
+            <button
+              type="button"
+              className="button button-secondary"
+              disabled={loading}
+              onClick={onRetry}
+            >
+              {loading ? "Trying again…" : "Try again"}
+            </button>
+          ) : null}
+        </p>
+      ) : null}
       {!loading &&
       search &&
       results.length === 0 &&
@@ -146,6 +235,7 @@ export function SearchSuggestions({
                 className="search-suggestion search-suggestion-profile"
                 data-testid="search-suggestion"
                 to={`/users/${encodeURIComponent(user.username)}`}
+                onClick={onSelect}
               >
                 <span className="search-suggestion-player">
                   <strong>
@@ -165,10 +255,11 @@ export function SearchSuggestions({
           ))}
           {results.map((result) => (
             <li key={result.tag}>
-              <a
+              <Link
                 className="search-suggestion"
                 data-testid="search-suggestion"
-                href={canonicalPlayerPath(result.tag)}
+                to={canonicalPlayerPath(result.tag)}
+                onClick={onSelect}
               >
                 <span className="search-suggestion-player">
                   <strong>
@@ -196,21 +287,22 @@ export function SearchSuggestions({
                     </>
                   )}
                 </span>
-              </a>
+              </Link>
             </li>
           ))}
           {unknownExactTag ? (
             <li>
-              <a
+              <Link
                 className="search-suggestion"
                 data-testid="search-suggestion"
-                href={canonicalPlayerPath(unknownExactTag)}
+                to={canonicalPlayerPath(unknownExactTag)}
+                onClick={onSelect}
               >
                 <span className="search-suggestion-player">
                   <strong>Open {unknownExactTag}</strong>
                   <small>Player tag</small>
                 </span>
-              </a>
+              </Link>
             </li>
           ) : null}
         </ul>
@@ -381,7 +473,7 @@ export function HeaderSearch() {
             className="search-form"
             onSubmit={(event) => {
               event.preventDefault();
-              const tag = normalizePlayerTag(suggestions.query);
+              const tag = searchedPlayerTag(suggestions.query);
               const words = suggestions.query.trim();
               if (tag || words !== "") {
                 collapse(false);
@@ -424,6 +516,8 @@ export function HeaderSearch() {
                 id="header-search-suggestions"
                 data={suggestions.data}
                 loading={suggestions.loading}
+                onRetry={suggestions.retry}
+                onSelect={() => collapse(false)}
               />
             ) : null}
             <button

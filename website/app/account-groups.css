@@ -357,6 +357,10 @@
     width: 2.75rem;
     height: 2.75rem;
   }
+  :root .group-card-open,
+  :root .group-text-button {
+    min-height: 2.75rem;
+  }
 }
 
 /* Add player and Edit: word-and-icon rows in the menu, plain until hovered. */

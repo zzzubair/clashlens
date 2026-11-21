@@ -29,7 +29,14 @@ function Portrait({
       title={label}
     >
       {art ? (
-        <img src={art} alt={label} loading="lazy" />
+        <img
+          src={art}
+          alt={label}
+          width={40}
+          height={40}
+          loading="lazy"
+          decoding="async"
+        />
       ) : (
         <span aria-label={label}>{name}</span>
       )}
@@ -78,7 +85,15 @@ export function UnitArt({ unitKey }: { unitKey: string }) {
   return (
     <span className="unit-art" aria-hidden="true">
       {art.map((src, index) => (
-        <img key={`${src}-${index}`} src={src} alt="" loading="lazy" />
+        <img
+          key={`${src}-${index}`}
+          src={src}
+          alt=""
+          width={32}
+          height={32}
+          loading="lazy"
+          decoding="async"
+        />
       ))}
     </span>
   );

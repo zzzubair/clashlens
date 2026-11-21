@@ -1228,16 +1228,16 @@ for (const [stall, read] of [
     await page.getByRole("button", { name: "Refresh", exact: true }).click();
     await expect.poll(reads).toEqual([false]);
     if (stall === "late") {
-      await page.clock.runFor(30_000);
+      await page.clock.runFor(5_000);
       const now = await page.evaluate(() => Date.now());
-      await page.clock.setSystemTime(now + 31_000);
+      await page.clock.setSystemTime(now + 56_000);
       await page.evaluate(() =>
         (window as unknown as { answerLate(): void }).answerLate(),
       );
       await expect.poll(() => page.evaluate(() => "answered" in window)).toBe(true);
       await expect(refresh).toContainText("Refreshing…");
       await expect(refresh).not.toContainText("Updated.");
-      await page.clock.runFor(31_000);
+      await page.clock.runFor(56_000);
     } else {
       await page.clock.runFor(59_000);
       await expect(stopped).toHaveCount(0);
@@ -1247,10 +1247,18 @@ for (const [stall, read] of [
     await expect(refresh).toContainText(NOT_REFRESHED);
     await expect(refresh.getByRole("progressbar")).toHaveCount(0);
 
+    const readsAtDeadline = await reads();
     await page.clock.runFor(240_000);
     await expect(stopped).toBeVisible();
     await expect(refresh).not.toContainText("Updated.");
-    expect(await reads()).toEqual([stall !== "late"]);
+    const readsAfter = await reads();
+    expect(readsAfter).toEqual(readsAtDeadline);
+    if (stall === "late") {
+      expect(readsAfter).toEqual([false]);
+    } else {
+      expect(readsAfter.length).toBeGreaterThanOrEqual(1);
+      expect(readsAfter.every(Boolean)).toBe(true);
+    }
   });
 }
 

@@ -142,8 +142,8 @@ export function dashboardEditStep(
  *
  * Events: `newLoad` (the page read again, which starts over), `outdated`,
  * `requested` and `answered`. Only `cardRefreshStep` moves it; the Dashboard
- * component owns it. There is no retry: a card that could not load stays so
- * until its settings change or the page reads again.
+ * component owns it. A card that could not load stays so until its Try again
+ * marks it `outdated`, its settings change or the page reads again.
  */
 export interface CardRefresh {
   refreshed: CardReads;
@@ -200,6 +200,16 @@ export function cardRefreshStep(
       };
     }
   }
+}
+
+/** A card read that took too long, answered as unavailable; each its own. */
+export function stalledCards(): DashboardLoaderData {
+  return {
+    kind: "error",
+    error: {
+      error: { code: "unavailable", message: "The cards took too long to load." },
+    },
+  };
 }
 
 /** The data each card shows: none while the page's read loads. */

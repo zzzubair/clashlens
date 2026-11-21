@@ -13,7 +13,12 @@ import { useBackState } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { PageSearch } from "../components/PageSearch";
 import type { SearchResponse, WebsiteErrorResponse } from "../lib/contracts";
-import { canonicalPlayerPath, noMatchHint, normalizePlayerTag } from "../lib/player-tag";
+import {
+  canonicalPlayerPath,
+  noMatchHint,
+  possiblePlayerTag,
+  searchedPlayerTag,
+} from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
 
 export interface SearchLoaderData {
@@ -28,7 +33,8 @@ export function meta() {
 
 /**
  * GET /search?q= — every saved player and Clash Lens profile matching the
- * words. A complete #tag opens that player's page instead.
+ * words. A complete #tag opens that player's page instead; the same characters
+ * without the # are offered as a player tag beside the name results.
  */
 export async function loader({
   request,
@@ -51,7 +57,7 @@ export async function loader({
       },
     };
   }
-  const exactTag = normalizePlayerTag(query);
+  const exactTag = searchedPlayerTag(query);
   if (exactTag) {
     const retry = params.get("recheck") === exactTag ? "?retry=1" : "";
     throw redirect(`${canonicalPlayerPath(exactTag)}${retry}`);
@@ -94,11 +100,27 @@ export default function Search() {
       <PageSearch
         query={data.query}
         results={
-          data.search ? <SearchResults search={data.search} busy={searching} /> : null
+          <>
+            <TagChoice query={data.query} search={data.search} />
+            {data.search ? <SearchResults search={data.search} busy={searching} /> : null}
+          </>
         }
       />
       {data.error ? <ErrorNotice error={data.error} /> : null}
     </main>
+  );
+}
+
+function TagChoice({ query, search }: { query: string; search: SearchResponse | null }) {
+  const tag = search?.exactTag ? null : possiblePlayerTag(query);
+  if (!tag || search?.results.some((result) => result.tag === tag)) return null;
+  return (
+    <section className="search-results">
+      <h3>Player tag</h3>
+      <a className="button button-secondary" href={canonicalPlayerPath(tag)}>
+        Open {tag}
+      </a>
+    </section>
   );
 }
 

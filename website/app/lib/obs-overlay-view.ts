@@ -620,17 +620,34 @@ export function mountOverlay(
   }
 
   // ---------- live data ----------
+  const inflight = new Set<AbortController>();
+  const timedRead = async (url: string) => {
+    const controller = new AbortController();
+    inflight.add(controller);
+    const timeout = setTimeout(() => controller.abort(), 12_000);
+    try {
+      const res = await fetch(url, { cache: "no-store", signal: controller.signal });
+      if (!res.ok) {
+        controller.abort();
+        return { ok: false, status: res.status, text: "" };
+      }
+      return { ok: true, status: res.status, text: await res.text() };
+    } finally {
+      clearTimeout(timeout);
+      inflight.delete(controller);
+    }
+  };
   const playerUrl = (tag: string) =>
     `/resources/players/${encodeURIComponent(`#${tag}`)}/overlay`;
   async function readPlayer(tag: string): Promise<View> {
-    const res = await fetch(playerUrl(tag), { cache: "no-store" });
-    const next = (await res.json()) as View;
-    if (!res.ok) throw new Error(next.error ?? "error");
-    return next;
+    const res = await timedRead(playerUrl(tag));
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return JSON.parse(res.text) as View;
   }
 
   // Whether `tag` is still the player the overlay reads.
-  const reading = (tag: string) => overlaySource(cfg) === "player" && cfg.tag === tag;
+  const reading = (tag: string) =>
+    clock.running() && overlaySource(cfg) === "player" && cfg.tag === tag;
 
   async function poll() {
     cancel(pollTimer);
@@ -713,7 +730,8 @@ export function mountOverlay(
         if (prev.tag !== cfg.tag) data = null;
         const tag = cfg.tag;
         const start = (d: View | null) => {
-          if (tag !== cfg.tag || overlaySource(cfg) !== "demo") return;
+          if (!clock.running() || tag !== cfg.tag || overlaySource(cfg) !== "demo")
+            return;
           if (d) data = d;
           startDemo();
         };
@@ -758,9 +776,8 @@ export function mountOverlay(
     const follow = async () => {
       let wait = SETTINGS_POLL_MS;
       try {
-        const res = await fetch(`/o/${encodeURIComponent(link)}/settings`, {
-          cache: "no-store",
-        });
+        const res = await timedRead(`/o/${encodeURIComponent(link)}/settings`);
+        if (!clock.running()) return;
         if (res.status === 404) {
           // A replaced link shows nothing, and checks rarely.
           cancel(pollTimer);
@@ -771,7 +788,7 @@ export function mountOverlay(
           followed = { kind: "retired" };
           wait = 60_000;
         } else if (res.ok) {
-          const reply = await res.json();
+          const reply = JSON.parse(res.text);
           const saved = parseOverlayLink({
             ...reply,
             kind: "obs-overlay-link",
@@ -793,7 +810,7 @@ export function mountOverlay(
       } catch {
         // Keep showing the last settings.
       }
-      later(follow, wait);
+      if (clock.running()) later(follow, wait);
     };
     void follow();
   } else {
@@ -804,6 +821,8 @@ export function mountOverlay(
   }
 
   return () => {
+    for (const controller of inflight) controller.abort();
+    inflight.clear();
     clock.stop();
     clearInterval(tick);
     window.removeEventListener("message", onMessage);

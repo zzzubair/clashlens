@@ -82,9 +82,14 @@ test("a streamer sets up the Stream overlay, OBS shows it live at stream size, a
   expectNoPageErrors(sourceErrors);
 
   // A new link retires the old one for good: OBS on it shows nothing.
-  page.once("dialog", (dialog) => void dialog.accept());
   await page.getByRole("button", { name: "Make a new link" }).click();
-  await expect(address).not.toHaveValue(firstLink);
+  await page.getByRole("button", { name: "Yes, make new link" }).click();
+  await expect
+    .poll(async () => {
+      const value = await address.inputValue();
+      return value !== firstLink && /\/o\/[A-Za-z0-9_-]{22}$/.test(value);
+    })
+    .toBe(true);
   const secondLink = await address.inputValue();
   await expect(source.locator(".ov-stage")).toBeEmpty({ timeout: 8_000 });
   expect(

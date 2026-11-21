@@ -8,6 +8,7 @@ import {
   useFetcher,
   useLoaderData,
   useNavigation,
+  useRevalidator,
   useSearchParams,
 } from "react-router";
 import { BattleStatistics } from "../components/BattleStatistics";
@@ -36,6 +37,7 @@ import {
   shownCards,
 } from "../lib/dashboard";
 import type { CardReads } from "../lib/dashboard-cards";
+import { retryShownPage } from "../lib/keep-page";
 import { leftDate, leftLine, type LeftLegendI } from "../lib/left-legend";
 import { LOOKUP_MESSAGES } from "../lib/player-lookup-text";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
@@ -505,6 +507,8 @@ function SignedInDashboard({
   const switching = switchingTo(useNavigation(), loaderData.players);
   // Saves live above each player's cards, so one still lands after a switch.
   const fetcher = useFetcher<DashboardActionData>();
+  const revalidator = useRevalidator();
+  const [retrying, setRetrying] = useState(false);
   // Settings saved since this load; the next load reads them back.
   const [saved, setSaved] = useState<{
     from: DashboardSettings;
@@ -551,7 +555,20 @@ function SignedInDashboard({
       ) : null}
       {loaderData.playersUnavailable ? (
         <p className="notice notice-warning" role="status">
-          Your linked players could not be loaded. Cards show again on the next load.
+          Your linked players could not be loaded.{" "}
+          <button
+            type="button"
+            className="button button-secondary dash-small-button"
+            disabled={retrying}
+            onClick={() => {
+              setRetrying(true);
+              void retryShownPage(() => revalidator.revalidate()).finally(() =>
+                setRetrying(false),
+              );
+            }}
+          >
+            {retrying ? "Retrying…" : "Try again"}
+          </button>
         </p>
       ) : null}
       {selected === null ? (

@@ -705,36 +705,38 @@ export function GroupWatchCard({
             : `Whole Season · ${data.days} days`}
       </p>
       {index >= 0 ? (
-        <table className="group-table">
-          <thead>
-            <tr>
-              <th scope="col">Player</th>
-              <th scope="col">Trophies</th>
-              <th scope="col" aria-sort="descending">
-                Avg gain <span aria-hidden="true">↓</span>
-              </th>
-              <th scope="col">Hit rate</th>
-              <th scope="col">Avg offense</th>
-              <th scope="col">Avg defense</th>
-            </tr>
-          </thead>
-          <tbody>
-            {shown.map((row, at) => (
-              <tr key={row.tag} className={row.you ? "rival-you" : undefined}>
-                <td>
-                  <Link className="rival-link" to={canonicalPlayerPath(row.tag)}>
-                    <Name>{`${first + at + 1}. ${row.name}`}</Name>
-                  </Link>
-                </td>
-                <td>{count(row.trophies)}</td>
-                <td className={tone(row.gain)}>{signedOr(row.gain)}</td>
-                <td>{percent(row.hitRate)}</td>
-                <td className="positive">{signedOr(row.offense)}</td>
-                <td className="negative">{signedOr(row.defense)}</td>
+        <div className="group-table-wrap">
+          <table className="group-table">
+            <thead>
+              <tr>
+                <th scope="col">Player</th>
+                <th scope="col">Trophies</th>
+                <th scope="col" aria-sort="descending">
+                  Avg gain <span aria-hidden="true">↓</span>
+                </th>
+                <th scope="col">Hit rate</th>
+                <th scope="col">Avg offense</th>
+                <th scope="col">Avg defense</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {shown.map((row, at) => (
+                <tr key={row.tag} className={row.you ? "rival-you" : undefined}>
+                  <td>
+                    <Link className="rival-link" to={canonicalPlayerPath(row.tag)}>
+                      <Name>{`${first + at + 1}. ${row.name}`}</Name>
+                    </Link>
+                  </td>
+                  <td>{count(row.trophies)}</td>
+                  <td className={tone(row.gain)}>{signedOr(row.gain)}</td>
+                  <td>{percent(row.hitRate)}</td>
+                  <td className="positive">{signedOr(row.offense)}</td>
+                  <td className="negative">{signedOr(row.defense)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       ) : (
         <CardNote>Your numbers could not be loaded.</CardNote>
       )}

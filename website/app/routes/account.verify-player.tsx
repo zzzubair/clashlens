@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react";
-import { data, Link, redirect, useActionData, useLoaderData } from "react-router";
+import {
+  data,
+  Form,
+  Link,
+  redirect,
+  useActionData,
+  useLoaderData,
+  useNavigation,
+} from "react-router";
 
 import type { BackHandle } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
@@ -92,10 +100,12 @@ export async function loader({
 /** A same-origin page to go on to, or null; never this page or account setup. */
 async function linkReturnPath(value: string | null | undefined): Promise<string | null> {
   const { getWebsiteConfig } = await import("../server/config.server");
-  const { safeReturnPath, ACCOUNT_SETUP_PATH } =
+  const { returnPathPage, safeReturnPath, ACCOUNT_SETUP_PATH } =
     await import("../server/return-path.server");
   const path = safeReturnPath(value, getWebsiteConfig().publicOrigin);
-  return path === ACCOUNT_SETUP_PATH || path === "/account/verify-player" ? null : path;
+  if (path === null) return null;
+  const page = returnPathPage(path);
+  return page === ACCOUNT_SETUP_PATH || page === "/account/verify-player" ? null : path;
 }
 
 /**
@@ -126,7 +136,9 @@ export async function action({ request, context }: Route.ActionArgs) {
   const token = form["token"] ?? "";
   const fieldErrors: { tag?: string; token?: string } = {};
   const tag = normalizeSubmittedPlayerTag(rawTag);
-  if (tag === null) fieldErrors.tag = "Enter a valid player tag.";
+  if (tag === null)
+    fieldErrors.tag =
+      "Enter a valid player tag (letters P, Y, L, Q, G, R, J, C, U, V and digits 0, 2, 8, 9 — use 0, not O).";
   if (!isVerificationToken(token)) {
     fieldErrors.token = "Enter the API token from Clash of Clans.";
   }
@@ -243,7 +255,9 @@ export function headers() {
 export default function VerifyPlayerRoute() {
   const loaderData = useLoaderData<typeof loader>();
   const actionData = useActionData<VerifyPlayerActionData>();
+  const navigation = useNavigation();
   const [token, setToken] = useState("");
+  const submitting = navigation.state === "submitting";
 
   // The API token is cleared after every submission attempt so it is
   // never left in the page after the request completes.
@@ -290,7 +304,7 @@ export default function VerifyPlayerRoute() {
 
       <section className="form-panel" aria-label="Link your Clash player form">
         <h2>Enter your player tag and API token</h2>
-        <form method="post" className="stack-form" noValidate>
+        <Form method="post" className="stack-form" noValidate>
           <input
             type="hidden"
             name="idempotencyKey"
@@ -305,13 +319,14 @@ export default function VerifyPlayerRoute() {
               id="verify-tag"
               name="tag"
               type="text"
+              placeholder="#2PY0LQ"
               autoComplete="off"
               autoCapitalize="characters"
               spellCheck={false}
               defaultValue={tagValue}
               aria-invalid={actionData?.fieldErrors?.tag ? true : undefined}
               aria-describedby={
-                actionData?.fieldErrors?.tag ? "verify-tag-error" : undefined
+                actionData?.fieldErrors?.tag ? "verify-tag-error" : "verify-tag-help"
               }
             />
             {actionData?.fieldErrors?.tag ? (
@@ -319,7 +334,10 @@ export default function VerifyPlayerRoute() {
                 {actionData.fieldErrors.tag}
               </p>
             ) : (
-              <p className="form-help">The public tag of the player you own.</p>
+              <p id="verify-tag-help" className="form-help">
+                In Clash of Clans, open My Profile and copy the tag under your name (# is
+                optional).
+              </p>
             )}
           </div>
           <div className="form-field">
@@ -356,10 +374,10 @@ export default function VerifyPlayerRoute() {
               it.
             </p>
           </div>
-          <button type="submit" className="button button-primary">
-            Link player
+          <button type="submit" className="button button-primary" disabled={submitting}>
+            {submitting ? "Linking…" : "Link player"}
           </button>
-        </form>
+        </Form>
       </section>
     </main>
   );

@@ -35,11 +35,18 @@ import { PythonApiError } from "../../app/services/python-response.server";
 const mocks = vi.hoisted(() => ({
   createPythonClient: vi.fn(),
   navigationState: "idle",
+  navigationSubmission: {} as Record<string, unknown>,
 }));
 
 vi.mock("react-router", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react-router")>();
-  return { ...actual, useNavigation: () => ({ state: mocks.navigationState }) };
+  return {
+    ...actual,
+    useNavigation: () => ({
+      state: mocks.navigationState,
+      ...mocks.navigationSubmission,
+    }),
+  };
 });
 
 vi.mock("../../app/services/python.server", async (importOriginal) => {
@@ -99,6 +106,7 @@ it("labels Clash Lens profiles so they do not look like game players", async () 
       query: "Nova",
       error: null,
       search: {
+        query: "Nova",
         exactTag: null,
         users: [{ username: "nova_star", displayName: "Nova", linkedPlayerCount: 2 }],
         results: [{ tag: "#2PP", name: "Nova", clan: "Test clan", trophies: 5000 }],
@@ -134,6 +142,24 @@ it("disables the search button and marks results busy while a search loads", asy
   }
 });
 
+it("keeps Search disabled while a submitted search redirects to the player", async () => {
+  const data = { leaderboard: null, query: "", error: null, search: null };
+  mocks.navigationState = "loading";
+  mocks.navigationSubmission = {
+    location: { pathname: "/players/%232PY0LQ" },
+    formMethod: "GET",
+    formAction: "/search?q=%232py0lq",
+  };
+  try {
+    expect(await renderHome(data, "")).toContain(
+      '<button type="submit" disabled="">Searching…</button>',
+    );
+  } finally {
+    mocks.navigationState = "idle";
+    mocks.navigationSubmission = {};
+  }
+});
+
 it("leaves search help to the placeholder and keeps a short tag hint when nothing matches", async () => {
   const html = await renderHome(
     { leaderboard: null, query: "Nova", error: null, search },
@@ -141,20 +167,22 @@ it("leaves search help to the placeholder and keeps a short tag hint when nothin
   );
   expect(html).toContain('placeholder="Name, @username or #tag"');
   expect(html).toContain("<h3>No players or profiles found</h3>");
-  expect(html).toContain("<p>Enter a full #tag to look up anyone.</p>");
+  expect(html).toContain(
+    "<p>Enter a full #tag (the # is optional) to look up anyone.</p>",
+  );
   const dropdown = renderToString(
     createElement(
       MemoryRouter,
       null,
       createElement(SearchSuggestions, {
         id: "suggestions",
-        data: { search, error: null } as never,
+        data: { query: search.query, search, error: null } as never,
         loading: false,
       }),
     ),
   );
   expect(dropdown).toContain(
-    "No players or profiles found. <!-- -->Enter a full #tag to look up anyone.",
+    "No players or profiles found. <!-- -->Enter a full #tag (the # is optional) to look up anyone.",
   );
 });
 
@@ -238,6 +266,7 @@ it("keeps worst-case names readable: one player, right-to-left text and no clan"
       createElement(SearchSuggestions, {
         id: "suggestions",
         data: {
+          query: search.query,
           search: {
             ...search,
             results: [
@@ -480,6 +509,50 @@ describe("search loading", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("keeps a letter-only word a name search and offers it as a player tag", async () => {
+    const searchPlayers = vi.fn().mockResolvedValue({ ...search, query: "YQQ" });
+    mocks.createPythonClient.mockReturnValue({ searchPlayers });
+    const loaded = await searchLoader({
+      request: new Request("https://clashlens.example/search?q=YQQ"),
+      context: visitor("203.0.113.9"),
+    } as never);
+    expect(loaded).not.toBeInstanceOf(Response);
+    expect(searchPlayers).toHaveBeenCalledTimes(1);
+    const html = (await renderHome(loaded, "?q=YQQ")).replaceAll("<!-- -->", "");
+    expect(html).toContain('href="/players/%23YQQ"');
+    expect(html).toContain("Open #YQQ");
+    expect(html).toContain("<h3>No players or profiles found</h3>");
+
+    const curry = (
+      await renderHome(
+        {
+          leaderboard: null,
+          query: "Ali",
+          error: null,
+          search: { ...search, query: "Ali" },
+        },
+        "?q=Ali",
+      )
+    ).replaceAll("<!-- -->", "");
+    expect(curry).not.toContain("Open #");
+  });
+
+  it("searches names for a tag-like word without its # and still offers the tag when search fails", async () => {
+    mocks.createPythonClient.mockReturnValue({
+      searchPlayers: vi
+        .fn()
+        .mockRejectedValue(new PythonApiError(429, { error: "rate_limited" })),
+    });
+    const loaded = await searchLoader({
+      request: new Request("https://clashlens.example/search?q=Curry2"),
+      context: visitor("203.0.113.9"),
+    } as never);
+    expect(loaded).not.toBeInstanceOf(Response);
+    const html = (await renderHome(loaded, "?q=Curry2")).replaceAll("<!-- -->", "");
+    expect(html).toContain('href="/players/%23CURRY2"');
+    expect(html).toContain("Open #CURRY2");
   });
 
   it("shows a failed search as an error", async () => {
