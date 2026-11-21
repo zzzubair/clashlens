@@ -31,7 +31,7 @@ Brand colours, the same in both themes:
 
 | Name        | Colour                | Use                                                |
 | ----------- | --------------------- | -------------------------------------------------- |
-| Night       | `#1a1206`             | Text on the yellow-to-orange fill                  |
+| Night       | `#1a1206`             | Text on the orange fill                            |
 | Sun yellow  | `#ffd447`             | Top of the button fill                             |
 | Lens orange | `#ff8a1f`             | Bottom of the button fill; focus ring              |
 | Ember red   | `#b3261e`             | Never body text                                    |
@@ -54,7 +54,7 @@ The site has a light theme (white and light grey) and a dark theme (night: near-
 | Loss, trophies lost      | `#c81e1e`      | `#ff6b5b`      |
 | Top bar, tab bar         | white, frosted | black, frosted |
 
-Every text colour above reaches at least 4.5:1 contrast on the page, card, panel and raised colours of its theme (the usual minimum for readable text). Text on the yellow-to-orange fill is always Night, which is at least 7.8:1; white on orange is only 2.4:1, so it is never used.
+Every text colour above reaches at least 4.5:1 contrast on the page, card, panel and raised colours of its theme (the usual minimum for readable text). Text on the orange fill is always Night, which is at least 7.8:1; white on orange is only 2.4:1, so it is never used.
 
 ## Fonts
 
@@ -67,10 +67,10 @@ All are served from the site itself.
 ## Look
 
 - **Less text:** a label shows only when the number or icon beside it is not clear on its own. Explanations for screen readers stay in the page, hidden from view.
-- **Glass, used sparingly:** only the top bar, the floating tab bar on phones and iPads, sheets and dropdowns are frosted. Cards are solid, with a faint top light and a hairline edge.
+- **Glass, used sparingly:** only the top bar, the floating tab bar on phones and iPads, sheets and dropdowns are frosted. Cards are solid, with a hairline edge.
 - **Rank plates:** every rank (Rankings, Crew boards, Armies, each day of the Daily Legend log) sits on a slanted plate; the top three are gold, silver and bronze. A day's plate shows how far it moved since the day before ("▲478").
 - **Scoreboard numbers:** big numbers use Big Shoulders Display; the player page draws the Season as a trophy line, Season stars as proportional bars, and each day's attacks against defenses as a swing bar.
-- **Buttons:** the main action uses the yellow-to-orange fill with Night text and a soft orange glow; everything else is a quiet card-coloured button with a thin edge. Controls have 8px corners, cards 12px.
+- **Buttons:** the main action is a solid orange fill (`--cl-action`) with Night text, flat with no glow (nothing on the site glows); everything else is a quiet card-coloured button with a thin edge. Controls have 8px corners, cards 12px.
 - **Dashboard teaser:** signed-out visitors see a locked example dashboard on the front page, with Create account and Sign in.
 - **Phones first:** nothing scrolls sideways except a row of tabs or chips; long lists show a first chunk and a "Show all" button.
 - **Consistency:** every page uses the same edges, corners and colours. Nothing gets a one-off style.

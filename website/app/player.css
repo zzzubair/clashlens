@@ -313,7 +313,7 @@
 
 /* The Season so far, under the trophies, read like a stock chart: a trophy
    scale at round counts down the left, dated weeks along the bottom, and a
-   dot at each Reset ending in a glowing dot for now. */
+   dot at each Reset ending in a larger dot for now. */
 .player-page .trophy-line {
   position: relative;
   grid-area: line;
