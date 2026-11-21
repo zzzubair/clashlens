@@ -271,7 +271,18 @@ export function SeasonGraphCard({ data }: { data: SeasonGraphData }) {
   );
 }
 
-function SeasonChart({
+export function stepDay(
+  points: { day: number }[],
+  tip: number | null,
+  move: -1 | 1,
+): number | null {
+  if (points.length === 0) return null;
+  const at = points.findIndex((point) => point.day === tip);
+  const from = at === -1 ? points.length - 1 : at + move;
+  return points[Math.min(points.length - 1, Math.max(0, from))].day;
+}
+
+export function SeasonChart({
   dayCount,
   points,
   mode,
@@ -294,7 +305,8 @@ function SeasonChart({
       : Math.max(1, Math.min(...values) * 0.6);
   const high =
     mode === "trophies" ? Math.max(...values) + 60 : Math.max(...values) * 1.25 + 1;
-  const x = (day: number) => left + ((day - 1) * (right - left)) / (dayCount - 1);
+  const step = (right - left) / (dayCount - 1);
+  const x = (day: number) => left + (day - 1) * step;
   // Trophies rise upwards; rank 1 sits at the top on a log scale.
   const y =
     mode === "trophies"
@@ -327,75 +339,107 @@ function SeasonChart({
   const tipPoint = points.find((point) => point.day === tip);
   const tipDay = days.find((day) => day.day === tip);
   return (
-    <div className="graph">
-      <svg
-        className="graph-svg"
-        viewBox={`0 0 ${GRAPH.width} ${GRAPH.height}`}
-        role="img"
-        aria-label={`Your ${mode} at each Reset this Season`}
-      >
-        {ticks.map((tick) => (
-          <g key={tick}>
-            <line className="graph-grid" x1={left} x2={right} y1={y(tick)} y2={y(tick)} />
-            <text className="graph-axis" x={left - 6} y={y(tick) + 4} textAnchor="end">
-              {mode === "trophies" ? count(tick) : `#${count(tick)}`}
-            </text>
-          </g>
-        ))}
-        {[1, 7, 14, 21, dayCount].map((day) => (
-          <text
-            key={day}
-            className="graph-axis"
-            x={x(day)}
-            y={bottom + 18}
-            textAnchor="middle"
-          >
-            Day {day}
-          </text>
-        ))}
-        <path className="graph-gap" d={dotted} />
-        <path className="graph-line" d={solid} />
-        {points.map((point) => (
-          <g
-            key={point.day}
-            tabIndex={0}
-            role="button"
-            aria-label={`Day ${point.day}: ${mode === "trophies" ? count(point.value) : `#${count(point.value)}`}`}
-            onMouseEnter={() => onTip(point.day)}
-            onMouseLeave={() => onTip(null)}
-            onFocus={() => onTip(point.day)}
-            onBlur={() => onTip(null)}
-            onClick={() => onTip(tip === point.day ? null : point.day)}
-          >
-            <circle
-              cx={x(point.day)}
-              cy={y(point.value)}
-              r={16}
-              fill="transparent"
-              style={{ cursor: "pointer" }}
-            />
-            <circle
-              className="graph-point"
-              cx={x(point.day)}
-              cy={y(point.value)}
-              r={tip === point.day ? 7 : 5}
-            />
-          </g>
-        ))}
-      </svg>
-      {tipPoint && tipDay ? (
-        <span
-          className="graph-tip"
-          style={{
-            left: `${(x(tipPoint.day) / GRAPH.width) * 100}%`,
-            top: `${(y(tipPoint.value) / GRAPH.height) * 100}%`,
-          }}
+    <>
+      <div className="graph">
+        <svg
+          className="graph-svg"
+          viewBox={`0 0 ${GRAPH.width} ${GRAPH.height}`}
+          role="img"
+          aria-label={`Your ${mode} at each Reset this Season`}
         >
-          Day {tipDay.day} ·{" "}
-          {mode === "trophies" ? count(tipDay.endTrophies) : `#${count(tipDay.rank)}`}
-        </span>
-      ) : null}
-    </div>
+          {ticks.map((tick) => (
+            <g key={tick}>
+              <line
+                className="graph-grid"
+                x1={left}
+                x2={right}
+                y1={y(tick)}
+                y2={y(tick)}
+              />
+              <text className="graph-axis" x={left - 6} y={y(tick) + 4} textAnchor="end">
+                {mode === "trophies" ? count(tick) : `#${count(tick)}`}
+              </text>
+            </g>
+          ))}
+          {[1, 7, 14, 21, dayCount].map((day) => (
+            <text
+              key={day}
+              className="graph-axis"
+              x={x(day)}
+              y={bottom + 18}
+              textAnchor="middle"
+            >
+              Day {day}
+            </text>
+          ))}
+          <path className="graph-gap" d={dotted} />
+          <path className="graph-line" d={solid} />
+          {points.map((point) => (
+            <g
+              key={point.day}
+              tabIndex={0}
+              role="button"
+              aria-label={`Day ${point.day}: ${mode === "trophies" ? count(point.value) : `#${count(point.value)}`}`}
+              onMouseEnter={() => onTip(point.day)}
+              onMouseLeave={() => onTip(null)}
+              onFocus={() => onTip(point.day)}
+              onBlur={() => onTip(null)}
+              onClick={() => onTip(point.day)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") onTip(null);
+              }}
+            >
+              <rect
+                className="graph-hit"
+                x={x(point.day) - step / 2}
+                y={top}
+                width={step}
+                height={bottom - top}
+                fill="transparent"
+              />
+              <circle
+                className="graph-point"
+                cx={x(point.day)}
+                cy={y(point.value)}
+                r={tip === point.day ? 7 : 5}
+              />
+            </g>
+          ))}
+        </svg>
+        {tipPoint && tipDay ? (
+          <span
+            className="graph-tip"
+            style={{
+              left: `${(x(tipPoint.day) / GRAPH.width) * 100}%`,
+              top: `${(y(tipPoint.value) / GRAPH.height) * 100}%`,
+            }}
+          >
+            Day {tipDay.day} ·{" "}
+            {mode === "trophies" ? count(tipDay.endTrophies) : `#${count(tipDay.rank)}`}
+          </span>
+        ) : null}
+      </div>
+      <div className="graph-steps">
+        <button
+          type="button"
+          className="button button-secondary"
+          aria-label="Earlier day"
+          disabled={points.length === 0 || tip === points[0].day}
+          onClick={() => onTip(stepDay(points, tip, -1))}
+        >
+          ‹ Earlier
+        </button>
+        <button
+          type="button"
+          className="button button-secondary"
+          aria-label="Later day"
+          disabled={points.length === 0 || tip === points[points.length - 1].day}
+          onClick={() => onTip(stepDay(points, tip, 1))}
+        >
+          Later ›
+        </button>
+      </div>
+    </>
   );
 }
 

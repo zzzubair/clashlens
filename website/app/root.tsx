@@ -288,28 +288,43 @@ const TAB_ROUTES = [
 ];
 
 // Floating <details> popovers (info tips, freshness notes, confirmations,
-// day-status notes) close when tapping outside or pressing Escape so they
-// never stay stuck over the page on phones or desktops.
-const POPOVER_DETAILS =
-  "details[open]:is(.dash-info, .player-freshness, .player-update-mobile, .last-days-info, .analytics-rule, .day-status, .crew-confirm, .goal-plan)";
+// day-status notes, Watchlist menus, base-strength notes) close when tapping
+// outside or pressing Escape so they never stay stuck over the page on phones
+// or desktops.
+const POPOVER_CLASSES = [
+  "dash-info",
+  "player-freshness",
+  "player-update-mobile",
+  "last-days-info",
+  "analytics-rule",
+  "day-status",
+  "crew-confirm",
+  "goal-plan",
+  "group-create",
+  "group-more",
+  "opponents-strength",
+];
+
+export function dismissPopovers(
+  root: ParentNode,
+  keep: Node | null,
+  refocus: Element | null,
+) {
+  for (const open of root.querySelectorAll<HTMLDetailsElement>("details[open]")) {
+    if (!POPOVER_CLASSES.some((name) => open.classList.contains(name))) continue;
+    if (keep && open.contains(keep)) continue;
+    const hadFocus = refocus !== null && open.contains(refocus);
+    open.open = false;
+    if (hadFocus) open.querySelector("summary")?.focus();
+  }
+}
 
 function useDismissPopovers() {
   useEffect(() => {
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as Node | null;
-      for (const open of document.querySelectorAll<HTMLDetailsElement>(POPOVER_DETAILS)) {
-        if (!target || !open.contains(target)) open.open = false;
-      }
-    };
+    const onPointerDown = (event: PointerEvent) =>
+      dismissPopovers(document, event.target as Node | null, null);
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      const open = [...document.querySelectorAll<HTMLDetailsElement>(POPOVER_DETAILS)];
-      if (open.length === 0) return;
-      for (const el of open) {
-        const hadFocus = el.contains(document.activeElement);
-        el.open = false;
-        if (hadFocus) el.querySelector("summary")?.focus();
-      }
+      if (event.key === "Escape") dismissPopovers(document, null, document.activeElement);
     };
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
@@ -320,43 +335,62 @@ function useDismissPopovers() {
   }, []);
 }
 
-// Once the page has loaded, download the code and styles of the pages a tap
-// most often opens, so a first tap on one waits only for its data. Skipped on
-// Data Saver or slow mobile connections so preloads never compete with the
-// Clasher's own requests.
+type TabManifest = {
+  routes: Record<
+    string,
+    { module: string; imports?: string[]; css?: string[] } | undefined
+  >;
+};
+
+// Download the code and styles of the pages a tap most often opens, so a first
+// tap on one waits only for its data. Skipped on Data Saver or slow mobile
+// connections, read as the downloads would start, so preloads never compete
+// with the Clasher's own requests.
+export function preloadTabCode(
+  manifest: TabManifest,
+  crews: boolean,
+  connection: { saveData?: boolean; effectiveType?: string } | undefined,
+) {
+  if (
+    connection?.saveData ||
+    connection?.effectiveType === "slow-2g" ||
+    connection?.effectiveType === "2g" ||
+    connection?.effectiveType === "3g"
+  )
+    return;
+  for (const id of crews ? [...TAB_ROUTES, "routes/crews"] : TAB_ROUTES) {
+    const route = manifest.routes[id];
+    if (route === undefined) continue;
+    for (const href of [route.module, ...(route.imports ?? [])]) preloadModule(href);
+    for (const href of route.css ?? []) preload(href, { as: "style" });
+    void import(/* @vite-ignore */ route.module).then(
+      (module: { links?: () => { rel?: string; href?: string }[] }) => {
+        for (const link of module.links?.() ?? []) {
+          if (link.rel === "stylesheet" && link.href) preload(link.href, { as: "style" });
+        }
+      },
+      () => {},
+    );
+  }
+}
+
 function usePreloadTabCode(crews: boolean) {
   const manifest = useContext(UNSAFE_FrameworkContext)?.manifest;
   useEffect(() => {
     if (manifest === undefined) return;
-    const connection = (
-      navigator as Navigator & {
-        connection?: { saveData?: boolean; effectiveType?: string };
-      }
-    ).connection;
-    if (
-      connection?.saveData ||
-      connection?.effectiveType === "slow-2g" ||
-      connection?.effectiveType === "2g" ||
-      connection?.effectiveType === "3g"
-    )
-      return;
-    const timer = setTimeout(() => {
-      for (const id of crews ? [...TAB_ROUTES, "routes/crews"] : TAB_ROUTES) {
-        const route = manifest.routes[id];
-        if (route === undefined) continue;
-        for (const href of [route.module, ...(route.imports ?? [])]) preloadModule(href);
-        for (const href of route.css ?? []) preload(href, { as: "style" });
-        void import(/* @vite-ignore */ route.module).then(
-          (module: { links?: () => { rel?: string; href?: string }[] }) => {
-            for (const link of module.links?.() ?? []) {
-              if (link.rel === "stylesheet" && link.href)
-                preload(link.href, { as: "style" });
+    const timer = setTimeout(
+      () =>
+        preloadTabCode(
+          manifest,
+          crews,
+          (
+            navigator as Navigator & {
+              connection?: { saveData?: boolean; effectiveType?: string };
             }
-          },
-          () => {},
-        );
-      }
-    }, 1000);
+          ).connection,
+        ),
+      1000,
+    );
     return () => clearTimeout(timer);
   }, [manifest, crews]);
 }

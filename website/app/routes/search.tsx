@@ -13,7 +13,7 @@ import { useBackState } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { PageSearch } from "../components/PageSearch";
 import type { SearchResponse, WebsiteErrorResponse } from "../lib/contracts";
-import { canonicalPlayerPath, noMatchHint, normalizePlayerTag } from "../lib/player-tag";
+import { canonicalPlayerPath, noMatchHint, searchedPlayerTag } from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
 
 export interface SearchLoaderData {
@@ -28,7 +28,7 @@ export function meta() {
 
 /**
  * GET /search?q= — every saved player and Clash Lens profile matching the
- * words. A complete #tag opens that player's page instead.
+ * words. A complete tag, with or without its #, opens that player's page instead.
  */
 export async function loader({
   request,
@@ -51,7 +51,7 @@ export async function loader({
       },
     };
   }
-  const exactTag = normalizePlayerTag(query);
+  const exactTag = searchedPlayerTag(query);
   if (exactTag) {
     const retry = params.get("recheck") === exactTag ? "?retry=1" : "";
     throw redirect(`${canonicalPlayerPath(exactTag)}${retry}`);

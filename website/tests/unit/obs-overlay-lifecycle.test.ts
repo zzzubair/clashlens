@@ -97,3 +97,50 @@ it("keeps a retired link blank and stops polling after a late player reply", asy
   await vi.advanceTimersByTimeAsync(1);
   expect(fetchMock).toHaveBeenCalledTimes(4);
 });
+
+function stalledBody(signal: AbortSignal) {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        signal.addEventListener("abort", () =>
+          controller.error(new DOMException("aborted", "AbortError")),
+        );
+      },
+    }),
+  );
+}
+
+it("times out a player reply that stalls after its headers and keeps polling", async () => {
+  fetchMock.mockImplementation(async (_url: string, init: RequestInit) =>
+    stalledBody(init.signal!),
+  );
+  mount(null);
+  message({
+    origin: ORIGIN,
+    data: { type: "cl-overlay-settings", contract: DOMAIN.overlay, search: "?p=2PP" },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(12_000);
+  expect((fetchMock.mock.calls[0][1] as RequestInit).signal!.aborted).toBe(true);
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
+it("times out stalled link settings, follows again, and aborts the read on teardown", async () => {
+  fetchMock.mockImplementation(async (_url: string, init: RequestInit) =>
+    stalledBody(init.signal!),
+  );
+  mount("saved-link");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(12_000 + 3_000);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  const second = (fetchMock.mock.calls[1][1] as RequestInit).signal!;
+  expect(second.aborted).toBe(false);
+  stop?.();
+  stop = undefined;
+  expect(second.aborted).toBe(true);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+});

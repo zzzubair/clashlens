@@ -3,7 +3,7 @@ import { CALENDAR } from "../fixtures/player-route-data";
 vi.mock("../../app/services/python-transport.server", () => ({
   requestJson: mocks.requestJson,
 }));
-import { createElement } from "react";
+import { createElement, type ReactElement, type ReactNode } from "react";
 import { renderToString } from "react-dom/server";
 import {
   createStaticHandler,
@@ -23,7 +23,10 @@ vi.mock("../../app/server/auth-guard.server", () => ({
   requireLogin: mocks.requireLogin,
 }));
 
-import GroupCompareRoute, { loader } from "../../app/routes/account.groups.$groupId";
+import GroupCompareRoute, {
+  loader,
+  TrendBars,
+} from "../../app/routes/account.groups.$groupId";
 import { PythonApiError } from "../../app/services/python-response.server";
 import { worstComparison } from "../fixtures/worst-case-accounts";
 
@@ -609,3 +612,35 @@ async function renderComparison(comparison: GroupComparison, sort = "trophies") 
     }),
   ).replaceAll("<!-- -->", "");
 }
+
+describe("Watchlist Trend on touch screens", () => {
+  type Bar = ReactElement<Record<string, unknown> & { children?: ReactNode }>;
+  const days = DAYS.map((start, index) => ({
+    start,
+    state: "complete" as const,
+    net: 10 * (index + 1),
+  }));
+  const bars = (active: number | null, onActive: (index: number | null) => void) => {
+    const strip = TrendBars({ days, scale: 30, active, onActive }) as Bar;
+    const children = (strip.props.children as ReactNode[]).flat() as Bar[];
+    return {
+      strip,
+      days: children.filter((child) =>
+        String(child?.props.className).startsWith("trend-day"),
+      ),
+    };
+  };
+
+  it("keeps a tapped day selected when the tap also points at it", () => {
+    const onActive = vi.fn();
+    (bars(null, onActive).days[1].props.onMouseEnter as () => void)();
+    expect(onActive).toHaveBeenLastCalledWith(1);
+    (bars(1, onActive).days[1].props.onClick as () => void)();
+    expect(onActive).toHaveBeenLastCalledWith(1);
+    (bars(1, onActive).strip.props.onKeyDown as (event: object) => void)({
+      key: "Escape",
+      preventDefault: vi.fn(),
+    });
+    expect(onActive).toHaveBeenLastCalledWith(null);
+  });
+});

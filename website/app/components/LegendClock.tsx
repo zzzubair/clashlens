@@ -1,6 +1,6 @@
 import { signedNumber as signed } from "../lib/number-format";
 import { timeFormatter, resetCountdown } from "../lib/clock-format";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { ClockBattle } from "../lib/dashboard";
 import { Stars } from "./GameIcons";
@@ -181,6 +181,11 @@ export function markReadout(mark: ClockMark, format: Intl.DateTimeFormat): strin
   ].join("\n");
 }
 
+/** Where a popover of this height starts so all of it stays on screen. */
+export function popoverTop(markTop: number, height: number, viewportHeight: number) {
+  return Math.max(8, Math.min(markTop - 10, viewportHeight - height - 8));
+}
+
 /** The battle behind one mark: when, who, stars, % and trophies. */
 function MarkDetail({
   mark,
@@ -195,15 +200,17 @@ function MarkDetail({
   anchor: DOMRect | null;
   onClose: () => void;
 }) {
+  const box = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState(0);
+  useLayoutEffect(() => {
+    setHeight(box.current?.offsetHeight ?? 0);
+  }, [mark]);
   const opensRight = anchor
     ? anchor.right + 306 < document.documentElement.clientWidth
     : true;
   // It grows out of the mark: from its left side when it opens to the
-  // mark's right, from its right side when it opens to the mark's left,
-  // clamped inside the viewport vertically so it never clips off-screen.
-  const clampedTop = anchor
-    ? Math.max(8, Math.min(anchor.top - 10, window.innerHeight - 160))
-    : 8;
+  // mark's right, from its right side when it opens to the mark's left.
+  const clampedTop = anchor ? popoverTop(anchor.top, height, window.innerHeight) : 8;
   const style =
     !phone && anchor
       ? {
@@ -216,6 +223,7 @@ function MarkDetail({
     <>
       {phone ? <div className="clock-sheet-back" onClick={onClose} /> : null}
       <div
+        ref={box}
         className={phone ? "clock-detail clock-sheet" : "clock-detail clock-popover"}
         style={style}
         role="dialog"

@@ -620,12 +620,10 @@ function FirstVisit({
   onPick: (choice: "default" | "own") => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
-  const picked = useRef(false);
   useEffect(() => {
     dialog.current?.showModal();
   }, []);
   const choose = (choice: "default" | "own") => {
-    picked.current = true;
     onPick(choice);
     dialog.current?.close();
   };
@@ -634,9 +632,6 @@ function FirstVisit({
       ref={dialog}
       className="dash-dialog dash-welcome"
       aria-labelledby="dash-welcome-title"
-      onClose={() => {
-        if (!picked.current) onPick("default");
-      }}
     >
       <h2 id="dash-welcome-title">Your dashboard</h2>
       <p className="dash-muted">

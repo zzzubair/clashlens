@@ -100,10 +100,12 @@ export async function loader({
 /** A same-origin page to go on to, or null; never this page or account setup. */
 async function linkReturnPath(value: string | null | undefined): Promise<string | null> {
   const { getWebsiteConfig } = await import("../server/config.server");
-  const { safeReturnPath, ACCOUNT_SETUP_PATH } =
+  const { returnPathPage, safeReturnPath, ACCOUNT_SETUP_PATH } =
     await import("../server/return-path.server");
   const path = safeReturnPath(value, getWebsiteConfig().publicOrigin);
-  return path === ACCOUNT_SETUP_PATH || path === "/account/verify-player" ? null : path;
+  if (path === null) return null;
+  const page = returnPathPage(path);
+  return page === ACCOUNT_SETUP_PATH || page === "/account/verify-player" ? null : path;
 }
 
 /**

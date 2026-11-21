@@ -622,12 +622,13 @@ export function mountOverlay(
   // ---------- live data ----------
   let stopped = false;
   const inflight = new Set<AbortController>();
-  const timedFetch = async (url: string): Promise<Response> => {
+  const timedRead = async (url: string) => {
     const controller = new AbortController();
     inflight.add(controller);
     const timeout = setTimeout(() => controller.abort(), 12_000);
     try {
-      return await fetch(url, { cache: "no-store", signal: controller.signal });
+      const res = await fetch(url, { cache: "no-store", signal: controller.signal });
+      return { ok: res.ok, status: res.status, text: await res.text() };
     } finally {
       clearTimeout(timeout);
       inflight.delete(controller);
@@ -636,8 +637,8 @@ export function mountOverlay(
   const playerUrl = (tag: string) =>
     `/resources/players/${encodeURIComponent(`#${tag}`)}/overlay`;
   async function readPlayer(tag: string): Promise<View> {
-    const res = await timedFetch(playerUrl(tag));
-    const next = (await res.json()) as View;
+    const res = await timedRead(playerUrl(tag));
+    const next = JSON.parse(res.text) as View;
     if (!res.ok) throw new Error(next.error ?? "error");
     return next;
   }
@@ -772,7 +773,7 @@ export function mountOverlay(
     const follow = async () => {
       let wait = SETTINGS_POLL_MS;
       try {
-        const res = await timedFetch(`/o/${encodeURIComponent(link)}/settings`);
+        const res = await timedRead(`/o/${encodeURIComponent(link)}/settings`);
         if (stopped) return;
         if (res.status === 404) {
           // A replaced link shows nothing, and checks rarely.
@@ -784,7 +785,7 @@ export function mountOverlay(
           followed = { kind: "retired" };
           wait = 60_000;
         } else if (res.ok) {
-          const reply = await res.json();
+          const reply = JSON.parse(res.text);
           const saved = parseOverlayLink({
             ...reply,
             kind: "obs-overlay-link",

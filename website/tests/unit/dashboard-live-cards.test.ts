@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it, expect } from "vitest";
 import { updatedAgo } from "../../app/lib/age-format";
-import { LegendClock, clockMarks } from "../../app/components/LegendClock";
+import { LegendClock, clockMarks, popoverTop } from "../../app/components/LegendClock";
 import { LegendDayCard } from "../../app/components/LegendDayCard";
 import type { PlayerDay } from "../../app/lib/dashboard";
 import { emptyDay, fight, linked } from "../fixtures/dashboard-data";
@@ -197,4 +197,13 @@ describe("Legend day card", () => {
       expect(html).toContain("Next Reset best #95 – worst #760");
     }
   });
+});
+
+it("keeps a tall group of battles on screen when its mark sits low", () => {
+  const viewport = 700;
+  const eightBattles = 9 * 36;
+  const top = popoverTop(640, eightBattles, viewport);
+  expect(top + eightBattles).toBeLessThanOrEqual(viewport - 8);
+  expect(popoverTop(200, eightBattles, viewport)).toBe(190);
+  expect(popoverTop(4, 120, viewport)).toBe(8);
 });

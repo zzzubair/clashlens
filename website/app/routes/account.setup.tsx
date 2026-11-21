@@ -60,7 +60,7 @@ export async function loader({ request }: Route.LoaderArgs): Promise<SetupLoader
 
 /** A new account links a player first, then goes on to where it was heading. */
 function linkFirst(returnPath: string, defaultPath: string): string {
-  if (returnPath === "/account/verify-player") return returnPath;
+  if (returnPath.split("?")[0] === "/account/verify-player") return returnPath;
   return returnPath === defaultPath
     ? "/account/verify-player"
     : `/account/verify-player?return=${encodeURIComponent(returnPath)}`;

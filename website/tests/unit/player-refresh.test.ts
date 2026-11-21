@@ -5,6 +5,7 @@ import {
   REFRESH_IDLE,
   REFRESH_TIMED_OUT,
   automaticRefreshFor,
+  followUpRead,
   lookupWaitTick,
   playerRefreshStep,
   pollAnswer,
@@ -194,5 +195,28 @@ describe("one automatic Refresh per visit", () => {
     expect(reloadedHere({ type: "reload", name: here }, "/players/%239QQ")).toBe(false);
     expect(reloadedHere({ type: "navigate", name: here }, "/players/%232PP")).toBe(false);
     expect(reloadedHere(undefined, "/players/%232PP")).toBe(false);
+  });
+});
+
+describe("reading the page after a Refresh completes", () => {
+  it("reads now when no read is underway", () => {
+    let reads = 0;
+    const followUp = followUpRead(() => reads++);
+    followUp.request(false);
+    followUp.settled();
+    expect(reads).toBe(1);
+  });
+
+  it("reads once more after a read that was already underway, however many checks it missed", () => {
+    let reads = 0;
+    const followUp = followUpRead(() => reads++);
+    followUp.request(true);
+    followUp.request(true);
+    followUp.request(true);
+    expect(reads).toBe(0);
+    followUp.settled();
+    expect(reads).toBe(1);
+    followUp.settled();
+    expect(reads).toBe(1);
   });
 });

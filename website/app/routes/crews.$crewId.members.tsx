@@ -2,7 +2,7 @@ import { data, Form, Link, redirect, useActionData, useLoaderData } from "react-
 
 import { type BackHandle, useBackState } from "../components/BackLink";
 import { crewCount, RoleChip } from "../components/CrewBoards";
-import { ConfirmForm, FormResult } from "../components/CrewForms";
+import { ConfirmForm, FormResult, useSubmitting } from "../components/CrewForms";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { Crest, TrophyIcon } from "../components/GameIcons";
 import "../crews.css";
@@ -280,21 +280,31 @@ function MemberCard({
           </div>
         </details>
       ) : canKick && role === "owner" ? (
-        // The owner's one choice for another member, named on the button.
-        <Form method="post" className="crew-edit">
-          <input
-            type="hidden"
-            name="intent"
-            value={member.role === "admin" ? "demote" : "promote"}
-          />
-          <input type="hidden" name="username" value={member.username} />
-          <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
-          <button type="submit" className="button secondary">
-            {member.role === "admin" ? "Remove admin" : "Make admin"}
-          </button>
-        </Form>
+        <RoleForm member={member} idempotencyKey={idempotencyKey} />
       ) : null}
     </li>
+  );
+}
+
+/** The owner's one choice for another member, named on the button. */
+function RoleForm({
+  member,
+  idempotencyKey,
+}: {
+  member: CrewMember;
+  idempotencyKey: string;
+}) {
+  const intent = member.role === "admin" ? "demote" : "promote";
+  const busy = useSubmitting({ intent, username: member.username, idempotencyKey });
+  return (
+    <Form method="post" className="crew-edit">
+      <input type="hidden" name="intent" value={intent} />
+      <input type="hidden" name="username" value={member.username} />
+      <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
+      <button type="submit" className="button secondary" disabled={busy}>
+        {busy ? "Saving…" : member.role === "admin" ? "Remove admin" : "Make admin"}
+      </button>
+    </Form>
   );
 }
 
@@ -334,6 +344,7 @@ function AddAccounts({
 }) {
   const spare = spareAccounts(crew, mine, accounts);
   const open = Math.max(0, crew.size - crew.used);
+  const busy = useSubmitting({ intent: "add", idempotencyKey });
   if (spare.length === 0) return null;
   return (
     <details className="crew-confirm">
@@ -365,8 +376,8 @@ function AddAccounts({
         </fieldset>
         <input type="hidden" name="intent" value="add" />
         <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
-        <button type="submit" className="button button-primary">
-          Add
+        <button type="submit" className="button button-primary" disabled={busy}>
+          {busy ? "Adding…" : "Add"}
         </button>
       </Form>
     </details>

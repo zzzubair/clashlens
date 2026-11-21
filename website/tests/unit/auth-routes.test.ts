@@ -268,6 +268,15 @@ describe("login loader", () => {
     });
   });
 
+  it("keeps the return page's query string through sign-in", async () => {
+    const result = await loginLoader({
+      request: new Request(
+        `${ORIGIN}/login?returnPath=%2Fleaderboards%2Ftracked%3Fday%3D12`,
+      ),
+    } as never);
+    expect(result.returnPath).toBe("/leaderboards/tracked?day=12");
+  });
+
   it("returns a sign-in started from a page's data request to the page", async () => {
     const result = await loginLoader({
       request: new Request(`${ORIGIN}/login?returnPath=%2Faccount%2Fgroups.data`),
@@ -633,13 +642,34 @@ describe("auth.google start loader", () => {
     ["google", googleStartLoader],
     ["discord", discordStartLoader],
   ] as const)(
+    "%s keeps the return page's query string",
+    async (provider, startLoader) => {
+      const response = await startLoader({
+        request: new Request(
+          `${ORIGIN}/auth/${provider}?returnPath=%2Fleaderboards%2Ftracked%3Fday%3D12`,
+        ),
+      } as never);
+      const cookie = (response as Response).headers.getSetCookie()[0]!;
+      const transaction = parseOAuthTransactionCookieValue(
+        cookie.slice(cookie.indexOf("=") + 1, cookie.indexOf(";")),
+        testConfig().loginSecret,
+        Math.floor(Date.now() / 1000),
+      );
+      expect(transaction?.returnPath).toBe("/leaderboards/tracked?day=12");
+    },
+  );
+
+  it.each([
+    ["google", googleStartLoader],
+    ["discord", discordStartLoader],
+  ] as const)(
     "%s uses the safe default return path for missing or hostile values",
     async (provider, startLoader) => {
       for (const query of [
         "",
         "?returnPath=https%3A%2F%2Fevil.example%2F",
         "?returnPath=%2F%2Fevil.example",
-        "?returnPath=%2Faccount%2Fgroups%3Fdays%3D3",
+        "?returnPath=%2Faccount%2Fgroups%23top",
       ]) {
         const response = await startLoader({
           request: new Request(`${ORIGIN}/auth/${provider}${query}`),
@@ -1029,7 +1059,7 @@ describe("auth.google.callback loader", () => {
           async () => ({ provider, providerSubject: "110022003300440055" }),
         );
       };
-      const groupPath = "/account/groups/6c1e3f8a-2a44-4b7d-9c0e-1f2a3b4c5d6e";
+      const groupPath = "/account/groups/6c1e3f8a-2a44-4b7d-9c0e-1f2a3b4c5d6e?day=12";
       expect(await signIn(groupPath)).toMatchObject({ location: groupPath });
       expect(await signIn(groupPath, "signup")).toMatchObject({ location: groupPath });
 

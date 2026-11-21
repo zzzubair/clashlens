@@ -8,6 +8,16 @@ export function normalizePlayerTag(value: string): string | null {
 }
 
 /**
+ * The player tag a search box means: a #tag, or the same characters without
+ * the # when they include a digit, so names like "Curry" stay name searches.
+ */
+export function searchedPlayerTag(value: string): string | null {
+  const typed = value.trim();
+  if (typed.startsWith("#")) return normalizePlayerTag(typed);
+  return /\d/.test(typed) ? normalizePlayerTag(`#${typed}`) : null;
+}
+
+/**
  * What to say when a search finds nobody: a complete-looking #tag with
  * letters the game never uses is not a tag at all, so asking for a full #tag
  * would be wrong.

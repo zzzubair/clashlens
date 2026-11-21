@@ -49,7 +49,10 @@ import CrewBoardRoute, {
   handle as boardHandle,
   loader as boardLoader,
 } from "../../app/routes/crews.$crewId.boards.$board";
-import { action as createAction, loader as newLoader } from "../../app/routes/crews.new";
+import NewCrewRoute, {
+  action as createAction,
+  loader as newLoader,
+} from "../../app/routes/crews.new";
 import { isCrewsEnabled } from "../../app/server/config.server";
 import { PythonApiError } from "../../app/services/python-response.server";
 
@@ -535,6 +538,49 @@ describe("crew page", () => {
 });
 
 describe("create a crew", () => {
+  it("says why no linked account can join, without claiming it is outside Legend League", async () => {
+    const handler = createStaticHandler([
+      {
+        path: "/crews/new",
+        Component: NewCrewRoute,
+        loader: () => ({
+          capacity: {
+            limits: { min_size: 5, max_size: 100, default_size: 20 },
+            maxCrews: 5,
+            crews: [],
+          },
+          crewCount: 0,
+          accounts: [
+            {
+              tag: "#2PP",
+              name: "Zara",
+              state: "uncertain",
+              trophies: 5200,
+              league: null,
+            },
+            {
+              tag: "#2QQ",
+              name: "Kenji",
+              state: "not_found",
+              trophies: null,
+              league: null,
+            },
+          ],
+          idempotencyKey: IDEMPOTENCY_KEY,
+          error: null,
+        }),
+      },
+    ]);
+    const html = renderStaticRoute(
+      handler,
+      await handler.query(new Request(`${ORIGIN}/crews/new`)),
+    );
+    expect(html).not.toContain("Legend League right now");
+    expect(html).toContain("#2PP · League not confirmed yet");
+    expect(html).toContain("#2QQ · Not found in the game");
+    expect(html).toContain("None of your linked accounts can join a crew right now.");
+  });
+
   it("makes the crew with the picked accounts and opens it", async () => {
     mocks.requestJson.mockResolvedValue({ crew_id: CREW_ID, name: "Red Dawn", size: 20 });
     const response = await thrown(() =>
