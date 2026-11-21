@@ -12,7 +12,14 @@ vi.mock("../../app/services/public-user.server", async (importOriginal) => {
       mocks.createPythonClient().getPublicUser(...args),
   };
 });
-import { createStaticHandler, RouterContextProvider } from "react-router";
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
+import {
+  createMemoryRouter,
+  createStaticHandler,
+  RouterContextProvider,
+  RouterProvider,
+} from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -523,6 +530,52 @@ describe("members", () => {
     expect(member.map(label)).toEqual(["Remove Zara", null, null, null]);
     expect(member[0]).toContain(">Remove and leave</button>");
     expect(member[0]).toContain('name="own" value="1"');
+  });
+
+  it("marks only the sent row or button as working while its form sends", async () => {
+    const sending = async (role: string, fields: Record<string, string>) => {
+      const router = createMemoryRouter(
+        [
+          {
+            path: "/crews/:crewId/members",
+            Component: CrewMembersRoute,
+            loader: () => ({
+              crew: mapCrew(crewPayload(role)),
+              accounts: [
+                { tag: "#2LL", name: "Spare", state: "tracking", trophies: 5200 },
+              ],
+              error: null,
+              idempotencyKey: KEY,
+            }),
+            action: () => new Promise(() => {}),
+          },
+        ],
+        { initialEntries: [`/crews/${CREW_ID}/members`] },
+      );
+      await vi.waitFor(() => expect(router.state.initialized).toBe(true));
+      const formData = new FormData();
+      for (const [name, value] of Object.entries({ ...fields, idempotencyKey: KEY }))
+        formData.set(name, value);
+      void router.navigate(`/crews/${CREW_ID}/members`, { formMethod: "post", formData });
+      await vi.waitFor(() => expect(router.state.navigation.state).toBe("submitting"));
+      return renderToString(createElement(RouterProvider, { router })).replaceAll(
+        "<!-- -->",
+        "",
+      );
+    };
+    const disabled = (html: string) => html.match(/<button[^>]*disabled=""[^>]*>[^<]*/g);
+
+    expect(disabled(await sending("owner", { intent: "remove", tag: "#2RR" }))).toEqual([
+      '<button type="submit" class="button danger-button" disabled="">Working…',
+    ]);
+    expect(
+      disabled(await sending("owner", { intent: "promote", username: "kenji" })),
+    ).toEqual(['<button type="submit" class="button secondary" disabled="">Saving…']);
+    expect(
+      disabled(await sending("member", { intent: "add", "join:#2LL": "on" })),
+    ).toEqual([
+      '<button type="submit" class="button button-primary" disabled="">Adding…',
+    ]);
   });
 
   it("refuses a form from another site or with an unknown intent", async () => {

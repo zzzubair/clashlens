@@ -63,7 +63,17 @@ async function openPage(failure: () => unknown, path = PAGE) {
               throw failure();
             },
           },
-          { id: "home", index: true, loader: () => ({ home: true }) },
+          {
+            id: "home",
+            index: true,
+            loader: (() => {
+              const page = read({ players: ["#LY2QQ9L9Q"] });
+              return ({ request }: { request: Request }) => {
+                if (new URL(request.url).searchParams.has("cards")) throw failure();
+                return page();
+              };
+            })(),
+          },
         ],
       },
     ],
@@ -207,4 +217,21 @@ it("shows the error again, not an empty page, on Back after a failed profile", a
   await router.navigate(-1);
   expect(router.state.location.pathname).toBe(PAGE);
   expect(router.state.errors).toEqual({ root: new TypeError("Load failed") });
+});
+
+it("keeps the shown dashboard when Try again on linked players loses the connection", async () => {
+  const router = await openPage(() => new TypeError("Load failed"), "/");
+  await router.revalidate();
+  expect(router.state.errors).toBeNull();
+  expect(router.state.loaderData.home).toEqual({ players: ["#LY2QQ9L9Q"] });
+});
+
+it("shows a dashboard card as unavailable when its Try again loses the connection", async () => {
+  const router = await openPage(() => new TypeError("Load failed"), "/");
+  const answer = await fetched(router, "card", () =>
+    router.fetch("card", "home", "/?index&player=%23LY2QQ9L9Q&cards=goal"),
+  );
+  expect(answer).toEqual(UNAVAILABLE);
+  expect(router.state.errors).toBeNull();
+  expect(router.state.loaderData.home).toEqual({ players: ["#LY2QQ9L9Q"] });
 });

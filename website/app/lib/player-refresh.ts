@@ -234,3 +234,19 @@ export function reloadedHere(
 ): boolean {
   return navigation?.type === "reload" && new URL(navigation.name).pathname === pathname;
 }
+
+/** Reads the page now, or once more after the read already underway settles. */
+export function followUpRead(read: () => void) {
+  let queued = false;
+  return {
+    request(busy: boolean) {
+      if (busy) queued = true;
+      else read();
+    },
+    settled() {
+      if (!queued) return;
+      queued = false;
+      read();
+    },
+  };
+}

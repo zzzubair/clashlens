@@ -225,6 +225,19 @@ html {
   }
 }
 
+/* A Watchlist Trend bar is about 20px tall on a phone; on touch screens each
+   day takes taps from a 44px band centred on its bar. */
+@media (pointer: coarse) {
+  .trend > .trend-day::before {
+    position: absolute;
+    inset-inline: 0;
+    top: 50%;
+    height: max(100%, 2.75rem);
+    content: "";
+    translate: 0 -50%;
+  }
+}
+
 /* Dark surfaces cover the shared controls, data views, and account forms. */
 @media (hover: hover) and (pointer: fine) {
   [data-theme="dark"] .data-table tbody tr:hover {

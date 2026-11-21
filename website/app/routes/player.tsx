@@ -1,5 +1,5 @@
 import { legendDayDate, validDay } from "../lib/legend-log-data";
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
   Link,
   redirect,
@@ -71,6 +71,7 @@ import {
 import {
   REFRESH_IDLE,
   automaticRefreshFor,
+  followUpRead,
   lookupWaitTick,
   playerRefreshStep,
   pollAnswer,
@@ -579,15 +580,17 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     refresh.phase !== "idle" && visibleStatus?.state === "complete"
       ? visibleStatus.workId
       : null;
+  const followUp = useMemo(() => followUpRead(() => void revalidate()), [revalidate]);
   useEffect(() => {
     if (completedWorkId === null) return;
     const timers = [0, 3_000, 8_000].map((delay) =>
-      setTimeout(() => {
-        if (revalidatorState.current === "idle") void revalidate();
-      }, delay),
+      setTimeout(() => followUp.request(revalidatorState.current !== "idle"), delay),
     );
     return () => timers.forEach(clearTimeout);
-  }, [completedWorkId, revalidate]);
+  }, [completedWorkId, followUp]);
+  useEffect(() => {
+    if (revalidator.state === "idle") followUp.settled();
+  }, [revalidator.state, followUp]);
 
   if (trackedPlayer === null) {
     if (data.requestedTag === null) {

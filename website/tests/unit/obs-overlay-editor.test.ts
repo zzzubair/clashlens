@@ -1,3 +1,5 @@
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
 import { afterEach, expect, it, vi } from "vitest";
 
 import type { OverlayBattle } from "../../app/lib/obs-overlay";
@@ -11,7 +13,9 @@ import {
   dragTo,
   previewMessage,
   releaseDrag,
+  ReplaceLinkConfirm,
   runAutosave,
+  SAVE_STATUS,
   startDrag,
   type Autosave,
   type Choices,
@@ -185,4 +189,21 @@ it("runs waiting timers only until the overlay stops", () => {
   vi.advanceTimersByTime(5_000);
   expect(ran).toEqual(["hide notice"]);
   expect(clock.running()).toBe(false);
+});
+
+it("offers Try again and says the result is unconfirmed after a lost new-link reply", () => {
+  const confirm = (unconfirmed: boolean) =>
+    renderToString(
+      createElement(ReplaceLinkConfirm, {
+        replacing: false,
+        unconfirmed,
+        onConfirm: () => {},
+        onCancel: () => {},
+      }),
+    );
+  expect(confirm(false)).toContain("Yes, make new link");
+  expect(confirm(true)).toContain("Try again");
+  expect(confirm(true)).not.toContain("Yes, make new link");
+  expect(SAVE_STATUS.linkUnconfirmed.text).toMatch(/couldn.t confirm/i);
+  expect(SAVE_STATUS.linkUnconfirmed.text).toMatch(/may already be retired/i);
 });

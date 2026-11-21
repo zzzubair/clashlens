@@ -133,15 +133,19 @@ export function isPlausibleTransaction(transaction: OAuthTransaction): boolean {
 export const MAX_RETURN_PATH_LENGTH = 200;
 // %23 is the # in a player tag, such as /players/%232PP.
 const RETURN_PATH_CHARS = /^(?:[A-Za-z0-9._~/-]|%23)+$/;
+const RETURN_QUERY_CHARS = /^(?:[A-Za-z0-9._~/=&+,:@!$()*;-]|%[0-9A-Fa-f]{2})+$/;
 
 export function isSafeReturnPath(value: string): boolean {
+  const queryStart = value.indexOf("?");
+  const path = queryStart === -1 ? value : value.slice(0, queryStart);
+  const query = queryStart === -1 ? null : value.slice(queryStart + 1);
   return (
-    value.length > 0 &&
     value.length <= MAX_RETURN_PATH_LENGTH &&
-    value.startsWith("/") &&
-    !value.startsWith("//") &&
-    RETURN_PATH_CHARS.test(value) &&
-    !value.split("/").some((segment) => segment === "." || segment === "..")
+    path.startsWith("/") &&
+    !path.startsWith("//") &&
+    RETURN_PATH_CHARS.test(path) &&
+    !path.split("/").some((segment) => segment === "." || segment === "..") &&
+    (query === null || RETURN_QUERY_CHARS.test(query))
   );
 }
 

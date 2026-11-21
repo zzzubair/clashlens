@@ -289,15 +289,17 @@ export default function ObsOverlayRoute() {
  *   lands, until the newest choices are saved.
  * - `saved`: the newest choices are saved; OBS follows within 3 seconds.
  * - `notSaved`: a save failed; the next change tries again.
- * - `linkMade` / `linkNotMade`: how making a new link went.
+ * - `linkMade`: a new link was made.
+ * - `linkUnconfirmed`: the reply to making a new link was lost, so the old
+ *   link may already be retired; trying again returns the current link.
  *
  * `OverlaySetup` owns it; leaving the page drops unsaved choices still in
  * their 0.3-second pause.
  */
 export type SaveStatus =
-  "untouched" | "saving" | "saved" | "notSaved" | "linkMade" | "linkNotMade";
+  "untouched" | "saving" | "saved" | "notSaved" | "linkMade" | "linkUnconfirmed";
 
-const SAVE_STATUS: Record<SaveStatus, { text: string; ok: boolean }> = {
+export const SAVE_STATUS: Record<SaveStatus, { text: string; ok: boolean }> = {
   untouched: { text: "Changes save by themselves.", ok: false },
   saving: { text: "Saving…", ok: false },
   saved: { text: "Saved. Your overlay in OBS updates within 3 seconds.", ok: true },
@@ -306,7 +308,10 @@ const SAVE_STATUS: Record<SaveStatus, { text: string; ok: boolean }> = {
     text: "New link made. The old one is deleted and shows nothing. Paste the new one into OBS.",
     ok: true,
   },
-  linkNotMade: { text: "No new link made. Check your connection.", ok: false },
+  linkUnconfirmed: {
+    text: "Couldn't confirm the new link. The old one may already be retired. Try again to get the current link.",
+    ok: false,
+  },
 };
 
 /**
@@ -657,7 +662,7 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
       setConfirmReplace(false);
       setSaveStatus("linkMade");
     } catch {
-      setSaveStatus("linkNotMade");
+      setSaveStatus("linkUnconfirmed");
     } finally {
       setReplacing(false);
     }
@@ -1042,27 +1047,12 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
               </span>
             ) : null}
             {confirmReplace ? (
-              <span className="obs-replace" role="group" aria-label="Confirm new link">
-                <span className="obs-help">
-                  The old link stops working immediately. Make a new link?{" "}
-                </span>
-                <button
-                  type="button"
-                  className="button button-primary"
-                  disabled={replacing}
-                  onClick={() => void replaceLink()}
-                >
-                  {replacing ? "Making link…" : "Yes, make new link"}
-                </button>{" "}
-                <button
-                  type="button"
-                  className="button button-secondary"
-                  disabled={replacing}
-                  onClick={() => setConfirmReplace(false)}
-                >
-                  Cancel
-                </button>
-              </span>
+              <ReplaceLinkConfirm
+                replacing={replacing}
+                unconfirmed={saveStatus === "linkUnconfirmed"}
+                onConfirm={() => void replaceLink()}
+                onCancel={() => setConfirmReplace(false)}
+              />
             ) : (
               <button
                 type="button"
@@ -1218,6 +1208,44 @@ function steps(fit: Fit, w: number, h: number): ReactNode[] {
           </>,
         ];
   return items.map((item, index) => <li key={index}>{item}</li>);
+}
+
+/** Asks before replacing the private link; after a lost reply, pressing again
+ * fetches whichever link is now current. */
+export function ReplaceLinkConfirm({
+  replacing,
+  unconfirmed,
+  onConfirm,
+  onCancel,
+}: {
+  replacing: boolean;
+  unconfirmed: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <span className="obs-replace" role="group" aria-label="Confirm new link">
+      <span className="obs-help">
+        The old link stops working immediately. Make a new link?{" "}
+      </span>
+      <button
+        type="button"
+        className="button button-primary"
+        disabled={replacing}
+        onClick={onConfirm}
+      >
+        {replacing ? "Making link…" : unconfirmed ? "Try again" : "Yes, make new link"}
+      </button>{" "}
+      <button
+        type="button"
+        className="button button-secondary"
+        disabled={replacing}
+        onClick={onCancel}
+      >
+        Cancel
+      </button>
+    </span>
+  );
 }
 
 /** The save route's own JSON answer. Anything else throws, a redirect to sign

@@ -902,6 +902,20 @@ function Rate({
  */
 function Trend({ days, scale }: { days: DayResult[]; scale: number }) {
   const [active, setActive] = useState<number | null>(null);
+  return <TrendBars days={days} scale={scale} active={active} onActive={setActive} />;
+}
+
+export function TrendBars({
+  days,
+  scale,
+  active,
+  onActive,
+}: {
+  days: DayResult[];
+  scale: number;
+  active: number | null;
+  onActive: (index: number | null) => void;
+}) {
   const summary = days
     .map(
       (day) =>
@@ -915,15 +929,16 @@ function Trend({ days, scale }: { days: DayResult[]; scale: number }) {
       role="img"
       aria-label={`Daily results: ${summary}`}
       tabIndex={0}
-      onFocus={() => setActive((index) => index ?? days.length - 1)}
-      onBlur={() => setActive(null)}
-      onMouseLeave={() => setActive(null)}
+      onFocus={() => onActive(active ?? days.length - 1)}
+      onBlur={() => onActive(null)}
+      onMouseLeave={() => onActive(null)}
       onKeyDown={(event) => {
+        if (event.key === "Escape") return onActive(null);
         const step = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
         if (step === undefined) return;
         event.preventDefault();
-        setActive((index) =>
-          Math.min(days.length - 1, Math.max(0, (index ?? days.length - 1) + step)),
+        onActive(
+          Math.min(days.length - 1, Math.max(0, (active ?? days.length - 1) + step)),
         );
       }}
     >
@@ -931,8 +946,8 @@ function Trend({ days, scale }: { days: DayResult[]; scale: number }) {
         <span
           key={day.start}
           className={`trend-day ${direction(day)}${index === active ? " trend-active" : ""}`}
-          onMouseEnter={() => setActive(index)}
-          onClick={() => setActive((current) => (current === index ? null : index))}
+          onMouseEnter={() => onActive(index)}
+          onClick={() => onActive(index)}
         >
           <DayBar day={day} scale={scale} />
         </span>

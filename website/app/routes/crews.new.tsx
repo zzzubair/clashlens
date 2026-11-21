@@ -29,6 +29,12 @@ import "../crews.css";
 const NO_STORE = { "Cache-Control": "no-store" };
 /** Each picked account is its own form field, named by this and its tag. */
 const JOIN_FIELD = "join:";
+/** Why a linked account can't join, from its latest reading. */
+const CANNOT_JOIN: Partial<Record<LinkedAccount["state"], string>> = {
+  not_in_legend: "Not in Legend League",
+  uncertain: "League not confirmed yet",
+  not_found: "Not found in the game",
+};
 
 export const handle: BackHandle = { back: { to: "/crews", label: "Crews" } };
 
@@ -346,7 +352,7 @@ export default function NewCrewRoute() {
                         <b>{account.name ?? account.tag}</b>
                         <span>
                           {account.tag}
-                          {joinable ? null : ` · Not in Legend League`}
+                          {joinable ? null : ` · ${CANNOT_JOIN[account.state]}`}
                         </span>
                       </span>
                       {joinable && account.trophies !== null ? (
@@ -366,9 +372,10 @@ export default function NewCrewRoute() {
               </p>
             ) : firstJoinable === undefined ? (
               <p className="form-help">
-                None of your linked accounts are in Legend League right now.{" "}
+                None of your linked accounts can join a crew right now. A crew needs an
+                account Clash Lens has confirmed is in Legend League.{" "}
                 <Link to="/account/verify-player?return=%2Fcrews%2Fnew">
-                  Link a Legend League account
+                  Link another account
                 </Link>{" "}
                 to start a crew.
               </p>

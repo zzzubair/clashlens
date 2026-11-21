@@ -358,7 +358,7 @@
     height: 2.75rem;
   }
   :root .group-card-open,
-  .group-text-button {
+  :root .group-text-button {
     min-height: 2.75rem;
   }
 }

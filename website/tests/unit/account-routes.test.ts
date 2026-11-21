@@ -313,11 +313,15 @@ describe("account routes", () => {
           } as never)
         ).returnPath;
       expect(await returnPathOf("/account/watchlists")).toBe("/account/watchlists");
+      expect(await returnPathOf("/account/watchlists?days=3&sort=defense")).toBe(
+        "/account/watchlists?days=3&sort=defense",
+      );
       for (const unsafe of [
         "https://evil.example/account/watchlists",
         "//evil.example/account/watchlists",
-        "/account/watchlists?days=3&sort=defense",
+        "/account/watchlists#top",
         "/account/setup",
+        "/account/setup?returnPath=%2Fcrews",
       ]) {
         expect(await returnPathOf(unsafe)).toBe("/account");
       }
@@ -337,6 +341,14 @@ describe("account routes", () => {
       );
       await expect(submit("https://evil.example/account/watchlists")).rejects.toSatisfy(
         expectRedirectTo("/account/verify-player"),
+      );
+      await expect(submit("/leaderboards/tracked?day=12")).rejects.toSatisfy(
+        expectRedirectTo(
+          "/account/verify-player?return=%2Fleaderboards%2Ftracked%3Fday%3D12",
+        ),
+      );
+      await expect(submit("/account/verify-player?return=%2Fcrews")).rejects.toSatisfy(
+        expectRedirectTo("/account/verify-player?return=%2Fcrews"),
       );
       client.createAccount = vi.fn(async () => {
         throw new PythonApiError(409, { error: "account_exists" });
@@ -874,6 +886,22 @@ describe("account routes", () => {
       } as never);
       expect(UUID_PATTERN.test(result.idempotencyKey)).toBe(true);
       assertNoProviderData(result);
+    });
+
+    it("keeps a return page's query string and never returns to itself or setup", async () => {
+      const returnPathOf = async (value: string) =>
+        (
+          await verifyPlayerLoader({
+            request: new Request(
+              `${ORIGIN}/account/verify-player?return=${encodeURIComponent(value)}`,
+            ),
+          } as never)
+        ).returnPath;
+      expect(await returnPathOf("/leaderboards/tracked?day=12")).toBe(
+        "/leaderboards/tracked?day=12",
+      );
+      expect(await returnPathOf("/account/verify-player?return=%2Fcrews")).toBeNull();
+      expect(await returnPathOf("/account/setup?returnPath=%2Fcrews")).toBeNull();
     });
 
     it.each(["linked", "already_linked"] as const)(

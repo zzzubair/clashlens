@@ -76,9 +76,11 @@ const UNAVAILABLE: WebsiteErrorResponse = {
   },
 };
 
-// Refresh and search show their own unavailable notice, as when the service is down.
+// Refresh, search and dashboard card reads show their own unavailable notice,
+// as when the service is down.
 function inlineAnswer({ pathname, searchParams }: URL) {
   if (/^\/resources\/players\/[^/]+\/refresh$/.test(pathname)) return UNAVAILABLE;
+  if (pathname === "/" && searchParams.has("cards")) return UNAVAILABLE;
   if (pathname === "/resources/players/search") {
     const answer: PlayerSearchLoaderData = {
       query: (searchParams.get("q") ?? "").trim(),
@@ -90,8 +92,8 @@ function inlineAnswer({ pathname, searchParams }: URL) {
   return undefined;
 }
 
-// Player profiles reread their own data in the background, such as when a phone
-// wakes. A re-read that cannot reach the website leaves the profile as the
+// Player profiles and the dashboard reread their own data in the background,
+// such as when a phone wakes or a Clasher presses Try again. A re-read that cannot reach the website leaves the profile as the
 // browser already has it, and the next re-read tries again; only a page the
 // browser has not shown yet can fail. The header never keeps an account it
 // could not read, so it shows signed out. Other pages show the error as before.
@@ -112,7 +114,7 @@ function keepPage(
     };
   if (
     request.method !== "GET" ||
-    !url.pathname.startsWith("/players/") ||
+    !(url.pathname.startsWith("/players/") || url.pathname === "/") ||
     shownPage !== url.pathname + url.search
   )
     return results;

@@ -203,6 +203,16 @@ export function FormResult({
   );
 }
 
+/** Whether the page is sending a form whose fields include every one of these. */
+export function useSubmitting(fields: Record<string, string>): boolean {
+  const navigation = useNavigation();
+  const sent = navigation.state === "submitting" ? navigation.formData : undefined;
+  return (
+    sent !== undefined &&
+    Object.entries(fields).every(([name, value]) => sent.get(name) === value)
+  );
+}
+
 /**
  * A button that asks before it acts: it opens a short question with the
  * real button under it. A disclosure, so it works without JavaScript.
@@ -225,11 +235,7 @@ export function ConfirmForm({
   idempotencyKey: string;
   fields?: Record<string, string>;
 }) {
-  const navigation = useNavigation();
-  const busy =
-    navigation.state === "submitting" &&
-    navigation.formData?.get("intent") === intent &&
-    navigation.formData?.get("idempotencyKey") === idempotencyKey;
+  const busy = useSubmitting({ intent, idempotencyKey, ...fields });
   return (
     <details className={icon ? "crew-confirm crew-row-confirm" : "crew-confirm"}>
       {icon ? (

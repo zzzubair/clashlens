@@ -2,7 +2,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { HeatMapCard } from "../../app/components/SeasonCards";
+import type { ReactElement, ReactNode } from "react";
+import { HeatMapCard, SeasonChart, stepDay } from "../../app/components/SeasonCards";
 import { heatCells, type SeasonData } from "../../app/lib/dashboard-cards";
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
@@ -133,5 +134,71 @@ describe("Season heat map", () => {
       ["shield", null],
       ["played", 0],
     ]);
+  });
+});
+
+type Element = ReactElement<Record<string, unknown> & { children?: ReactNode }>;
+function walk(node: ReactNode, found: Element[] = []): Element[] {
+  if (Array.isArray(node)) node.forEach((child) => walk(child, found));
+  else if (node && typeof node === "object" && "props" in node) {
+    const element = node as Element;
+    found.push(element);
+    walk(element.props.children, found);
+  }
+  return found;
+}
+
+describe("Season chart on touch screens", () => {
+  const points = [
+    { day: 1, value: 5000 },
+    { day: 2, value: 5100 },
+    { day: 3, value: 5150 },
+  ];
+  const chart = (tip: number | null, onTip: (day: number | null) => void) =>
+    walk(
+      SeasonChart({
+        dayCount: 28,
+        points,
+        mode: "trophies",
+        tip,
+        onTip,
+        days: points.map((point) => ({
+          ...day(point.day, 0),
+          endTrophies: point.value,
+          rank: 10,
+        })) as unknown as SeasonData["days"],
+      }),
+    );
+  const dayButton = (elements: Element[], number: number) =>
+    elements.find((element) => element.props["aria-label"] === `Day ${number}: 5,150`)!;
+
+  it("keeps a tapped day's readout open when the tap also points at it", () => {
+    const onTip = vi.fn();
+    (dayButton(chart(null, onTip), 3).props.onMouseEnter as () => void)();
+    expect(onTip).toHaveBeenLastCalledWith(3);
+    (dayButton(chart(3, onTip), 3).props.onClick as () => void)();
+    expect(onTip).toHaveBeenLastCalledWith(3);
+    (dayButton(chart(3, onTip), 3).props.onKeyDown as (event: { key: string }) => void)({
+      key: "Escape",
+    });
+    expect(onTip).toHaveBeenLastCalledWith(null);
+  });
+
+  it("gives each day a full-height column and thumb-sized day steps", () => {
+    const elements = chart(null, vi.fn());
+    const columns = elements.filter((element) => element.props.className === "graph-hit");
+    expect(columns).toHaveLength(3);
+    // At 320px wide the 760-unit chart draws each column over 44px tall.
+    for (const column of columns)
+      expect(((column.props.height as number) * 320) / 760).toBeGreaterThanOrEqual(44);
+    expect(
+      elements.filter((element) => element.props["aria-label"] === "Later day"),
+    ).toHaveLength(1);
+    expect(stepDay(points, null, -1)).toBe(3);
+    expect(stepDay(points, 3, -1)).toBe(2);
+    expect(stepDay(points, 1, -1)).toBe(1);
+    expect(stepDay(points, 2, 1)).toBe(3);
+    expect(stepDay(points, 3, 1)).toBe(3);
+    expect(stepDay([], null, 1)).toBeNull();
   });
 });
