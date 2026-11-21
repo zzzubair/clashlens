@@ -641,7 +641,17 @@ queues one more. Two saves for the same day committing at the same moment
 can each queue one, and both run. From 16:40 to 17:19 UTC on 9 October 2026 the evidence
 queued about 535 jobs a minute for 3,782 player days; replayed with this
 rule and 4 at a time, about 410 a minute, none waiting over 10 seconds. They
-are removed with other finished jobs after 48 hours. Every
+are removed with other finished jobs after 48 hours. None of these, nor
+the twice-daily recheck or the day-end recalculation below, queues or works
+out a settled day (`queue_refresh.settled`): one whose newest result is
+Complete, with its Reset total proven and its automatic loss confirmed or
+not applicable, for a reading taken an hour or more after its end Reset (for
+a battle log or a check, every profile it first covers; for the twice-daily
+and day-end ones, the time they run). Battle reports, the next day's start, official totals, the
+weekly league record and repairs still reach it. On 10 November 2026,
+10,090 of about 13,070 players got a new day result after the first board,
+1 with a different end, and 39,727 jobs were overdue at 05:30 the next
+morning. Every
 active player's last two ended days are also queued twice a day in the same
 lane, once the day-end recheck has finished and from 23:00 UTC, never from
 04:00 to 07:00 UTC, skipping days already waiting: about 26,000 jobs each
