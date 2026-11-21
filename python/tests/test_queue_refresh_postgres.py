@@ -135,9 +135,10 @@ def test_a_check_after_the_reset_recalculates_an_unproven_reset_total_at_once(
 def test_only_new_battle_reports_queue_their_day_and_the_day_before(
     database_url: str, archive_server
 ) -> None:
-    # Days B and C are saved. A log repeating day C's attack unchanged queues
-    # only day C, which it can judge as a reading; one adding a day C defense
-    # queues day C and day B. A day's queued recheck covers both.
+    # Days B and C are saved. A log repeating day C's attack unchanged, in
+    # the hour after day C's Reset, queues only day C, which it can judge as
+    # a reading; one adding a day C defense queues day C and day B. A day's
+    # queued recheck covers both.
     day_b = [(DAY_B + timedelta(hours=hour), False) for hour in range(1, 9)]
     attack = (DAY_C + timedelta(hours=1), True)
     late_defense = (DAY_C + timedelta(hours=20), False)
@@ -155,7 +156,7 @@ def test_only_new_battle_reports_queue_their_day_and_the_day_before(
         )
         _process(connection_info, archive_server, jobs)
         queued = []
-        for minutes, battles in ((60, (attack,)), (70, (attack, late_defense))):
+        for minutes, battles in ((30, (attack,)), (40, (attack, late_defense))):
             observation_id, log_job = store_observation(
                 connection_info, archive_server, occurrence_key=f"log-{minutes}",
                 endpoint="battle_log", body=_log(*battles),
@@ -542,13 +543,17 @@ def test_a_late_reading_queues_its_own_ended_day_and_the_day_before(
     assert queued == [(str(player_id), f"{day:%Y-%m-%dT%H:%M:%SZ}") for day in (DAY_B, DAY_C)]
 
 
-def _quiet_days(connection_info: str, archive_server, days: list) -> int:
+def _quiet_days(connection_info: str, archive_server, days: list,
+                settled: bool = True) -> int:
     """Save each of ``days`` with no battles and unchanged trophies, a shield
-    run, and return the player's id."""
+    run, and return the player's id. Each is settled, its Reset total proven
+    by its end Reset reading, unless ``settled`` is false: then no profile
+    answers after the first Reset, so none is proven."""
     jobs, end = [], days[-1] + timedelta(days=1)
     for day in [*days, end]:
         jobs += _reset_work(
-            connection_info, archive_server, day, profile=_profile(6000), log=_log()
+            connection_info, archive_server, day, log=_log(),
+            profile=_profile(6000) if settled or day == days[0] else None,
         )
     _process(connection_info, archive_server, jobs)
     for day in days:
@@ -598,7 +603,7 @@ def test_the_daily_recheck_queues_the_last_two_ended_days(
     # over the next hours, so a recheck for new evidence waits behind only
     # the ones already due.
     with domain_database(database_url) as connection_info:
-        player_id = _quiet_days(connection_info, archive_server, [DAY_B, DAY_C])
+        player_id = _quiet_days(connection_info, archive_server, [DAY_B, DAY_C], settled=False)
         database = Database(connection_info)
         try:
             count = queue_refresh.queue_recheck(database, "night", DAY_D)
@@ -627,7 +632,7 @@ def test_evidence_merges_only_into_a_daily_recheck_already_due(
     # The pass's first day is due now and reads the evidence when it runs;
     # one due hours later would leave that evidence waiting behind it.
     with domain_database(database_url) as connection_info:
-        player_id = _quiet_days(connection_info, archive_server, [DAY_B, DAY_C])
+        player_id = _quiet_days(connection_info, archive_server, [DAY_B, DAY_C], settled=False)
         database = Database(connection_info)
         try:
             queue_refresh.queue_recheck(database, "night", DAY_D)
@@ -658,7 +663,7 @@ def test_an_evidence_recheck_goes_before_the_daily_pass_due_before_it(
     # leaves, however many of its rechecks came due first, then goes in the
     # order they came due.
     with domain_database(database_url) as connection_info:
-        player_id = _quiet_days(connection_info, archive_server, [DAY_B, DAY_C])
+        player_id = _quiet_days(connection_info, archive_server, [DAY_B, DAY_C], settled=False)
         database = Database(connection_info)
         try:
             queue_refresh.queue_recheck(database, "night", DAY_D)
@@ -714,7 +719,7 @@ def test_evidence_merged_into_a_due_daily_recheck_goes_before_the_pass(
     # Evidence for a day whose pass recheck is already due, behind 80 others
     # due before it, adds no job: that recheck runs as one for evidence.
     with domain_database(database_url) as connection_info:
-        player_id = _quiet_days(connection_info, archive_server, [DAY_B, DAY_C])
+        player_id = _quiet_days(connection_info, archive_server, [DAY_B, DAY_C], settled=False)
         database = Database(connection_info)
         try:
             queue_refresh.queue_recheck(database, "night", DAY_D)
