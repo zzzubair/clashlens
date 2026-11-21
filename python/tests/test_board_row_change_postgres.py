@@ -43,11 +43,11 @@ def test_a_day_saved_again_rebuilds_only_what_its_row_changes(
 
     - The 05:30 proof changes UNPROVEN's mark, not its battles: the board is
       rebuilt once, its army records are kept.
-    - SAVED_AGAIN is read at 5,000 five more times, an hour apart: its
+    - CONTRADICTED's 05:40 reading of 4,963, saved after that rebuild, is 37
+      lower than any automatic loss the rule expects, which makes its day
+      Inconsistent with the same Reset total and mark: nothing is rebuilt.
+      SAVED_AGAIN is read at 5,000 five more times, an hour apart: its
       Reset reading still decides its day, so no result is saved again.
-      CONTRADICTED is read at 4,963 once, 37 lower than any automatic loss
-      the rule expects, which makes its day Inconsistent with the same Reset
-      total and mark: nothing is rebuilt.
     - SAVED_AGAIN's attack for 30 at 04:58 first shows in its battle log at
       13:01: its Reset total moves to 5,030, and the board and its army
       records are rebuilt exactly once more."""
@@ -66,10 +66,10 @@ def test_a_day_saved_again_rebuilds_only_what_its_row_changes(
         story.reads(_at(5, 30), {UNPROVEN: 5030})
         story.wait(timedelta(hours=1))
         proven = (_entries(story.served_board(end)), _versions(connection_info, end))
+        story.reads(_at(5, 40), {CONTRADICTED: 4963})
         saved = _results(connection_info, start, SAVED_AGAIN)
         for hour in range(7, 12):
-            story.reads(_at(hour, 10), {SAVED_AGAIN: 5000} if hour > 7 else {
-                SAVED_AGAIN: 5000, CONTRADICTED: 4963})
+            story.reads(_at(hour, 10), {SAVED_AGAIN: 5000})
             story.wait(timedelta(hours=1))
         saved_again = (_entries(story.served_board(end)), _versions(connection_info, end),
                        _results(connection_info, start, SAVED_AGAIN) - saved,

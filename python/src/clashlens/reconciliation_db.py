@@ -125,6 +125,14 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                 (player_id, day_start, RECONCILIATION_RULE_VERSION),
             ).fetchone() is None:
                 day_starts = set()
+            # The day-end recalculation, and a twice-daily recheck no
+            # evidence joined (``queue_refresh``), read nothing new for a
+            # day settled since they were queued.
+            if claim.input_json.get("trigger") in {"day_end", "recheck"} and connection.execute(
+                f"SELECT {queue_refresh.settled('%(player)s', '%(day)s', 'clock_timestamp()')}",
+                {"player": player_id, "day": day_start, "rule": RECONCILIATION_RULE_VERSION},
+            ).fetchone()[0]:
+                day_starts = set()
             pending = sorted(day_starts)
             # Each Reset's board records wait for the end, so the Reset locks
             # they take are held only while they and the commit run, not
@@ -1318,7 +1326,8 @@ def _enqueue_day_end_reconciliation(
     Legend I when a Season starts, gets no Reset reading and nothing else
     calculates the day again: on 2026-10-06 that left 2,037 ended Day 1
     results Live. So every such day is calculated once more, about 13,000 a
-    Reset, and the job runs only when no other work waits.
+    Reset, and the job runs only when no other work waits, unless the day
+    is settled by then (``queue_refresh.settled``).
     """
     day_text = ranked_day.start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     connection.execute(

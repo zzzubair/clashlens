@@ -20,7 +20,16 @@ night one only before midnight, due by 03:00 at the latest: on 11 Oct 2026
 the 23:00 pass queued about 17,500 rechecks into a lane finishing 5,800 to
 8,250 an hour, and the work due rose from 5,314 at 23:40 to 20,405 at 04:00,
 into the Reset. A pass with no room tries again at the next check; rechecks
-for new evidence still run."""
+for new evidence still run.
+
+A settled day (``settled``) is not rechecked for a reading alone: a
+profile or battle log processed, an unchanged battle-log check, the
+twice-daily pass, or the day-end recalculation (``reconciliation_db``).
+Its Reset total is proven once and no later reading takes that back; only
+evidence that can change the answer reaches it: its battles, the next
+day's start, an official total, the weekly league record or a repair. On
+10 November 2026, 10,090 of about 13,070 players got a new day result
+after the first board, and the calculated end changed for 1."""
 
 from __future__ import annotations
 
@@ -49,6 +58,9 @@ RECHECK_SPREAD = timedelta(hours=4)
 # Reset total before the board builds (``queue_for_reset_proof``): its hard
 # deadline. On 14 and 15 November 2026 every such proof came 05:19 to 05:54.
 RESET_PROOF_WINDOW = timedelta(hours=1)
+# Readings in this first hour after a Reset still show whether and when
+# the automatic defense loss and the Monday raise landed (``settled``).
+SETTLE_WINDOW = timedelta(hours=1)
 # A pass waits while this many rechecks are already due in its lane.
 RECHECK_ROOM = 5000
 NIGHT_PASS_DUE_BY = timedelta(hours=22)  # 03:00 UTC, counted from the Reset.
@@ -67,6 +79,27 @@ def _seasons(at: datetime) -> dict[str, str | None]:
     previous = domain.ranked_day_for(season_start - timedelta(days=1)).official_season_id
     return {"season": domain.ranked_day_for(at).official_season_id,
             "previous": previous if at < season_start + SEASON_CLOSE_WAIT else None}
+
+
+def settled(player: str, day: str, read_at: str) -> str:
+    """SQL, over the SQL expressions ``player``, ``day`` and ``read_at``:
+    whether the player's day from ``day`` is settled for a reading taken at
+    ``read_at``, so no reading from then on can change it. Its newest
+    result is Complete, its Reset total proven (``reset_total``), its
+    automatic loss confirmed or not applicable (``loss_rule``), and the
+    reading taken after ``SETTLE_WINDOW`` past the day's end, as a reading
+    inside it may still show the loss landing, even one processed later.
+    Needs the query's ``%(rule)s``."""
+    return f"""COALESCE((
+        SELECT newest.state = 'Complete'
+           AND newest.formula_components -> 'reset_total' ->> 'proven' = 'true'
+           AND newest.automatic_defense_evidence_state IN ('confirmed', 'not_applicable')
+           AND {read_at} >= newest.ranked_day_end
+               + interval '{int(SETTLE_WINDOW.total_seconds())} seconds'
+        FROM ranked_day_versions AS newest
+        WHERE newest.player_id = {player} AND newest.ranked_day_start = {day}
+          AND newest.reconciliation_rule_version = %(rule)s
+        ORDER BY newest.version DESC LIMIT 1), false)"""
 
 
 def _day_text(day_start: datetime) -> str:
@@ -145,27 +178,49 @@ def _queue_day(connection: Any, player_id: int, day_start: datetime, key: str,
     )
 
 
-def queue_for_reading(connection: Any, player_id: int, evidence: str, at: datetime) -> None:
+# The earliest profile a battle log read at %(at)s first covers, read since
+# the player's previous log under its parser, %(log_parser)s: a profile no
+# log covers yet can only confirm a day (``reading_rule``), so the log is
+# what lets it judge one. Without one, the log's own time.
+_FIRST_COVERED = """COALESCE((
+    SELECT min(profile.response_completed_at) FROM collector_observations AS profile
+    WHERE profile.player_id = %(player)s AND profile.endpoint = 'profile'
+      AND profile.http_status BETWEEN 200 AND 299
+      AND profile.response_completed_at <= %(at)s
+      AND profile.response_completed_at > GREATEST(%(at)s - %(window)s, (
+          SELECT max(earlier.observed_at) FROM battle_log_observations AS earlier
+          WHERE earlier.player_id = %(player)s AND earlier.parser_version = %(log_parser)s
+            AND earlier.observed_at < %(at)s))), %(at)s)"""
+
+
+def queue_for_reading(connection: Any, player_id: int, evidence: str, at: datetime,
+                      log_parser: str | None = None) -> None:
     """A profile or battle log read at ``at`` can judge the newest ended day,
     and its own day once that has ended, when it is processed late. So can
     one naming the Season of a day saved before any profile named it, as a
-    first battle log processed before the first profile saves Day 1."""
+    first battle log processed before the first profile saves Day 1. Not a
+    settled day (``settled``), for the profile, or for a battle log, saved
+    under ``log_parser``, for each profile it first covers."""
+    read_at = "%(at)s" if log_parser is None else _FIRST_COVERED
     rows = connection.execute(
-        """
-        (SELECT ranked_day_start FROM ranked_day_versions
-         WHERE player_id = %(player)s AND reconciliation_rule_version = %(rule)s
-           AND official_season_id IN (%(season)s, %(previous)s, 'unknown')
-           AND ranked_day_end <= %(at)s AND ranked_day_end > %(at)s - %(window)s
-         ORDER BY ranked_day_start DESC LIMIT 1)
-        UNION
-        SELECT ranked_day_start FROM ranked_day_versions
-        WHERE player_id = %(player)s AND reconciliation_rule_version = %(rule)s
-          AND official_season_id IN (%(season)s, %(previous)s, 'unknown')
-          AND ranked_day_start <= %(at)s AND ranked_day_end > %(at)s
-          AND ranked_day_end <= clock_timestamp()
+        f"""
+        SELECT day.ranked_day_start FROM (
+            (SELECT ranked_day_start FROM ranked_day_versions
+             WHERE player_id = %(player)s AND reconciliation_rule_version = %(rule)s
+               AND official_season_id IN (%(season)s, %(previous)s, 'unknown')
+               AND ranked_day_end <= %(at)s AND ranked_day_end > %(at)s - %(window)s
+             ORDER BY ranked_day_start DESC LIMIT 1)
+            UNION
+            SELECT ranked_day_start FROM ranked_day_versions
+            WHERE player_id = %(player)s AND reconciliation_rule_version = %(rule)s
+              AND official_season_id IN (%(season)s, %(previous)s, 'unknown')
+              AND ranked_day_start <= %(at)s AND ranked_day_end > %(at)s
+              AND ranked_day_end <= clock_timestamp()
+        ) AS day
+        WHERE NOT {settled("%(player)s", "day.ranked_day_start", read_at)}
         """,
         {**_VERSIONS, "player": player_id, "at": at, "window": EVIDENCE_REFRESH_WINDOW,
-         **_seasons(at)},
+         "log_parser": log_parser, **_seasons(at)},
     ).fetchall()
     for (day_start,) in rows:
         _queue_day(connection, player_id, day_start, f"reconcile:{evidence}:{player_id}")
@@ -202,7 +257,8 @@ def queue_for_season_rule_start(connection: Any, player_id: int, day_start: date
 def queue_for_check(connection: Any, check: Any) -> None:
     """A successful unchanged battle-log check (``collector_db``) saves no log
     yet covers each profile read since the last check and the latest Reset:
-    queue the day that ended there, which the worker calculates if saved."""
+    queue the day that ended there, which the worker calculates if saved,
+    unless it is settled for each of those profiles (``settled``)."""
     if check.player_id is None:
         return
     reset = domain.ranked_day_for(check.response_completed_at).start
@@ -211,16 +267,19 @@ def queue_for_check(connection: Any, check: Any) -> None:
         f"reconcile:check:{check.player_id}:{check.response_completed_at}",
         "battle_log_check",
         jobs=_COLLECTOR_JOBS,
-        only_if="""EXISTS (SELECT 1 FROM collector_observations AS profile
+        only_if=f"""EXISTS (SELECT 1 FROM collector_observations AS profile
             WHERE profile.player_id = %(reader)s AND profile.endpoint = 'profile'
               AND profile.http_status BETWEEN 200 AND 299
               AND profile.response_completed_at <= %(at)s
               AND profile.response_completed_at > GREATEST((
                   SELECT last_success_at FROM collector_response_state
                   WHERE scope = %(scope)s AND identity_key = %(identity)s
-                    AND endpoint = 'battle_log'), %(reset)s))""",
+                    AND endpoint = 'battle_log'), %(reset)s)
+              AND NOT {settled("%(reader)s", "%(ended)s",
+                               "profile.response_completed_at")})""",
         at=check.response_completed_at, reader=check.player_id,
         scope=check.scope, identity=check.identity_key, reset=reset,
+        ended=reset - timedelta(days=1),
     )
     queue_for_reset_proof(
         connection, check.player_id,
@@ -371,12 +430,12 @@ def queue_for_reset_proof(connection: Any, player_id: int, key: str, at: datetim
 def queue_recheck(database: db.Database, slot: str, boundary: datetime,
                   spread: timedelta = RECHECK_SPREAD) -> int:
     """Queue each active player's saved days ending at ``boundary`` and the
-    Reset before, once per ``slot``, unless already waiting, due evenly over
-    ``spread`` from now; count them. Each is created when it falls
+    Reset before, once per ``slot``, unless already waiting or settled
+    (``settled``), due evenly over ``spread`` from now; count them. Each is created when it falls
     due, so the backlog metrics count it from then."""
     with database.pool.connection() as connection, connection.transaction():
         return connection.execute(
-            """
+            f"""
             INSERT INTO python_processing_jobs_worker (observation_id, work_type,
                 deduplication_key, input_json, state, due_at, created_at, parser_version,
                 processing_version, domain_rule_version, analytics_rule_version, priority)
@@ -391,7 +450,7 @@ def queue_recheck(database: db.Database, slot: str, boundary: datetime,
                     * (row_number() OVER (ORDER BY player_id, day_text) - 1)
                     / count(*) OVER () AS due_at
                 FROM (
-                    SELECT DISTINCT saved.player_id, to_char(
+                    SELECT DISTINCT saved.player_id, saved.ranked_day_start, to_char(
                         saved.ranked_day_start AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'
                     ) AS day_text
                     FROM ranked_day_versions AS saved
@@ -399,7 +458,8 @@ def queue_recheck(database: db.Database, slot: str, boundary: datetime,
                     WHERE saved.ranked_day_start IN (%(last)s, %(before)s)
                       AND saved.reconciliation_rule_version = %(rule)s
                 ) AS day
-                WHERE NOT EXISTS (
+                WHERE NOT {settled("day.player_id", "day.ranked_day_start", "clock_timestamp()")}
+                  AND NOT EXISTS (
                     SELECT 1 FROM python_processing_jobs_worker AS job
                     WHERE job.work_type = 'reconcile_ranked_day'
                       AND job.state IN ('pending', 'waiting_retry')
