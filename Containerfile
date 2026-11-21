@@ -16,7 +16,7 @@ FROM docker.io/library/python@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c1
 RUN groupadd --gid 10001 clashlens \
     && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin clashlens
 COPY --from=dependencies /opt/clashlens/.venv /opt/venv
-COPY --chown=10001:10001 python/src /opt/clashlens/src
+COPY python/src /opt/clashlens/src
 ENV PATH=/opt/venv/bin:$PATH PYTHONPATH=/opt/clashlens/src PYTHONDONTWRITEBYTECODE=1
 WORKDIR /opt/clashlens
 VOLUME ["/spool"]

@@ -1072,14 +1072,15 @@ create_admin_secret() {
   ADMIN_SECRET_ACTIVE=true
 }
 
+# One-off containers gain no privileges, write only their mounts and a small /tmp, and stay within 1 GiB and 256 processes.
+run_once() { "$PODMAN_BIN" run --rm --pod "$PREFIX-pod" --cap-drop=all --security-opt=no-new-privileges --memory=1g --pids-limit=256 --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m "$@"; }
+
+# Arguments: any extra podman options, the image, then its command.
 run_with_admin_database() {
-  local image=$1
-  shift
   create_admin_secret
   set +e
-  "$PODMAN_BIN" run --rm --name "$PREFIX-admin-operation" --label org.clashlens.managed=ops --label org.clashlens.purpose=transient-admin --pod "$PREFIX-pod" \
-    --secret clashlens-init-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400 \
-    "$image" "$@"
+  run_once --name "$PREFIX-admin-operation" --label org.clashlens.managed=ops --label org.clashlens.purpose=transient-admin \
+    --secret clashlens-init-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400 "$@"
   local result=$?
   set -e
   cleanup_admin_secret || result=1
@@ -1089,21 +1090,13 @@ run_with_admin_database() {
 bootstrap_fixture() {
   local manifest digest result receipt_matches
   manifest="$STATE_DIR/fixture/cohort-200.txt"; result="$STATE_DIR/fixture/bootstrap.json"
-  "$PODMAN_BIN" run --rm --pod "$PREFIX-pod" --user 10001:10001 --volume "$STATE_DIR/fixture:/state:Z" "${RELEASE[FIXTURES_IMAGE]}" manifest --players 200 --output /state/cohort-200.txt
+  run_once --user 10001:10001 --volume "$STATE_DIR/fixture:/state:Z" "${RELEASE[FIXTURES_IMAGE]}" manifest --players 200 --output /state/cohort-200.txt
   digest=$(sha256sum "$manifest" | cut -d' ' -f1)
   receipt_matches=$(printf '%s\n' "SELECT count(*) FROM population_bootstrap_runs WHERE run_id='ops-fixture-200' AND manifest_sha256='$digest' AND manifest_count=200 AND status='complete' AND players_registered=200 AND discovery_jobs_created=200;" | psql_exec --tuples-only --no-align)
   [[ "$(trim "$receipt_matches")" == 0 ]] || { [[ "$(trim "$receipt_matches")" == 1 ]] && return; die "fixture bootstrap receipt is ambiguous"; }
   [[ ! -e "$result" && ! -L "$result" ]] || die "fixture bootstrap receipt file exists without a matching database receipt"
-  create_admin_secret
-  set +e
-  "$PODMAN_BIN" run --rm --name "$PREFIX-admin-operation" --label org.clashlens.managed=ops --label org.clashlens.purpose=transient-admin --pod "$PREFIX-pod" \
-    --secret clashlens-init-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400 \
-    --volume "$STATE_DIR/fixture:/state:Z" "${RELEASE[PYTHON_IMAGE]}" bootstrap-population --database-url-file /run/secrets/database-url \
+  run_with_admin_database --volume "$STATE_DIR/fixture:/state:Z" "${RELEASE[PYTHON_IMAGE]}" bootstrap-population --database-url-file /run/secrets/database-url \
     --cohort-file /state/cohort-200.txt --expected-sha256 "$digest" --expected-count 200 --run-id ops-fixture-200 --result-file /state/bootstrap.json >/dev/null
-  local bootstrap_result=$?
-  set -e
-  cleanup_admin_secret || bootstrap_result=1
-  (( bootstrap_result == 0 )) || return "$bootstrap_result"
 }
 
 ensure_linger() {
@@ -1428,7 +1421,7 @@ archive_prune() {
   # Scheduled runs skip the operation lock (up and down stop the timer); this lock only stops overlaps.
   exec {lock_fd}> "$STATE_DIR/archive-prune.lock"
   flock --nonblock "$lock_fd" || { printf 'Another raw-response cleanup is running; skipped.\n'; return 0; }
-  "$PODMAN_BIN" run --rm --name "$PREFIX-archive-prune" --label org.clashlens.managed=ops --pod "$PREFIX-pod" --read-only --tmpfs /tmp \
+  run_once --name "$PREFIX-archive-prune" --label org.clashlens.managed=ops \
     --env-file "$STATE_DIR/env/worker.env" --volume "$SPOOL_ROOT:/spool:rw,z" \
     --secret clashlens-archive-operator-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400 \
     --secret clashlens-archive-operator-access-key,type=mount,target=/run/secrets/archive-access-key,uid=10001,gid=10001,mode=0400 \
@@ -1443,7 +1436,7 @@ history_prune() {
   prepare_managed_runtime worker
   [[ "$MODE" == production ]] || die "finished-job cleanup is unavailable in fixture mode"
   load_production_config
-  "$PODMAN_BIN" run --rm --name "$PREFIX-history-prune" --label org.clashlens.managed=ops --pod "$PREFIX-pod" --read-only --tmpfs /tmp \
+  run_once --name "$PREFIX-history-prune" --label org.clashlens.managed=ops \
     --env-file "$STATE_DIR/env/worker.env" --secret clashlens-history-operator-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400 \
     "${RELEASE[PYTHON_IMAGE]}" prune-history --jobs-only --retention-hours 48 --max-jobs 1000 --apply
 }

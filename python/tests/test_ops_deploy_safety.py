@@ -7,6 +7,7 @@ stopping must say so: until 8 Oct 2026 it left everything stopped with the
 alerts switched off."""
 
 import configparser
+import json
 import os
 import re
 import subprocess
@@ -170,6 +171,90 @@ def test_the_private_api_is_reachable_only_from_inside_the_pod() -> None:
         "http://127.0.0.1:8000"
     }
     assert ":8000" not in (ROOT / "deploy/quadlet/clashlens.pod").read_text()
+
+
+def unit_settings(name: str) -> list[tuple[str, str]]:
+    path = ROOT / "deploy/quadlet" / name
+    return [
+        tuple(line.split("=", 1))
+        for line in path.read_text().splitlines()
+        if "=" in line and not line.startswith("#")
+    ]
+
+
+def test_the_database_container_gains_no_privileges_and_writes_only_its_mounts() -> None:
+    settings = unit_settings("clashlens-postgres.container")
+    for required in (("ReadOnly", "true"), ("NoNewPrivileges", "true"), ("DropCapability", "all")):
+        assert required in settings
+    # The start script hands the data and socket folders to the postgres user
+    # and switches to it; the startup check signals that user's server.
+    added = [v for k, v in settings if k == "AddCapability"]
+    assert len(added) == 1
+    assert set(added[0].split()) == {"CHOWN", "DAC_READ_SEARCH", "FOWNER", "SETUID", "SETGID", "KILL"}
+    tmpfs = {v.split(":", 1)[0]: set(v.split(":", 1)[1].split(",")) for k, v in settings if k == "Tmpfs"}
+    assert set(tmpfs) == {"/tmp", "/run/postgresql"}
+    for options in tmpfs.values():
+        assert {"noexec", "nosuid", "nodev"} <= options
+        assert any(option.startswith("size=") for option in options)
+
+
+ONE_OFF_RUNS = r"""
+source "$1" help >/dev/null
+for check in require_host prepare_managed_runtime load_production_config create_admin_secret cleanup_admin_secret archive_retention_enabled; do
+  eval "$check() { :; }"
+done
+setting() { echo apply; }
+psql_exec() { echo 0; }
+PODMAN_BIN=$2 STATE_DIR=$3 SPOOL_ROOT=$3/spool MODE=production PREFIX=clashlens
+RELEASE=([PYTHON_IMAGE]=sha256:python [FIXTURES_IMAGE]=sha256:fixtures)
+mkdir -p "$STATE_DIR/fixture"
+: > "$STATE_DIR/fixture/cohort-200.txt"
+archive_prune --apply
+history_prune
+failed_items --limit 1
+bootstrap_fixture
+"""
+
+
+def test_every_one_off_container_gains_no_privileges_and_writes_only_its_mounts(tmp_path) -> None:
+    calls = tmp_path / "calls"
+    podman = tmp_path / "podman"
+    podman.write_text(
+        f"#!{sys.executable}\nimport json, sys\n"
+        f"open({str(calls)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
+    )
+    podman.chmod(0o700)
+    result = subprocess.run(
+        ["bash", "-c", ONE_OFF_RUNS, "one-off-test", str(OPS), str(podman), str(tmp_path / "state")],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    runs = [json.loads(line) for line in calls.read_text().splitlines()]
+    commands = [run[next(i for i, a in enumerate(run) if a.startswith("sha256:")) + 1] for run in runs]
+    assert commands == ["prune-archive", "prune-history", "failed-items", "manifest", "bootstrap-population"]
+    for run in runs:
+        options = run[: next(i for i, a in enumerate(run) if a.startswith("sha256:"))]
+        assert options[:2] == ["run", "--rm"]
+        for flag in (
+            "--cap-drop=all", "--security-opt=no-new-privileges", "--memory=1g",
+            "--pids-limit=256", "--read-only",
+        ):
+            assert flag in options, (run, flag)
+        assert options[options.index("--tmpfs") + 1] == "/tmp:rw,noexec,nosuid,nodev,size=16m"
+        assert options[options.index("--pod") + 1] == "clashlens-pod"
+    # The administrator login reaches only the two administrator runs.
+    admin = [run for run in runs if any(a.startswith("clashlens-init-database-url,") for a in run)]
+    assert [run[run.index("--name") + 1] for run in admin] == ["clashlens-admin-operation"] * 2
+    assert admin[0][-4:-1] == ["--limit", "1", "--operator"]
+
+
+def test_application_code_in_the_images_belongs_to_root() -> None:
+    # Owned by root, the code stays read-only to the service user even in a
+    # container started without a read-only root.
+    for containerfile in (ROOT / "Containerfile", ROOT / "python/Containerfile"):
+        copies = [line for line in containerfile.read_text().splitlines() if line.startswith("COPY ")]
+        assert any("/opt/clashlens/src" in line for line in copies)
+        assert not [line for line in copies if "--chown" in line], containerfile
 
 
 @pytest.fixture
