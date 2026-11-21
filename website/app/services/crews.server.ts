@@ -42,7 +42,7 @@ import { requireLogin } from "../server/auth-guard.server";
 import { type LoginIdentity } from "../server/auth.server";
 import { getWebsiteConfig, isCrewsEnabled } from "../server/config.server";
 import { safeWebsiteError } from "../server/errors.server";
-import { accountSetupPath } from "../server/return-path.server";
+import { accountSetupPath, returnPathPage } from "../server/return-path.server";
 import { checkPlayerTag } from "./group-players.server";
 import { PythonApiError } from "./python-response.server";
 import { requestJson } from "./python-transport.server";
@@ -613,7 +613,7 @@ export async function crewFormAction(
  * ended, or when it can't be read.
  */
 export async function inviteCrewName(returnPath: string | null): Promise<string | null> {
-  const code = /^\/crews\/join\/([^/]+)$/.exec(returnPath ?? "")?.[1];
+  const code = /^\/crews\/join\/([^/]+)$/.exec(returnPathPage(returnPath ?? ""))?.[1];
   if (code === undefined || !INVITE_CODE.test(code) || !isCrewsEnabled()) return null;
   try {
     const invite = await getInvite(undefined, code);

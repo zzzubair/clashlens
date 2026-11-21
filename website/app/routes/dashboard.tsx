@@ -508,6 +508,7 @@ function SignedInDashboard({
   // Saves live above each player's cards, so one still lands after a switch.
   const fetcher = useFetcher<DashboardActionData>();
   const revalidator = useRevalidator();
+  const [retrying, setRetrying] = useState(false);
   // Settings saved since this load; the next load reads them back.
   const [saved, setSaved] = useState<{
     from: DashboardSettings;
@@ -558,10 +559,15 @@ function SignedInDashboard({
           <button
             type="button"
             className="button button-secondary dash-small-button"
-            disabled={revalidator.state !== "idle"}
-            onClick={() => void retryShownPage(() => revalidator.revalidate())}
+            disabled={retrying}
+            onClick={() => {
+              setRetrying(true);
+              void retryShownPage(() => revalidator.revalidate()).finally(() =>
+                setRetrying(false),
+              );
+            }}
           >
-            {revalidator.state !== "idle" ? "Retrying…" : "Try again"}
+            {retrying ? "Retrying…" : "Try again"}
           </button>
         </p>
       ) : null}

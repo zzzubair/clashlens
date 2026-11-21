@@ -106,6 +106,7 @@ describe("requireLogin auth guard", () => {
   it("keeps the page's query string in the return path", async () => {
     for (const [path, expected] of [
       ["/account/watchlists?day=12", "/account/watchlists?day=12"],
+      ["/account/watchlists?q=Why?", "/account/watchlists?q=Why?"],
       ["/account/watchlists.data?day=12&_routes=root", "/account/watchlists?day=12"],
       [
         "/account/setup?returnPath=%2Fleaderboards%2Ftracked%3Fday%3D12",

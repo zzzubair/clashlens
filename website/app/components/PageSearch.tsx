@@ -19,9 +19,10 @@ export function PageSearch({
   const suggestions = usePlayerSuggestions(query);
   const { setQuery } = suggestions;
   const navigation = useNavigation();
+  const target = navigation.formAction ?? navigation.location?.pathname;
   const searching =
     navigation.state !== "idle" &&
-    (!navigation.location || navigation.location.pathname === "/search");
+    (!target || new URL(target, "https://clashlens.invalid").pathname === "/search");
 
   useEffect(() => {
     setQuery(query);

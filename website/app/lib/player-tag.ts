@@ -7,19 +7,16 @@ export function normalizePlayerTag(value: string): string | null {
   return PLAYER_TAG_PATTERN.test(normalized) ? normalized : null;
 }
 
-/**
- * The player tag a search box means: a #tag, or the same characters without
- * the # when they include a digit, so names like "Curry" stay name searches.
- */
+/** The player tag a search box means for certain: one typed with its #. */
 export function searchedPlayerTag(value: string): string | null {
   const typed = value.trim();
-  if (typed.startsWith("#")) return normalizePlayerTag(typed);
-  return /\d/.test(typed) ? normalizePlayerTag(`#${typed}`) : null;
+  return typed.startsWith("#") ? normalizePlayerTag(typed) : null;
 }
 
 /**
- * A tag the search may mean but cannot be sure of, such as "YQQ", which could
- * also be a name: offered as a choice beside the name results.
+ * The tag typed text could be, with or without its #. Text without a # may
+ * also be a name, such as "Curry2", so it is offered as a choice beside the
+ * name results rather than opened.
  */
 export function possiblePlayerTag(value: string): string | null {
   const typed = value.trim();

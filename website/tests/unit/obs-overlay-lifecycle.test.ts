@@ -169,3 +169,29 @@ it("times out stalled link settings, follows again, and aborts the read on teard
   await vi.advanceTimersByTimeAsync(60_000);
   expect(fetchMock).toHaveBeenCalledTimes(2);
 });
+
+it("schedules nothing when a demo's player read is aborted by teardown", async () => {
+  fetchMock.mockImplementation(
+    (_url: string, init: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init.signal!.addEventListener("abort", () => reject(init.signal!.reason));
+      }),
+  );
+  mount(null);
+  message({
+    origin: ORIGIN,
+    data: {
+      type: "cl-overlay-settings",
+      contract: DOMAIN.overlay,
+      search: "?p=2PP&w=366&h=222&demo=1",
+    },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  const before = stage.innerHTML;
+  stop?.();
+  stop = undefined;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(vi.getTimerCount()).toBe(0);
+  expect(stage.innerHTML).toBe(before);
+});

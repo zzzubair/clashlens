@@ -33,7 +33,8 @@ export function meta() {
 
 /**
  * GET /search?q= — every saved player and Clash Lens profile matching the
- * words. A complete tag, with or without its #, opens that player's page instead.
+ * words. A complete #tag opens that player's page instead; the same characters
+ * without the # are offered as a player tag beside the name results.
  */
 export async function loader({
   request,
@@ -99,7 +100,10 @@ export default function Search() {
       <PageSearch
         query={data.query}
         results={
-          data.search ? <SearchResults search={data.search} busy={searching} /> : null
+          <>
+            <TagChoice query={data.query} search={data.search} />
+            {data.search ? <SearchResults search={data.search} busy={searching} /> : null}
+          </>
         }
       />
       {data.error ? <ErrorNotice error={data.error} /> : null}
@@ -107,19 +111,23 @@ export default function Search() {
   );
 }
 
+function TagChoice({ query, search }: { query: string; search: SearchResponse | null }) {
+  const tag = search?.exactTag ? null : possiblePlayerTag(query);
+  if (!tag || search?.results.some((result) => result.tag === tag)) return null;
+  return (
+    <section className="search-results">
+      <h3>Player tag</h3>
+      <a className="button button-secondary" href={canonicalPlayerPath(tag)}>
+        Open {tag}
+      </a>
+    </section>
+  );
+}
+
 function SearchResults({ search, busy }: { search: SearchResponse; busy: boolean }) {
   const users = search.users;
-  const tagChoice = search.exactTag ? null : possiblePlayerTag(search.query);
   return (
     <div className="search-results" aria-live="polite" aria-busy={busy}>
-      {tagChoice && !search.results.some((result) => result.tag === tagChoice) ? (
-        <section>
-          <h3>Player tag</h3>
-          <a className="button button-secondary" href={canonicalPlayerPath(tagChoice)}>
-            Open {tagChoice}
-          </a>
-        </section>
-      ) : null}
       {users.length > 0 ? (
         <section aria-labelledby="profile-search-title">
           <h3 id="profile-search-title">Clash Lens profiles</h3>

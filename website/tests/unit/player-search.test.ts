@@ -9,7 +9,7 @@ import {
   suggestionsView,
 } from "../../app/components/PlayerSearch";
 import type { PlayerSearchLoaderData } from "../../app/lib/player-search-data";
-import { searchedPlayerTag } from "../../app/lib/player-tag";
+import { possiblePlayerTag, searchedPlayerTag } from "../../app/lib/player-tag";
 import { loader as searchLoader } from "../../app/routes/search";
 
 const answer = (query: string, failed = false): PlayerSearchLoaderData => ({
@@ -97,22 +97,35 @@ const suggestionsHtml = (props: Record<string, unknown>) =>
   ).replaceAll("<!-- -->", "");
 
 describe("bare player tags", () => {
-  it("reads a tag typed with or without its #, but keeps letter-only words as names", () => {
-    expect(searchedPlayerTag(" 2py0lq ")).toBe("#2PY0LQ");
-    expect(searchedPlayerTag("LQ2")).toBe("#LQ2");
+  it("opens only a #tag, and offers text without the # as a possible tag", () => {
+    expect(searchedPlayerTag(" #2py0lq ")).toBe("#2PY0LQ");
     expect(searchedPlayerTag("#curry")).toBe("#CURRY");
-    expect(searchedPlayerTag("Curry")).toBeNull();
-    expect(searchedPlayerTag("YQQ")).toBeNull();
-    expect(searchedPlayerTag("Ali 2")).toBeNull();
+    expect(searchedPlayerTag("2py0lq")).toBeNull();
+    expect(searchedPlayerTag("Curry2")).toBeNull();
     expect(searchedPlayerTag("#2PY0LA")).toBeNull();
+    expect(possiblePlayerTag(" 2py0lq ")).toBe("#2PY0LQ");
+    expect(possiblePlayerTag("Curry2")).toBe("#CURRY2");
+    expect(possiblePlayerTag("YQQ")).toBe("#YQQ");
+    expect(possiblePlayerTag("Ali 2")).toBeNull();
   });
 
-  it("opens the player page when the search page gets a bare tag", async () => {
+  it("opens the player page when the search page gets a #tag", async () => {
     const response = await searchLoader({
-      request: new Request("https://clashlens.example/search?q=2py0lq"),
+      request: new Request("https://clashlens.example/search?q=%232py0lq"),
     } as never).catch((thrown: unknown) => thrown);
     expect(response).toBeInstanceOf(Response);
     expect((response as Response).headers.get("Location")).toBe("/players/%232PY0LQ");
+  });
+
+  it("still offers the typed tag when the name search fails", () => {
+    const html = suggestionsHtml({
+      data: answer("curry2", true),
+      loading: false,
+      onRetry: () => {},
+    });
+    expect(html).toContain("Search unavailable.");
+    expect(html).toContain("Open #CURRY2");
+    expect(html).toContain('href="/players/%23CURRY2"');
   });
 
   it("offers a short bare tag as a suggestion", () => {

@@ -183,9 +183,7 @@ export function SearchSuggestions({
   const search = data?.search;
   const results = search?.results.slice(0, 5) ?? [];
   const users = search?.users.slice(0, 3) ?? [];
-  const candidateTag = search
-    ? (search.exactTag ?? possiblePlayerTag(search.query))
-    : null;
+  const candidateTag = data ? (search?.exactTag ?? possiblePlayerTag(data.query)) : null;
   const unknownExactTag =
     candidateTag && !results.some((result) => result.tag === candidateTag)
       ? candidateTag

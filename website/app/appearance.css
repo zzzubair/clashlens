@@ -238,6 +238,24 @@ html {
   }
 }
 
+/* Chart days sit closer than a thumb on a phone, so a touch screen also gets
+   two thumb-sized buttons that step the readout one day at a time. A chart,
+   its readout and those buttons form one day group. */
+.day-group {
+  display: contents;
+}
+.graph-steps {
+  display: none;
+}
+@media (pointer: coarse) {
+  .graph-steps {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+}
+
 /* Dark surfaces cover the shared controls, data views, and account forms. */
 @media (hover: hover) and (pointer: fine) {
   [data-theme="dark"] .data-table tbody tr:hover {

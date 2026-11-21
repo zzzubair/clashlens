@@ -620,7 +620,6 @@ export function mountOverlay(
   }
 
   // ---------- live data ----------
-  let stopped = false;
   const inflight = new Set<AbortController>();
   const timedRead = async (url: string) => {
     const controller = new AbortController();
@@ -648,7 +647,7 @@ export function mountOverlay(
 
   // Whether `tag` is still the player the overlay reads.
   const reading = (tag: string) =>
-    !stopped && overlaySource(cfg) === "player" && cfg.tag === tag;
+    clock.running() && overlaySource(cfg) === "player" && cfg.tag === tag;
 
   async function poll() {
     cancel(pollTimer);
@@ -731,7 +730,8 @@ export function mountOverlay(
         if (prev.tag !== cfg.tag) data = null;
         const tag = cfg.tag;
         const start = (d: View | null) => {
-          if (tag !== cfg.tag || overlaySource(cfg) !== "demo") return;
+          if (!clock.running() || tag !== cfg.tag || overlaySource(cfg) !== "demo")
+            return;
           if (d) data = d;
           startDemo();
         };
@@ -777,7 +777,7 @@ export function mountOverlay(
       let wait = SETTINGS_POLL_MS;
       try {
         const res = await timedRead(`/o/${encodeURIComponent(link)}/settings`);
-        if (stopped) return;
+        if (!clock.running()) return;
         if (res.status === 404) {
           // A replaced link shows nothing, and checks rarely.
           cancel(pollTimer);
@@ -810,7 +810,7 @@ export function mountOverlay(
       } catch {
         // Keep showing the last settings.
       }
-      if (!stopped) later(follow, wait);
+      if (clock.running()) later(follow, wait);
     };
     void follow();
   } else {
@@ -821,7 +821,6 @@ export function mountOverlay(
   }
 
   return () => {
-    stopped = true;
     for (const controller of inflight) controller.abort();
     inflight.clear();
     clock.stop();

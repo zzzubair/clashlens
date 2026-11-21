@@ -202,6 +202,16 @@ export function cardRefreshStep(
   }
 }
 
+/** A card read that took too long, answered as unavailable; each its own. */
+export function stalledCards(): DashboardLoaderData {
+  return {
+    kind: "error",
+    error: {
+      error: { code: "unavailable", message: "The cards took too long to load." },
+    },
+  };
+}
+
 /** The data each card shows: none while the page's read loads. */
 export function cardReads(data: CardReads | null, state: CardRefresh): CardReads | null {
   const reads = data === null ? null : { ...data, ...state.refreshed };

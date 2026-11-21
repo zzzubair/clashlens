@@ -650,6 +650,38 @@ describe("Watchlist Trend on touch screens", () => {
     expect(onActive).toHaveBeenLastCalledWith(null);
   });
 
+  it("keeps the selected day when focus moves to Earlier, then steps back from it", () => {
+    const onActive = vi.fn();
+    const earlier = { label: "Earlier day" };
+    const outside = { label: "page" };
+    const group = { contains: (node: unknown) => node === earlier };
+    const currentTarget = {
+      closest: (selector: string) => (selector === ".day-group" ? group : null),
+    };
+    const strip = bars(1, onActive).strip;
+    (strip.props.onBlur as (event: object) => void)({
+      currentTarget,
+      relatedTarget: earlier,
+    });
+    (strip.props.onMouseLeave as (event: object) => void)({
+      currentTarget,
+      relatedTarget: earlier,
+    });
+    expect(onActive).not.toHaveBeenCalled();
+    const onStep = vi.fn();
+    const steps = DaySteps({ count: days.length, at: 1, onStep }) as Bar;
+    const button = (steps.props.children as Bar[]).find(
+      (child) => child.props["aria-label"] === "Earlier day",
+    )!;
+    (button.props.onClick as () => void)();
+    expect(onStep).toHaveBeenLastCalledWith(0);
+    (strip.props.onMouseLeave as (event: object) => void)({
+      currentTarget,
+      relatedTarget: outside,
+    });
+    expect(onActive).toHaveBeenLastCalledWith(null);
+  });
+
   it("steps through every day with thumb-sized Earlier and Later buttons", () => {
     const step = (at: number | null, label: string) => {
       const onStep = vi.fn();
