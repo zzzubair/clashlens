@@ -125,8 +125,10 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                 (player_id, day_start, RECONCILIATION_RULE_VERSION),
             ).fetchone() is None:
                 day_starts = set()
-            # The day-end recalculation reads nothing new for a settled day.
-            if claim.input_json.get("trigger") == "day_end" and connection.execute(
+            # The day-end recalculation, and a twice-daily recheck no
+            # evidence joined (``queue_refresh``), read nothing new for a
+            # day settled since they were queued.
+            if claim.input_json.get("trigger") in {"day_end", "recheck"} and connection.execute(
                 f"SELECT {queue_refresh.settled('%(player)s', '%(day)s', 'clock_timestamp()')}",
                 {"player": player_id, "day": day_start, "rule": RECONCILIATION_RULE_VERSION},
             ).fetchone()[0]:

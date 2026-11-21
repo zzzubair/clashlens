@@ -646,8 +646,8 @@ the twice-daily recheck or the day-end recalculation below, queues or works
 out a settled day (`queue_refresh.settled`): one whose newest result is
 Complete, with its Reset total proven and its automatic loss confirmed or
 not applicable, for a reading taken an hour or more after its end Reset (for
-a check, every profile it covers; for the twice-daily and day-end ones, the
-time they run). Battle reports, the next day's start, official totals, the
+a battle log or a check, every profile it first covers; for the twice-daily
+and day-end ones, the time they run). Battle reports, the next day's start, official totals, the
 weekly league record and repairs still reach it. On 10 November 2026,
 10,090 of about 13,070 players got a new day result after the first board,
 1 with a different end, and 39,727 jobs were overdue at 05:30 the next

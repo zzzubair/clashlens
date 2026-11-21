@@ -490,7 +490,8 @@ def complete_battle_log(
                 connection, reporter_id, battle_log.observed_at, valid_rows
             )
             queue_refresh.queue_for_reading(
-                connection, reporter_id, f"log:{observation_id}", battle_log.observed_at
+                connection, reporter_id, f"log:{observation_id}", battle_log.observed_at,
+                battle_log.parser_version,
             )
             queue_refresh.queue_for_reset_proof(
                 connection, reporter_id, f"reconcile:reset-proof:log:{observation_id}:{reporter_id}",

@@ -178,12 +178,30 @@ def _queue_day(connection: Any, player_id: int, day_start: datetime, key: str,
     )
 
 
-def queue_for_reading(connection: Any, player_id: int, evidence: str, at: datetime) -> None:
+# The earliest profile a battle log read at %(at)s first covers, read since
+# the player's previous log under its parser, %(log_parser)s: a profile no
+# log covers yet can only confirm a day (``reading_rule``), so the log is
+# what lets it judge one. Without one, the log's own time.
+_FIRST_COVERED = """COALESCE((
+    SELECT min(profile.response_completed_at) FROM collector_observations AS profile
+    WHERE profile.player_id = %(player)s AND profile.endpoint = 'profile'
+      AND profile.http_status BETWEEN 200 AND 299
+      AND profile.response_completed_at <= %(at)s
+      AND profile.response_completed_at > GREATEST(%(at)s - %(window)s, (
+          SELECT max(earlier.observed_at) FROM battle_log_observations AS earlier
+          WHERE earlier.player_id = %(player)s AND earlier.parser_version = %(log_parser)s
+            AND earlier.observed_at < %(at)s))), %(at)s)"""
+
+
+def queue_for_reading(connection: Any, player_id: int, evidence: str, at: datetime,
+                      log_parser: str | None = None) -> None:
     """A profile or battle log read at ``at`` can judge the newest ended day,
     and its own day once that has ended, when it is processed late. So can
     one naming the Season of a day saved before any profile named it, as a
     first battle log processed before the first profile saves Day 1. Not a
-    settled day (``settled``)."""
+    settled day (``settled``), for the profile, or for a battle log, saved
+    under ``log_parser``, for each profile it first covers."""
+    read_at = "%(at)s" if log_parser is None else _FIRST_COVERED
     rows = connection.execute(
         f"""
         SELECT day.ranked_day_start FROM (
@@ -199,10 +217,10 @@ def queue_for_reading(connection: Any, player_id: int, evidence: str, at: dateti
               AND ranked_day_start <= %(at)s AND ranked_day_end > %(at)s
               AND ranked_day_end <= clock_timestamp()
         ) AS day
-        WHERE NOT {settled("%(player)s", "day.ranked_day_start", "%(at)s")}
+        WHERE NOT {settled("%(player)s", "day.ranked_day_start", read_at)}
         """,
         {**_VERSIONS, "player": player_id, "at": at, "window": EVIDENCE_REFRESH_WINDOW,
-         **_seasons(at)},
+         "log_parser": log_parser, **_seasons(at)},
     ).fetchall()
     for (day_start,) in rows:
         _queue_day(connection, player_id, day_start, f"reconcile:{evidence}:{player_id}")
