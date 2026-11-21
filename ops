@@ -463,7 +463,7 @@ guard_existing_resources() {
   names[secret]="clashlens-postgres-password clashlens-collector-database-url clashlens-worker-database-url clashlens-api-database-url
     clashlens-collector-archive-access-key clashlens-collector-archive-secret-key clashlens-worker-archive-access-key clashlens-worker-archive-secret-key
     clashlens-normal-api-keys clashlens-interactive-api-keys clashlens-interactive-1 clashlens-hmac-current clashlens-hmac-previous
-    clashlens-login-secret clashlens-google-client-secret clashlens-discord-client-secret clashlens-init-database-url clashlens-walg-config
+    clashlens-login-secret clashlens-google-client-secret clashlens-discord-client-secret clashlens-init-database-url clashlens-walg-config clashlens-walg-pgp-public-key
     clashlens-archive-operator-database-url clashlens-archive-operator-access-key clashlens-archive-operator-secret-key clashlens-history-operator-database-url clashlens-discord-bot-token clashlens-discord-bot-database-url"
   # One listing and one label read per kind (two calls per name took 25 s); anything unexpected, a failed listing included, falls back to guard_resource.
   for kind in container pod network volume secret; do
@@ -704,13 +704,12 @@ render() {
 
 render_units() {
   mkdir -p "$QUADLET_DIR" "$USER_UNIT_DIR"
-  local template base fixture_requires fixture_ports backup_secret= archive_args= backup_requires= alert_requires=
-  fixture_requires=
-  fixture_ports=
+  local template base fixture_requires= fixture_ports= backup_secret= archive_args= backup_requires= alert_requires=
   [[ "$MODE" != fixture ]] || fixture_requires='Wants=clashlens-archive.service clashlens-clash-api.service clashlens-login.service'
   [[ "$MODE" != fixture ]] || fixture_ports=$'PublishPort=127.0.0.1:8011:8011\nPublishPort=127.0.0.1:8012:8012'
   if backup_enabled; then
     backup_secret='Secret=clashlens-walg-config,type=mount,target=/run/secrets/walg.json,uid=70,gid=70,mode=0400'
+    [[ -z "$(setting CLASHLENS_BACKUP_PGP_PUBLIC_KEY_FILE)" ]] || backup_secret+=$'\nSecret=clashlens-walg-pgp-public-key,type=mount,target=/run/secrets/walg-pgp.asc,uid=70,gid=70,mode=0400'
     archive_args='-c archive_mode=on -c archive_timeout=300 -c "archive_command=wal-g --config /run/secrets/walg.json wal-push %%p"'
     backup_requires='Wants=clashlens-backup.timer'
   fi
@@ -758,8 +757,7 @@ render_units() {
   render "$TEMPLATE_DIR/clashlens.target" "$USER_UNIT_DIR/clashlens.target" FIXTURE_REQUIRES "$fixture_requires" BACKUP_REQUIRES "$backup_requires" ALERT_REQUIRES "$alert_requires"
   if backup_enabled; then
     [[ "$ROOT" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "backup service requires a checkout path without spaces or systemd specifiers"
-    render "$TEMPLATE_DIR/clashlens-backup.service" "$USER_UNIT_DIR/clashlens-backup.service" ROOT "$ROOT"
-    render "$TEMPLATE_DIR/clashlens-backup.timer" "$USER_UNIT_DIR/clashlens-backup.timer"
+    for base in service timer; do render "$TEMPLATE_DIR/clashlens-backup.$base" "$USER_UNIT_DIR/clashlens-backup.$base" ROOT "$ROOT"; done
   fi
 }
 
@@ -925,6 +923,7 @@ replace_file_secret() {
 prepare_secrets() {
   if backup_enabled; then
     replace_secret clashlens-walg-config "$(backup_config_json)"
+    [[ -z "$(setting CLASHLENS_BACKUP_PGP_PUBLIC_KEY_FILE)" ]] || replace_file_secret clashlens-walg-pgp-public-key "$(setting CLASHLENS_BACKUP_PGP_PUBLIC_KEY_FILE)"
   fi
   replace_secret clashlens-postgres-password "${CONFIG[POSTGRES_PASSWORD]}"
   replace_secret clashlens-collector-database-url "postgresql://clashlens_collector:${CONFIG[CLASHLENS_COLLECTOR_DB_PASSWORD]}@127.0.0.1:5432/$POSTGRES_DB?sslmode=disable"
@@ -1303,7 +1302,7 @@ validate_backup_config() {
 }
 
 backup_config_json() {
-  local file line key value access= secret=
+  local file line key value access= secret= pgp_key prefix
   file=$(setting CLASHLENS_BACKUP_CREDENTIAL_FILE)
   validate_mode600_file "$file"
   [[ "$(stat -c '%u' "$file")" == "$(id -u)" ]] || die "backup credential file must belong to the service account"
@@ -1317,8 +1316,15 @@ backup_config_json() {
     esac
   done < "$file"
   [[ -n "$access" && -n "$secret" ]] || die "backup credential file is incomplete"
-  printf '{"AWS_ACCESS_KEY_ID":"%s","AWS_SECRET_ACCESS_KEY":"%s","AWS_ENDPOINT":"%s","AWS_REGION":"auto","AWS_S3_FORCE_PATH_STYLE":"true","WALG_S3_PREFIX":"%s","WALG_COMPRESSION_METHOD":"zstd","WALG_DELTA_MAX_STEPS":"1","WALG_UPLOAD_CONCURRENCY":"2","WALG_DOWNLOAD_CONCURRENCY":"2","WALG_PREVENT_WAL_OVERWRITE":"true"}' \
-    "$access" "$secret" "$(setting CLASHLENS_BACKUP_ENDPOINT)" "$(setting CLASHLENS_BACKUP_PREFIX)"
+  pgp_key=$(setting CLASHLENS_BACKUP_PGP_PUBLIC_KEY_FILE) prefix=$(setting CLASHLENS_BACKUP_PREFIX)
+  [[ "$prefix" == *-pgp && -n "$pgp_key" || "$prefix" != *-pgp && -z "$pgp_key" ]] || die "use a backup prefix ending in -pgp exactly when CLASHLENS_BACKUP_PGP_PUBLIC_KEY_FILE is set, so no prefix mixes encrypted and plain backups"
+  if [[ -n "$pgp_key" ]]; then
+    [[ -e "$pgp_key" ]] || die "backup encryption is on but its public key file $pgp_key is missing; refusing to upload unencrypted backups"; validate_mode600_file "$pgp_key"
+    [[ "$(head -n 1 "$pgp_key")" == '-----BEGIN PGP PUBLIC KEY BLOCK-----' ]] && ! grep -q PRIVATE "$pgp_key" || die "$pgp_key must hold only an armored PGP public key; the private key stays offline"
+  fi
+  # The overwrite check reads the stored copy back, which needs the private key, so a retried upload would fail forever.
+  printf '{"AWS_ACCESS_KEY_ID":"%s","AWS_SECRET_ACCESS_KEY":"%s","AWS_ENDPOINT":"%s","AWS_REGION":"auto","AWS_S3_FORCE_PATH_STYLE":"true","WALG_S3_PREFIX":"%s","WALG_COMPRESSION_METHOD":"zstd","WALG_DELTA_MAX_STEPS":"1","WALG_UPLOAD_CONCURRENCY":"2","WALG_DOWNLOAD_CONCURRENCY":"2","WALG_PREVENT_WAL_OVERWRITE":"%s"%s}' \
+    "$access" "$secret" "$(setting CLASHLENS_BACKUP_ENDPOINT)" "$prefix" "$([[ -n "$pgp_key" ]] && echo false || echo true)" "${pgp_key:+,\"WALG_PGP_KEY_PATH\":\"/run/secrets/walg-pgp.asc\"}"
 }
 
 prepare_backup() {

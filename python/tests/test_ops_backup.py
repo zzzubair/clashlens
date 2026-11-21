@@ -1381,3 +1381,81 @@ def test_discord_bot_token_becomes_a_secret_only_when_the_bot_is_on(tmp_path, mo
     assert result.returncode == 0, result.stderr
     assert (store / "clashlens-discord-bot-token").read_text() == "bot-token-value\n"
     assert "bot-token-value" not in result.stdout + result.stderr
+
+
+PGP_PUBLIC_KEY = "-----BEGIN PGP PUBLIC KEY BLOCK-----\n\nmDMEaaaa\n-----END PGP PUBLIC KEY BLOCK-----\n"
+
+
+def turn_on_backups(tmp_path, mode_config, prefix, key_file=None):
+    credentials = tmp_path / "r2"
+    credentials.write_text(f"AWS_ACCESS_KEY_ID={'a' * 32}\nAWS_SECRET_ACCESS_KEY={'b' * 64}\n")
+    credentials.chmod(0o600)
+    with Path(mode_config["OPS_ENV_FILE"]).open("a") as config:
+        config.write(
+            "CLASHLENS_BACKUP_ENABLED=true\n"
+            f"CLASHLENS_BACKUP_ENDPOINT=https://{'a' * 32}.eu.r2.cloudflarestorage.com\n"
+            f"CLASHLENS_BACKUP_PREFIX=s3://clashlens-pg-backup/{prefix}\n"
+            f"CLASHLENS_BACKUP_CREDENTIAL_FILE={credentials}\n"
+            + (f"CLASHLENS_BACKUP_PGP_PUBLIC_KEY_FILE={key_file}\n" if key_file else "")
+        )
+
+
+@pytest.mark.parametrize("encrypted", [False, True])
+def test_encrypted_backups_get_only_the_public_key(tmp_path, mode_config, encrypted):
+    key_file = tmp_path / "secrets" / "backup-public.asc"
+    key_file.write_text(PGP_PUBLIC_KEY)
+    key_file.chmod(0o600)
+    turn_on_backups(tmp_path, mode_config, "rogue-pg18-pgp" if encrypted else "rogue-pg18", key_file if encrypted else None)
+    store = tmp_path / "podman-secrets"
+    store.mkdir()
+    podman = tmp_path / "podman"
+    podman.write_text(FAKE_SECRET_STORE)
+    podman.chmod(0o700)
+    script = MODE_CONFIG + """
+prepare_secrets
+RELEASE=([POSTGRES_IMAGE]=postgres [COLLECTOR_IMAGE]=collector [PYTHON_IMAGE]=python [WEBSITE_IMAGE]=website)
+render_units
+"""
+    result = subprocess.run(
+        ["bash", "-c", script, "backup-key-test", str(OPS)],
+        env=dict(mode_config, TEST_MODE="production", PODMAN_BIN=str(podman), SECRET_STORE=str(store)),
+        capture_output=True, text=True, timeout=OPS_TIMEOUT, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    config = json.loads((store / "clashlens-walg-config").read_text())
+    assert config.get("WALG_PGP_KEY_PATH") == ("/run/secrets/walg-pgp.asc" if encrypted else None)
+    # Checking an existing upload needs the private key, so a retried upload of encrypted WAL skips that check.
+    assert config["WALG_PREVENT_WAL_OVERWRITE"] == ("false" if encrypted else "true")
+    key_secret = store / "clashlens-walg-pgp-public-key"
+    assert (key_secret.read_text() if key_secret.exists() else None) == (PGP_PUBLIC_KEY if encrypted else None)
+    postgres = (tmp_path / "config" / "containers" / "systemd" / "clashlens-postgres.container").read_text()
+    mounts = [line for line in postgres.splitlines() if line.startswith("Secret=clashlens-walg")]
+    assert mounts == [
+        "Secret=clashlens-walg-config,type=mount,target=/run/secrets/walg.json,uid=70,gid=70,mode=0400",
+        *(["Secret=clashlens-walg-pgp-public-key,type=mount,target=/run/secrets/walg-pgp.asc,uid=70,gid=70,mode=0400"] if encrypted else []),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("prefix", "key", "message"),
+    [
+        ("rogue-pg18-pgp", "missing", "refusing to upload unencrypted backups"),
+        ("rogue-pg18-pgp", "with-private", "the private key stays offline"),
+        ("rogue-pg18", "public", "prefix ending in -pgp"),
+        ("rogue-pg18-pgp", None, "prefix ending in -pgp"),
+    ],
+)
+def test_backups_refuse_to_start_without_a_usable_public_key(tmp_path, mode_config, prefix, key, message):
+    key_file = tmp_path / "secrets" / "backup-public.asc"
+    if key in ("public", "with-private"):
+        private = "-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nlFgEaaaa\n-----END PGP PRIVATE KEY BLOCK-----\n"
+        key_file.write_text(PGP_PUBLIC_KEY + (private if key == "with-private" else ""))
+        key_file.chmod(0o600)
+    turn_on_backups(tmp_path, mode_config, prefix, key_file if key else None)
+    result = subprocess.run(
+        ["bash", "-c", MODE_CONFIG, "backup-key-test", str(OPS)],
+        env=dict(mode_config, TEST_MODE="production"),
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+    assert result.returncode != 0
+    assert message in result.stderr
