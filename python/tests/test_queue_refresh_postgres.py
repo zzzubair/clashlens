@@ -261,6 +261,46 @@ def test_unchanged_covering_check_lets_a_later_reading_contradict_the_day(
     assert "trophy_equation_mismatch" in after[2]
 
 
+def test_a_log_after_the_first_hour_lets_a_reading_inside_it_contradict_the_day(
+    database_url: str, archive_server
+) -> None:
+    # Day B's 05:20 Reset reading proves it, and nothing in the hour after
+    # the Reset changes that: it is settled. A 05:55 reading 10 more is
+    # inside that hour, but cannot contradict the day while no battle log
+    # covers it; the next log, saved at 06:05, covers it, and the day is
+    # judged.
+    day_b = [(DAY_B + timedelta(hours=1), True)] + [
+        (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    end_b = 6000 + WIN - 8 * LOSS
+    reset_log = _log(*day_b)
+    with domain_database(database_url) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C, profile=_profile(end_b),
+            log=reset_log, profile_at=DAY_C + timedelta(minutes=20),
+        )
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="later-profile",
+            endpoint="profile", body=_profile(end_b + 10),
+            observed_at=DAY_C + timedelta(minutes=55), normalized_tag=TAG,
+        )[1])
+        _process(connection_info, archive_server, jobs)
+        _calculate(connection_info, archive_server, TAG, DAY_B)
+        before = _day(connection_info, TAG, DAY_B)
+        _process(connection_info, archive_server, [store_observation(
+            connection_info, archive_server, occurrence_key="covering-log",
+            endpoint="battle_log", body=reset_log,
+            observed_at=DAY_C + timedelta(minutes=65), normalized_tag=TAG,
+        )[1]])
+        after = _day(connection_info, TAG, DAY_B)
+
+    assert before[:2] == ("Complete", "exact")
+    assert after[:2] == ("Inconsistent", "uncertain")
+
+
 def test_late_opponent_report_settles_the_battles_day_for_both_players(
     database_url: str, archive_server
 ) -> None:

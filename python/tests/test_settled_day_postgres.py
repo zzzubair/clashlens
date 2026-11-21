@@ -29,6 +29,7 @@ from reset_scenarios_postgres_support import (
 )
 
 from clashlens import queue_refresh, reconciliation_db
+from clashlens.background_pacing import DAY_RECHECK_PRIORITY
 from clashlens.collector_db import CollectorDatabase
 from clashlens.db import Database
 from clashlens.domain import ranked_day_for
@@ -50,7 +51,8 @@ def test_a_settled_day_is_recalculated_only_for_its_battles(
 
     - From 07:10, SETTLED is read at 5,000 five times, each with its battle
       log a minute later, its unchanged log is checked twice, the
-      twice-daily recheck runs and its day-end recalculation falls due: its
+      twice-daily recheck runs, and its day-end recalculation and a recheck
+      a pass queued before the day settled fall due: its
       day is not worked out again and no recalculation is queued for it.
       UNPROVEN's 07:10 reading still reaches its day and proves 5,030.
     - SETTLED's attack for 30 at 04:58 first shows in its battle log at
@@ -91,7 +93,8 @@ def test_a_settled_day_is_recalculated_only_for_its_battles(
         # Two unchanged checks of the 11:11 log, each covering a reading.
         _check_unchanged(connection_info, story, ids[SETTLED], _at(11, 11),
                          [_at(11, 30), _at(11, 50)])
-        # The twice-daily recheck, then the day-end recalculation.
+        # The twice-daily recheck, then the day-end recalculation and a
+        # recheck queued by a pass before the day settled.
         database = Database(connection_info)
         try:
             rechecked = queue_refresh.queue_recheck(database, "test", end)
@@ -99,6 +102,16 @@ def test_a_settled_day_is_recalculated_only_for_its_battles(
             with database.pool.connection() as connection:
                 reconciliation_db._enqueue_day_end_reconciliation(
                     connection, ids[SETTLED], ranked_day_for(start))
+                connection.execute(
+                    "INSERT INTO python_processing_jobs_worker (work_type, deduplication_key,"
+                    " input_json, state, due_at, parser_version, processing_version,"
+                    " domain_rule_version, analytics_rule_version, priority)"
+                    " SELECT work_type, 'reconcile:recheck:earlier', input_json"
+                    " || '{\"trigger\": \"recheck\"}', 'pending', clock_timestamp(),"
+                    " parser_version, processing_version, domain_rule_version,"
+                    " analytics_rule_version, %s FROM python_processing_jobs_worker"
+                    " WHERE input_json ->> 'trigger' = 'day_end'",
+                    (DAY_RECHECK_PRIORITY,))
         finally:
             database.close()
         story.wait(timedelta(hours=1))
@@ -161,13 +174,14 @@ def _check_unchanged(connection_info: str, story, player_id: int, log_at: dateti
 
 def _queued(connection_info: str, player_id: int, day_start: datetime) -> int:
     """How many recalculations of the player's day were ever queued, but
-    for its day-end one."""
+    for its day-end one and the pass recheck the story queued itself."""
     with psycopg.connect(connection_info) as connection:
         return connection.execute(
             "SELECT count(*) FROM python_processing_jobs"
             " WHERE work_type = 'reconcile_ranked_day'"
             " AND input_json ->> 'player_id' = %s AND input_json ->> 'ranked_day_start' = %s"
-            " AND input_json ->> 'trigger' IS DISTINCT FROM 'day_end'",
+            " AND input_json ->> 'trigger' IS DISTINCT FROM 'day_end'"
+            " AND deduplication_key <> 'reconcile:recheck:earlier'",
             (str(player_id), f"{day_start:%Y-%m-%dT%H:%M:%SZ}"),
         ).fetchone()[0]
 
