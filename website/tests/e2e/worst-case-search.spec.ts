@@ -49,7 +49,7 @@ async function serveWorstCaseSearch(page: Page) {
     const data = rewrite(decodePageData<unknown>(await response.text()));
     await route.fulfill({ response, body: encodePageData(data) });
   });
-  await page.route(/\/resources\/player-search\?/, async (route) => {
+  await page.route(/\/resources\/players\/search\?/, async (route) => {
     const response = await route.fetch();
     const data = rewrite(await response.json());
     await route.fulfill({ response, json: data });
