@@ -18,6 +18,15 @@ export function searchedPlayerTag(value: string): string | null {
 }
 
 /**
+ * A tag the search may mean but cannot be sure of, such as "YQQ", which could
+ * also be a name: offered as a choice beside the name results.
+ */
+export function possiblePlayerTag(value: string): string | null {
+  const typed = value.trim();
+  return searchedPlayerTag(typed) ?? normalizePlayerTag(`#${typed}`);
+}
+
+/**
  * What to say when a search finds nobody: a complete-looking #tag with
  * letters the game never uses is not a tag at all, so asking for a full #tag
  * would be wrong.
@@ -26,7 +35,7 @@ export function noMatchHint(query: string): string {
   const typed = query.trim().toUpperCase();
   return /^#[0-9A-Z]{3,15}$/.test(typed) && normalizePlayerTag(typed) === null
     ? `${typed} is not a Clash of Clans player tag. Tags use only 0, 2, 8, 9 and the letters P, Y, L, Q, G, R, J, C, U and V.`
-    : "Enter a full #tag to look up anyone.";
+    : "Enter a full #tag (the # is optional) to look up anyone.";
 }
 
 export function validPlayerTag(value: string): boolean {

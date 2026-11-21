@@ -130,7 +130,7 @@ export function isPlausibleTransaction(transaction: OAuthTransaction): boolean {
   );
 }
 
-export const MAX_RETURN_PATH_LENGTH = 200;
+export const MAX_RETURN_PATH_LENGTH = 2048;
 // %23 is the # in a player tag, such as /players/%232PP.
 const RETURN_PATH_CHARS = /^(?:[A-Za-z0-9._~/-]|%23)+$/;
 const RETURN_QUERY_CHARS = /^(?:[A-Za-z0-9._~/=&+,:@!$()*;-]|%[0-9A-Fa-f]{2})+$/;

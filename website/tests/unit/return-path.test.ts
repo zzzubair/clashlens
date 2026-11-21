@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { MAX_RETURN_PATH_LENGTH } from "../../app/server/auth.server";
+import {
+  createOAuthTransactionCookieValue,
+  parseOAuthTransactionCookieValue,
+} from "../../app/server/auth-cookies.server";
+import {
+  createOAuthTransaction,
+  MAX_RETURN_PATH_LENGTH,
+} from "../../app/server/auth.server";
+import { MAX_SEARCH_QUERY_LENGTH } from "../../app/lib/validation";
 import {
   accountSetupPath,
   DEFAULT_RETURN_PATH,
@@ -100,5 +108,34 @@ describe("same-origin return path validation", () => {
     expect(DEFAULT_RETURN_PATH).toBe("/account");
     const portOrigin = new URL("https://clashlens.example:8443");
     expect(safeReturnPath("/account", portOrigin)).toBe("/account");
+  });
+});
+
+describe("return paths carrying the longest supported search", () => {
+  const KEY = Buffer.alloc(32, 0x24);
+  const longest = [
+    `/search?${new URLSearchParams({ q: "龍".repeat(MAX_SEARCH_QUERY_LENGTH) })}`,
+    `/leaderboards/tracked?${new URLSearchParams({ q: "🐉".repeat(MAX_SEARCH_QUERY_LENGTH / 2), day: "12" })}`,
+  ];
+
+  it.each(longest)("survives the guard, sign-in cookie and account setup: %s", (path) => {
+    expect(path.length).toBeGreaterThan(200);
+    const dataRequest = `${path.replace("?", ".data?")}&_routes=routes%2Fsearch`;
+    expect(safeReturnPath(dataRequest, ORIGIN)).toBe(path);
+
+    const now = 1_750_000;
+    const cookie = createOAuthTransactionCookieValue(
+      createOAuthTransaction(path, now),
+      KEY,
+    );
+    expect(Buffer.byteLength(cookie, "utf8")).toBeLessThan(4096);
+    expect(parseOAuthTransactionCookieValue(cookie, KEY, now)?.returnPath).toBe(path);
+
+    expect(setupReturnPath(path, ORIGIN)).toBe(path);
+    expect(accountSetupPath(path, ORIGIN)).toBe(
+      `/account/setup?returnPath=${encodeURIComponent(path)}`,
+    );
+    const linking = `/account/verify-player?return=${encodeURIComponent(path)}`;
+    expect(safeReturnPath(linking, ORIGIN)).toBe(linking);
   });
 });

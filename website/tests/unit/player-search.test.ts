@@ -102,6 +102,7 @@ describe("bare player tags", () => {
     expect(searchedPlayerTag("LQ2")).toBe("#LQ2");
     expect(searchedPlayerTag("#curry")).toBe("#CURRY");
     expect(searchedPlayerTag("Curry")).toBeNull();
+    expect(searchedPlayerTag("YQQ")).toBeNull();
     expect(searchedPlayerTag("Ali 2")).toBeNull();
     expect(searchedPlayerTag("#2PY0LA")).toBeNull();
   });
@@ -118,7 +119,13 @@ describe("bare player tags", () => {
     expect(suggestionsHtml({ data: answer("lq2"), loading: false })).toContain(
       "Open #LQ2",
     );
-    expect(suggestionsHtml({ data: answer("curry"), loading: false })).not.toContain(
+  });
+
+  it("offers a letter-only tag as a choice beside name results", () => {
+    const html = suggestionsHtml({ data: answer("yqq"), loading: false });
+    expect(html).toContain("Open #YQQ");
+    expect(html).toContain('href="/players/%23YQQ"');
+    expect(suggestionsHtml({ data: answer("ali"), loading: false })).not.toContain(
       "Open #",
     );
   });

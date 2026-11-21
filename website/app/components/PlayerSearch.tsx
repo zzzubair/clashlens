@@ -1,7 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 
-import { canonicalPlayerPath, noMatchHint, searchedPlayerTag } from "../lib/player-tag";
+import {
+  canonicalPlayerPath,
+  noMatchHint,
+  possiblePlayerTag,
+  searchedPlayerTag,
+} from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
 import type { PlayerSearchLoaderData } from "../lib/player-search-data";
 import { moveFocusWithArrows } from "./ArrowKeys";
@@ -179,7 +184,7 @@ export function SearchSuggestions({
   const results = search?.results.slice(0, 5) ?? [];
   const users = search?.users.slice(0, 3) ?? [];
   const candidateTag = search
-    ? (search.exactTag ?? searchedPlayerTag(search.query))
+    ? (search.exactTag ?? possiblePlayerTag(search.query))
     : null;
   const unknownExactTag =
     candidateTag && !results.some((result) => result.tag === candidateTag)

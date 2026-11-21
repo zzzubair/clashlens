@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ReactElement, ReactNode } from "react";
-import { HeatMapCard, SeasonChart, stepDay } from "../../app/components/SeasonCards";
+import { HeatMapCard, SeasonChart } from "../../app/components/SeasonCards";
 import { heatCells, type SeasonData } from "../../app/lib/dashboard-cards";
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
@@ -143,6 +143,8 @@ function walk(node: ReactNode, found: Element[] = []): Element[] {
   else if (node && typeof node === "object" && "props" in node) {
     const element = node as Element;
     found.push(element);
+    if (typeof element.type === "function")
+      walk((element.type as (props: unknown) => ReactNode)(element.props), found);
     walk(element.props.children, found);
   }
   return found;
@@ -191,14 +193,33 @@ describe("Season chart on touch screens", () => {
     // At 320px wide the 760-unit chart draws each column over 44px tall.
     for (const column of columns)
       expect(((column.props.height as number) * 320) / 760).toBeGreaterThanOrEqual(44);
-    expect(
-      elements.filter((element) => element.props["aria-label"] === "Later day"),
-    ).toHaveLength(1);
-    expect(stepDay(points, null, -1)).toBe(3);
-    expect(stepDay(points, 3, -1)).toBe(2);
-    expect(stepDay(points, 1, -1)).toBe(1);
-    expect(stepDay(points, 2, 1)).toBe(3);
-    expect(stepDay(points, 3, 1)).toBe(3);
-    expect(stepDay([], null, 1)).toBeNull();
+    const steps = elements.filter((element) =>
+      ["Earlier day", "Later day"].includes(element.props["aria-label"] as string),
+    );
+    expect(steps).toHaveLength(2);
+    for (const button of steps) {
+      const style = button.props.style as { minWidth: string; minHeight: string };
+      expect(parseFloat(style.minWidth) * 16).toBeGreaterThanOrEqual(44);
+      expect(parseFloat(style.minHeight) * 16).toBeGreaterThanOrEqual(44);
+    }
+  });
+
+  it("steps the readout through every day with Earlier and Later", () => {
+    const step = (tip: number | null, label: string) => {
+      const onTip = vi.fn();
+      const button = chart(tip, onTip).find(
+        (element) => element.props["aria-label"] === label,
+      )!;
+      if (button.props.disabled) return "disabled";
+      (button.props.onClick as () => void)();
+      return onTip.mock.calls.at(-1)![0] as number | null;
+    };
+    expect(step(null, "Earlier day")).toBe(3);
+    expect(step(3, "Earlier day")).toBe(2);
+    expect(step(2, "Earlier day")).toBe(1);
+    expect(step(1, "Earlier day")).toBe("disabled");
+    expect(step(1, "Later day")).toBe(2);
+    expect(step(2, "Later day")).toBe(3);
+    expect(step(3, "Later day")).toBe("disabled");
   });
 });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { RefreshStatus, RefreshWork } from "../../app/lib/contracts";
 import {
@@ -6,6 +6,7 @@ import {
   REFRESH_TIMED_OUT,
   automaticRefreshFor,
   followUpRead,
+  pollStatus,
   lookupWaitTick,
   playerRefreshStep,
   pollAnswer,
@@ -218,5 +219,53 @@ describe("reading the page after a Refresh completes", () => {
     expect(reads).toBe(1);
     followUp.settled();
     expect(reads).toBe(1);
+  });
+});
+
+describe("checking Refresh status", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("checks every half second for the whole minute, one read at a time", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const starts: number[] = [];
+    let open = 0;
+    let most = 0;
+    const stop = pollStatus(
+      async () => {
+        starts.push(Date.now());
+        open++;
+        most = Math.max(most, open);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        open--;
+      },
+      () => Date.now() >= 60_000,
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    stop();
+    const gaps = starts.slice(1).map((at, i) => at - starts[i]!);
+    expect(gaps.length).toBeGreaterThan(15);
+    expect(new Set(gaps)).toEqual(new Set([600]));
+    expect(most).toBe(1);
+  });
+
+  it("cancels a stalled read after 8 seconds and the read underway on stop", async () => {
+    vi.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    const stop = pollStatus(
+      (signal) =>
+        new Promise<void>((resolve) => {
+          signals.push(signal);
+          signal.addEventListener("abort", () => resolve());
+        }),
+      () => false,
+    );
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(signals[0]!.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(signals).toHaveLength(2);
+    stop();
+    expect(signals[1]!.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(signals).toHaveLength(2);
   });
 });

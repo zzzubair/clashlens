@@ -15,6 +15,7 @@ import { ShieldIcon, Stars, SwordIcon } from "../components/GameIcons";
 import { dayBar, rowScale } from "../lib/day-bars";
 import { utcDate, dayRange } from "../lib/date-format";
 import { LastDays } from "../components/LastDays";
+import { DaySteps, stepIndex } from "../components/SeasonCards";
 import { formatAge } from "../lib/age-format";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import {
@@ -898,11 +899,17 @@ function Rate({
 
 /**
  * A player's days as thin bars. Pointing at a bar, or stepping through them
- * with the arrow keys once the bars have focus, shows that day's date and result.
+ * with the arrow keys once the bars have focus, or with the Earlier and Later
+ * buttons on touch screens, shows that day's date and result.
  */
 function Trend({ days, scale }: { days: DayResult[]; scale: number }) {
   const [active, setActive] = useState<number | null>(null);
-  return <TrendBars days={days} scale={scale} active={active} onActive={setActive} />;
+  return (
+    <>
+      <TrendBars days={days} scale={scale} active={active} onActive={setActive} />
+      <DaySteps count={days.length} at={active} onStep={setActive} />
+    </>
+  );
 }
 
 export function TrendBars({
@@ -937,9 +944,7 @@ export function TrendBars({
         const step = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
         if (step === undefined) return;
         event.preventDefault();
-        onActive(
-          Math.min(days.length - 1, Math.max(0, (active ?? days.length - 1) + step)),
-        );
+        onActive(stepIndex(days.length, active, step as -1 | 1));
       }}
     >
       {days.map((day, index) => (

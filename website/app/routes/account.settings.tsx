@@ -354,6 +354,10 @@ export default function AccountSettingsRoute() {
           {PROVIDERS.map((provider) => {
             const connected = page.providers.includes(provider);
             const only = connected && page.providers.length === 1;
+            const intent = connected ? "unlink" : "link";
+            const handingOff =
+              navigation.formData?.get("intent") === intent &&
+              navigation.formData.get("provider") === provider;
             return (
               <li key={provider} className="settings-row">
                 <div className="settings-label">
@@ -366,23 +370,25 @@ export default function AccountSettingsRoute() {
                         : "Not connected."}
                   </p>
                 </div>
-                <form method="post" className="inline-form">
-                  <input
-                    type="hidden"
-                    name="intent"
-                    value={connected ? "unlink" : "link"}
-                  />
+                <Form method="post" className="inline-form">
+                  <input type="hidden" name="intent" value={intent} />
                   <input type="hidden" name="provider" value={provider} />
                   <input type="hidden" name="idempotencyKey" value={key} />
                   <button
                     type="submit"
                     className="button button-secondary"
-                    disabled={only}
+                    disabled={only || handingOff}
                     aria-describedby={`settings-${provider}-state`}
                   >
-                    {connected ? "Disconnect" : "Connect"}
+                    {handingOff
+                      ? connected
+                        ? "Disconnecting…"
+                        : `Opening ${PROVIDER_LABELS[provider]}…`
+                      : connected
+                        ? "Disconnect"
+                        : "Connect"}
                   </button>
-                </form>
+                </Form>
               </li>
             );
           })}

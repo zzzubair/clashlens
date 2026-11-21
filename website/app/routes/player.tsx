@@ -72,6 +72,7 @@ import {
   REFRESH_IDLE,
   automaticRefreshFor,
   followUpRead,
+  pollStatus,
   lookupWaitTick,
   playerRefreshStep,
   pollAnswer,
@@ -526,31 +527,12 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
   useEffect(() => {
     if (!workId || refreshResourcePath === null || deadline === null) return;
     let cancelled = false;
-    let inFlight = false;
-    let controller: AbortController | null = null;
     const late = () => cancelled || Date.now() >= deadline;
-
-    const startedAt = Date.now();
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const scheduleNext = () => {
-      if (late()) return;
-      const interval = Date.now() - startedAt < 5_000 ? 500 : 1_500;
-      timer = setTimeout(() => void poll(), interval);
-    };
-
-    const poll = async () => {
-      if (late() || inFlight) return;
-      inFlight = true;
-      controller = new AbortController();
-      const timeout = setTimeout(() => controller?.abort(), 8_000);
+    const stop = pollStatus(async (signal) => {
       try {
         const response = await fetch(
           `${refreshResourcePath}?workId=${encodeURIComponent(workId)}`,
-          {
-            cache: "no-store",
-            headers: { Accept: "application/json" },
-            signal: controller.signal,
-          },
+          { cache: "no-store", headers: { Accept: "application/json" }, signal },
         );
         const payload: unknown = await response.json();
         if (late()) return;
@@ -558,19 +540,11 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
       } catch (error) {
         const failed = late() ? null : pollThrew(error);
         if (failed) dispatchRefresh(failed);
-      } finally {
-        clearTimeout(timeout);
-        inFlight = false;
-        controller = null;
-        scheduleNext();
       }
-    };
-
-    void poll();
+    }, late);
     return () => {
       cancelled = true;
-      if (timer !== null) clearTimeout(timer);
-      controller?.abort();
+      stop();
     };
   }, [deadline, player?.tag, refreshResourcePath, workId]);
 

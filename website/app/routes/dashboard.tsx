@@ -37,6 +37,7 @@ import {
   shownCards,
 } from "../lib/dashboard";
 import type { CardReads } from "../lib/dashboard-cards";
+import { retryShownPage } from "../lib/keep-page";
 import { leftDate, leftLine, type LeftLegendI } from "../lib/left-legend";
 import { LOOKUP_MESSAGES } from "../lib/player-lookup-text";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
@@ -558,7 +559,7 @@ function SignedInDashboard({
             type="button"
             className="button button-secondary dash-small-button"
             disabled={revalidator.state !== "idle"}
-            onClick={() => void revalidator.revalidate()}
+            onClick={() => void retryShownPage(() => revalidator.revalidate())}
           >
             {revalidator.state !== "idle" ? "Retrying…" : "Try again"}
           </button>
