@@ -27,6 +27,7 @@ import {
   shownCards,
 } from "../lib/dashboard";
 import type { CardDataMap, CardReads } from "../lib/dashboard-cards";
+import { RETRY_DEADLINE_MS } from "../lib/keep-page";
 import { canonicalPlayerPath } from "../lib/player-tag";
 import type { DashboardActionData, DashboardLoaderData } from "../lib/dashboard-data";
 import {
@@ -45,6 +46,7 @@ import {
   cardRefreshStep,
   dashboardEditStep,
   outdatedCards,
+  stalledCards,
   type DashboardEditEvent,
 } from "./DashboardState";
 import { CardHead, CardNote } from "./DashboardParts";
@@ -786,6 +788,11 @@ export function Dashboard({
     if (stale.length === 0 || loading) return;
     dispatchCards({ type: "requested", cards: stale });
     void load(dashboardQuery({ player: tag, cards: stale.join(",") }, viewAs));
+    const timer = window.setTimeout(
+      () => dispatchCards({ type: "answered", answer: stalledCards(), tag }),
+      RETRY_DEADLINE_MS,
+    );
+    return () => window.clearTimeout(timer);
   }, [stale, tag, viewAs, loading, load]);
   useEffect(() => {
     const answer = refresher.data;

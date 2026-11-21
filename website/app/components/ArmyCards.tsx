@@ -124,9 +124,7 @@ function useArmies(lens: ArmyLens, { tag, armies: initial }: ArmiesData) {
         .then(({ armies }) => armies ?? null)
         .catch(() => null)
         .finally(() => clearTimeout(timeout))
-        .then((armies) => {
-          if (asked.current === ask) dispatch({ type: "answered", ask, days, armies });
-        });
+        .then((armies) => dispatch({ type: "answered", ask, days, armies }));
     },
   };
 }

@@ -7,16 +7,21 @@ import {
   UNSAFE_FrameworkContext,
   type MiddlewareFunction,
 } from "react-router";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 
 import {
   LOGGED_OUT,
   keepPageOnLostConnection,
+  RETRY_DEADLINE_MS,
   rememberShownPage,
   retryShownPage,
   usePreloadInlineAnswerCode,
 } from "../../app/lib/keep-page";
-import { CARDS_FROM_LOAD, cardRefreshStep } from "../../app/components/DashboardState";
+import {
+  CARDS_FROM_LOAD,
+  cardRefreshStep,
+  stalledCards,
+} from "../../app/components/DashboardState";
 
 const PAGE = "/players/%23LY2QQ9L9Q";
 const GROUPS = "/account/groups";
@@ -33,7 +38,11 @@ async function openPage(failure: () => unknown, path = PAGE) {
     let reads = 0;
     return () => {
       reads += 1;
-      if (reads > 1) throw failure();
+      if (reads > 1) {
+        const failed = failure();
+        if (failed instanceof Promise) return failed;
+        throw failed;
+      }
       return data;
     };
   };
@@ -246,6 +255,41 @@ it("shows a dashboard card as unavailable again when a second Try again loses th
     state = cardRefreshStep(state, {
       type: "answered",
       answer: answer as never,
+      tag: "#LY2QQ9L9Q",
+    });
+    expect(state.stale).toEqual([]);
+    expect(state.refreshed).toEqual({ goal: null });
+  }
+});
+
+it("gives linked-players Try again back when its re-read stalls past the deadline", async () => {
+  const router = await openPage(() => new Promise(() => {}), "/");
+  vi.useFakeTimers();
+  try {
+    let settled = false;
+    void retryShownPage(() => router.revalidate()).then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(RETRY_DEADLINE_MS - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(router.state.errors).toBeNull();
+    expect(router.state.loaderData.home).toEqual({ players: ["#LY2QQ9L9Q"] });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("shows a stalled dashboard card as could not load, again on a second stalled Try again", () => {
+  const card = "goal" as never;
+  let state = CARDS_FROM_LOAD;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    state = cardRefreshStep(state, { type: "outdated", cards: [card] });
+    state = cardRefreshStep(state, { type: "requested", cards: state.stale });
+    state = cardRefreshStep(state, {
+      type: "answered",
+      answer: stalledCards(),
       tag: "#LY2QQ9L9Q",
     });
     expect(state.stale).toEqual([]);

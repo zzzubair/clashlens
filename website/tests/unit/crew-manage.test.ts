@@ -1028,6 +1028,31 @@ describe("linking an account from an invite", () => {
     expect(await crewNames()).toEqual(Array(4).fill("Night Owls"));
   });
 
+  it("names the crew on the way to an invite whose address has a query", async () => {
+    mocks.readLoginIdentity.mockResolvedValue(null);
+    mocks.requestJson.mockResolvedValue(invitePayload({ accounts: [] }));
+    const invite = `/crews/join/${CODE}?from=discord`;
+    const back = encodeURIComponent(invite);
+    const loaded = await Promise.all([
+      loginLoader({
+        request: new Request(`${ORIGIN}/login?returnPath=${back}`),
+      } as never),
+      signupLoader({
+        request: new Request(`${ORIGIN}/signup?returnPath=${back}`),
+      } as never),
+      setupLoader({
+        request: new Request(`${ORIGIN}/account/setup?returnPath=${back}`),
+      } as never),
+      verifyLoader({
+        request: new Request(`${ORIGIN}/account/verify-player?return=${back}`),
+      } as never),
+    ]);
+    expect(loaded.map(({ crewName }) => crewName)).toEqual(Array(4).fill("Night Owls"));
+    expect(mocks.requestJson.mock.calls.map(([path]) => path)).toEqual(
+      Array(4).fill(`/v1/crew-invites/${CODE}`),
+    );
+  });
+
   it("goes on to any page on this website once the account is linked", async () => {
     const response = (await link("/account/watchlists")) as Response;
     expect(response.headers.get("Location")).toBe("/account/watchlists");

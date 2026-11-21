@@ -15,7 +15,7 @@ import { ShieldIcon, Stars, SwordIcon } from "../components/GameIcons";
 import { dayBar, rowScale } from "../lib/day-bars";
 import { utcDate, dayRange } from "../lib/date-format";
 import { LastDays } from "../components/LastDays";
-import { DaySteps, stepIndex } from "../components/SeasonCards";
+import { DaySteps, leftDayGroup, stepIndex } from "../components/SeasonCards";
 import { formatAge } from "../lib/age-format";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import {
@@ -905,10 +905,10 @@ function Rate({
 function Trend({ days, scale }: { days: DayResult[]; scale: number }) {
   const [active, setActive] = useState<number | null>(null);
   return (
-    <>
+    <span className="day-group">
       <TrendBars days={days} scale={scale} active={active} onActive={setActive} />
       <DaySteps count={days.length} at={active} onStep={setActive} />
-    </>
+    </span>
   );
 }
 
@@ -937,8 +937,12 @@ export function TrendBars({
       aria-label={`Daily results: ${summary}`}
       tabIndex={0}
       onFocus={() => onActive(active ?? days.length - 1)}
-      onBlur={() => onActive(null)}
-      onMouseLeave={() => onActive(null)}
+      onBlur={(event) => {
+        if (leftDayGroup(event)) onActive(null);
+      }}
+      onMouseLeave={(event) => {
+        if (leftDayGroup(event)) onActive(null);
+      }}
       onKeyDown={(event) => {
         if (event.key === "Escape") return onActive(null);
         const step = { ArrowLeft: -1, ArrowRight: 1 }[event.key];

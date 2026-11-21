@@ -29,14 +29,26 @@ export function rememberShownPage(url: string) {
 }
 
 let retryingPage: string | null = null;
+let retries = 0;
 
-export async function retryShownPage(revalidate: () => Promise<void>) {
+export const RETRY_DEADLINE_MS = 12_000;
+
+// Resolves when the re-read settles or after the deadline, whichever is first,
+// so a stalled reply gives Try again back. The page stays kept until it settles.
+export function retryShownPage(revalidate: () => Promise<void>): Promise<void> {
   retryingPage = shownPage;
-  try {
-    await revalidate();
-  } finally {
-    retryingPage = null;
-  }
+  const retry = (retries += 1);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const read = revalidate().finally(() => {
+    clearTimeout(timer);
+    if (retry === retries) retryingPage = null;
+  });
+  return Promise.race([
+    read,
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, RETRY_DEADLINE_MS);
+    }),
+  ]);
 }
 
 export function useRememberShownPage() {

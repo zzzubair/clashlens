@@ -329,10 +329,11 @@ const LINK_STATUS: Record<"made" | "unconfirmed", { text: string; ok: boolean }>
  *   `saved` matches them, and a change meanwhile waits for it instead of
  *   starting a second loop.
  *
- * A failed save goes back to `idle` with `saved` unchanged, so the next change
- * sends again. `runAutosave` is its only writer.
+ * A failed save goes back to `idle` with `saved` null, since Clash Lens may
+ * or may not have taken it, so the next change or Try again sends the newest
+ * choices. `runAutosave` is its only writer.
  */
-export type Autosave = { phase: "idle" | "sending"; saved: string };
+export type Autosave = { phase: "idle" | "sending"; saved: string | null };
 
 /** The newest choices, as the save loop reads them each time round. */
 export type Choices = { json: string; tag: string | null; settings: OverlaySettings };
@@ -359,6 +360,7 @@ export async function runAutosave(
     }
     show("saved");
   } catch {
+    autosave.current = { phase: "sending", saved: null };
     show("notSaved");
   } finally {
     autosave.current = { ...autosave.current, phase: "idle" };
@@ -674,6 +676,7 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
   async function replaceLink() {
     if (replacing) return;
     setReplacing(true);
+    setCopyState(null);
     try {
       const made = await post<{ link: string }>(
         { intent: "new-link", replaces: link },
@@ -1037,22 +1040,11 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
             Your own private link. Paste it into OBS once: every change you make on this
             page shows on stream within 3 seconds, with no new link.
           </p>
-          <div className="obs-addr">
-            <input
-              id="obs-address"
-              readOnly
-              value={address}
-              aria-label="Overlay address"
-            />
-            <button
-              type="button"
-              className="button button-primary"
-              disabled={linkStatus === "unconfirmed"}
-              onClick={copy}
-            >
-              Copy
-            </button>
-          </div>
+          <AddressRow
+            address={address}
+            known={!replacing && linkStatus !== "unconfirmed"}
+            onCopy={copy}
+          />
           <div className="obs-under">
             <StatusLine saveStatus={saveStatus} linkStatus={linkStatus} />
             {saveStatus === "notSaved" ? (
@@ -1075,13 +1067,12 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
                 onCancel={() => setConfirmReplace(false)}
               />
             ) : (
-              <button
-                type="button"
-                className="button button-secondary obs-replace"
-                onClick={() => setConfirmReplace(true)}
-              >
-                Make a new link
-              </button>
+              <ReplaceAction
+                replacing={replacing}
+                unconfirmed={linkStatus === "unconfirmed"}
+                onRetry={() => void replaceLink()}
+                onAsk={() => setConfirmReplace(true)}
+              />
             )}
           </div>
           <div className="obs-dims">
@@ -1248,6 +1239,63 @@ export function StatusLine({
       {line.text}
     </span>
   ));
+}
+
+/** The private address and Copy, both unavailable while the current link is
+ * not known (a new one is being made, or its reply was lost). */
+export function AddressRow({
+  address,
+  known,
+  onCopy,
+}: {
+  address: string;
+  known: boolean;
+  onCopy: () => void;
+}) {
+  return (
+    <div className="obs-addr">
+      <input
+        id="obs-address"
+        readOnly
+        value={known ? address : ""}
+        placeholder="Waiting for the current link…"
+        aria-label="Overlay address"
+      />
+      <button
+        type="button"
+        className="button button-primary"
+        disabled={!known}
+        onClick={onCopy}
+      >
+        Copy
+      </button>
+    </div>
+  );
+}
+
+/** The new-link action outside the confirm: Try again, straight away, while
+ * the current link is unconfirmed, else Make a new link, which asks first. */
+export function ReplaceAction({
+  replacing,
+  unconfirmed,
+  onRetry,
+  onAsk,
+}: {
+  replacing: boolean;
+  unconfirmed: boolean;
+  onRetry: () => void;
+  onAsk: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="button button-secondary obs-replace"
+      disabled={replacing}
+      onClick={unconfirmed ? onRetry : onAsk}
+    >
+      {replacing ? "Making link…" : unconfirmed ? "Try again" : "Make a new link"}
+    </button>
+  );
 }
 
 /** Asks before replacing the private link; after a lost reply, pressing again

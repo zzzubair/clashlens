@@ -276,20 +276,6 @@
   cursor: pointer;
 }
 
-/* Chart days sit closer than a thumb on a phone, so a touch screen also gets
-   two thumb-sized buttons that step the readout one day at a time. */
-.graph-steps {
-  display: none;
-}
-@media (pointer: coarse) {
-  .graph-steps {
-    display: flex;
-    justify-content: space-between;
-    gap: 0.5rem;
-    margin-top: 0.5rem;
-  }
-}
-
 .graph-tip {
   position: absolute;
   padding: 0.15rem 0.5rem;

@@ -276,6 +276,14 @@ export function stepIndex(count: number, at: number | null, move: -1 | 1): numbe
   return at === null ? count - 1 : Math.min(count - 1, Math.max(0, at + move));
 }
 
+export function leftDayGroup(event: {
+  currentTarget: Element;
+  relatedTarget: EventTarget | null;
+}): boolean {
+  const group = event.currentTarget.closest(".day-group");
+  return !group?.contains(event.relatedTarget as Node | null);
+}
+
 export const STEP_SIZE = { minWidth: "2.75rem", minHeight: "2.75rem" };
 
 /** Thumb-sized Earlier and Later buttons that move a chart's readout one day. */
@@ -371,7 +379,7 @@ export function SeasonChart({
   const tipPoint = points.find((point) => point.day === tip);
   const tipDay = days.find((day) => day.day === tip);
   return (
-    <>
+    <div className="day-group">
       <div className="graph">
         <svg
           className="graph-svg"
@@ -413,9 +421,13 @@ export function SeasonChart({
               role="button"
               aria-label={`Day ${point.day}: ${mode === "trophies" ? count(point.value) : `#${count(point.value)}`}`}
               onMouseEnter={() => onTip(point.day)}
-              onMouseLeave={() => onTip(null)}
+              onMouseLeave={(event) => {
+                if (leftDayGroup(event)) onTip(null);
+              }}
               onFocus={() => onTip(point.day)}
-              onBlur={() => onTip(null)}
+              onBlur={(event) => {
+                if (leftDayGroup(event)) onTip(null);
+              }}
               onClick={() => onTip(point.day)}
               onKeyDown={(event) => {
                 if (event.key === "Escape") onTip(null);
@@ -456,7 +468,7 @@ export function SeasonChart({
         at={tip === null ? null : points.findIndex((point) => point.day === tip)}
         onStep={(index) => onTip(index === null ? null : points[index].day)}
       />
-    </>
+    </div>
   );
 }
 

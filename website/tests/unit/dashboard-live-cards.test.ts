@@ -121,12 +121,12 @@ describe("Legend day card", () => {
 
   it("shows the projected place beside the outer range, labelled its range", () => {
     const html = render(emptyDay({}), { best: 1, worst: 12_270 }, 3000);
-    expect(html).toContain("Projected place #3,000 at Reset. ");
     expect(html).toContain(
-      "left, and gets closer through the day. Next Reset range best #1 worst #12,270",
+      "Projected place #3,000 at Reset Next Reset range best #1 worst #12,270",
     );
+    expect(html.match(/hundreds of places out/g)).toHaveLength(1);
     expect(html).toContain(
-      "An estimate from how players in your spot finished on recent days. It can be hundreds of places out while battles are left, and gets closer through the day.",
+      "What Projected place means Projected place estimates your rank at the next Reset",
     );
     // Before any day's examples are saved, only the outer range shows.
     expect(render(emptyDay({}))).not.toContain("Projected");

@@ -204,6 +204,37 @@ describe("Season chart on touch screens", () => {
     }
   });
 
+  it("keeps the tapped day when focus moves to Earlier, then steps back from it", () => {
+    const onTip = vi.fn();
+    const elements = chart(3, onTip);
+    const earlier = { label: "Earlier day" };
+    const outside = { label: "page" };
+    const group = { contains: (node: unknown) => node === earlier };
+    const currentTarget = {
+      closest: (selector: string) => (selector === ".day-group" ? group : null),
+    };
+    const point = dayButton(elements, 3);
+    (point.props.onBlur as (event: object) => void)({
+      currentTarget,
+      relatedTarget: earlier,
+    });
+    (point.props.onMouseLeave as (event: object) => void)({
+      currentTarget,
+      relatedTarget: earlier,
+    });
+    expect(onTip).not.toHaveBeenCalled();
+    const button = elements.find(
+      (element) => element.props["aria-label"] === "Earlier day",
+    )!;
+    (button.props.onClick as () => void)();
+    expect(onTip).toHaveBeenLastCalledWith(2);
+    (point.props.onBlur as (event: object) => void)({
+      currentTarget,
+      relatedTarget: outside,
+    });
+    expect(onTip).toHaveBeenLastCalledWith(null);
+  });
+
   it("steps the readout through every day with Earlier and Later", () => {
     const step = (tip: number | null, label: string) => {
       const onTip = vi.fn();

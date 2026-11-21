@@ -80,6 +80,19 @@ describe("same-origin return path validation", () => {
     );
   });
 
+  it("keeps any query text a browser sends unchanged", () => {
+    for (const path of [
+      "/search?q=Why?",
+      "/search?q=a/b:c@d!e$f(g)h*i+j,k;l=m",
+      "/search?q=[x]{y}|z^`\\",
+    ])
+      expect(safeReturnPath(path, ORIGIN)).toBe(path);
+    expect(accountSetupPath("/search?q=Why?", ORIGIN)).toBe(
+      "/account/setup?returnPath=%2Fsearch%3Fq%3DWhy%3F",
+    );
+    expect(setupReturnPath("/search?q=Why?", ORIGIN)).toBe("/search?q=Why?");
+  });
+
   it("rejects unsafe query strings, fragments, spaces, and control characters", () => {
     expect(safeReturnPath("//evil.example?day=1", ORIGIN)).toBeNull();
     expect(safeReturnPath("/\\evil.example?day=1", ORIGIN)).toBeNull();
