@@ -1,13 +1,5 @@
 import { useRef } from "react";
-import {
-  data,
-  Form,
-  Link,
-  redirect,
-  useActionData,
-  useLoaderData,
-  useNavigation,
-} from "react-router";
+import { data, Form, Link, redirect, useActionData, useLoaderData } from "react-router";
 
 import { type BackHandle } from "../components/BackLink";
 import { TrophyIcon } from "../components/GameIcons";
@@ -24,11 +16,18 @@ import {
 } from "../lib/crew-contracts";
 import { normalizePlayerTag } from "../lib/player-tag";
 import type { Route } from "./+types/crews.new";
+import { usePendingForm } from "../lib/pending-form";
 import "../crews.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 /** Each picked account is its own form field, named by this and its tag. */
 const JOIN_FIELD = "join:";
+/** Why a linked account can't join, from its latest reading. */
+const CANNOT_JOIN: Partial<Record<LinkedAccount["state"], string>> = {
+  not_in_legend: "Not in Legend League",
+  uncertain: "League not confirmed yet",
+  not_found: "Not found in the game",
+};
 
 export const handle: BackHandle = { back: { to: "/crews", label: "Crews" } };
 
@@ -210,9 +209,8 @@ export async function action({ request, context }: Route.ActionArgs) {
 export default function NewCrewRoute() {
   const loaderData = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
-  const navigation = useNavigation();
   const sizeInput = useRef<HTMLInputElement>(null);
-  const creating = navigation.state === "submitting";
+  const creating = usePendingForm() !== undefined;
   const { accounts, crewCount, capacity } = loaderData;
   const errors = actionData?.fieldErrors ?? {};
   const firstJoinable = accounts.find(canJoin)?.tag;
@@ -247,7 +245,10 @@ export default function NewCrewRoute() {
       ) : accounts.length === 0 ? (
         <p className="notice crew-notice-action">
           <span>Link a Clash of Clans account to make a crew.</span>
-          <Link className="button button-primary" to="/account/verify-player">
+          <Link
+            className="button button-primary"
+            to="/account/verify-player?return=%2Fcrews%2Fnew"
+          >
             Link an account
           </Link>
         </p>
@@ -343,7 +344,7 @@ export default function NewCrewRoute() {
                         <b>{account.name ?? account.tag}</b>
                         <span>
                           {account.tag}
-                          {joinable ? null : ` · Not in Legend League`}
+                          {joinable ? null : ` · ${CANNOT_JOIN[account.state]}`}
                         </span>
                       </span>
                       {joinable && account.trophies !== null ? (
@@ -361,9 +362,22 @@ export default function NewCrewRoute() {
               <p id="crew-accounts-error" className="field-error" role="alert">
                 {errors.accounts}
               </p>
+            ) : firstJoinable === undefined ? (
+              <p className="form-help">
+                None of your linked accounts can join a crew right now. A crew needs an
+                account Clash Lens has confirmed is in Legend League.{" "}
+                <Link to="/account/verify-player?return=%2Fcrews%2Fnew">
+                  Link another account
+                </Link>{" "}
+                to start a crew.
+              </p>
             ) : null}
           </fieldset>
-          <button type="submit" className="button button-primary" disabled={creating}>
+          <button
+            type="submit"
+            className="button button-primary"
+            disabled={creating || firstJoinable === undefined}
+          >
             {creating ? "Creating crew…" : "Create crew"}
           </button>
         </Form>

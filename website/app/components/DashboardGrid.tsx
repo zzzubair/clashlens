@@ -27,6 +27,7 @@ import {
   shownCards,
 } from "../lib/dashboard";
 import type { CardDataMap, CardReads } from "../lib/dashboard-cards";
+import { RETRY_DEADLINE_MS } from "../lib/keep-page";
 import { canonicalPlayerPath } from "../lib/player-tag";
 import type { DashboardActionData, DashboardLoaderData } from "../lib/dashboard-data";
 import {
@@ -45,6 +46,7 @@ import {
   cardRefreshStep,
   dashboardEditStep,
   outdatedCards,
+  stalledCards,
   type DashboardEditEvent,
 } from "./DashboardState";
 import { CardHead, CardNote } from "./DashboardParts";
@@ -70,6 +72,7 @@ interface ViewContext {
   basesDay: BasesDay;
   saving: boolean;
   pickGroup: (groupId: string) => void;
+  retryCard: (card: keyof CardDataMap) => void;
 }
 
 const CARD_VIEWS: {
@@ -169,8 +172,18 @@ function cardBody(
   );
   if (context.viewAs !== null && ACCOUNT_CARDS.includes(card))
     return note("Your Watchlists stay off while you view as another player.");
-  const failed = note(
-    "This card could not be loaded right now. Reload the page to try again.",
+  const failed = (
+    <>
+      <CardHead icon={CARDS[card].icon} title={title} />
+      <CardNote>This card could not be loaded right now.</CardNote>
+      <button
+        type="button"
+        className="button button-secondary dash-small-button"
+        onClick={() => context.retryCard(card)}
+      >
+        Try again
+      </button>
+    </>
   );
   const loading = <div aria-busy="true">{note("Loading…")}</div>;
   const read = reads?.[card];
@@ -415,6 +428,9 @@ function SettingsDialog({
       className="dash-dialog dash-settings"
       aria-labelledby="dash-settings-title"
       onClose={onClose}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) dialog.current?.close();
+      }}
     >
       <form
         method="dialog"
@@ -552,6 +568,9 @@ function AddSheet({
       className="dash-dialog dash-add-sheet"
       aria-labelledby="dash-add-title"
       onClose={onClose}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) dialog.current?.close();
+      }}
     >
       <header className="dash-dialog-head">
         <h2 id="dash-add-title">Add a card</h2>
@@ -606,6 +625,10 @@ function FirstVisit({
   useEffect(() => {
     dialog.current?.showModal();
   }, []);
+  const choose = (choice: "default" | "own") => {
+    onPick(choice);
+    dialog.current?.close();
+  };
   return (
     <dialog
       ref={dialog}
@@ -622,10 +645,7 @@ function FirstVisit({
           type="button"
           className="dash-welcome-option"
           disabled={saving}
-          onClick={() => {
-            onPick("default");
-            dialog.current?.close();
-          }}
+          onClick={() => choose("default")}
         >
           <span className="dash-welcome-badge">Recommended</span>
           <b>Use our layout</b>
@@ -635,10 +655,7 @@ function FirstVisit({
           type="button"
           className="dash-welcome-option"
           disabled={saving}
-          onClick={() => {
-            onPick("own");
-            dialog.current?.close();
-          }}
+          onClick={() => choose("own")}
         >
           <b>
             <DashboardIcon name="plus" /> Build my own
@@ -771,6 +788,11 @@ export function Dashboard({
     if (stale.length === 0 || loading) return;
     dispatchCards({ type: "requested", cards: stale });
     void load(dashboardQuery({ player: tag, cards: stale.join(",") }, viewAs));
+    const timer = window.setTimeout(
+      () => dispatchCards({ type: "answered", answer: stalledCards(), tag }),
+      RETRY_DEADLINE_MS,
+    );
+    return () => window.clearTimeout(timer);
   }, [stale, tag, viewAs, loading, load]);
   useEffect(() => {
     const answer = refresher.data;
@@ -845,6 +867,7 @@ export function Dashboard({
     basesDay,
     saving,
     pickGroup: (groupId) => save({ ...settings, group: groupId }),
+    retryCard: (card) => dispatchCards({ type: "outdated", cards: [card] }),
   };
   const firstVisit = settings.layout === null && !editing && viewAs === null;
   const error = answer?.error;

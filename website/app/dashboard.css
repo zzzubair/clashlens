@@ -959,10 +959,15 @@
   }
 
   .dash-edit-strip .dash-icon-button,
+  .dash-edit-strip .dash-grip,
   :root .dash-grid-editing .dash-card-settings {
     order: 1;
     width: 2.75rem;
     height: 2.75rem;
+  }
+
+  .dash-edit-strip .dash-grip {
+    order: 0;
   }
 
   :root .dash-grid-editing .dash-card-settings {
@@ -1436,4 +1441,16 @@
 
 .goal-axis-trophies {
   font-weight: 500;
+}
+
+@media (pointer: coarse) {
+  .dash-edit-strip .dash-icon-button,
+  .dash-edit-strip .dash-grip,
+  :root .dash-grid-editing .dash-card-settings,
+  .dash-small-button,
+  .dash-chip-button,
+  .goal-plan > summary {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
 }

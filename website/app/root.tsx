@@ -235,6 +235,7 @@ export default function App() {
   usePreloadInlineAnswerCode();
   usePreloadTabCode(data.crewsEnabled === true);
   useReplayGrowOnOpen();
+  useDismissPopovers();
   useEffect(() => {
     if (previousPath.current !== location.pathname && !location.hash) {
       document.getElementById("main-content")?.focus({ preventScroll: true });
@@ -286,49 +287,163 @@ const TAB_ROUTES = [
   "routes/player",
 ];
 
-// Once the page has loaded, download the code and styles of the pages a tap
-// most often opens, so a first tap on one waits only for its data.
+// Floating <details> popovers (info tips, freshness notes, confirmations,
+// day-status notes, Watchlist menus, base-strength notes) close when tapping
+// outside or pressing Escape so they never stay stuck over the page on phones
+// or desktops.
+const POPOVER_CLASSES = [
+  "dash-info",
+  "player-freshness",
+  "player-update-mobile",
+  "last-days-info",
+  "analytics-rule",
+  "day-status",
+  "crew-confirm",
+  "goal-plan",
+  "group-create",
+  "group-more",
+  "opponents-strength",
+];
+
+export function dismissPopovers(
+  root: ParentNode,
+  keep: Node | null,
+  refocus: Element | null,
+) {
+  for (const open of root.querySelectorAll<HTMLDetailsElement>("details[open]")) {
+    if (!POPOVER_CLASSES.some((name) => open.classList.contains(name))) continue;
+    if (keep && open.contains(keep)) continue;
+    const hadFocus = refocus !== null && open.contains(refocus);
+    open.open = false;
+    if (hadFocus) open.querySelector("summary")?.focus();
+  }
+}
+
+function useDismissPopovers() {
+  useEffect(() => {
+    const onPointerDown = (event: PointerEvent) =>
+      dismissPopovers(document, event.target as Node | null, null);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") dismissPopovers(document, null, document.activeElement);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, []);
+}
+
+type TabManifest = {
+  routes: Record<
+    string,
+    { module: string; imports?: string[]; css?: string[] } | undefined
+  >;
+};
+
+// Download the code and styles of the pages a tap most often opens, so a first
+// tap on one waits only for its data. Skipped on Data Saver or slow mobile
+// connections, read as the downloads would start, so preloads never compete
+// with the Clasher's own requests.
+export function preloadTabCode(
+  manifest: TabManifest,
+  crews: boolean,
+  connection: { saveData?: boolean; effectiveType?: string } | undefined,
+) {
+  if (
+    connection?.saveData ||
+    connection?.effectiveType === "slow-2g" ||
+    connection?.effectiveType === "2g" ||
+    connection?.effectiveType === "3g"
+  )
+    return;
+  for (const id of crews ? [...TAB_ROUTES, "routes/crews"] : TAB_ROUTES) {
+    const route = manifest.routes[id];
+    if (route === undefined) continue;
+    for (const href of [route.module, ...(route.imports ?? [])]) preloadModule(href);
+    for (const href of route.css ?? []) preload(href, { as: "style" });
+    void import(/* @vite-ignore */ route.module).then(
+      (module: { links?: () => { rel?: string; href?: string }[] }) => {
+        for (const link of module.links?.() ?? []) {
+          if (link.rel === "stylesheet" && link.href) preload(link.href, { as: "style" });
+        }
+      },
+      () => {},
+    );
+  }
+}
+
 function usePreloadTabCode(crews: boolean) {
   const manifest = useContext(UNSAFE_FrameworkContext)?.manifest;
   useEffect(() => {
     if (manifest === undefined) return;
-    const timer = setTimeout(() => {
-      for (const id of crews ? [...TAB_ROUTES, "routes/crews"] : TAB_ROUTES) {
-        const route = manifest.routes[id];
-        if (route === undefined) continue;
-        for (const href of [route.module, ...(route.imports ?? [])]) preloadModule(href);
-        for (const href of route.css ?? []) preload(href, { as: "style" });
-        void import(/* @vite-ignore */ route.module).then(
-          (module: { links?: () => { rel?: string; href?: string }[] }) => {
-            for (const link of module.links?.() ?? []) {
-              if (link.rel === "stylesheet" && link.href)
-                preload(link.href, { as: "style" });
+    const timer = setTimeout(
+      () =>
+        preloadTabCode(
+          manifest,
+          crews,
+          (
+            navigator as Navigator & {
+              connection?: { saveData?: boolean; effectiveType?: string };
             }
-          },
-          () => {},
-        );
-      }
-    }, 1000);
+          ).connection,
+        ),
+      1000,
+    );
     return () => clearTimeout(timer);
   }, [manifest, crews]);
+}
+
+// Tapping a tab again while its page loads would start the load over.
+function useIgnoreRepeatTap() {
+  const navigation = useNavigation();
+  return (event: MouseEvent<HTMLAnchorElement>) => {
+    const next = navigation.location;
+    const plain =
+      event.button === 0 &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.shiftKey &&
+      !event.altKey;
+    if (
+      plain &&
+      next &&
+      next.pathname + next.search === event.currentTarget.getAttribute("href")
+    )
+      event.preventDefault();
+  };
 }
 
 // The tabs, most useful first. Home and Crews follow their switches. Home is
 // the front page, or the dashboard once signed in, as on the phone tabs. A
 // player's page is none of them, so no tab is lit there.
 function SiteTabs({ data }: { data: RootLoaderData | undefined }) {
+  const ignoreRepeatTap = useIgnoreRepeatTap();
   return (
     <>
       {data?.dashboardEnabled && (
-        <NavLink to="/" end>
+        <NavLink to="/" end onClick={ignoreRepeatTap}>
           Home
         </NavLink>
       )}
-      <NavLink to="/leaderboards/tracked?view=live&page=1">Rankings</NavLink>
-      <NavLink to="/analytics/armies">Analytics</NavLink>
-      {data?.crewsEnabled && <NavLink to="/crews">Crews</NavLink>}
-      <NavLink to="/account/watchlists">Watchlists</NavLink>
-      <NavLink to="/blog">Blog</NavLink>
+      <NavLink to="/leaderboards/tracked?view=live&page=1" onClick={ignoreRepeatTap}>
+        Rankings
+      </NavLink>
+      <NavLink to="/analytics/armies" onClick={ignoreRepeatTap}>
+        Analytics
+      </NavLink>
+      {data?.crewsEnabled && (
+        <NavLink to="/crews" onClick={ignoreRepeatTap}>
+          Crews
+        </NavLink>
+      )}
+      <NavLink to="/account/watchlists" onClick={ignoreRepeatTap}>
+        Watchlists
+      </NavLink>
+      <NavLink to="/blog" onClick={ignoreRepeatTap}>
+        Blog
+      </NavLink>
     </>
   );
 }
@@ -375,26 +490,10 @@ function TabIcon({ name }: { name: keyof typeof TAB_ICONS }) {
 // NavLink adds); see site-header.css.
 function BottomTabs({ data }: { data: RootLoaderData | undefined }) {
   const location = useLocation();
-  const navigation = useNavigation();
+  const ignoreRepeatTap = useIgnoreRepeatTap();
   const inMore = ["/account/watchlists", "/blog"].some(
     (path) => location.pathname === path || location.pathname.startsWith(`${path}/`),
   );
-  // Tapping a tab again while its page loads would start the load over.
-  function ignoreRepeatTap(event: MouseEvent<HTMLAnchorElement>) {
-    const next = navigation.location;
-    const plain =
-      event.button === 0 &&
-      !event.metaKey &&
-      !event.ctrlKey &&
-      !event.shiftKey &&
-      !event.altKey;
-    if (
-      plain &&
-      next &&
-      next.pathname + next.search === event.currentTarget.getAttribute("href")
-    )
-      event.preventDefault();
-  }
   return (
     <nav className="bottom-tabs" aria-label="Main navigation">
       <NavLink
@@ -453,10 +552,10 @@ function DiscordLink({ icon = false }: { icon?: boolean }) {
   );
 }
 
-// Any tap that changes page shows a loading line along the top bar until the
-// new page shows, so a slow page never looks like a missed tap.
+// Any tap that changes page or submits a form shows a loading line along the
+// top bar until the answer arrives, so a slow request never looks missed.
 function PageLoading() {
-  return useNavigation().state === "loading" ? (
+  return useNavigation().state !== "idle" ? (
     <span className="page-loading" aria-hidden="true" />
   ) : null;
 }
@@ -464,6 +563,15 @@ function PageLoading() {
 // Sign-in pages already offer both ways in, so they pass on where the
 // Clasher was going (their own returnPath) instead of coming back to themselves.
 const SIGN_IN_PAGES = new Set(["/login", "/signup", "/account/setup"]);
+const TRANSIENT_RETURN_PARAMS = ["saved", "logout"] as const;
+
+function currentReturnPath(pathname: string, search: string): string {
+  if (!search) return pathname;
+  const params = new URLSearchParams(search);
+  for (const key of TRANSIENT_RETURN_PARAMS) params.delete(key);
+  const kept = params.toString();
+  return kept ? `${pathname}?${kept}` : pathname;
+}
 
 // The same top bar on every page, error pages included. Without the root
 // data (the server failed before it), it shows the signed-out menu. The
@@ -473,7 +581,7 @@ function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
   const location = useLocation();
   const back = SIGN_IN_PAGES.has(location.pathname)
     ? new URLSearchParams(location.search).get("returnPath")
-    : location.pathname;
+    : currentReturnPath(location.pathname, location.search);
   const signIn = back ? `/login?returnPath=${encodeURIComponent(back)}` : "/login";
   // A busy moment can leave the account's name unread (see
   // loadRootNavigation); the menu keeps the name it already showed for the

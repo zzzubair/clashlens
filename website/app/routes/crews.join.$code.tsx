@@ -1,13 +1,5 @@
 import { useEffect, useState } from "react";
-import {
-  data,
-  Form,
-  Link,
-  redirect,
-  useActionData,
-  useLoaderData,
-  useNavigation,
-} from "react-router";
+import { data, Form, Link, redirect, useActionData, useLoaderData } from "react-router";
 
 import { type BackHandle } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
@@ -26,6 +18,7 @@ import {
 import { LocalTimestamp } from "../components/Provenance";
 import { normalizePlayerTag } from "../lib/player-tag";
 import type { Route } from "./+types/crews.join.$code";
+import { usePendingForm } from "../lib/pending-form";
 import "../crews.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -205,6 +198,11 @@ export default function JoinCrewRoute() {
       <main id="main-content" tabIndex={-1} className="page-shell narrow-shell crew-page">
         <h1>Crew invite</h1>
         <ErrorNotice error={error} />
+        <p className="hero-actions">
+          <a className="button secondary" href={`/crews/join/${code}`}>
+            Try again
+          </a>
+        </p>
       </main>
     );
   }
@@ -310,7 +308,7 @@ function JoinForm({
   answer: JoinActionData | undefined;
   linkAccount: string;
 }) {
-  const navigation = useNavigation();
+  const joining = usePendingForm() !== undefined;
   const joinable = accounts.filter((account) => account.eligibility === "ok");
   const [picked, setPicked] = useState<string[]>(() =>
     answer ? answer.tags : joinable.length > 0 && open > 0 ? [joinable[0]!.tag] : [],
@@ -374,17 +372,17 @@ function JoinForm({
       <button
         type="submit"
         className="button button-primary"
-        disabled={
-          (hydrated && (count === 0 || tooMany)) || navigation.state === "submitting"
-        }
+        disabled={(hydrated && (count === 0 || tooMany)) || joining}
       >
-        {!hydrated
-          ? "Join with the picked players"
-          : count === 0
-            ? "Pick at least one player"
-            : tooMany
-              ? `Pick at most ${open}`
-              : `Join with ${count} ${count === 1 ? "player" : "players"}`}
+        {joining
+          ? "Joining…"
+          : !hydrated
+            ? "Join with the picked players"
+            : count === 0
+              ? "Pick at least one player"
+              : tooMany
+                ? `Pick at most ${open}`
+                : `Join with ${count} ${count === 1 ? "player" : "players"}`}
       </button>
       <Link className="crew-link-button" to={linkAccount}>
         Link another player

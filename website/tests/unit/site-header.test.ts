@@ -5,11 +5,17 @@ import {
   createStaticRouter,
   StaticRouterProvider,
 } from "react-router";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 
 import { DISCORD_INVITE_URL } from "../../app/lib/discord";
 import type { RootLoaderData } from "../../app/lib/root-data";
-import App from "../../app/root";
+import App, { dismissPopovers, preloadTabCode } from "../../app/root";
+
+const preloads = vi.hoisted(() => ({ preload: vi.fn(), preloadModule: vi.fn() }));
+vi.mock("react-dom", async (original) => ({
+  ...(await original<typeof import("react-dom")>()),
+  ...preloads,
+}));
 
 const SIGNED_OUT: RootLoaderData = {
   loggedIn: false,
@@ -79,6 +85,19 @@ it("signed out offers Sign in back to this page and Join Discord in a new tab", 
   expect(header).toContain("opens in a new tab");
   expect(header).not.toContain("account-menu");
   expect(header).not.toContain("Sign out");
+
+  const withQuery = await renderHeader(SIGNED_OUT, "/leaderboards/tracked?day=12");
+  expect(withQuery).toContain(
+    'href="/login?returnPath=%2Fleaderboards%2Ftracked%3Fday%3D12" data-discover="true">Sign in</a>',
+  );
+  const afterLogout = await renderHeader(SIGNED_OUT, "/?saved=logout");
+  expect(afterLogout).toContain(
+    'href="/login?returnPath=%2F" data-discover="true">Sign in</a>',
+  );
+  const unrecordedLogout = await renderHeader(SIGNED_OUT, "/?logout=unrecorded");
+  expect(unrecordedLogout).toContain(
+    'href="/login?returnPath=%2F" data-discover="true">Sign in</a>',
+  );
 });
 
 it("on a sign-in page, Sign in passes on where the Clasher was going", async () => {
@@ -195,4 +214,69 @@ it("signed in puts your profile, tools, Settings and Sign out behind the account
   expect(panel).toContain(">Sign out</button>");
   expect(nav.replace(panel, "")).not.toContain("Sign out");
   expect(nav).not.toContain(">Sign in<");
+});
+
+function popover(className: string) {
+  const summary = { focus: vi.fn() };
+  const inside = { name: `inside ${className}` };
+  return {
+    open: true,
+    summary,
+    inside,
+    classList: { contains: (name: string) => className.split(" ").includes(name) },
+    contains: (node: unknown) => node === inside,
+    querySelector: () => summary,
+  };
+}
+
+it("closes Watchlist menus and base-strength notes on an outside tap or Escape", () => {
+  const create = popover("group-create");
+  const more = popover("group-more");
+  const strength = popover("opponents-strength");
+  const other = popover("delete-step");
+  const root = {
+    querySelectorAll: () => [create, more, strength, other],
+  } as unknown as ParentNode;
+
+  dismissPopovers(root, more.inside as unknown as Node, null);
+  expect([create.open, more.open, strength.open, other.open]).toEqual([
+    false,
+    true,
+    false,
+    true,
+  ]);
+
+  create.open = true;
+  strength.open = true;
+  dismissPopovers(root, null, more.inside as unknown as Element);
+  expect([create.open, more.open, strength.open, other.open]).toEqual([
+    false,
+    false,
+    false,
+    true,
+  ]);
+  expect(more.summary.focus).toHaveBeenCalledOnce();
+  expect(create.summary.focus).not.toHaveBeenCalled();
+});
+
+it("reads the connection when background page code would download", () => {
+  const manifest = {
+    routes: {
+      "routes/dashboard": { module: "/assets/dashboard.js", css: ["/assets/d.css"] },
+    },
+  };
+  for (const connection of [
+    { saveData: true },
+    { effectiveType: "slow-2g" },
+    { effectiveType: "2g" },
+    { effectiveType: "3g" },
+  ]) {
+    preloadTabCode(manifest, false, connection);
+  }
+  expect(preloads.preloadModule).not.toHaveBeenCalled();
+  expect(preloads.preload).not.toHaveBeenCalled();
+
+  preloadTabCode(manifest, false, { effectiveType: "4g" });
+  expect(preloads.preloadModule).toHaveBeenCalledWith("/assets/dashboard.js");
+  expect(preloads.preload).toHaveBeenCalledWith("/assets/d.css", { as: "style" });
 });

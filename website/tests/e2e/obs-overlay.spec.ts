@@ -82,9 +82,14 @@ test("a streamer sets up the Stream overlay, OBS shows it live at stream size, a
   expectNoPageErrors(sourceErrors);
 
   // A new link retires the old one for good: OBS on it shows nothing.
-  page.once("dialog", (dialog) => void dialog.accept());
   await page.getByRole("button", { name: "Make a new link" }).click();
-  await expect(address).not.toHaveValue(firstLink);
+  await page.getByRole("button", { name: "Yes, make new link" }).click();
+  await expect
+    .poll(async () => {
+      const value = await address.inputValue();
+      return value !== firstLink && /\/o\/[A-Za-z0-9_-]{22}$/.test(value);
+    })
+    .toBe(true);
   const secondLink = await address.inputValue();
   await expect(source.locator(".ov-stage")).toBeEmpty({ timeout: 8_000 });
   expect(
@@ -156,6 +161,36 @@ test("a streamer sets up the Stream overlay, OBS shows it live at stream size, a
   await page.reload();
   await expect(page.getByLabel("Width")).toHaveValue("1280");
   await expect.poll(settingsOf).toMatchObject({ w: "1280", h: "720", text: "light" });
+
+  // On a touch phone Stream size and the pop-up choice are a thumb's height,
+  // and a tap low on the pop-up's label still flips it.
+  const phone = await browser.newContext({
+    baseURL: websiteOrigin,
+    storageState: await page.context().storageState(),
+    viewport: { width: 390, height: 844 },
+    hasTouch: true,
+    isMobile: true,
+  });
+  const phonePage = await phone.newPage();
+  await phonePage.goto("/account/obs-overlay");
+  const popup = phonePage.locator(".obs-toggle");
+  for (const control of [phonePage.getByLabel("Stream size"), popup]) {
+    expect((await control.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  }
+  // Scrolled up from below, as a thumb brings it out from under the preview
+  // that stays at the top.
+  await popup.evaluate((node) => node.scrollIntoView({ block: "end" }));
+  const popupBox = (await popup.boundingBox())!;
+  const popupChoice = popup.getByRole("checkbox");
+  const popupWasOn = await popupChoice.isChecked();
+  await expect(async () => {
+    await phonePage.touchscreen.tap(
+      popupBox.x + popupBox.width - 4,
+      popupBox.y + popupBox.height - 2,
+    );
+    await expect(popupChoice).toBeChecked({ checked: !popupWasOn, timeout: 1_000 });
+  }).toPass();
+  await phone.close();
 
   // Signed out in the meantime, a change is not saved, and the page says so.
   await page.context().clearCookies();

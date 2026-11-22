@@ -103,6 +103,32 @@ describe("requireLogin auth guard", () => {
     });
   });
 
+  it("keeps the page's query string in the return path", async () => {
+    for (const [path, expected] of [
+      ["/account/watchlists?day=12", "/account/watchlists?day=12"],
+      ["/account/watchlists?q=Why?", "/account/watchlists?q=Why?"],
+      ["/account/watchlists.data?day=12&_routes=root", "/account/watchlists?day=12"],
+      [
+        "/account/setup?returnPath=%2Fleaderboards%2Ftracked%3Fday%3D12",
+        "/leaderboards/tracked?day=12",
+      ],
+    ]) {
+      await expect(requireLogin(loginRequest(path!))).rejects.toSatisfy(
+        (thrown: unknown) => {
+          expectNeedsAccount(thrown, expected!);
+          return true;
+        },
+      );
+    }
+    const request = new Request("https://clashlens.example/account/watchlists?day=3", {
+      method: "POST",
+    });
+    await expect(requireLogin(request)).rejects.toSatisfy((thrown: unknown) => {
+      expectLoginRedirect(thrown, "/login?returnPath=%2Faccount%2Fwatchlists%3Fday%3D3");
+      return true;
+    });
+  });
+
   it("returns to the page, not its data, when an in-app link needs sign-in", async () => {
     for (const path of [
       "/account/groups.data",
@@ -147,7 +173,7 @@ describe("requireLogin auth guard", () => {
     for (const destination of [
       "https%3A%2F%2Fevil.example",
       "%2F%2Fevil.example",
-      "%2Faccount%2Fgroups%3Fdays%3D7",
+      "%2Faccount%2Fgroups%23top",
       "%2Faccount%2Fsetup",
     ]) {
       await expect(

@@ -10,15 +10,8 @@
   -webkit-text-size-adjust: 100%;
 }
 
-/* Warm light falls on every page from above the logo, with a fainter ember
-   glow to the right, so the glass panels have something to catch. */
 body {
-  background:
-    radial-gradient(70rem 34rem at 18% -14rem, var(--cl-glow), transparent 70%),
-    radial-gradient(56rem 30rem at 100% -6rem, var(--cl-glow-2), transparent 70%),
-    var(--cl-paper);
-  background-attachment: fixed;
-  background-repeat: no-repeat;
+  background: var(--cl-paper);
 }
 .site-header {
   box-shadow: var(--cl-header-shadow);
@@ -82,9 +75,6 @@ body {
   --cl-glass: rgb(26 19 15 / 0.62);
   --cl-glass-strong: rgb(24 18 14 / 0.94);
   --cl-glass-edge: rgb(255 226 200 / 0.1);
-  --cl-glass-shine: inset 0 1px 0 rgb(255 240 225 / 0.07);
-  --cl-glow: rgb(255 128 24 / 0.13);
-  --cl-glow-2: rgb(200 50 30 / 0.09);
   /* No ring: every pop-up draws its own 1px edge, and a ring outside it
      made a double edge. */
   --cl-overlay-shadow: 0 24px 56px -12px rgb(0 0 0 / 0.8);
@@ -230,8 +220,39 @@ html {
   background: #91221e;
 }
 @media (any-pointer: coarse) {
-  main :is(input, select, textarea) {
-    font-size: 1rem;
+  :root main :is(input, select, textarea) {
+    font-size: max(1rem, 1em);
+  }
+}
+
+/* A Watchlist Trend bar is about 20px tall on a phone; on touch screens each
+   day takes taps from a 44px band centred on its bar. */
+@media (pointer: coarse) {
+  .trend > .trend-day::before {
+    position: absolute;
+    inset-inline: 0;
+    top: 50%;
+    height: max(100%, 2.75rem);
+    content: "";
+    translate: 0 -50%;
+  }
+}
+
+/* Chart days sit closer than a thumb on a phone, so a touch screen also gets
+   two thumb-sized buttons that step the readout one day at a time. A chart,
+   its readout and those buttons form one day group. */
+.day-group {
+  display: contents;
+}
+.graph-steps {
+  display: none;
+}
+@media (pointer: coarse) {
+  .graph-steps {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
   }
 }
 

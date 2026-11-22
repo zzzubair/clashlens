@@ -1,12 +1,4 @@
-import {
-  data,
-  Form,
-  Link,
-  redirect,
-  useActionData,
-  useLoaderData,
-  useNavigation,
-} from "react-router";
+import { data, Form, Link, redirect, useActionData, useLoaderData } from "react-router";
 import type { ShouldRevalidateFunctionArgs } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
@@ -20,6 +12,7 @@ import type { WebsiteErrorResponse } from "../lib/contracts";
 import { addedNotice, groupLimit } from "../lib/group-text";
 import { addToGroupPath, canonicalPlayerPath } from "../lib/player-tag";
 import type { Route } from "./+types/account.groups.add";
+import { usePendingForm } from "../lib/pending-form";
 import "../account-groups.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -261,8 +254,7 @@ export function shouldRevalidate({
 export default function AddToGroupRoute() {
   const loaderData = useLoaderData<typeof loader>();
   const actionData = useActionData<AddToGroupActionData>();
-  const navigation = useNavigation();
-  const busy = navigation.state === "submitting";
+  const busy = usePendingForm() !== undefined;
   const { tag, groups } = loaderData;
   const addKey = actionData?.addIdempotencyKey ?? loaderData.addIdempotencyKey;
   const createKey = actionData?.createIdempotencyKey ?? loaderData.createIdempotencyKey;

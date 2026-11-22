@@ -21,6 +21,7 @@ import { getWebsiteConfig } from "./config.server";
 import {
   ACCOUNT_SETUP_PATH,
   DEFAULT_RETURN_PATH,
+  returnPathPage,
   safeReturnPath,
   setupReturnPath,
 } from "./return-path.server";
@@ -61,14 +62,14 @@ export async function requireLogin(request: Request): Promise<LoginIdentity> {
 }
 
 function loginReturnPath(request: Request, config: WebsiteConfig): string | null {
-  const { pathname, searchParams } = new URL(request.url);
-  let returnPath = safeReturnPath(pathname, config.publicOrigin);
-  if (returnPath === ACCOUNT_SETUP_PATH) {
-    const destination = setupReturnPath(
-      searchParams.get("returnPath"),
-      config.publicOrigin,
-    );
-    if (destination !== DEFAULT_RETURN_PATH) returnPath = destination;
+  const { pathname, search, searchParams } = new URL(request.url);
+  const returnPath = safeReturnPath(pathname + search, config.publicOrigin);
+  if (returnPath === null || returnPathPage(returnPath) !== ACCOUNT_SETUP_PATH) {
+    return returnPath;
   }
-  return returnPath;
+  const destination = setupReturnPath(
+    searchParams.get("returnPath"),
+    config.publicOrigin,
+  );
+  return destination === DEFAULT_RETURN_PATH ? ACCOUNT_SETUP_PATH : destination;
 }

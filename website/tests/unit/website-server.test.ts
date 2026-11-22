@@ -41,7 +41,11 @@ beforeEach(async () => {
   clearPublicRefreshLimits();
   directory = await mkdtemp(join(process.cwd(), "node_modules/.website-server-test-"));
   await mkdir(join(directory, "assets"));
+  await mkdir(join(directory, "fonts"));
+  await mkdir(join(directory, "images"));
   await writeFile(join(directory, "assets", "app.js"), "window.example = true;");
+  await writeFile(join(directory, "fonts", "test.woff2"), "font-bytes");
+  await writeFile(join(directory, "images", "test.webp"), "img-bytes");
   await writeFile(join(directory, "site.webmanifest"), '{"name":"Clash Lens"}');
   await writeFile(join(directory, ".secret"), "must not be served");
   for (const icon of Object.keys(icons))
@@ -336,6 +340,13 @@ it("serves built assets with caching, compression and HEAD without exposing othe
   expect(asset.headers.get("cache-control")).toContain("immutable");
   expect(asset.headers.get("content-encoding")).toBe("gzip");
   expect(await asset.text()).toBe("window.example = true;");
+  for (const staticPath of ["/fonts/test.woff2", "/images/test.webp"]) {
+    const res = await fetch(`${url}${staticPath}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe(
+      "public, max-age=604800, stale-while-revalidate=86400",
+    );
+  }
   const uncompressed = await fetch(`${url}/assets/app.js`, {
     headers: { "Accept-Encoding": "gzip;q=0.0, identity" },
   });

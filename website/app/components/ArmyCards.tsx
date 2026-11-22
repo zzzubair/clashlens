@@ -1,5 +1,5 @@
 import { CARDS } from "../lib/dashboard";
-import { useReducer, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 
 import type { ArmiesData } from "../lib/dashboard-cards";
 import type {
@@ -96,6 +96,8 @@ function useArmies(lens: ArmyLens, { tag, armies: initial }: ArmiesData) {
   const [read, dispatch] = useReducer(armyDaysStep, initial, armyDaysStart);
   // Numbers each ask, so only the newest one's answer lands.
   const asked = useRef(0);
+  const controller = useRef<AbortController | null>(null);
+  useEffect(() => () => controller.current?.abort(), []);
   return {
     days: read.days,
     // While the chosen days load, the numbers already shown stay, faded.
@@ -103,14 +105,25 @@ function useArmies(lens: ArmyLens, { tag, armies: initial }: ArmiesData) {
     loading: read.phase === "loading",
     choose(days: ArmyDays) {
       const ask = ++asked.current;
+      controller.current?.abort();
       dispatch({ type: "choose", ask, days, initial });
       if (days === initial.days) return;
       // Not a router fetcher: its failed read, a dropped connection or a 502
       // from the server in front, would replace the whole page with an error.
-      void fetch(armiesPath(tag, lens, days), { headers: { Accept: "application/json" } })
-        .then((response) => response.json() as Promise<ArmiesResponse>)
+      const next = new AbortController();
+      controller.current = next;
+      const timeout = setTimeout(() => next.abort(), 15_000);
+      void fetch(armiesPath(tag, lens, days), {
+        headers: { Accept: "application/json" },
+        signal: next.signal,
+      })
+        .then((response) => {
+          if (!response.ok) throw new Error(String(response.status));
+          return response.json() as Promise<ArmiesResponse>;
+        })
         .then(({ armies }) => armies ?? null)
         .catch(() => null)
+        .finally(() => clearTimeout(timeout))
         .then((armies) => dispatch({ type: "answered", ask, days, armies }));
     },
   };
@@ -416,7 +429,19 @@ export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
         }
       />
       {empty || !armies ? (
-        <CardNote>{empty}</CardNote>
+        <>
+          <CardNote>{empty}</CardNote>
+          {!armies ? (
+            <button
+              type="button"
+              className="button button-secondary dash-small-button"
+              disabled={loading}
+              onClick={() => choose(days)}
+            >
+              Try again
+            </button>
+          ) : null}
+        </>
       ) : (
         <>
           <WindowLine armies={armies} noun="defense" />
@@ -493,10 +518,34 @@ export function ArmiesOnOffenseCard({ data }: { data: ArmiesData }) {
       <CardHead
         icon={CARDS["armies-offense"].icon}
         title="Armies on offense"
+        info={
+          empty || !armies ? null : (
+            <InfoTip label="What the columns mean">
+              <p>
+                Your hit rate: share of your attacks that scored 3 stars with each army.
+              </p>
+              <p>
+                Legends: the 3-star rate of all tracked Legend players using that army.
+              </p>
+            </InfoTip>
+          )
+        }
         meta={<DaySwitch days={days} choose={choose} custom={false} />}
       />
       {empty || !armies || !total ? (
-        <CardNote>{empty}</CardNote>
+        <>
+          <CardNote>{empty}</CardNote>
+          {!armies ? (
+            <button
+              type="button"
+              className="button button-secondary dash-small-button"
+              disabled={loading}
+              onClick={() => choose(days)}
+            >
+              Try again
+            </button>
+          ) : null}
+        </>
       ) : (
         <>
           <WindowLine armies={armies} noun="attack" />

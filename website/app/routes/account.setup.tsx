@@ -9,6 +9,7 @@ import {
 } from "../lib/account-validation";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import type { Route } from "./+types/account.setup";
+import { usePendingForm } from "../lib/pending-form";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
@@ -53,7 +54,7 @@ export async function loader({ request }: Route.LoaderArgs): Promise<SetupLoader
 
 /** A new account links a player first, then goes on to where it was heading. */
 function linkFirst(returnPath: string, defaultPath: string): string {
-  if (returnPath === "/account/verify-player") return returnPath;
+  if (returnPath.split("?")[0] === "/account/verify-player") return returnPath;
   return returnPath === defaultPath
     ? "/account/verify-player"
     : `/account/verify-player?return=${encodeURIComponent(returnPath)}`;
@@ -178,6 +179,8 @@ export function headers() {
 export default function AccountSetupRoute() {
   const loaderData = useLoaderData<typeof loader>();
   const actionData = useActionData<SetupActionData>();
+  const creating = usePendingForm() !== undefined;
+  const switching = usePendingForm("/logout") !== undefined;
   const initialValues = actionData?.values ?? { username: "", displayName: "" };
   const [clientErrors, setClientErrors] = useState<{
     username?: string;
@@ -226,7 +229,7 @@ export default function AccountSetupRoute() {
       {actionData?.generalError ? <ErrorNotice error={actionData.generalError} /> : null}
 
       <section className="form-panel" aria-label="Account setup form">
-        <form method="post" className="stack-form" onSubmit={handleSubmit} noValidate>
+        <Form method="post" className="stack-form" onSubmit={handleSubmit} noValidate>
           <input
             type="hidden"
             name="idempotencyKey"
@@ -276,17 +279,25 @@ export default function AccountSetupRoute() {
               <p className="form-help">Shown on your profile. 1–80 characters.</p>
             )}
           </div>
-          <button type="submit" className="button button-primary">
-            Create account
+          <button
+            type="submit"
+            className="button button-primary"
+            disabled={creating || switching}
+          >
+            {creating ? "Creating account…" : "Create account"}
           </button>
-        </form>
+        </Form>
       </section>
 
       <Form method="post" action="/logout" className="account-buttons">
         <input type="hidden" name="idempotencyKey" value={loaderData.idempotencyKey} />
         <input type="hidden" name="signUp" value={loaderData.returnPath} />
-        <button type="submit" className="button button-secondary">
-          Not you? Use a different sign-in
+        <button
+          type="submit"
+          className="button button-secondary"
+          disabled={creating || switching}
+        >
+          {switching ? "Switching…" : "Not you? Use a different sign-in"}
         </button>
       </Form>
     </main>

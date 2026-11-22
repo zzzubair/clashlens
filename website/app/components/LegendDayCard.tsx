@@ -1,6 +1,6 @@
 import type { LinkedPlayerCard } from "../lib/account-contracts";
 import type { ClockBattle, PlayerDay, RankRange } from "../lib/dashboard";
-import { CardHead } from "./DashboardParts";
+import { CardHead, InfoTip } from "./DashboardParts";
 import { updatedAgo } from "../lib/age-format";
 import { ShieldIcon, Stars, SwordIcon } from "./GameIcons";
 import { TrophyMark } from "./LeaderboardShared";
@@ -111,6 +111,17 @@ export function LegendDayCard({
       {/* The tab above shows whose day this is; screen readers hear it here.
           How old the numbers are is said once for the page, here. */}
       <CardHead
+        info={
+          projected ? (
+            <InfoTip label="What Projected place means">
+              <p>
+                Projected place estimates your rank at the next Reset from how players in
+                your spot finished over the last 7 days. It can be hundreds of places out
+                while battles are left, and gets closer through the day.
+              </p>
+            </InfoTip>
+          ) : null
+        }
         meta={
           fresh ? (
             <span className="legend-day-fresh">{fresh.replace(/^u/, "U")}</span>
@@ -202,12 +213,7 @@ export function LegendDayCard({
               {projected ? (
                 <span className="legend-day-projected">
                   {rankText(projected)}
-                  <span className="sr-only">
-                    {" "}
-                    at Reset. An estimate from how players in your spot finished on recent
-                    days. It can be hundreds of places out while battles are left, and
-                    gets closer through the day.
-                  </span>
+                  <span className="sr-only"> at Reset</span>
                 </span>
               ) : range ? (
                 <span className="legend-day-range">

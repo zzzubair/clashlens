@@ -65,3 +65,43 @@ test("Settings saves the name and default player, and unlinks a player after a c
 
   expectNoPageErrors(errors);
 });
+
+test("Save stays busy, and the rejected name's warning stays away, until the saved name loads", async ({
+  page,
+}) => {
+  await signIn(page);
+  await ensureAccount(page, "lensscout", "Lens Scout");
+  await page.goto("/account/settings");
+  const name = page.getByLabel("Display name");
+  const save = page.locator(".settings-name").getByRole("button");
+  const warning = page.locator("#settings-display-name-error");
+
+  await name.fill("N".repeat(81));
+  await save.click();
+  await expect(warning).toBeVisible();
+  await expect(name).toHaveValue("N".repeat(81));
+
+  // Hold the read of the page that follows a successful save.
+  let release = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  let reading = () => {};
+  const readStarted = new Promise<void>((resolve) => (reading = resolve));
+  await page.route(/\/account\/settings\.data\?saved=name/, async (route) => {
+    reading();
+    await held;
+    await route.continue();
+  });
+  try {
+    await name.fill("Lens Scout");
+    await save.click();
+    await readStarted;
+    await expect(save).toBeDisabled();
+    await expect(save).toHaveText("Saving…");
+    await expect(warning).toHaveCount(0);
+  } finally {
+    release();
+  }
+  await expect(page.getByRole("status")).toHaveText("Display name saved.");
+  await expect(save).toBeEnabled();
+  await expect(save).toHaveText("Save");
+});

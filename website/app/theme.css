@@ -75,9 +75,6 @@
   --cl-glass: rgb(255 252 248 / 0.72);
   --cl-glass-strong: rgb(255 252 248 / 0.94);
   --cl-glass-edge: rgb(90 50 20 / 0.1);
-  --cl-glass-shine: inset 0 1px 0 rgb(255 255 255 / 0.95);
-  --cl-glow: rgb(255 150 50 / 0.2);
-  --cl-glow-2: rgb(255 196 90 / 0.18);
   --cl-font: Archivo, system-ui, -apple-system, "Segoe UI", sans-serif;
   /* The big scoreboard numbers and page titles only; it runs too narrow
      for anything small. Section titles use the body face. */

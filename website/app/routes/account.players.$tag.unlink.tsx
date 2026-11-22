@@ -1,4 +1,4 @@
-import { data, Link, redirect, useActionData, useLoaderData } from "react-router";
+import { data, Form, Link, redirect, useActionData, useLoaderData } from "react-router";
 
 import type { BackHandle } from "../components/BackLink";
 import { SavedLine } from "../components/SavedLine";
@@ -6,6 +6,7 @@ import type { VerifiedPlayer } from "../lib/account-contracts";
 import { normalizePlayerTag } from "../lib/player-tag";
 import type { HandOverCrew } from "../services/unlink-player.server";
 import type { Route } from "./+types/account.players.$tag.unlink";
+import { usePendingForm } from "../lib/pending-form";
 
 import "../user-profile.css";
 
@@ -117,6 +118,7 @@ export function headers() {
 export default function UnlinkPlayerRoute() {
   const loaded = useLoaderData<typeof loader>();
   const answer = useActionData<typeof action>();
+  const unlinking = usePendingForm() !== undefined;
   const failed = answer && "idempotencyKey" in answer ? answer : null;
   const handOver = answer && "handOver" in answer ? answer.handOver : loaded.handOver;
   const { player, nextDefault } = loaded;
@@ -185,19 +187,19 @@ export default function UnlinkPlayerRoute() {
             </div>
           </>
         ) : (
-          <form method="post" className="hero-actions">
+          <Form method="post" className="hero-actions">
             <input
               type="hidden"
               name="idempotencyKey"
               value={failed?.idempotencyKey ?? loaded.idempotencyKey}
             />
-            <button type="submit" className="button button-primary">
-              Unlink {name}
+            <button type="submit" className="button button-primary" disabled={unlinking}>
+              {unlinking ? `Unlinking ${name}…` : `Unlink ${name}`}
             </button>
             <Link className="button button-secondary" to={SETTINGS}>
               Cancel
             </Link>
-          </form>
+          </Form>
         )}
       </section>
     </main>

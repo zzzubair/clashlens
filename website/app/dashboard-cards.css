@@ -272,6 +272,10 @@
   cursor: pointer;
 }
 
+.graph-hit {
+  cursor: pointer;
+}
+
 .graph-tip {
   position: absolute;
   padding: 0.15rem 0.5rem;
@@ -478,8 +482,15 @@
     display: none;
   }
 
-  /* A watchlist keeps every column on a phone, at the smallest type. */
+  /* A watchlist scrolls horizontally inside its card on narrow phones instead
+     of crushing numbers to ellipses. */
+  .group-table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
   .group-table {
+    min-width: 24rem;
     font-size: 0.8125rem;
   }
 

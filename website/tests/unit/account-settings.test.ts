@@ -1,8 +1,11 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
+  createMemoryRouter,
   createStaticHandler,
+  RouterProvider,
   createStaticRouter,
+  redirect,
   StaticRouterProvider,
   type RouteObject,
 } from "react-router";
@@ -164,6 +167,34 @@ function location(thrown: unknown): string | null {
   return (thrown as Response).headers.get("Location");
 }
 
+/** Settings while a form with `fields` is still waiting for its answer. */
+async function sending(
+  path: string,
+  Component: () => unknown,
+  fields: Record<string, string>,
+) {
+  const router = createMemoryRouter(
+    [
+      {
+        path,
+        Component: Component as never,
+        loader: settingsLoader as never,
+        action: () => new Promise(() => {}),
+      },
+    ],
+    { initialEntries: [path] },
+  );
+  await vi.waitFor(() => expect(router.state.initialized).toBe(true));
+  const formData = new FormData();
+  for (const [name, value] of Object.entries(fields)) formData.set(name, value);
+  void router.navigate(path, { formMethod: "post", formData });
+  await vi.waitFor(() => expect(router.state.navigation.state).toBe("submitting"));
+  return renderToString(createElement(RouterProvider, { router })).replaceAll(
+    "<!-- -->",
+    "",
+  );
+}
+
 describe("Settings", () => {
   it("shows the name, the Clash players with the default, and each sign-in", async () => {
     const html = await settings();
@@ -185,6 +216,80 @@ describe("Settings", () => {
     expect(html.match(/>Make default</g)).toHaveLength(1);
     expect(html).not.toContain(IDENTITY.providerSubject);
     expect(settingsHeaders()).toEqual({ "Cache-Control": "no-store" });
+  });
+
+  it("greys out only the sign-in button that was pressed while its handoff starts", async () => {
+    const html = await sending("/account/settings", SettingsRoute, {
+      intent: "link",
+      provider: "discord",
+    });
+    expect(html.match(/<button[^>]*disabled=""[^>]*>[^<]*/g)).toEqual([
+      expect.stringMatching(/>Disconnect$/),
+      expect.stringMatching(/>Opening Discord…$/),
+    ]);
+  });
+
+  it("keeps Save busy and the rejected name's warning away until the saved name loads", async () => {
+    let reads = 0;
+    let saves = 0;
+    const router = createMemoryRouter(
+      [
+        {
+          path: "/account/settings",
+          Component: SettingsRoute as never,
+          // The first page and the re-read after the rejected name answer;
+          // the read after the successful save is held.
+          loader: ((args: never) =>
+            reads++ < 2 ? settingsLoader(args) : new Promise(() => {})) as never,
+          action: () =>
+            saves++ === 0
+              ? {
+                  idempotencyKey: "retry",
+                  displayName: "N".repeat(81),
+                  displayNameError: "Use 80 characters or fewer.",
+                  error: null,
+                }
+              : redirect("/account/settings?saved=name"),
+        },
+      ],
+      { initialEntries: ["/account/settings"] },
+    );
+    await vi.waitFor(() => expect(router.state.initialized).toBe(true));
+    const save = (displayName: string) => {
+      const formData = new FormData();
+      formData.set("intent", "display-name");
+      formData.set("idempotencyKey", "retry");
+      formData.set("displayName", displayName);
+      return router.navigate("/account/settings", { formMethod: "post", formData });
+    };
+    const page = () =>
+      renderToString(createElement(RouterProvider, { router })).replaceAll(
+        "<!-- -->",
+        "",
+      );
+
+    await save("N".repeat(81));
+    expect(page()).toContain("Use 80 characters or fewer.");
+
+    void save("Nova Prime");
+    await vi.waitFor(() => expect(router.state.navigation.state).toBe("loading"));
+    const html = page();
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Saving…<\/button>/);
+    expect(html).not.toContain("Use 80 characters or fewer.");
+  });
+
+  it("says Disconnecting on the sign-in being removed, not Opening", async () => {
+    client.getAccount.mockResolvedValue({
+      ...ACCOUNT,
+      providers: ["google", "discord"],
+    });
+    const html = await sending("/account/settings", SettingsRoute, {
+      intent: "unlink",
+      provider: "google",
+    });
+    expect(html.match(/<button[^>]*disabled=""[^>]*>[^<]*/g)).toEqual([
+      expect.stringMatching(/>Disconnecting…$/),
+    ]);
   });
 
   it("marks each sign-in connected or not, and keeps the only one", async () => {

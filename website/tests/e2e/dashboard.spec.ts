@@ -245,6 +245,37 @@ test("a Clasher builds a dashboard, keeps it after a reload, and reads it on a p
     .toBeGreaterThan(smallHeight);
   await clock.getByRole("button", { name: "Show small clock" }).click();
   await expect.poll(async () => (await dial.boundingBox())!.height).toBe(smallHeight);
+  // On a touch phone the day buttons are a thumb's size: 44 px wide, and a
+  // tap up to 7 px above or below one still lands on it.
+  const phone = await page
+    .context()
+    .browser()!
+    .newContext({
+      baseURL: new URL(page.url()).origin,
+      storageState: await page.context().storageState(),
+      viewport: { width: 390, height: 844 },
+      hasTouch: true,
+      isMobile: true,
+    });
+  const phonePage = await phone.newPage();
+  await phonePage.goto("/");
+  for (const name of ["Earlier Legend day", "Later Legend day"]) {
+    const button = phonePage
+      .getByRole("region", { name: "Bases you attacked", exact: true })
+      .getByRole("button", { name });
+    await button.scrollIntoViewIfNeeded();
+    const box = (await button.boundingBox())!;
+    expect(box.width).toBeGreaterThanOrEqual(44);
+    const reached = await button.evaluate((node, box) => {
+      const x = box.x + box.width / 2;
+      return [box.y - 7, box.y + box.height + 7].map((y) =>
+        node.contains(document.elementFromPoint(x, y)),
+      );
+    }, box);
+    expect(reached).toEqual([true, true]);
+  }
+  await phone.close();
+
   // A phone keeps Customise in the toolbar's Options menu.
   await page.getByRole("button", { name: "Dashboard options" }).click();
   await page.getByRole("button", { name: "Customise dashboard" }).click();

@@ -267,7 +267,10 @@ export default function ObsOverlayRoute() {
           <h2>Link a player first</h2>
           <p className="obs-help">
             The overlay shows one of your verified players.{" "}
-            <Link to="/account/verify-player">Link a player</Link>, then come back here.
+            <Link to="/account/verify-player?return=%2Faccount%2Fobs-overlay">
+              Link a player
+            </Link>
+            , then come back here.
           </p>
         </section>
       ) : (
@@ -286,24 +289,36 @@ export default function ObsOverlayRoute() {
  *   lands, until the newest choices are saved.
  * - `saved`: the newest choices are saved; OBS follows within 3 seconds.
  * - `notSaved`: a save failed; the next change tries again.
- * - `linkMade` / `linkNotMade`: how making a new link went.
  *
  * `OverlaySetup` owns it; leaving the page drops unsaved choices still in
- * their 0.3-second pause.
+ * their 0.3-second pause and stops any save still sending.
  */
-export type SaveStatus =
-  "untouched" | "saving" | "saved" | "notSaved" | "linkMade" | "linkNotMade";
+export type SaveStatus = "untouched" | "saving" | "saved" | "notSaved";
 
 const SAVE_STATUS: Record<SaveStatus, { text: string; ok: boolean }> = {
   untouched: { text: "Changes save by themselves.", ok: false },
   saving: { text: "Saving…", ok: false },
   saved: { text: "Saved. Your overlay in OBS updates within 3 seconds.", ok: true },
   notSaved: { text: "Not saved. Check your connection.", ok: false },
-  linkMade: {
+};
+
+/**
+ * How the last new-link request went, kept apart from saving so a save that
+ * lands later cannot hide it: `made`, or `unconfirmed` when the reply was lost
+ * and the old link may already be retired (trying again returns the current
+ * link). Null before any new link is asked for.
+ */
+export type LinkStatus = "made" | "unconfirmed" | null;
+
+const LINK_STATUS: Record<"made" | "unconfirmed", { text: string; ok: boolean }> = {
+  made: {
     text: "New link made. The old one is deleted and shows nothing. Paste the new one into OBS.",
     ok: true,
   },
-  linkNotMade: { text: "No new link made. Check your connection.", ok: false },
+  unconfirmed: {
+    text: "Couldn't confirm the new link. The old one may already be retired. Try again to get the current link.",
+    ok: false,
+  },
 };
 
 /**
@@ -314,10 +329,11 @@ const SAVE_STATUS: Record<SaveStatus, { text: string; ok: boolean }> = {
  *   `saved` matches them, and a change meanwhile waits for it instead of
  *   starting a second loop.
  *
- * A failed save goes back to `idle` with `saved` unchanged, so the next change
- * sends again. `runAutosave` is its only writer.
+ * A failed save goes back to `idle` with `saved` null, since Clash Lens may
+ * or may not have taken it, so the next change or Try again sends the newest
+ * choices. `runAutosave` is its only writer.
  */
-export type Autosave = { phase: "idle" | "sending"; saved: string };
+export type Autosave = { phase: "idle" | "sending"; saved: string | null };
 
 /** The newest choices, as the save loop reads them each time round. */
 export type Choices = { json: string; tag: string | null; settings: OverlaySettings };
@@ -344,6 +360,7 @@ export async function runAutosave(
     }
     show("saved");
   } catch {
+    autosave.current = { phase: "sending", saved: null };
     show("notSaved");
   } finally {
     autosave.current = { ...autosave.current, phase: "idle" };
@@ -495,7 +512,11 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
   const [place, setPlace] = useState<Place>(() => clamp(initial.current.place));
   const [link, setLink] = useState(overlay.link);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("untouched");
-  const [copied, setCopied] = useState(false);
+  const [linkStatus, setLinkStatus] = useState<LinkStatus>(null);
+  const page = useRef<AbortController | null>(null);
+  const [copyState, setCopyState] = useState<null | "copied" | "selected">(null);
+  const [confirmReplace, setConfirmReplace] = useState(false);
+  const [replacing, setReplacing] = useState(false);
   const [preview, setPreview] = useState<PreviewLink>({ kind: "waiting" });
   const [guides, setGuides] = useState<Guides>({
     v: null,
@@ -579,23 +600,34 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
   const queryRef = useRef(query);
   queryRef.current = query;
 
+  useEffect(() => {
+    const controller = new AbortController();
+    page.current = controller;
+    return () => controller.abort();
+  }, []);
+
+  const saveNow = () => {
+    void runAutosave(
+      autosave,
+      () => latest.current,
+      (next) =>
+        post<{ version: number }>(
+          {
+            intent: "save",
+            tag: next.tag ?? "",
+            settings: JSON.stringify(next.settings),
+          },
+          page.current?.signal,
+        ),
+      setSaveStatus,
+    );
+  };
+
   // Saved on Clash Lens against the private link, 0.3 seconds after the last
   // change, one save at a time: the newest choices go once the one sending lands.
   useEffect(() => {
     if (savedJson === autosave.current.saved) return;
-    const timer = setTimeout(() => {
-      void runAutosave(
-        autosave,
-        () => latest.current,
-        (next) =>
-          post<{ version: number }>({
-            intent: "save",
-            tag: next.tag ?? "",
-            settings: JSON.stringify(next.settings),
-          }),
-        setSaveStatus,
-      );
-    }, 300);
+    const timer = setTimeout(saveNow, 300);
     return () => clearTimeout(timer);
   }, [savedJson]);
 
@@ -642,30 +674,34 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
   }
 
   async function replaceLink() {
-    if (
-      !window.confirm(
-        "Make a new link? The old one is deleted for good and shows nothing from now on, so you'll need to paste the new one into OBS.",
-      )
-    )
-      return;
+    if (replacing) return;
+    setReplacing(true);
+    setCopyState(null);
     try {
-      const made = await post<{ link: string }>({ intent: "new-link", replaces: link });
+      const made = await post<{ link: string }>(
+        { intent: "new-link", replaces: link },
+        page.current?.signal,
+      );
       setLink(made.link);
-      setSaveStatus("linkMade");
+      setConfirmReplace(false);
+      setLinkStatus("made");
     } catch {
-      setSaveStatus("linkNotMade");
+      setLinkStatus("unconfirmed");
+    } finally {
+      setReplacing(false);
     }
   }
 
   async function copy() {
     try {
       await navigator.clipboard.writeText(address);
+      setCopyState("copied");
     } catch {
       const input = document.getElementById("obs-address") as HTMLInputElement | null;
       input?.select();
+      setCopyState("selected");
     }
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
+    setTimeout(() => setCopyState(null), 2500);
   }
 
   const box = { left: place.x, top: place.y, width: place.w, height: place.h };
@@ -1004,34 +1040,40 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
             Your own private link. Paste it into OBS once: every change you make on this
             page shows on stream within 3 seconds, with no new link.
           </p>
-          <div className="obs-addr">
-            <input
-              id="obs-address"
-              readOnly
-              value={address}
-              aria-label="Overlay address"
-            />
-            <button type="button" className="button button-primary" onClick={copy}>
-              Copy
-            </button>
-          </div>
+          <AddressRow
+            address={address}
+            known={!replacing && linkStatus !== "unconfirmed"}
+            onCopy={copy}
+          />
           <div className="obs-under">
-            <span
-              className={`obs-saved${SAVE_STATUS[saveStatus].ok ? " ok" : ""}`}
-              role="status"
-            >
-              {SAVE_STATUS[saveStatus].text}
-            </span>
-            {copied ? (
-              <span className="obs-copied">Copied. Paste it into OBS.</span>
+            <StatusLine saveStatus={saveStatus} linkStatus={linkStatus} />
+            {saveStatus === "notSaved" ? (
+              <button type="button" className="button button-secondary" onClick={saveNow}>
+                Try again
+              </button>
             ) : null}
-            <button
-              type="button"
-              className="button button-secondary obs-replace"
-              onClick={replaceLink}
-            >
-              Make a new link
-            </button>
+            {copyState === "copied" ? (
+              <span className="obs-copied">Copied. Paste it into OBS.</span>
+            ) : copyState === "selected" ? (
+              <span className="obs-copied">
+                Selected. Press Copy, then paste into OBS.
+              </span>
+            ) : null}
+            {confirmReplace ? (
+              <ReplaceLinkConfirm
+                replacing={replacing}
+                unconfirmed={linkStatus === "unconfirmed"}
+                onConfirm={() => void replaceLink()}
+                onCancel={() => setConfirmReplace(false)}
+              />
+            ) : (
+              <ReplaceAction
+                replacing={replacing}
+                unconfirmed={linkStatus === "unconfirmed"}
+                onRetry={() => void replaceLink()}
+                onAsk={() => setConfirmReplace(true)}
+              />
+            )}
           </div>
           <div className="obs-dims">
             <div className="obs-dim">
@@ -1180,15 +1222,143 @@ function steps(fit: Fit, w: number, h: number): ReactNode[] {
   return items.map((item, index) => <li key={index}>{item}</li>);
 }
 
+/** How saving went, and beside it how the last new-link request went. */
+export function StatusLine({
+  saveStatus,
+  linkStatus,
+}: {
+  saveStatus: SaveStatus;
+  linkStatus: LinkStatus;
+}) {
+  const lines = [
+    SAVE_STATUS[saveStatus],
+    ...(linkStatus ? [LINK_STATUS[linkStatus]] : []),
+  ];
+  return lines.map((line) => (
+    <span key={line.text} className={`obs-saved${line.ok ? " ok" : ""}`} role="status">
+      {line.text}
+    </span>
+  ));
+}
+
+/** The private address and Copy, both unavailable while the current link is
+ * not known (a new one is being made, or its reply was lost). */
+export function AddressRow({
+  address,
+  known,
+  onCopy,
+}: {
+  address: string;
+  known: boolean;
+  onCopy: () => void;
+}) {
+  return (
+    <div className="obs-addr">
+      <input
+        id="obs-address"
+        readOnly
+        value={known ? address : ""}
+        placeholder="Waiting for the current link…"
+        aria-label="Overlay address"
+      />
+      <button
+        type="button"
+        className="button button-primary"
+        disabled={!known}
+        onClick={onCopy}
+      >
+        Copy
+      </button>
+    </div>
+  );
+}
+
+/** The new-link action outside the confirm: Try again, straight away, while
+ * the current link is unconfirmed, else Make a new link, which asks first. */
+export function ReplaceAction({
+  replacing,
+  unconfirmed,
+  onRetry,
+  onAsk,
+}: {
+  replacing: boolean;
+  unconfirmed: boolean;
+  onRetry: () => void;
+  onAsk: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="button button-secondary obs-replace"
+      disabled={replacing}
+      onClick={unconfirmed ? onRetry : onAsk}
+    >
+      {replacing ? "Making link…" : unconfirmed ? "Try again" : "Make a new link"}
+    </button>
+  );
+}
+
+/** Asks before replacing the private link; after a lost reply, pressing again
+ * fetches whichever link is now current. */
+export function ReplaceLinkConfirm({
+  replacing,
+  unconfirmed,
+  onConfirm,
+  onCancel,
+}: {
+  replacing: boolean;
+  unconfirmed: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <span className="obs-replace" role="group" aria-label="Confirm new link">
+      <span className="obs-help">
+        The old link stops working immediately. Make a new link?{" "}
+      </span>
+      <button
+        type="button"
+        className="button button-primary"
+        disabled={replacing}
+        onClick={onConfirm}
+      >
+        {replacing ? "Making link…" : unconfirmed ? "Try again" : "Yes, make new link"}
+      </button>{" "}
+      <button
+        type="button"
+        className="button button-secondary"
+        disabled={replacing}
+        onClick={onCancel}
+      >
+        Cancel
+      </button>
+    </span>
+  );
+}
+
 /** The save route's own JSON answer. Anything else throws, a redirect to sign
  * in included. */
-async function post<T>(values: Record<string, string>): Promise<T> {
-  const res = await fetch(SAVE, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams(values),
-    redirect: "manual",
-  });
-  if (!res.ok) throw new Error(String(res.status));
-  return (await res.json()) as T;
+export async function post<T>(
+  values: Record<string, string>,
+  page?: AbortSignal,
+): Promise<T> {
+  if (page?.aborted) throw new DOMException("Left the page", "AbortError");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  const leave = () => controller.abort();
+  page?.addEventListener("abort", leave);
+  try {
+    const res = await fetch(SAVE, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(values),
+      redirect: "manual",
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(String(res.status));
+    return (await res.json()) as T;
+  } finally {
+    clearTimeout(timeout);
+    page?.removeEventListener("abort", leave);
+  }
 }

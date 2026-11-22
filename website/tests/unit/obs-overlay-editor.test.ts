@@ -1,3 +1,5 @@
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
 import { afterEach, expect, it, vi } from "vitest";
 
 import type { OverlayBattle } from "../../app/lib/obs-overlay";
@@ -11,8 +13,13 @@ import {
   dragTo,
   previewMessage,
   releaseDrag,
+  AddressRow,
+  ReplaceAction,
+  ReplaceLinkConfirm,
   runAutosave,
+  post,
   startDrag,
+  StatusLine,
   type Autosave,
   type Choices,
   type Place,
@@ -112,7 +119,7 @@ it("saves the newest choices once the one sending lands, one run at a time", asy
   expect(autosave.current).toEqual({ phase: "idle", saved: "choices 2" });
 });
 
-it("leaves the old choices saved after a failure, so the next change sends again", async () => {
+it("treats a failed save as unknown, so the next run sends the newest choices", async () => {
   const autosave: { current: Autosave } = {
     current: { phase: "idle", saved: choices(0).json },
   };
@@ -124,7 +131,7 @@ it("leaves the old choices saved after a failure, so the next change sends again
     (s) => shown.push(s),
   );
   expect(shown).toEqual(["saving", "notSaved"]);
-  expect(autosave.current).toEqual({ phase: "idle", saved: "choices 0" });
+  expect(autosave.current).toEqual({ phase: "idle", saved: null });
   await runAutosave(
     autosave,
     () => choices(1),
@@ -133,6 +140,33 @@ it("leaves the old choices saved after a failure, so the next change sends again
   );
   expect(autosave.current).toEqual({ phase: "idle", saved: "choices 1" });
   expect(shown.at(-1)).toBe("saved");
+});
+
+it("sends the first choices again after a change back from a lost save", async () => {
+  const autosave: { current: Autosave } = {
+    current: { phase: "idle", saved: choices(0).json },
+  };
+  const sent: string[] = [];
+  await runAutosave(
+    autosave,
+    () => choices(1),
+    (next) => {
+      sent.push(next.json);
+      return Promise.reject(new TypeError("Failed to fetch"));
+    },
+    () => {},
+  );
+  const shown: SaveStatus[] = [];
+  await runAutosave(
+    autosave,
+    () => choices(0),
+    async (next) => {
+      sent.push(next.json);
+    },
+    (s) => shown.push(s),
+  );
+  expect(sent).toEqual(["choices 1", "choices 0"]);
+  expect(shown).toEqual(["saving", "saved"]);
 });
 
 it("answers the preview's handshake and shows how it laid itself out", () => {
@@ -185,4 +219,102 @@ it("runs waiting timers only until the overlay stops", () => {
   vi.advanceTimersByTime(5_000);
   expect(ran).toEqual(["hide notice"]);
   expect(clock.running()).toBe(false);
+});
+
+it("offers Try again and says the result is unconfirmed after a lost new-link reply", () => {
+  const confirm = (unconfirmed: boolean) =>
+    renderToString(
+      createElement(ReplaceLinkConfirm, {
+        replacing: false,
+        unconfirmed,
+        onConfirm: () => {},
+        onCancel: () => {},
+      }),
+    );
+  expect(confirm(false)).toContain("Yes, make new link");
+  expect(confirm(true)).toContain("Try again");
+  expect(confirm(true)).not.toContain("Yes, make new link");
+});
+
+it("keeps an unconfirmed new link in view after a later save lands", async () => {
+  const shown: SaveStatus[] = [];
+  const autosave = { current: { phase: "idle", saved: "choices 0" } as Autosave };
+  await runAutosave(
+    autosave,
+    () => choices(1),
+    async () => ({}),
+    (s) => shown.push(s),
+  );
+  const html = renderToString(
+    createElement(StatusLine, { saveStatus: shown.at(-1)!, linkStatus: "unconfirmed" }),
+  );
+  expect(html).toContain("Saved.");
+  expect(html).toMatch(/couldn&#x27;t confirm the new link/i);
+  expect(html).toMatch(/may already be retired/i);
+});
+
+it("stops sending saves and aborts the one in flight when the editor goes away", async () => {
+  const page = new AbortController();
+  const signals: AbortSignal[] = [];
+  const fetchMock = vi.fn(
+    (_url: string, init: RequestInit) =>
+      new Promise<Response>((resolve, reject) => {
+        signals.push(init.signal!);
+        if (signals.length === 1) resolve(Response.json({ version: 1 }));
+        else init.signal!.addEventListener("abort", () => reject(init.signal!.reason));
+      }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  let n = 1;
+  const shown: SaveStatus[] = [];
+  const autosave = { current: { phase: "idle", saved: "choices 0" } as Autosave };
+  const run = runAutosave(
+    autosave,
+    () => choices(n),
+    async (next) => {
+      const reply = await post({ intent: "save", settings: next.json }, page.signal);
+      n += 1;
+      return reply;
+    },
+    (s) => shown.push(s),
+  );
+  await vi.waitFor(() => expect(signals).toHaveLength(2));
+  page.abort();
+  await run;
+  expect(signals[1].aborted).toBe(true);
+  expect(shown.at(-1)).toBe("notSaved");
+  await expect(
+    post({ intent: "new-link", replaces: "old" }, page.signal),
+  ).rejects.toThrow();
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  vi.unstubAllGlobals();
+});
+
+it("hides the address and Copy until the current link is known", () => {
+  const row = (known: boolean) =>
+    renderToString(
+      createElement(AddressRow, { address: "https://x/o/old", known, onCopy: () => {} }),
+    );
+  expect(row(true)).toContain('value="https://x/o/old"');
+  expect(row(true)).not.toMatch(/disabled=""[^>]*>Copy/);
+  expect(row(false)).not.toContain("https://x/o/old");
+  expect(row(false)).toMatch(/disabled=""[^>]*>Copy/);
+});
+
+it("keeps Try again as the new-link action after a lost reply is cancelled", () => {
+  const onRetry = vi.fn();
+  const onAsk = vi.fn();
+  const action = (unconfirmed: boolean) =>
+    ReplaceAction({ replacing: false, unconfirmed, onRetry, onAsk });
+  const retry = action(true);
+  expect(retry.props.children).toBe("Try again");
+  retry.props.onClick();
+  expect(onRetry).toHaveBeenCalledTimes(1);
+  const ask = action(false);
+  expect(ask.props.children).toBe("Make a new link");
+  ask.props.onClick();
+  expect(onAsk).toHaveBeenCalledTimes(1);
+  expect(
+    ReplaceAction({ replacing: true, unconfirmed: true, onRetry, onAsk }).props.disabled,
+  ).toBe(true);
 });

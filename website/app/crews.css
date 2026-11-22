@@ -441,8 +441,7 @@
   }
 }
 
-/* Where the browser can tell, the bar fills in only once stuck, so the
-   header's glow fades out behind it instead of ending on its edge. */
+/* Where the browser can tell, the bar fills in only once stuck. */
 @supports (container-type: scroll-state) {
   .crew-page .crew-tabs-dock {
     container-type: scroll-state;
@@ -937,7 +936,7 @@
 
 /* ---------- Live and At last Reset: now against a held reading ---------- */
 
-/* Live wears a green dot before its title, so it never reads as At last
+/* Live wears a flat green dot before its title, so it never reads as At last
    Reset, a still copy of the last Reset, in the same row style. */
 .crew-board-live .crew-board-open::before {
   flex: none;
@@ -946,7 +945,6 @@
   margin: 0 0.6rem 0 0.2rem;
   background: var(--cl-positive);
   border-radius: 50%;
-  box-shadow: 0 0 0 0.2rem color-mix(in srgb, var(--cl-positive) 22%, transparent);
   content: "";
 }
 
@@ -1261,6 +1259,14 @@
 
 .crew-row-x::-webkit-details-marker {
   display: none;
+}
+
+@media (pointer: coarse) {
+  .crew-row-x {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+    top: 0.25rem;
+  }
 }
 
 .crew-row-confirm[open] > .crew-row-x {
