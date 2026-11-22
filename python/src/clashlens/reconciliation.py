@@ -197,7 +197,8 @@ class ReconciliationInput:
     # end Reset reading (``loss_rule.next_day_landing``).
     next_day_start: int | None = None
     # The attacker's report, the attack's end, of each defense reported in
-    # the last minutes before the day's end, by battle (``reset_total``).
+    # the last minutes before the day's end or in the next day, by battle
+    # (``reset_total``, ``_effects``).
     attack_ends: Mapping[str, datetime] = field(default_factory=dict)
     # The newest reading at or before the day's start Reset, when none from
     # the day can be its old reading (``reset_total``).
@@ -484,9 +485,9 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
         "loss_candidates": () if official_end and automatic_loss else
         loss_rule.loss_candidates(automatic_loss, automatic_state, possible),
         "loss_certain": automatic_state is LossEvidence.CALCULATED and bool(automatic_loss) and not official_end,
-        "day_effects": () if official_end else _effects(contributions),
+        "day_effects": () if official_end else _effects(contributions, data.attack_ends),
         "new_day_effects": () if official_end else _effects(
-            _deduplicate_contributions(data.new_day_contributions)[0]),
+            _deduplicate_contributions(data.new_day_contributions)[0], data.attack_ends),
         "floor": 5000 if data.boundary_kind in {"weekly", "season"} else None,
         "reset": data.boundary_kind == "season",
     }
@@ -1218,9 +1219,11 @@ def _readings(data: ReconciliationInput) -> tuple[reading_rule.Reading, ...]:
 
 def _effects(
     contributions: Iterable[BattleContribution],
+    attack_ends: Mapping[str, datetime] | None = None,
 ) -> tuple[reading_rule.Effect, ...]:
     """Each battle's trophy change for the player and the earliest the
-    profile can show it: an attack from its report, a defense up to
+    profile can show it: an attack from its report, a defense from its
+    attacker's report in ``attack_ends``, when the attack ended, else up to
     ``reading_rule.DEFENSE_SHOWS_EARLY`` before its report plus its length.
     A battle with no report time is taken as shown."""
     effects = []
@@ -1228,6 +1231,11 @@ def _effects(
         if battle.amount is None:
             continue
         defense = battle.lens == "defense"
+        ended = (attack_ends or {}).get(battle.battle_identity) if defense else None
+        if ended is not None:
+            effects.append(reading_rule.Effect(
+                battle.battle_identity, -battle.amount, ended, battle.disagreement))
+            continue
         length = timedelta(seconds=battle.battle_seconds or 0) if defense else timedelta(0)
         early = min(length, reading_rule.DEFENSE_SHOWS_EARLY)
         effects.append(reading_rule.Effect(

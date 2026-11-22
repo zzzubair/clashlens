@@ -693,3 +693,66 @@ def test_a_proof_read_after_the_day_saved_is_in_the_result_the_board_pins(
                      HELD: (5000, "confirmed")}
     assert {tag: (answer[:2], answer[3]) for tag, answer in after.items()} == dict.fromkeys(
         (SAVED_EARLY, PLAYED_ON), ((5233, "confirmed"), _at(5, 23, 18)))
+
+
+ATTACKED, UNTRACKED, ITS_ATTACKER = "#2JJ", "#8JJ", "#9JJ"
+
+
+def test_a_new_day_defense_lands_when_its_attack_ends(
+    database_url: str, archive_server, monkeypatch, capsys
+) -> None:
+    """21 November 2026: eight proven days lost their proof once a new-day
+    defense, under way when their Reset reading was taken, was learned,
+    though the attacker's report showed the attack ended after the reading.
+    Here each day starts at 5,000, gains 80 over 2 attacks and loses 80 over
+    8 defenses, which leave no automatic loss: 5,000, which the Reset
+    readings at 05:09:08 prove. Each player then defends for 30 from
+    05:08:00, an attack that ends at 05:11:00; the reports are first saved
+    in battle logs at 05:20, the attacker's first. ATTACKED's attacker is
+    tracked: the defense lands from 05:11:00, so the reading saw no battle
+    in flight, and the day saves no new result and stays confirmed.
+    UNTRACKED's attacker is not: its defense may have shown in the reading,
+    as before, so its day loses the proof."""
+    start, end = day(2), day(3)
+    defense_at, attack_ended_at = _at(5, 8, 0), _at(5, 11, 0)
+    with domain_database(database_url) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, UNTRACKED)
+        story.players[ATTACKED] = _Opposed(ATTACKED, against={defense_at: ITS_ATTACKER})
+        story.players[ITS_ATTACKER] = _Opposed(
+            ITS_ATTACKER, [Battle(attack_ended_at, 30, True)], against={attack_ended_at: ATTACKED})
+        tags = (ATTACKED, UNTRACKED)
+        for tag in tags:
+            story.players[tag].battles = [*attacks(start, 40, 40), *defenses(start, *[10] * 8)]
+        story.reset(start, dict.fromkeys(tags, (5000, SEASON)))
+        monkeypatch.setattr(scenarios, "READ_AFTER", timedelta(minutes=9, seconds=8))
+        story.reset(end, dict.fromkeys(tags, (5000, SEASON)))
+        first = (_entries(story.served_board(end)), _stored(connection_info, start, tags))
+        results = {tag: _results(connection_info, start, tag) for tag in tags}
+        capsys.readouterr()
+        for tag in tags:
+            story.players[tag].battles.append(Battle(defense_at, -30, False))
+        story.read(ITS_ATTACKER, _at(5, 20, 0))
+        story.run_worker()
+        story.read(ATTACKED, _at(5, 20, 0))
+        story.read(UNTRACKED, _at(5, 20, 0))
+        story.wait(timedelta(hours=1))
+        later = (_entries(story.served_board(end)), _stored(connection_info, start, tags))
+        results = {tag: _results(connection_info, start, tag) - results[tag] for tag in tags}
+        with psycopg.connect(connection_info) as connection:
+            names = dict(connection.execute(
+                "SELECT id, normalized_tag FROM players WHERE normalized_tag = ANY(%s)",
+                (list(tags),)).fetchall())
+        unfinished = story.unfinished_jobs()
+
+    lost = [(names[event["player_id"]], event["battles_changed"], event["end_changed"])
+            for event in map(json.loads, (line for line in capsys.readouterr().out.splitlines()
+                                          if line.startswith("{")))
+            if event.get("event") == "day_proof_lost"]
+    assert unfinished == []
+    proven = (5000, "confirmed", "calculated_end", end + timedelta(minutes=9, seconds=8))
+    assert first == ({ATTACKED: (5000, "confirmed"), UNTRACKED: (5000, "confirmed")},
+                     {ATTACKED: proven, UNTRACKED: proven})
+    assert lost == [(UNTRACKED, False, False)]
+    assert results == {ATTACKED: 0, UNTRACKED: 1}
+    assert later == ({ATTACKED: (5000, "confirmed"), UNTRACKED: (5000, "uncertain")},
+                     {ATTACKED: proven, UNTRACKED: (5000, "uncertain", "calculated_end", None)})
