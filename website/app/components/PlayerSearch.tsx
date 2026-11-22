@@ -8,6 +8,7 @@ import {
   searchedPlayerTag,
 } from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
+import type { SearchResponse } from "../lib/contracts";
 import type { PlayerSearchLoaderData } from "../lib/player-search-data";
 import { moveFocusWithArrows } from "./ArrowKeys";
 import { TrophyMark } from "./LeaderboardShared";
@@ -16,9 +17,10 @@ const SEARCH_DEBOUNCE_MS = 180;
 export const SEARCH_TIMEOUT_MS = 10_000;
 
 /**
- * Asks for suggestions for `query`. A failed, refused or slower than
- * `SEARCH_TIMEOUT_MS` request answers as Search unavailable; one cancelled
- * through `signal` answers null.
+ * Asks for suggestions for `query`. A failed or slower than
+ * `SEARCH_TIMEOUT_MS` request, or any reply that is not the search endpoint's
+ * own, answers as Search unavailable; one cancelled through `signal` answers
+ * null.
  */
 export async function loadPlayerSuggestions(
   query: string,
@@ -34,7 +36,11 @@ export async function loadPlayerSuggestions(
       `/resources/players/search?q=${encodeURIComponent(query)}`,
       { headers: { Accept: "application/json" }, signal: controller.signal },
     );
-    return (await response.json()) as PlayerSearchLoaderData;
+    const answer: unknown = await response.json();
+    // A proxy in front of the website can answer with its own JSON error.
+    // Only the search endpoint's own replies, its refusals included, count.
+    if (!isSearchAnswer(answer)) throw new Error("Not a search reply");
+    return answer;
   } catch {
     if (signal.aborted) return null;
     return {
@@ -46,6 +52,23 @@ export async function loadPlayerSuggestions(
     clearTimeout(timeout);
     signal.removeEventListener("abort", cancel);
   }
+}
+
+function isSearchAnswer(value: unknown): value is PlayerSearchLoaderData {
+  if (typeof value !== "object" || value === null) return false;
+  const { query, search, error } = value as Record<string, unknown>;
+  const found = search as Partial<SearchResponse> | null;
+  const failed = error as { error?: { message?: unknown } } | null;
+  return (
+    typeof query === "string" &&
+    (found === null ||
+      (typeof found === "object" &&
+        typeof found.query === "string" &&
+        Array.isArray(found.results) &&
+        Array.isArray(found.users))) &&
+    (failed === null ||
+      (typeof failed === "object" && typeof failed.error?.message === "string"))
+  );
 }
 
 /**

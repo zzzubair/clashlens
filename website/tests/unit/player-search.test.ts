@@ -183,6 +183,34 @@ describe("suggestion requests", () => {
     expect(fetch.mock.calls[0][1].signal?.aborted).toBe(true);
   });
 
+  const reply = (body: unknown) =>
+    vi.fn(() => Promise.resolve({ json: () => Promise.resolve(body) }));
+
+  it("answers Search unavailable for a JSON error that is not a search reply", async () => {
+    vi.stubGlobal("fetch", reply({ error: "upstream unavailable" }));
+    expect(await loadPlayerSuggestions("ali", new AbortController().signal)).toEqual({
+      query: "ali",
+      search: null,
+      error: { error: { code: "unavailable", message: "Search did not answer." } },
+    });
+  });
+
+  it("keeps the search endpoint's own answers and refusals", async () => {
+    const refused = {
+      query: "ali",
+      search: null,
+      error: {
+        error: { code: "rate_limited", message: "Slow down.", retryAfterSeconds: 9 },
+      },
+    };
+    for (const body of [answer("ali"), refused]) {
+      vi.stubGlobal("fetch", reply(body));
+      expect(await loadPlayerSuggestions("ali", new AbortController().signal)).toEqual(
+        body,
+      );
+    }
+  });
+
   it("disables Try again while the retry is running", () => {
     const retrying = suggestionsHtml({
       data: answer("ali", true),

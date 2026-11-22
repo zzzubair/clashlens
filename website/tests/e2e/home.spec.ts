@@ -341,6 +341,34 @@ test("new search does not show suggestions from the previous query", async ({ pa
   }
 });
 
+test("a proxy's JSON error keeps the search page and typed text, and Try again recovers", async ({
+  page,
+}) => {
+  let failing = true;
+  await page.route("**/resources/players/search*", (route) =>
+    failing
+      ? route.fulfill({ status: 502, json: { error: "upstream unavailable" } })
+      : route.continue(),
+  );
+  await page.goto("/search");
+  const input = page.getByRole("searchbox", {
+    name: "Search players and Clash Lens profiles",
+  });
+  const suggestions = page.getByRole("region", {
+    name: "Player and profile search suggestions",
+  });
+  await input.fill("Synthetic");
+  await expect(suggestions).toContainText("Search unavailable.");
+  await expect(page.getByRole("heading", { name: "Search players" })).toBeVisible();
+  await expect(input).toHaveValue("Synthetic");
+
+  failing = false;
+  await suggestions.getByRole("button", { name: "Try again" }).click();
+  await expect(suggestions).toContainText("Synthetic Clasher 001");
+  await expect(suggestions).not.toContainText("Search unavailable.");
+  await expect(input).toHaveValue("Synthetic");
+});
+
 test("search typed before the page's scripts start still shows suggestions", async ({
   page,
 }) => {
