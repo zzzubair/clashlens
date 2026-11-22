@@ -1,13 +1,5 @@
 import { useEffect, useState } from "react";
-import {
-  data,
-  Form,
-  Link,
-  redirect,
-  useActionData,
-  useLoaderData,
-  useNavigation,
-} from "react-router";
+import { data, Form, Link, redirect, useActionData, useLoaderData } from "react-router";
 
 import type { BackHandle } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
@@ -18,6 +10,7 @@ import {
 } from "../lib/account-validation";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import type { Route } from "./+types/account.verify-player";
+import { usePendingForm } from "../lib/pending-form";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
@@ -255,9 +248,8 @@ export function headers() {
 export default function VerifyPlayerRoute() {
   const loaderData = useLoaderData<typeof loader>();
   const actionData = useActionData<VerifyPlayerActionData>();
-  const navigation = useNavigation();
   const [token, setToken] = useState("");
-  const submitting = navigation.state === "submitting";
+  const submitting = usePendingForm() !== undefined;
 
   // The API token is cleared after every submission attempt so it is
   // never left in the page after the request completes.

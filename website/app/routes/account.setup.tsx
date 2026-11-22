@@ -1,12 +1,5 @@
 import { useState, type FormEvent } from "react";
-import {
-  data,
-  Form,
-  redirect,
-  useActionData,
-  useLoaderData,
-  useNavigation,
-} from "react-router";
+import { data, Form, redirect, useActionData, useLoaderData } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import {
@@ -16,6 +9,7 @@ import {
 } from "../lib/account-validation";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import type { Route } from "./+types/account.setup";
+import { usePendingForm } from "../lib/pending-form";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
@@ -185,11 +179,8 @@ export function headers() {
 export default function AccountSetupRoute() {
   const loaderData = useLoaderData<typeof loader>();
   const actionData = useActionData<SetupActionData>();
-  const navigation = useNavigation();
-  const creating =
-    navigation.state === "submitting" && navigation.formAction !== "/logout";
-  const switching =
-    navigation.state === "submitting" && navigation.formAction === "/logout";
+  const creating = usePendingForm() !== undefined;
+  const switching = usePendingForm("/logout") !== undefined;
   const initialValues = actionData?.values ?? { username: "", displayName: "" };
   const [clientErrors, setClientErrors] = useState<{
     username?: string;

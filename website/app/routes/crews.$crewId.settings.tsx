@@ -6,7 +6,6 @@ import {
   useActionData,
   useLoaderData,
   useLocation,
-  useNavigation,
 } from "react-router";
 
 import { type BackHandle } from "../components/BackLink";
@@ -18,6 +17,7 @@ import { isInappropriateName, normalizeGroupName } from "../lib/account-validati
 import { MAX_CREW_SIZE, MIN_CREW_SIZE, type Crew } from "../lib/crew-contracts";
 import { isCanonicalUuid } from "../lib/validation";
 import type { Route } from "./+types/crews.$crewId.settings";
+import { usePendingForm } from "../lib/pending-form";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 const INTENTS = ["rename", "resize", "revoke", "transfer", "delete"] as const;
@@ -109,12 +109,10 @@ export default function CrewSettingsRoute() {
   const { crew, error, idempotencyKey: loadedKey } = useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
   const location = useLocation();
-  const navigation = useNavigation();
   const sizeInput = useRef<HTMLInputElement>(null);
-  const submittingIntent =
-    navigation.state === "submitting" ? navigation.formData?.get("intent") : null;
-  const submittingInvite =
-    navigation.state === "submitting" ? navigation.formData?.get("invite") : null;
+  const sent = usePendingForm();
+  const submittingIntent = sent?.get("intent") ?? null;
+  const submittingInvite = sent?.get("invite") ?? null;
   if (crew === null) {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell narrow-shell crew-page">

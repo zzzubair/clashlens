@@ -15,6 +15,7 @@ import type { VerifiedPlayer } from "../lib/account-contracts";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import { normalizePlayerTag } from "../lib/player-tag";
 import type { Route } from "./+types/account.settings";
+import { usePendingForm } from "../lib/pending-form";
 
 import "../user-profile.css";
 
@@ -245,11 +246,12 @@ export default function AccountSettingsRoute() {
   const page = useLoaderData<typeof loader>();
   const answer = useActionData<SettingsActionData>();
   const navigation = useNavigation();
-  const submittingIntent =
-    navigation.state === "submitting" ? navigation.formData?.get("intent") : null;
-  const submittingTag =
-    navigation.state === "submitting" ? navigation.formData?.get("tag") : null;
+  const sent = usePendingForm();
+  const submittingIntent = sent?.get("intent") ?? null;
+  const submittingTag = sent?.get("tag") ?? null;
   const savingName = submittingIntent === "display-name";
+  // The warning for a rejected name goes while its correction is saving.
+  const nameError = savingName ? null : (answer?.displayNameError ?? null);
   if (page.error) {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
@@ -278,9 +280,9 @@ export default function AccountSettingsRoute() {
           <input type="hidden" name="idempotencyKey" value={key} />
           <div className="settings-label">
             <label htmlFor="settings-display-name">Display name</label>
-            {answer?.displayNameError ? (
+            {nameError ? (
               <p id="settings-display-name-error" className="field-error" role="alert">
-                {answer.displayNameError}
+                {nameError}
               </p>
             ) : (
               <p className="form-help">Shown on your profile and in crews.</p>
@@ -293,10 +295,8 @@ export default function AccountSettingsRoute() {
               type="text"
               autoComplete="nickname"
               defaultValue={answer?.displayName ?? page.displayName}
-              aria-invalid={answer?.displayNameError ? true : undefined}
-              aria-describedby={
-                answer?.displayNameError ? "settings-display-name-error" : undefined
-              }
+              aria-invalid={nameError ? true : undefined}
+              aria-describedby={nameError ? "settings-display-name-error" : undefined}
             />
             <button
               type="submit"

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
-import { Form, Link, useNavigation } from "react-router";
+import { Form, Link } from "react-router";
+import { usePendingForm } from "../lib/pending-form";
 
 /** The account menu's pages, after the profile and before Sign out. */
 const MENU_PAGES = [
@@ -25,9 +26,7 @@ export function AccountMenu({
 }) {
   const menuRef = useRef<HTMLDetailsElement>(null);
   const toggleRef = useRef<HTMLElement>(null);
-  const navigation = useNavigation();
-  const signingOut =
-    navigation.state === "submitting" && navigation.formAction === "/logout";
+  const signingOut = usePendingForm("/logout") !== undefined;
 
   function close() {
     if (menuRef.current) menuRef.current.open = false;

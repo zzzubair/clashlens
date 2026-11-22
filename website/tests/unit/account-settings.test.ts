@@ -5,6 +5,7 @@ import {
   createStaticHandler,
   RouterProvider,
   createStaticRouter,
+  redirect,
   StaticRouterProvider,
   type RouteObject,
 } from "react-router";
@@ -226,6 +227,55 @@ describe("Settings", () => {
       expect.stringMatching(/>Disconnect$/),
       expect.stringMatching(/>Opening Discord…$/),
     ]);
+  });
+
+  it("keeps Save busy and the rejected name's warning away until the saved name loads", async () => {
+    let reads = 0;
+    let saves = 0;
+    const router = createMemoryRouter(
+      [
+        {
+          path: "/account/settings",
+          Component: SettingsRoute as never,
+          // The first page and the re-read after the rejected name answer;
+          // the read after the successful save is held.
+          loader: ((args: never) =>
+            reads++ < 2 ? settingsLoader(args) : new Promise(() => {})) as never,
+          action: () =>
+            saves++ === 0
+              ? {
+                  idempotencyKey: "retry",
+                  displayName: "N".repeat(81),
+                  displayNameError: "Use 80 characters or fewer.",
+                  error: null,
+                }
+              : redirect("/account/settings?saved=name"),
+        },
+      ],
+      { initialEntries: ["/account/settings"] },
+    );
+    await vi.waitFor(() => expect(router.state.initialized).toBe(true));
+    const save = (displayName: string) => {
+      const formData = new FormData();
+      formData.set("intent", "display-name");
+      formData.set("idempotencyKey", "retry");
+      formData.set("displayName", displayName);
+      return router.navigate("/account/settings", { formMethod: "post", formData });
+    };
+    const page = () =>
+      renderToString(createElement(RouterProvider, { router })).replaceAll(
+        "<!-- -->",
+        "",
+      );
+
+    await save("N".repeat(81));
+    expect(page()).toContain("Use 80 characters or fewer.");
+
+    void save("Nova Prime");
+    await vi.waitFor(() => expect(router.state.navigation.state).toBe("loading"));
+    const html = page();
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Saving…<\/button>/);
+    expect(html).not.toContain("Use 80 characters or fewer.");
   });
 
   it("says Disconnecting on the sign-in being removed, not Opening", async () => {

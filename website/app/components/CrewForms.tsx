@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Form, useFetcher, useNavigation, useSearchParams } from "react-router";
+import { Form, useFetcher, useSearchParams } from "react-router";
 
 import type { InviteLink } from "../lib/crew-contracts";
 import { LocalTimestamp } from "./Provenance";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import { ErrorNotice } from "./ErrorNotice";
+import { usePendingForm } from "../lib/pending-form";
 
 interface InviteAnswer {
   idempotencyKey: string;
@@ -203,10 +204,12 @@ export function FormResult({
   );
 }
 
-/** Whether the page is sending a form whose fields include every one of these. */
+/**
+ * Whether the page is sending a form whose fields include every one of these,
+ * until the page that answers it has loaded.
+ */
 export function useSubmitting(fields: Record<string, string>): boolean {
-  const navigation = useNavigation();
-  const sent = navigation.state === "submitting" ? navigation.formData : undefined;
+  const sent = usePendingForm();
   return (
     sent !== undefined &&
     Object.entries(fields).every(([name, value]) => sent.get(name) === value)

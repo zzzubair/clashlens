@@ -1,13 +1,5 @@
 import { useRef } from "react";
-import {
-  data,
-  Form,
-  Link,
-  redirect,
-  useActionData,
-  useLoaderData,
-  useNavigation,
-} from "react-router";
+import { data, Form, Link, redirect, useActionData, useLoaderData } from "react-router";
 
 import { type BackHandle } from "../components/BackLink";
 import { TrophyIcon } from "../components/GameIcons";
@@ -24,6 +16,7 @@ import {
 } from "../lib/crew-contracts";
 import { normalizePlayerTag } from "../lib/player-tag";
 import type { Route } from "./+types/crews.new";
+import { usePendingForm } from "../lib/pending-form";
 import "../crews.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -216,9 +209,8 @@ export async function action({ request, context }: Route.ActionArgs) {
 export default function NewCrewRoute() {
   const loaderData = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
-  const navigation = useNavigation();
   const sizeInput = useRef<HTMLInputElement>(null);
-  const creating = navigation.state === "submitting";
+  const creating = usePendingForm() !== undefined;
   const { accounts, crewCount, capacity } = loaderData;
   const errors = actionData?.fieldErrors ?? {};
   const firstJoinable = accounts.find(canJoin)?.tag;
