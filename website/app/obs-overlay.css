@@ -1233,6 +1233,10 @@ html.obs-page body {
     display: inline-flex;
     align-items: center;
   }
+  .obs-settings .obs-toggle,
+  .obs-settings .obs-place select {
+    min-height: 2.75rem;
+  }
 }
 .obs-settings .obs-under {
   display: flex;
