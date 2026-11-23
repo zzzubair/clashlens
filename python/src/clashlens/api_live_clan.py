@@ -32,14 +32,8 @@ from .verification import (
 
 LIVE_CLAN_SECONDS = 60
 LIVE_CLAN_TIMEOUT_SECONDS = 1.5
-# A live clan is optional, so its start waits this long at most for one of the
-# API's database connections, and not at all for the key's row: when either is
-# busy the page shows the saved clan. Waiting held connections and request
-# threads that the health checks and every other page needed.
 LIVE_CLAN_CONNECTION_WAIT_SECONDS = 0.1
-# About 4,096 short entries, well under a megabyte.
 MAX_REMEMBERED_PLAYERS = 4096
-# As loose as the saved clan tag, which the page already links.
 _CLAN_TAG = re.compile(r"#[0-9A-Z]{2,15}")
 
 
@@ -123,7 +117,6 @@ def _take_permit(connection: Any, fingerprint: str) -> str | None:
             "SELECT granted FROM clashlens_acquire_shared_api_permit(%s, 'collector')",
             (fingerprint,),
         ).fetchone()
-        # Refused while the key cools down or its whole window is used.
         return None if granted is not None and bool(granted[0]) else "key_not_ready"
 
 
@@ -186,7 +179,6 @@ class LiveClans:
                 normalized_tag, timeout_seconds=LIVE_CLAN_TIMEOUT_SECONDS
             )
         except VerificationTransportError as error:
-            # timeout, relay_timeout, relay_failure or other
             return LiveClan(False, reason=transport_outcome(error.__cause__))
         action = classify_official_response(response.http_status, response.body).key_action
         if action is not KeyAction.NONE:

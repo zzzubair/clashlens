@@ -4,28 +4,9 @@ import type { DashboardActionData, DashboardLoaderData } from "../lib/dashboard-
 
 type Layout = NonNullable<DashboardSettings["layout"]>;
 
-/** The sheet open over Customise, if any. */
 export type DashboardSheet =
   { kind: "none" } | { kind: "adding" } | { kind: "settings"; card: CardId };
 
-/**
- * Customise on the Dashboard:
- *
- * - `viewing`: the saved layout shows; nothing is being edited.
- * - `editing`: a draft of the card order shows, with at most one sheet open
- *   (Add a card, or one card's settings) and at most one card being dragged.
- *   `finishing` says Done was pressed: it waits for its own save's answer,
- *   the first one other than the answer that was showing when Done was pressed.
- *
- * Events: Customise, card changes, Use default, Add, settings, dragging,
- * Done, the save's answer, `kept` (Done in View as, which saves nothing and
- * ends editing at once), and Cancel. Only `dashboardEditStep` moves it.
- * Done's answer ends editing only when it saved; a failed save keeps the
- * draft and shows the error, and Done can be pressed again. A saved answer
- * closes an open settings sheet. Cancel and Escape discard the draft. The
- * Dashboard component owns it; leaving the page or reloading drops a draft.
- * `status` is what screen readers hear about the last change.
- */
 export type DashboardEdit =
   | { mode: "viewing"; status: string }
   | {
@@ -70,14 +51,12 @@ function editing(
   };
 }
 
-/** The only place Customise moves; see `DashboardEdit`. */
 export function dashboardEditStep(
   state: DashboardEdit,
   event: DashboardEditEvent,
 ): DashboardEdit {
   if (event.type === "customise") return editing("", event.layout ?? "default");
   if (event.type === "openAdd") {
-    // Add a card on an empty dashboard starts Customise with no cards.
     const from = state.mode === "editing" ? state : editing(state.status, []);
     return { ...from, sheet: { kind: "adding" } };
   }
@@ -127,24 +106,6 @@ export function dashboardEditStep(
   }
 }
 
-/**
- * The cards' data after the page's first read, as saves change what they
- * show. Each card is:
- *
- * - loading, while the page's read is on its way (its data is null);
- * - shown, from that read or from a later one in `refreshed`;
- * - stale, in `stale`: a save changed the settings it follows, or it has no
- *   data yet, so it shows as loading until it is read again;
- * - read again: one read asks for every stale card, `requested`; a newer read
- *   replaces it, and its answer is merged once (`merged`) into `refreshed`, a
- *   card it leaves out, a failed answer or one for another player as null,
- *   "could not load".
- *
- * Events: `newLoad` (the page read again, which starts over), `outdated`,
- * `requested` and `answered`. Only `cardRefreshStep` moves it; the Dashboard
- * component owns it. A card that could not load stays so until its Try again
- * marks it `outdated`, its settings change or the page reads again.
- */
 export interface CardRefresh {
   refreshed: CardReads;
   stale: CardId[];
@@ -165,7 +126,6 @@ export const CARDS_FROM_LOAD: CardRefresh = {
   merged: undefined,
 };
 
-/** The only place card data moves after the first read; see `CardRefresh`. */
 export function cardRefreshStep(
   state: CardRefresh,
   event: CardRefreshEvent,
@@ -202,7 +162,6 @@ export function cardRefreshStep(
   }
 }
 
-/** A card read that took too long, answered as unavailable; each its own. */
 export function stalledCards(): DashboardLoaderData {
   return {
     kind: "error",
@@ -212,17 +171,12 @@ export function stalledCards(): DashboardLoaderData {
   };
 }
 
-/** The data each card shows: none while the page's read loads. */
 export function cardReads(data: CardReads | null, state: CardRefresh): CardReads | null {
   const reads = data === null ? null : { ...data, ...state.refreshed };
   for (const card of state.stale) if (reads) delete reads[card as keyof CardReads];
   return reads;
 }
 
-/**
- * The cards a save makes out of date: those whose numbers follow the changed
- * settings, and shown cards with a view that have no data yet.
- */
 export function outdatedCards(
   before: DashboardSettings,
   after: DashboardSettings,

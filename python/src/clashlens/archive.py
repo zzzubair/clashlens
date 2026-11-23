@@ -22,8 +22,6 @@ _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _GENERATION_RE = re.compile(r"^[0-9a-f]{32}$")
 _S3_CODE_RE = re.compile(r"^[A-Za-z0-9.]{1,64}$")
 MARKER_CHECK_SECONDS = 300.0
-# A marker check that failed for a reason that may pass is tried again this
-# soon: one caller asks the archive while the others wait for its answer.
 MARKER_RETRY_SECONDS = 15.0
 DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024
 DEFAULT_CONNECT_TIMEOUT_SECONDS = 5.0
@@ -242,10 +240,8 @@ class S3ArchiveReader:
             else None
         )
         self._marker_checked_at = -math.inf
-        # Held while a check runs, so no caller reads its result unfinished.
         self._marker_lock = threading.Lock()
         self._marker_error: ArchiveReadError | None = None
-        # The latest failed marker check's failure_evidence, kept after recovery.
         self.marker_failure: dict[str, Any] | None = None
         self.remote_attempts = {"get": 0, "bucket": 0, "marker": 0}
         self.secure = secure
@@ -290,8 +286,6 @@ class S3ArchiveReader:
         self.http_client.set_pool_acquire_observer(observer)
 
     def check_ready(self) -> bool:
-        # Archive reachability is telemetry in the spool-first worker. Keep
-        # this legacy adapter probe only for callers without a local spool.
         for attempt in range(self.max_retries + 1):
             try:
                 self.remote_attempts["bucket"] += 1
@@ -374,8 +368,6 @@ class S3ArchiveReader:
             except ArchiveReadError as error:
                 if not error.retryable or attempt == self.max_retries:
                     raise
-                # Renew the caller's lease before backing off so the wall time
-                # of a bounded provider-outage retry window stays inside it.
                 if heartbeat is not None:
                     heartbeat()
                 if self.retry_backoff_seconds:
@@ -624,8 +616,6 @@ class SpoolFirstReader:
         self.archive.set_pool_acquire_observer(observer)
 
     def check_ready(self) -> bool:
-        # The worker only reads saved responses, so it stays ready while the
-        # spool is too full to admit another one; draining is what frees it.
         try:
             return self.spool.readiness(admission=False)[0]
         except (OSError, ValueError, SpoolError):

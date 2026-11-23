@@ -24,14 +24,12 @@ export function boardTitle(board: BoardKey): string {
   return board === "top" ? "At last Reset" : BOARDS[board].title;
 }
 
-/** The line under a board's name; At last Reset's name already says when. */
 export function boardCaption(board: BoardKey, period: CrewPeriod): string {
   return board === "top"
     ? "Trophies when this Legend day began"
     : boardDescription(board, period);
 }
 
-/** Owner and Admin chips; members have none. */
 export function RoleChip({ role }: { role: CrewRole }) {
   if (role === "member") return null;
   return (
@@ -51,7 +49,6 @@ export function crewCount(used: number, clashers: number | null): string {
     : `${accounts} · ${clashers} ${clashers === 1 ? "Clasher" : "Clashers"}`;
 }
 
-/** How full a crew is, as a bar; the words beside it say the numbers. */
 export function PlacesMeter({ used, size }: { used: number; size: number }) {
   const value = `${Math.min(100, (used / size) * 100)}%`;
   return (
@@ -73,10 +70,6 @@ export function crewSearch(period: CrewPeriod, board?: BoardKey): string {
   return search === "" ? "" : `?${search}`;
 }
 
-/**
- * Today / Last 7 days / Season, as links so it works without JavaScript. On
- * the crew page `board` keeps the board picked on a phone.
- */
 export function PeriodSwitch({
   period,
   board,
@@ -133,7 +126,6 @@ export function DefenseOrder({
   );
 }
 
-/** What an empty board says. */
 export function emptyBoardText(board: BoardKey, period: CrewPeriod, dayNumber: number) {
   if (board === "live") return "Nobody on the Live leaderboard yet";
   if (board === "top")
@@ -204,8 +196,6 @@ export function BoardRows({
                   <span className="sr-only"> first</span>
                 </span>
               ) : null}
-              {/* What an average is over, under the name, so the number's
-                  column stays narrow and the name keeps its room. */}
               {row.kind === "trophies" || row.kind === "streak" ? null : (
                 <span className="crew-behind">{averageOver(row, board, period)}</span>
               )}

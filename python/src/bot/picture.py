@@ -75,7 +75,7 @@ _DARK = {
 WIDTH, HEIGHT = 1200, 860
 # Drawn at twice the size, then shrunk, for smooth edges.
 _SCALE = 2
-_MOST = 8  # the game's attacks, and defenses, a Legend day
+_MOST = 8
 
 
 @cache

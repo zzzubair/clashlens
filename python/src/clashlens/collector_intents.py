@@ -36,7 +36,6 @@ IntentRun = Literal[
     "incomplete",
 ]
 
-# Player work kept for retry when every failure was transient.
 _RETRIED_INTENTS = frozenset(
     {
         "reset_baseline",
@@ -53,7 +52,6 @@ _RETRIES_WHILE_ANSWERING = 3
 
 
 def lane_for(intent: CollectorIntent) -> str:
-    # Settlement checks require fresh, ordered answers through the Reset slots.
     if intent.kind in {"reset_baseline", "reset_settlement"}:
         return "reset"
     if intent.kind in {"initial_collection", "live_refresh"}:
@@ -110,8 +108,6 @@ class IntentExecutor:
         if "window_closed" in outcomes:
             return "window_closed"
         if outcomes != ["recorded"] * len(endpoints):
-            # A provider outage must not become a permanent player failure,
-            # but once the API answers again a few retries are enough.
             retryable = "failed" not in outcomes and intent.kind in _RETRIED_INTENTS
             outage = getattr(collector.client, "provider_outage", None)
             if retryable and not getattr(outage, "active", False):
@@ -131,7 +127,6 @@ class IntentExecutor:
             return "retrying"
         self._retries_while_answering.pop(intent.work_id, None)
         if intent.kind == "reset_baseline" and endpoints == ("profile",):
-            # The profile pass: the battle log follows from its own pass.
             return "profile_saved"
         completed = await self._finish(
             collector.database.complete_intent, intent.work_id

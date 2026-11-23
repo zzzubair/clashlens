@@ -79,12 +79,8 @@ WORK_TYPE = "reconcile_pass"
 BATCH_DAYS = 500
 PASS_FIX_LIMIT = 2000
 STATEMENT_SECONDS = 60
-# A step's time limits: all its reads, and saving what they found.
 READ_SECONDS, WRITE_SECONDS = 360, 120
-# A step's job lease: both limits, and room to spare.
 STEP_LEASE_SECONDS = 600
-# UTC: no step starts from 03:50 and none is saved from 03:58, until 07:00,
-# the Reset and its catching up being done.
 STEPS_STOP, SAVES_STOP, QUIET_END = time(3, 50), time(3, 58), time(7)
 FIXED_CHECKS = ("recount", "missing_day")
 FIX_KEY = "reconcile:pass:"
@@ -94,14 +90,11 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-# The players the Reset sweeps starting and ending the day tracked.
 _TRACKED = """
 SELECT DISTINCT member FROM collector_reset_sweeps AS sweep
 CROSS JOIN LATERAL unnest(sweep.member_ids) AS member
 WHERE sweep.boundary_at IN (%(day)s, %(reset)s)
 """
-# A step's players: the next by id of those tracked and every one with a
-# saved day for the day.
 _STEP_PLAYERS = f"""
 SELECT member FROM (
     {_TRACKED}
@@ -110,15 +103,11 @@ SELECT member FROM (
 ) AS judged (member)
 WHERE member > %(after)s ORDER BY member LIMIT %(limit)s
 """
-# The batch's players the Reset sweep ending the day tracked: each one's
-# day is saved at that Reset when it is a Legend day.
 _EXPECTED = """
 SELECT DISTINCT member FROM collector_reset_sweeps AS sweep
 CROSS JOIN LATERAL unnest(sweep.member_ids) AS member
 WHERE sweep.boundary_at = %(reset)s AND member = ANY(%(players)s::bigint[])
 """
-# Each player's saved day of %(day)s and the day before, as their pages
-# show it: the newest published log and the saved result it shows.
 _DAYS = """
 SELECT DISTINCT ON (log.player_id, log.ranked_day_start)
        log.player_id, log.ranked_day_start, day.id, day.official_season_id,
@@ -132,11 +121,6 @@ WHERE log.player_id = ANY(%(players)s::bigint[])
   AND log.ranked_day_start IN (%(day)s, %(day)s - interval '1 day')
 ORDER BY log.player_id, log.ranked_day_start, log.version DESC
 """
-# Each player's battles of the day counted from the saved battles: the
-# report each side's battle shows, when it is a valid Legend report stamped
-# in the day (``domain.battle_window``), as ``ranked_day_inputs`` reads them.
-# The battles index holds both players, so the day's battles are read once
-# from it and only the batch's are joined.
 _RECOUNT = """
 SELECT side.player_id,
        count(*) FILTER (WHERE side.perspective = 'attacker'),
@@ -160,12 +144,6 @@ WHERE battle.ranked_day_start BETWEEN %(day)s - interval '1 day' AND %(day)s + i
   AND source.outcome = 'valid_legend'
 GROUP BY side.player_id
 """
-# The day's battles whose two saved reports differ, or whose second report
-# is missing though both players were tracked, compared from the reports
-# themselves: each side's trophies as the attacker's and the defender's,
-# and either side's trophies only when both reports carry them. A battle is
-# judged with its attacker, or with its defender when the attacker is
-# neither tracked nor has a saved day for the day.
 _COPIES = f"""
 WITH tracked AS ({_TRACKED}), reports AS (
     SELECT battle.id, battle.attacker_player_id AS attacker,
@@ -218,27 +196,22 @@ WHERE (attacker = ANY(%(players)s::bigint[])
        OR saved < 2 AND attacker IN (SELECT member FROM tracked)
                     AND defender IN (SELECT member FROM tracked))
 """
-# The newest Daily board of the Reset ending the day.
 _NEWEST_BOARD = """
 SELECT id FROM leaderboard_snapshots
 WHERE snapshot_kind = 'frozen' AND state = 'published' AND boundary_at = %(reset)s
 ORDER BY version DESC, id DESC LIMIT 1
 """
-# Its confirmed rows.
 _BOARD = f"""
 SELECT entry.player_id, board.id, entry.trophies
 FROM ({_NEWEST_BOARD}) AS board
 JOIN leaderboard_snapshot_entries AS entry ON entry.snapshot_id = board.id
 WHERE entry.player_id = ANY(%(players)s::bigint[]) AND entry.confidence = 'confirmed'
 """
-# The batch's players with an open board finding of the day about a board
-# the newest one replaced.
 _REPLACED = f"""
 SELECT player_id FROM reconcile_findings
 WHERE ranked_day_start = %(day)s AND player_id = ANY(%(players)s::bigint[])
   AND check_name = 'board' AND resolved_at IS NULL AND subject_id <> ({_NEWEST_BOARD})
 """
-# The batch's open findings of the day whose recalculation is saved.
 _FIXED = """
 SELECT id FROM reconcile_findings
 WHERE ranked_day_start = %(day)s AND player_id = ANY(%(players)s::bigint[])
@@ -256,8 +229,6 @@ class Finding:
     saved: dict[str, Any] = field(default_factory=dict)
 
 
-# A day's findings, each player and check judged, and the open findings
-# whose recalculation is saved.
 Judgment = tuple[list[Finding], set[tuple[int, str]], set[int]]
 
 
@@ -360,13 +331,10 @@ def judge(connection: Any, day: datetime, players: list[int]) -> Judgment:
                                 {"reports": 2, "fields": []},
                                 {"reports": int(saved), "fields": list(fields)}))
     rows = connection.execute(_BOARD, params).fetchall()
-    # A board finding is judged with its row, or once a newer board replaced
-    # its board, whose rows are judged as any.
     judged |= {(int(row[0]), "board")
                for row in [*rows, *connection.execute(_REPLACED, params)]}
     for player, board, trophies in rows:
         version, at_reset = ends.get(int(player), (None, {"value": None}))
-        # A result saved before results stored the total has none to judge by.
         if at_reset is None:
             continue
         expected = at_reset["value"]
@@ -424,7 +392,6 @@ def record(connection: Any, day: datetime, judgment: Judgment, *, read_at: datet
         state = finding_state(fix_queued_at, escalated_at, fix_saved=finding_id in fixed)
         if state is FindingState.OPEN:
             if fix and finding.check in FIXED_CHECKS and counts["queued"] < fix_room:
-                # Due now at backfill priority; once, under the finding's own key.
                 day_recalculation.request(
                     connection, finding.player_id, day, None, key=f"{FIX_KEY}{finding_id}",
                     trigger="reconcile_pass", later_days=False,
@@ -567,7 +534,6 @@ def run_step(database: db.Database, claim: db.Claim) -> str:
                 if _quiet(_now(), STEPS_STOP):
                     raise _Stopped
                 with connection.transaction():
-                    # One snapshot for every read, the time it was taken.
                     connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
                     _limit(connection, READ_SECONDS)
                     read_at = connection.execute("SELECT statement_timestamp()").fetchone()[0]
@@ -577,14 +543,10 @@ def run_step(database: db.Database, claim: db.Claim) -> str:
                 with connection.transaction():
                     _limit(connection, WRITE_SECONDS)
                     job = claimed_jobs.lock_live_claim(connection, claim)
-                    # Under its guard, a Season repair cannot start queueing
-                    # days before this step commits.
                     repairing = domain_repair.recalculating_days(
                         connection, newest.official_season_id)
                     counts = record(connection, day, judgment, read_at=read_at,
                                     fix=not repairing, fix_room=PASS_FIX_LIMIT - queued)
-                    # The step's recalculations count in the pass's total,
-                    # the one ``queued`` its log line shows.
                     total = queued + counts.pop("queued", 0)
                     done = {**counts, "days": len(players), "repairing": repairing,
                             **Counter(f"seen:{finding.check}" for finding in judgment[0])}
@@ -599,7 +561,6 @@ def run_step(database: db.Database, claim: db.Claim) -> str:
                         raise _Stopped
                 detail, queued = done, total
             except _Stopped:
-                # Nothing it read is kept, and nothing more is queued.
                 stopped = True
                 with connection.transaction():
                     claimed_jobs.finish_claim(

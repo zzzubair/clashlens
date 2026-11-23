@@ -56,25 +56,14 @@ from .store import Store, link_colours
 
 log = logging.getLogger("clashlens.bot.alerts")
 
-# Battles saved, or confirmations asked for, longer ago than this are never
-# sent, nor tried again.
 WINDOW = timedelta(minutes=15)
 INTERVAL_SECONDS = 10.0
-# The wait before trying again a DM Discord could not take, doubling with
-# each try up to the longest.
 RETRY_SECONDS = 10.0
 RETRY_LONGEST_SECONDS = 120.0
-# A DM Discord did not take is tried again only this long after its first
-# try, while Discord's nonce check still stops a repeat.
 NONCE_SECONDS = 120.0
-# Delivery log rows are deleted after this; only the newest refusal is shown.
 KEEP = timedelta(days=7)
-# How long a delivered alert's picture waits for its battle to be saved into
-# the defender's Legend day, and the longest an edit adding it may take.
 PICTURE_SECONDS = 300.0
 PICTURE_EDIT_SECONDS = 30.0
-# Pictures are added in a round for at most this long, so the next look for
-# new battles is not held up.
 PICTURE_ROUND_SECONDS = 10.0
 
 _DUE_COLUMNS = (
@@ -100,10 +89,6 @@ _CONFIRM_COLUMNS = (
     "name",
     "confirm_requested_at",
 )
-# Where a DM is still due: its switch on since before the battle was saved, or
-# still asking for this confirmation, the player still verified to the account
-# or the account still a site owner (`MAY_SEND`), Discord still connected as
-# the same user, and within `WINDOW`.
 _STILL_DUE = """
     FROM discord_attack_alerts AS alert
     JOIN account_provider_identities AS identity
@@ -238,12 +223,9 @@ class Delivery:
     player_id: int
     discord_user_id: str
     battle_id: int | None
-    # When its `WINDOW` started: the battle saved, or the confirmation asked for.
     since: datetime
     reply: Reply
     alert: dict[str, Any] | None = None
-    # Its delivery log id once claimed (logged SENDING), also the nonce of
-    # every try, and the loop's clock time then, just before its first try.
     id: int = 0
     claimed_at: float = 0.0
 
@@ -455,16 +437,10 @@ class AlertLoop:
         self.alerts = alerts
         self.messenger = messenger
         self.site = site
-        # How far into the battle's Season the attacker's details go, and
-        # when the defender's Legend day is read for the picture.
         self.now = now
         self._pruned_at: float | None = None
-        # Claimed DMs Discord could not take yet, waiting for their next try.
         self._waiting: list[tuple[Delivery, Waiting]] = []
-        # Delivered alerts waiting for their picture, oldest first.
         self._pictures: list[PendingPicture] = []
-        # Clear while a picture's read of its Legend day, cut off by the end
-        # of its round, still runs; no other picture is read until it ends.
         self._read = threading.Event()
         self._read.set()
 
@@ -575,8 +551,6 @@ class AlertLoop:
     async def _add_picture(self, message: Any, alert: dict[str, Any]) -> bool:
         """Read the alert's Legend day, draw it and edit it into `message`;
         False while its battle is not saved into the day yet."""
-        # Cleared only once the read starts: one cut off still waiting for a
-        # thread never runs.
         now, read = self.now(), threading.Event()
         read.set()
         self._read = read

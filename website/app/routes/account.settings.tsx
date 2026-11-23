@@ -41,14 +41,12 @@ export interface SettingsLoaderData {
   displayName: string;
   providers: string[];
   players: VerifiedPlayer[];
-  /** The default player: the one the Discord bot's /stats uses when none is named. */
   defaultPlayer: string | null;
   saved: Saved | null;
   idempotencyKey: string;
   error: WebsiteErrorResponse | null;
 }
 
-/** What the last save says at the top of the page. */
 export interface Saved {
   text: string;
   failed: boolean;
@@ -61,11 +59,6 @@ export interface SettingsActionData {
   error: WebsiteErrorResponse | null;
 }
 
-/**
- * GET /account/settings — the signed-in Clasher's settings on one page: the
- * display name, their Clash players and which one is the default player, and
- * how they sign in. An identity with no account yet goes to setup.
- */
 export async function loader({ request }: Route.LoaderArgs) {
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
@@ -133,11 +126,6 @@ function savedMessage(params: URLSearchParams): Saved | null {
   return null;
 }
 
-/**
- * POST /account/settings — save the display name, choose the default player,
- * or start connecting or disconnecting Google or Discord. Connecting and
- * disconnecting finish at the provider's callback, which comes back here.
- */
 export async function action({ request }: Route.ActionArgs) {
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
@@ -250,7 +238,6 @@ export default function AccountSettingsRoute() {
   const submittingIntent = sent?.get("intent") ?? null;
   const submittingTag = sent?.get("tag") ?? null;
   const savingName = submittingIntent === "display-name";
-  // The warning for a rejected name goes while its correction is saving.
   const nameError = savingName ? null : (answer?.displayNameError ?? null);
   if (page.error) {
     return (
@@ -398,7 +385,6 @@ export default function AccountSettingsRoute() {
   );
 }
 
-/** One linked player: Default, or the button to make it so, and Unlink. */
 function PlayerRow({
   player,
   isDefault,

@@ -45,7 +45,6 @@ TYPING_SLOTS = 2
 # Dropdowns and buttons stop working after this, inside Discord's 15 minute
 # limit on editing a reply.
 VIEW_SECONDS = 600
-# The Legend day picture's file name, uploaded with the message that shows it.
 PICTURE = "legend-day.png"
 PICTURE_URL = f"attachment://{PICTURE}"
 # Discord's JSON error codes for a DM it will not deliver
@@ -264,7 +263,6 @@ class DiscordApp:
             await interaction.edit_original_response(
                 **{"view": None, **message}, attachments=files
             )
-            # The old buttons are gone; their timeout must not put them back.
             replacing.stop()
         elif not interaction.response.is_done():
             await interaction.response.send_message(**message, ephemeral=private)
@@ -279,7 +277,6 @@ class DiscordApp:
         outcome = "ok"
         try:
             await interaction.response.defer()
-            # One click at a time, and none on a menu already replaced or used.
             async with view.lock:
                 if view.state is not MenuState.OPEN:
                     outcome = "already_used"
@@ -289,7 +286,6 @@ class DiscordApp:
                 view.origin = interaction
                 reply = await self.drawn(await self.read(work))
                 if reply.private:
-                    # A refusal for the clicker never replaces the message.
                     outcome = "refused"
                     await self._send(interaction, reply, private=True)
                     return

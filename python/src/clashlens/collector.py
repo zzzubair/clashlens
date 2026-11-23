@@ -55,14 +55,8 @@ from .response_fields import content_fingerprint
 from .spool import Spool, SpoolError
 from .spool_health import SpoolHealth, SpoolState
 
-# 64 files share each turn's wait; one indexed lookup feeds 16, resting 30 s below one turn.
 _CLEANUP_BATCH_SIZE, _CLEANUP_LOOKUP_SIZE, _CLEANUP_IDLE_SECONDS = 64, 1024, 30.0
-# Stopping looks up only this many, so it stays quick.
 _SHUTDOWN_CLEANUP_SIZE = 32
-# These slots cover HTTP plus durable handoffs; key limits still bound requests.
-# A check fetches its profile, saves it, then maybe its battle log, one after
-# the other, so a check holds at most one request at a time. The collector
-# command sizes this from its keys; see docs/collector-polling.md.
 _REGULAR_PARALLELISM = 256
 _ORDINARY_INTENT_PARALLELISM = 32
 
@@ -99,8 +93,6 @@ class Collector:
         self.interactive_fingerprint = interactive_fingerprint
         self.weekly_eligibility_enabled = weekly_eligibility_enabled
         self.regular_parallelism = regular_parallelism
-        # Archive uploads run in their own process (uploader.py); this keeps
-        # it running. None runs none, as in tests.
         self.uploads = uploads
         self.battle_logs = BattleLogSchedule()
         self.overlay_players = partial(collector_overlays.players_in_use, database)
@@ -129,8 +121,6 @@ class Collector:
         self._metrics_refresh_after = 0.0
         self._metrics_refresh: asyncio.Task[None] | None = None
         self._database_metrics: dict[str, int | float] = {}
-        # When each main loop last came round, and database calls running with
-        # their loop and start, for the container health check.
         self.loop_passes: dict[str, float] = {}
         self.database_waits: dict[object, tuple[str, float]] = {}
         collector_liveness.mark(self, "start")
@@ -152,7 +142,6 @@ class Collector:
         endpoints: tuple[str, ...] = ("profile", "battle_log"),
     ) -> list[str]:
         outage = getattr(self.client, "provider_outage", None)
-        # Regular checks wait out an outage pause as paused work, not in flight.
         if not await self._spool_available() or (lane == "ordinary" and outage is not None and outage.paused):
             return ["capacity_paused"] * len(endpoints)
         pool = self.interactive_keys if lane == "interactive" else self.regular_keys
@@ -178,8 +167,6 @@ class Collector:
             if reuse_fresh_profile:
                 selected_endpoints = ("battle_log",)
                 selected_reservations = (reservations[1],)
-            # Reset responses go out one after another, so each battle log is
-            # collected after the profile it must cover.
             in_order = lane == "reset"
             tasks = [
                 asyncio.create_task(
@@ -239,7 +226,6 @@ class Collector:
         if not self.battle_logs.profile_due(
             work.normalized_tag, now=datetime.now(UTC)
         ):
-            # The game still reports Season 0: only the battle log can be due.
             if not self.battle_logs.due(
                 work.normalized_tag, profile_usable=True, now=datetime.now(UTC)
             ):
@@ -290,7 +276,7 @@ class Collector:
                 self.database.defer_regular_check, work.player_id, until
             )
         except (psycopg.Error, PoolTimeout):
-            pass  # The player keeps the normal cadence.
+            pass
 
     async def _open_overlays(self, now: datetime) -> list[int]:
         """Players an open OBS overlay shows, less those who finished the
@@ -300,7 +286,7 @@ class Collector:
             try:
                 self._overlays = await self.database_call(self.overlay_players)
             except (psycopg.Error, PoolTimeout):
-                self._overlays = []  # They keep the normal cadence.
+                self._overlays = []
         return [
             player_id
             for player_id, tag in self._overlays
@@ -359,7 +345,6 @@ class Collector:
         reservation: Any | None = None,
         usable: list[bool] | None = None,
     ) -> str:
-        # Discovery work makes one request per run; its work row retries it.
         important = lane in {"interactive", "reset"} or endpoint == "global_player_rankings"
         attempts = 3 if important else 1
         pool_name = "interactive" if pool is self.interactive_keys else "regular"
@@ -454,7 +439,6 @@ class Collector:
                 ):
                     return "capacity_paused"
                 self._count("recorded")
-                # Discovery work (ordinary lane with a work row) is not tracked.
                 noted = (
                     200 <= response.http_status < 300
                     and (lane != "ordinary" or work.collector_work_id is None)
@@ -569,8 +553,6 @@ class Collector:
     ) -> None:
         """Run admissions, intent work, uploads, cleanup, and health together."""
         self.stopping = stop_requested
-        # Open health first: on 7 Oct 2026 a 60 s recovery read ran before it
-        # opened, so every restart was killed again before it could answer.
         server = await asyncio.start_server(
             partial(collector_liveness.serve, self), health_host, health_port
         )
@@ -642,8 +624,6 @@ class Collector:
                     await wait_or_stop(stop_requested, max(1.0, idle_seconds))
                     if stop_requested.is_set():
                         break
-                    # Paused work is not in flight, so a Reset can start
-                    # meanwhile; it waits for the next pass once admission closes.
                     async with self._regular_admission_lock:
                         if await self.database_call(
                             self.database.regular_admission_open, datetime.now(UTC)
@@ -683,8 +663,6 @@ class Collector:
                     available = self.regular_parallelism - len(pending)
                     overlays = await self._open_overlays(claim_time)
                     if overlays and available > 0:
-                        # Each once its last check is 30 seconds old: a claim
-                        # makes the next one due 90 seconds after it.
                         admit(
                             await self.database_call(
                                 self.database.claim_due_players,
@@ -700,9 +678,6 @@ class Collector:
                     repeat_inflight = sum(
                         not item.first_battle_pending for item in pending.values()
                     )
-                    # Cold discovery measured 21.21 players/s against 29.27
-                    # regular jobs/s. A quarter of the slots keeps overdue
-                    # revisits moving until discovery drains.
                     repeat_limit = min(
                         available,
                         max(1, self.regular_parallelism // 4) - repeat_inflight,
@@ -766,10 +741,6 @@ class Collector:
         idle_seconds: float,
     ) -> None:
         active: dict[int, tuple[str, asyncio.Task[str]]] = {}
-        # Reset pairs hold regular checks until they finish, so they may use
-        # the regular checks' slots. Settlement checks, due once those pairs
-        # are done, share them behind any pair still owed: each holds its slot
-        # through two saves, so 32 slots took hours. Other work keeps its few.
         slots = {
             "interactive": 6,
             "reset": self.regular_parallelism,
@@ -778,10 +749,6 @@ class Collector:
         scheduled_boundary: datetime | None = None
         next_rankings_at = datetime.min.replace(tzinfo=UTC)
         next_expiry_at = next_rankings_at
-        # Discovery admission runs beside the picks, one at a time: after the
-        # 9 Nov 2026 Monday Reset each took 30 to 60 s, so inside the pick it
-        # held every Reset and settlement check behind it, and three timed out
-        # in a row stopped the collector. A failed one is retried next pass.
         admission: asyncio.Future[None] | None = None
         graceful = False
         try:
@@ -849,7 +816,6 @@ class Collector:
                         held=self.commits.held_work(),
                         reset_limit=slots["reset"],
                     )
-                    # A stop can arrive during any wait above; start nothing after it.
                     if stop_requested.is_set():
                         break
                     for intent in intents:
@@ -916,29 +882,16 @@ class Collector:
                         next_cleanup = loop.time() + _CLEANUP_IDLE_SECONDS * (
                             found < _CLEANUP_BATCH_SIZE
                         )
-                    # Compacted responses leave no upload row or observation, so
-                    # their spool bytes are unreferenced. Sweep them under the
-                    # cleanup barrier; the referenced set is evaluated inside it so
-                    # sidecars still in flight and freshly committed rows protect.
-                    # The sweep walks the whole spool, so it is paced per minute,
-                    # not per loop.
                     if time.monotonic() - last_sweep >= 60.0:
                         last_sweep = time.monotonic()
-                        # Startup leaves crash debris younger than its 60-second
-                        # safety window alone. Revisit it here so an immediate
-                        # restart cannot leave that temporary file forever.
                         await asyncio.to_thread(self.spool.cleanup_stale, 60.0)
                         await asyncio.to_thread(self.commits.sweep_unreferenced)
                 except (OSError, SpoolError) as error:
                     self.spool_health.record_failure(error)
                 if self.spool_health.capacity_exhausted:
-                    # Uploads and deletion continue while collection is
-                    # paused, so archived bytes can make room for this probe.
                     await self._spool_available()
                 await wait_or_stop(stop_requested, max(1.0, idle_seconds))
             if uploads is not None:
-                # Let the uploads process finish its uploads, so the last
-                # cleanup pass removes their saved copies too.
                 await drain_awaitable(asyncio.gather(uploads, return_exceptions=True))
             try:
                 await drain_to_thread(self.cleanup_uploaded, limit=_SHUTDOWN_CLEANUP_SIZE)
@@ -953,7 +906,7 @@ class Collector:
         try:
             self._database_metrics = await asyncio.to_thread(self.database.health_metrics)
         except psycopg.Error:
-            pass  # The sample ages; the alert check judges how old.
+            pass
         finally:
             self._metrics_refresh = None
 
@@ -977,8 +930,6 @@ class Collector:
         regular = self.regular_keys.health()
         interactive = self.interactive_keys.health()
         if path == "/readyz":
-            # Keep /metrics row counts out of readiness: they can exceed the
-            # container health-check deadline even when collection can continue.
             try:
                 await asyncio.to_thread(self._ping_database)
             except psycopg.Error:
@@ -994,10 +945,6 @@ class Collector:
                 state = "ready"
             body = state.encode() + b"\n"
             return (200 if healthy else 503), "text/plain", body
-        # Counting the queue took 21.6 s on 12 Oct 2026 with 113,000 jobs
-        # waiting, past the alert check's 10 s, so every alert run lost the
-        # collector's numbers. The last sample answers at once, with its time
-        # (metrics_sample_timestamp_seconds), while one read refreshes it.
         async with self._metrics_lock:
             if time.monotonic() >= self._metrics_refresh_after and self._metrics_refresh is None:
                 self._metrics_refresh_after = time.monotonic() + 30

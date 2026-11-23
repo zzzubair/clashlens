@@ -29,11 +29,6 @@ export interface SetupActionData {
   values: { username: string; displayName: string };
 }
 
-/**
- * GET /account/setup — first-time account creation form. Requires a valid
- * browser login; the account is created only through the private Python API.
- * "Not you?" logs that login out and starts the sign-up again.
- */
 export async function loader({ request }: Route.LoaderArgs): Promise<SetupLoaderData> {
   const { requireLogin } = await import("../server/auth-guard.server");
   await requireLogin(request);
@@ -52,7 +47,6 @@ export async function loader({ request }: Route.LoaderArgs): Promise<SetupLoader
   };
 }
 
-/** A new account links a player first, then goes on to where it was heading. */
 function linkFirst(returnPath: string, defaultPath: string): string {
   if (returnPath.split("?")[0] === "/account/verify-player") return returnPath;
   return returnPath === defaultPath
@@ -60,11 +54,6 @@ function linkFirst(returnPath: string, defaultPath: string): string {
     : `/account/verify-player?return=${encodeURIComponent(returnPath)}`;
 }
 
-/**
- * POST /account/setup — create the account. Same-origin, bounded form,
- * canonical idempotency UUID, early name validation (including the strict
- * inappropriate-name feedback), and safe Python error mapping.
- */
 export async function action({ request }: Route.ActionArgs) {
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);

@@ -113,7 +113,6 @@ def link_provider(
     with database.pool.connection() as connection:
         with connection.transaction():
             if not _lock_account(connection, account_id):
-                # Nothing is reserved yet, so there is no request to complete.
                 return OperationResult(404, {"error": "account_not_found"})
             existing = api_requests.reserve_request(connection, binding)
             if existing is not None:
@@ -179,7 +178,6 @@ def unlink_provider(
     with database.pool.connection() as connection:
         with connection.transaction():
             if not _lock_account(connection, account_id):
-                # Nothing is reserved yet, so there is no request to complete.
                 return OperationResult(404, {"error": "account_not_found"})
             existing = api_requests.reserve_request(connection, binding)
             if existing is not None:

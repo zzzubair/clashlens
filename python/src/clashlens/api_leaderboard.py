@@ -37,9 +37,7 @@ from .live_board import (
 from .shared_copy import SharedCopy
 
 _LIVE_FRESHNESS_SECONDS = 600
-# Rows kept beside a selected player when their page edge would hide them.
 _FOCUS_NEIGHBORS = 5
-# Finished Legend days each Live row's chart shows; today has its own column.
 RECENT_DAYS = 7
 
 
@@ -108,7 +106,6 @@ _LIVE_CANDIDATES_SQL = _live_candidates_sql()
 _LIVE_PLAYERS_SQL = f"""
 SELECT * FROM ({_LIVE_CANDIDATES_SQL}) AS candidate WHERE season_current
 """
-# The profile that ranks one player at 5,000 when their current one does not.
 UNPLAYED_PROFILE_SQL = f"""
 SELECT unplayed.id, unplayed.observed_at
 FROM players AS player
@@ -116,9 +113,6 @@ FROM players AS player
 WHERE player.normalized_tag = %(tag)s
 """
 
-# Equal trophies in the Daily board's order (analytics.tie_order_key), from
-# the counts the worker last saved (analytics.refresh_live_attack_tallies).
-# v1 ordered them by MD5 of the tag alone.
 _LIVE_ORDER_VERSION = "tracked-trophies-attack-destruction-v2"
 _LIVE_ORDER_SQL = (
     f"trophies DESC, {tie_order_sql('attacks', 'destruction', 'normalized_tag')}"
@@ -218,7 +212,6 @@ def live_freshness_metrics(database: ApiDatabase, *, now: datetime) -> dict[str,
 class _LiveBoard:
     tracked_population: int
     season_reset_pending: int
-    # (tag, name, trophies, observed_at, eligibility_state, clan) in rank order.
     rows: list[tuple[Any, ...]]
 
     def tied(self, index: int) -> bool:
@@ -392,7 +385,6 @@ def get_live_leaderboard(
         "calendar": calendar_payload(now),
         "tracked_population": board.tracked_population,
         "total_entries": total_entries,
-        # Tracked players left off until a profile names this Season.
         "season_reset_pending": board.season_reset_pending,
         "page": page,
         "page_size": limit,
@@ -611,7 +603,6 @@ def linked_season_days(
             "entry": None if entry is None else text_value(entry),
         })
     for player in players.values():
-        # One letter per day tuple, in the same order: played, shield or missing.
         player["heatmap_day_kinds"] = "".join(heatmap_kind(kept[1], kept[2], kept[3])[0] for kept in player["days"])
         player["heatmap_day_numbers"] = heatmap_day_numbers(
             day.season_start, day.day_number, player["season_weeks"], player["days"]

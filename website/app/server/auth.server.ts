@@ -11,16 +11,10 @@ export const MAX_PROVIDER_SUBJECT_LENGTH = 128;
 export const MAX_CALLBACK_PARAMS = 32;
 export const MAX_CALLBACK_PARAM_BYTES = 8192;
 
-/**
- * What the authorization completes: a browser login, or a link/unlink
- * started from an authenticated account. The provider is always the one
- * whose authorize route created the transaction.
- */
 /** Sign in, sign up (a missing account may be made), or change sign-in connections. */
 export type OAuthIntent = "login" | "signup" | "link" | "unlink";
 
 export interface OAuthTransaction {
-  /** The only provider whose callback may consume this transaction. */
   provider: "google" | "discord";
   state: string;
   nonce: string;
@@ -28,7 +22,6 @@ export interface OAuthTransaction {
   codeChallenge: string;
   returnPath: string;
   intent: OAuthIntent;
-  /** Fingerprint of the initiating login (createLoginSessionBinding), for link/unlink only. */
   sessionBinding?: string;
   issuedAt: number;
   expiresAt: number;
@@ -47,7 +40,6 @@ export class OAuthCallbackError extends Error {
   }
 }
 
-/** Provider subject bound: non-empty, bounded, no whitespace or control chars. */
 export function isProviderSubject(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -67,18 +59,10 @@ export function constantTimeEqual(left: string, right: string): boolean {
   return timingSafeEqual(leftBytes, rightBytes);
 }
 
-/** The two Phase 1 login providers; transactions are provider-bound. */
 export function isProvider(value: unknown): value is "google" | "discord" {
   return value === "google" || value === "discord";
 }
 
-/**
- * Fresh one-time OAuth transaction for exactly one provider and intent:
- * state, nonce, and PKCE S256 verifier with challenge, plus the validated
- * same-origin return path. The transaction lives for
- * OAUTH_TRANSACTION_LIFETIME_SECONDS and is consumed once.
- * `now` is the current epoch time in seconds.
- */
 export function createOAuthTransaction(
   returnPath: string,
   now: number,

@@ -1,13 +1,9 @@
-// The game's own symbols, drawn once and used everywhere: faceted gold stars,
-// the trophy, and solid sword and shield marks for attacks and defenses.
-
 const STAR =
   "M12 1.7 15.06 8.69 22.65 9.44 16.95 14.51 18.58 21.96 12 18.1 5.42 21.96 7.05 14.51 1.35 9.44 8.94 8.69Z";
 // The lit half of each arm, so a star reads as cut metal, not a text glyph.
 const STAR_LIGHT =
   "M12 12.9 8.94 8.69 12 1.7ZM12 12.9 15.06 8.69 22.65 9.44ZM12 12.9 16.95 14.51 18.58 21.96ZM12 12.9 12 18.1 5.42 21.96ZM12 12.9 7.05 14.51 1.35 9.44Z";
 
-/** One star: gold when won, a dark hollow when missed. */
 export function Star({ won }: { won: boolean }) {
   return (
     <svg
@@ -22,7 +18,6 @@ export function Star({ won }: { won: boolean }) {
   );
 }
 
-/** Three stars with `count` of them won, read out as "2 stars". */
 export function Stars({ count }: { count: number }) {
   const won = Math.max(0, Math.min(3, count));
   return (
@@ -64,7 +59,6 @@ export function TrophyIcon({ className = "game-trophy" }: { className?: string }
   );
 }
 
-/** A solid sword for attacks; takes the text colour. */
 export function SwordIcon() {
   return (
     <svg className="game-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -75,7 +69,6 @@ export function SwordIcon() {
   );
 }
 
-/** A solid shield for defenses; takes the text colour. */
 export function ShieldIcon() {
   return (
     <svg className="game-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">

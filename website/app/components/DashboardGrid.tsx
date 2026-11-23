@@ -62,9 +62,7 @@ import {
 
 interface ViewContext {
   tag: string;
-  /** The tag the owner views the dashboard as, read only; null otherwise. */
   viewAs: string | null;
-  /** The Legend day the cards were read for has ended. */
   dayOver: boolean;
   nowMs: number | null;
   timeZone: string;
@@ -112,15 +110,8 @@ function hasView(card: CardId): card is keyof CardDataMap {
   return Object.hasOwn(CARD_VIEWS, card);
 }
 
-// A card read before the shared board, or Legend day while its projected
-// place is worked out, asks again at most this many times, the server waiting
-// up to 4 seconds for them each time.
 const BOARD_TRIES = 3;
 
-/**
- * Reads `card` again with the shared board, showing `shown` until the read
- * comes back.
- */
 function ReadAgain<Data>({
   card,
   tag,
@@ -151,10 +142,6 @@ function ReadAgain<Data>({
   );
 }
 
-/**
- * A card's body: its data, or a note while it loads, before Done reads it,
- * or when it could not be read. `reads` is null while another player loads.
- */
 function cardBody(
   card: CardId,
   reads: CardReads | null,
@@ -195,7 +182,6 @@ function cardBody(
     value: NonNullable<Awaited<typeof read>>,
     context: ViewContext,
   ) => ReactNode;
-  // A card read before the shared board shows what it has and asks again.
   const show = (loaded: NonNullable<Awaited<typeof read>>, tries = 0): ReactNode =>
     "boardPending" in loaded && tries < BOARD_TRIES ? (
       <ReadAgain
@@ -219,10 +205,8 @@ function cardBody(
   );
 }
 
-/** The cards whose read says how fresh the page is, in the order asked. */
 const FRESH_CARDS = ["legend-day", "legend-clock", "rivals-watch", "cutoffs"] as const;
 
-/** When the read behind a card was taken; the older one when it has two. */
 export function readAt(card: (typeof FRESH_CARDS)[number], data: unknown): number | null {
   if (data === null || typeof data !== "object") return null;
   if (card === "legend-day") {
@@ -233,10 +217,6 @@ export function readAt(card: (typeof FRESH_CARDS)[number], data: unknown): numbe
   return (data as CardDataMap["rivals-watch" | "cutoffs"]).live?.observedAtMs ?? null;
 }
 
-/**
- * "Updated 9 min ago" in the toolbar when the Legend day card, which
- * otherwise says it, is not shown: the first other live card's read.
- */
 function Freshness({ reads, nowMs }: { reads: CardReads | null; nowMs: number | null }) {
   const card = FRESH_CARDS.find((name) => reads?.[name] !== undefined);
   const read = card ? reads?.[card] : undefined;
@@ -255,11 +235,6 @@ function Freshness({ reads, nowMs }: { reads: CardReads | null; nowMs: number | 
   );
 }
 
-/**
- * Beside the player tabs: the chosen player's page and Customise, each named.
- * A phone folds both into one ⋯ menu so the tabs keep the row; tapping
- * outside it, Escape or choosing either closes it.
- */
 function DashboardTools({
   tag,
   saving,
@@ -301,7 +276,6 @@ function DashboardTools({
         aria-controls="dash-tools"
         onClick={() => setOpen(!open)}
       >
-        {/* The sliders, so it never reads as the tab bar's More. */}
         <DashboardIcon name="gear" />
         <span className="dash-more-label">Options</span>
       </button>
@@ -327,7 +301,6 @@ function DashboardTools({
   );
 }
 
-/** Device-zone discovery may fail; UTC keeps the clock usable. */
 function deviceTimeZone(): string {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -392,7 +365,6 @@ function SettingsDialog({
   onClose: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
-  // Only this dialog's own save failing shows here, not an earlier one.
   const [tried, setTried] = useState(false);
   const [goal, setGoal] = useState(String(settings.goal));
   const [lines, setLines] = useState<number[]>(settings.cutoffs);
@@ -667,10 +639,6 @@ function FirstVisit({
   );
 }
 
-/**
- * The one way the dashboard saves its settings (Done, card settings, the
- * first-visit pick and Group watch's group). In View as it sends nothing.
- */
 export function saveSettings(
   fetcher: Pick<FetcherWithComponents<DashboardActionData>, "data" | "submit">,
   viewAs: string | null,
@@ -687,15 +655,6 @@ export function saveSettings(
   );
 }
 
-/**
- * The divider with "⚙ Customise dashboard", the card grid and Customise.
- * Customise edits a draft of the card order; Done saves it. Card settings
- * and the group picked on Group watch save at once, through `fetcher`, which
- * outlives a switch to another player. A save keeps the cards already shown
- * and reads only those it changes or adds. In View as nothing saves: Done
- * shows the new card order in this page only, until a reload or Exit, and
- * card settings stay closed.
- */
 export function Dashboard({
   tag,
   viewAs = null,
@@ -706,18 +665,14 @@ export function Dashboard({
   fetcher,
 }: {
   tag: string;
-  /** The tag the owner views the dashboard as, read only; null otherwise. */
   viewAs?: string | null;
-  /** As last saved: a change reads again the cards it changes or adds. */
   settings: DashboardSettings;
-  /** Null while the player's cards load. */
   data: CardReads | null;
   dayOver: boolean;
   idempotencyKey: string;
   fetcher: FetcherWithComponents<DashboardActionData>;
 }) {
   const refresher = useFetcher<DashboardLoaderData>();
-  // View as only: the card order Done last set, kept in this page alone.
   const [ownLayout, setOwnLayout] = useState<DashboardSettings["layout"]>(null);
   const settings = useMemo(
     () =>
@@ -726,13 +681,9 @@ export function Dashboard({
         : { ...accountSettings, layout: ownLayout },
     [accountSettings, viewAs, ownLayout],
   );
-  // Cards read again after a save, and cards waiting for that read.
   const [cardData, dispatchCards] = useReducer(cardRefreshStep, CARDS_FROM_LOAD);
   const { stale } = cardData;
-  // The cards' load and the settings they now follow.
   const readWith = useRef({ data, settings });
-  // A functional update rather than useReducer, so an event that changes
-  // nothing, as most drag moves do, skips the render.
   const [edit, setEdit] = useState(DASHBOARD_VIEWING);
   const dispatch = useCallback(
     (event: DashboardEditEvent) => setEdit((state) => dashboardEditStep(state, event)),
@@ -744,7 +695,6 @@ export function Dashboard({
   const adding = sheet?.kind === "adding";
   const editingSettings = sheet?.kind === "settings" ? sheet.card : null;
   const dragging = editing ? edit.dragging : null;
-  // Done waits for its own save's answer, not an earlier one.
   const finishing = editing ? edit.finishing : null;
   const [nowMs, setNowMs] = useState<number | null>(null);
   const [timeZone, setTimeZone] = useState("UTC");
@@ -757,16 +707,11 @@ export function Dashboard({
     return () => window.clearInterval(timer);
   }, []);
 
-  // A save is done once its answer is back; the reads it starts come later.
   const saving = fetcher.state === "submitting";
   const answer = saving ? undefined : fetcher.data;
   const saved = answer?.saved === true;
   const reads = cardReads(data, cardData);
 
-  // Saved settings read again only the cards whose numbers follow them or
-  // that have no data yet. A new load's cards follow its own settings, except
-  // in View as, where the load follows the default layout and cards added
-  // here are read again.
   useEffect(() => {
     const before = readWith.current;
     readWith.current = { data, settings };
@@ -781,7 +726,6 @@ export function Dashboard({
       dispatchCards({ type: "outdated", cards });
     }
   }, [data, settings, reads, viewAs]);
-  // One read for every out-of-date card; a newer one replaces it.
   const { load } = refresher;
   const loading = data === null;
   useEffect(() => {
@@ -814,7 +758,6 @@ export function Dashboard({
   const medium = cardPlaces(cards, 2, !editing);
   const change = (next: CardId[], message: string) =>
     dispatch({ type: "change", draft: next, status: message });
-  // Cancel, or Escape with no sheet open, leaves the saved layout as it was.
   const cancel = () => dispatch({ type: "cancel" });
   const sheetOpen = adding || editingSettings !== null;
   useEffect(() => {
@@ -826,7 +769,6 @@ export function Dashboard({
     return () => document.removeEventListener("keydown", onKey);
   });
 
-  // Dragging: the card under the pointer makes room; the page scrolls near its edges.
   useEffect(() => {
     if (dragging === null) return;
     const move = (event: PointerEvent) => {
@@ -878,7 +820,6 @@ export function Dashboard({
         <DashboardTools
           tag={tag}
           saving={saving}
-          // The Legend day card says how old the numbers are; without it, the toolbar does.
           fresh={
             dayOver || cards.includes("legend-day") ? null : (
               <Freshness reads={reads} nowMs={nowMs} />

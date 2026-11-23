@@ -35,12 +35,10 @@ SORTS = frozenset(
         "three-star-rate",
         "average-stars",
         "average-destruction",
-        # Army types only.
         "average-trophies",
     }
 )
 TOP_PRESETS = frozenset({5, 10, 20, 50, 100, 200, 300, 500, 1000, 2000, 5000, 10000})
-# Consistent top reads every member's facts, so it stays within the top 1,000.
 STREAK_PRESETS = frozenset({5, 10, 20, 50, 100, 200, 500, 1000})
 RANK_BANDS = frozenset(
     {
@@ -56,7 +54,6 @@ RANK_BANDS = frozenset(
         (5001, 10000),
     }
 )
-# A trophy range is any whole-number range inside these limits.
 TROPHY_RANGE_LIMITS = (0, 99999)
 
 
@@ -309,7 +306,6 @@ def finish_army_result(
             "three_star_rate": star_rates[3],
             "average_stars": stars / sample if sample else 0,
             "average_destruction": destruction / sample if sample else 0,
-            # Unnamed ids count like any other unit, so nothing is excluded.
             "unknown_excluded_attacks": 0,
         })
     sort_field = {

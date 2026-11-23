@@ -184,6 +184,5 @@ def infer_shield(
     if not evidence["trophies_unchanged"]:
         return Shield(ShieldState.NOT_INFERRED, None, evidence)
 
-    # Shields stack, so a run of such days is shielded however long it lasts.
     prior_run = previous.shield_run_length if previous is not None else 0
     return Shield(ShieldState.INFERRED_SHIELDED, prior_run + 1, evidence)

@@ -27,7 +27,6 @@ export function useSeasonEnded(end: string | null): boolean {
   return seasonEnded;
 }
 
-/** A player whose trophies belong to a Season that has ended. */
 export function expireSeasonTrophies<
   T extends { trophies: number | null; seasonResetPending: boolean },
 >(player: T): T {

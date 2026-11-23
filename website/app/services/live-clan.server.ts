@@ -2,7 +2,6 @@ import { allowLiveClanRead } from "../server/abuse.server";
 import { isRecord, isString, PythonApiError } from "./python-response.server";
 import { requestJson } from "./python-transport.server";
 
-/** The player's clan in the game right now; `clan` is null when they are in none. */
 export interface LiveClan {
   clan: { name: string; tag: string } | null;
 }
@@ -11,10 +10,6 @@ export interface LiveClan {
 // under its five-second limit, so a slow answer never holds the page.
 const LIVE_CLAN_TIMEOUT_MS = 2_500;
 
-/**
- * Null when the game gave no answer (logged with why), or this visitor asked
- * too often: the page keeps the saved clan.
- */
 export async function getLiveClan(
   identity: string | undefined,
   tag: string,

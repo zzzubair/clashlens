@@ -1,15 +1,5 @@
 import { signedNumber } from "./number-format";
 import { elapsedUnits } from "./age-format";
-/**
- * The OBS overlay itself, drawn into one element. It runs in OBS's browser
- * source through the private link, and in the account page's preview.
- *
- * The box is exactly w × h stream pixels: its shape picks the arrangement
- * (card, wide card, strip or column), the content is laid out at its natural
- * size and scaled to fit, and the least important parts are left out first
- * when it would get too small to read. Squares, totals and the pop-up change
- * together, from one update.
- */
 import {
   OVERLAY_FONTS,
   parseSettingsContract,
@@ -25,7 +15,6 @@ type Part = string;
 type Font = keyof typeof OVERLAY_FONTS;
 type Arrangement = "card" | "wide" | "strip" | "column";
 
-/** What the overlay tells the page around it after each layout. */
 export interface OverlaySize {
   type: "cl-overlay-size";
   layout: Arrangement;
@@ -61,7 +50,6 @@ const FONT_FAMILY: Record<Font, string> = {
 };
 const MIN_SCALE = 0.6;
 const MAX_SCALE = 4;
-// Left out first when space runs short.
 const DROP_ORDER: Part[] = ["updated", "day", "net", "rank"];
 const TOAST_MS = 6_000;
 const DEMO_FIRST_MS = 800;
@@ -95,7 +83,6 @@ const esc = (s: unknown) =>
     (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] ?? c,
   );
 
-/** The overlay's settings from an address query. */
 export function readConfig(search: string, contract: OverlaySettingsContract): Config {
   const q = new URLSearchParams(search);
   const pick = (key: string) => {
@@ -121,7 +108,6 @@ export function readConfig(search: string, contract: OverlaySettingsContract): C
     text: pick("text") as Config["text"],
     bg: pick("bg") as Config["bg"],
     popup: pick("popup") !== "0",
-    // An absent viewer size stays blank; an absent fit stays inline, as before.
     screen: q.get("fit") === "screen" && contract.choices.fit.includes("screen"),
     x: number("x"),
     y: number("y"),
@@ -132,7 +118,6 @@ export function readConfig(search: string, contract: OverlaySettingsContract): C
   };
 }
 
-/** The box's shape picks the arrangement: wide is a strip, tall is a column. */
 export function arrangementFor(w: number, h: number): Arrangement {
   const ratio = w / h;
   return ratio >= 4.5
@@ -144,7 +129,6 @@ export function arrangementFor(w: number, h: number): Arrangement {
         : "card";
 }
 
-/** A battle is good, middling or bad for the player shown. */
 function tone(b: OverlayBattle): "good" | "mid" | "bad" {
   if (b.kind === "attack") return b.stars === 3 ? "good" : b.stars === 2 ? "mid" : "bad";
   return b.stars === 3 ? "bad" : b.stars === 2 ? "mid" : "good";
@@ -181,55 +165,17 @@ function demoBattle(kind: OverlayBattle["kind"], i: number): OverlayBattle {
   };
 }
 
-/**
- * What the overlay shows, from its settings alone (`overlaySource`):
- *
- * - `none`: no player picked; it says "Pick a player".
- * - `player`: the picked player, read every 20 seconds. A failed read keeps
- *   the last view and marks it offline; the next read tries again.
- * - `demo`: a made-up day that plays a battle every 12 seconds, named after
- *   the picked player when one is read.
- *
- * Picking another player or turning the demo on or off starts that source
- * over: its first read shows no battle notice, and each later read that
- * brings new battles shows one notice for all of them, replacing any notice
- * still showing (`BattleRead`, `Notice`).
- */
 export type OverlaySource = "none" | "player" | "demo";
 
 export function overlaySource(cfg: { demo: boolean; tag: string }): OverlaySource {
   return cfg.demo ? "demo" : cfg.tag ? "player" : "none";
 }
 
-/**
- * How the overlay follows its private link's saved settings, read every 3
- * seconds:
- *
- * - `unread`: no settings read yet; the first answer applies them afresh.
- * - `following`: the settings of one saved version and player (`key`) show; a
- *   new version or player applies on top of them.
- * - `retired`: the link was replaced, so the overlay shows nothing and checks
- *   once a minute; an answer after that applies afresh.
- *
- * A failed read keeps the last settings. Nothing is kept between page loads,
- * so OBS reloading the source starts `unread`.
- */
 type LinkFollow =
   { kind: "unread" } | { kind: "following"; key: string } | { kind: "retired" };
 
-/**
- * Which battles the current source has already shown (`accept` moves it):
- *
- * - `first`: none yet; the next read only records its battles, with no notice.
- * - `seen`: these battle ids are on screen; a later read's other battles are new.
- *
- * Starting a source over (another player, the demo on or off) goes back to
- * `first`. A failed read keeps it.
- */
 export type BattleRead = { kind: "first" } | { kind: "seen"; ids: Set<string> };
 
-/** One read's battles: which are new to the screen (none on a first or
- * `quiet` read), and what has been seen after it. */
 export function readBattles(
   read: BattleRead,
   battles: OverlayBattle[],
@@ -240,31 +186,14 @@ export function readBattles(
   return { read: { kind: "seen", ids: new Set(battles.map((b) => b.id)) }, fresh };
 }
 
-/**
- * The battle notice (`showToast` moves it):
- *
- * - `hidden`: no notice shows.
- * - `showing`: these battles' notice shows for 6 seconds, then hides; a newer
- *   notice replaces it and starts the 6 seconds again. A redraw keeps it showing.
- */
 export type Notice = { kind: "hidden" } | { kind: "showing"; battles: OverlayBattle[] };
 
-/** The notice new battles bring, or null when there are none or pop-ups are off. */
 export function noticeFor(battles: OverlayBattle[], popup: boolean): Notice | null {
   return popup && battles.length ? { kind: "showing", battles } : null;
 }
 
-/**
- * Whether the overlay is still mounted: `running` until the returned stop
- * function makes it `stopped`, after which no timer runs and nothing redraws.
- */
 type Mounted = "running" | "stopped";
 
-/**
- * The overlay's timers and its `Mounted` state, their one owner: `later`
- * runs only while `running`, and `stop` makes it `stopped` and clears every
- * timer still waiting. Nothing restarts it; a new mount makes new timers.
- */
 export function overlayTimers() {
   let mounted: Mounted = "running";
   const timers = new Set<ReturnType<typeof setTimeout>>();
@@ -291,14 +220,6 @@ export function overlayTimers() {
   };
 }
 
-/**
- * Draw the overlay into `root` and keep it live, until the returned stop
- * function clears every timer. With `link`, it follows the saved settings of
- * that private link (`LinkFollow`). Without, it takes its settings from
- * `search` and from the page around it (the account page's preview). What it
- * shows is `OverlaySource`; its progress is `BattleRead`, `Notice` and
- * `Mounted`.
- */
 export function mountOverlay(
   root: HTMLElement,
   {
@@ -334,7 +255,6 @@ export function mountOverlay(
     return html;
   }
 
-  // Small and quiet: "Powered by [mark] clashlens.net", always shown.
   function brand(layout: Arrangement) {
     const mark = `<img src="/images/mark-cl-block.svg" alt=""><span class="ov-cl">clashlens.net</span>`;
     if (layout === "strip")
@@ -420,7 +340,6 @@ export function mountOverlay(
       if (show.has("net"))
         body += `<div class="ov-net"><span class="ov-muted">${m.left === null ? "" : m.left ? `${m.left} battle${m.left === 1 ? "" : "s"} left` : "All 16 battles done"}</span><span>Net today ${netValue(m)}</span></div>`;
     }
-    // A normal card stacks left over right; a wide card puts them side by side.
     return `<div class="ov-box">
       <div class="ov-main"><div class="ov-left">${left}</div><div class="ov-right">${body}</div></div>
       <div class="ov-foot">${brand("card")}${upd}</div>
@@ -499,7 +418,6 @@ export function mountOverlay(
   }
 
   function draw(layout: Arrangement, m: Model, show: Set<Part>) {
-    // A wide card is the card, side by side.
     return layout === "strip"
       ? renderStrip(m, show)
       : layout === "column"
@@ -520,8 +438,6 @@ export function mountOverlay(
     stage.style.left = `${cfg.screen ? cfg.x : 0}px`;
     stage.style.top = `${cfg.screen ? cfg.y : 0}px`;
     const shadow = cfg.bg === "card" ? 6 : 0;
-    // Lay it out at its natural size, then scale it to fit the box; if it
-    // would get too small to read, leave out the least important parts.
     const shown = new Set(cfg.show);
     let scale: number;
     hidden = [];
@@ -564,7 +480,6 @@ export function mountOverlay(
     }
   }
 
-  // ---------- pop-up ----------
   function toastHtml(list: OverlayBattle[]) {
     if (list.length > 1) {
       const sum = list.reduce((total, b) => total + b.trophies, 0);
@@ -587,8 +502,6 @@ export function mountOverlay(
       </span>`;
   }
 
-  // One pop-up per update, shown the moment the squares change. Battles that
-  // land together share one pop-up; a newer update replaces the one showing.
   function showToast(list: OverlayBattle[]) {
     const next = noticeFor(list, cfg.popup);
     if (!next) return;
@@ -607,7 +520,6 @@ export function mountOverlay(
     }, TOAST_MS);
   }
 
-  // The squares, totals and pop-up all come from this one update.
   function accept(next: View, quiet = false) {
     const battles = next.day?.battles ?? [];
     const after = readBattles(read, battles, quiet);
@@ -619,7 +531,6 @@ export function mountOverlay(
     showToast(fresh);
   }
 
-  // ---------- live data ----------
   const inflight = new Set<AbortController>();
   const timedRead = async (url: string) => {
     const controller = new AbortController();
@@ -645,7 +556,6 @@ export function mountOverlay(
     return JSON.parse(res.text) as View;
   }
 
-  // Whether `tag` is still the player the overlay reads.
   const reading = (tag: string) =>
     clock.running() && overlaySource(cfg) === "player" && cfg.tag === tag;
 
@@ -662,7 +572,6 @@ export function mountOverlay(
     if (reading(tag)) pollTimer = later(poll, PLAYER_POLL_MS);
   }
 
-  // ---------- demo: a made-up day that plays a battle every 12 seconds ----------
   function stopDemo() {
     cancel(demoTimer);
     demoTimer = undefined;
@@ -702,8 +611,7 @@ export function mountOverlay(
       );
     };
     read = { kind: "first" };
-    for (let k = 0; k < 5; k++) push(true); // the starting battles make no pop-ups
-    // The first made-up battle lands straight away, then one every 12 seconds.
+    for (let k = 0; k < 5; k++) push(true);
     const every = () => {
       push();
       demoTimer = later(every, DEMO_EVERY_MS);
@@ -719,7 +627,6 @@ export function mountOverlay(
     const prev = cfg ?? nextConfig;
     cfg = nextConfig;
     if ((initial || cfg.font !== prev.font) && cfg.font !== "clashlens") {
-      // Lay out again once the font is in, so the fit is measured with it.
       document.fonts.load(`700 24px "${FONT_FAMILY[cfg.font]}"`).then(render, () => {});
     }
     const wasDemo = overlaySource(prev) === "demo";
@@ -763,15 +670,12 @@ export function mountOverlay(
     }
   };
   window.addEventListener("message", onMessage);
-  // Keep "Updated N min ago" honest.
   const tick = setInterval(() => {
     if (cfg && data && overlaySource(cfg) !== "demo") render();
   }, 30_000);
   void document.fonts.ready.then(render);
 
   if (link !== null) {
-    // A saved link: the settings live on Clash Lens and are read again every
-    // 3 seconds, so a change on the account page shows here with no new address.
     let followed: LinkFollow = { kind: "unread" };
     const follow = async () => {
       let wait = SETTINGS_POLL_MS;
@@ -779,7 +683,6 @@ export function mountOverlay(
         const res = await timedRead(`/o/${encodeURIComponent(link)}/settings`);
         if (!clock.running()) return;
         if (res.status === 404) {
-          // A replaced link shows nothing, and checks rarely.
           cancel(pollTimer);
           stopDemo();
           if (cfg) cfg = { ...cfg, tag: "", demo: false, w: 0, h: 0 };
@@ -815,7 +718,6 @@ export function mountOverlay(
     void follow();
   } else {
     apply(search, true);
-    // The account page answers with its newest settings, made while this loaded.
     if (window.parent !== window)
       window.parent.postMessage({ type: "cl-overlay-ready" }, location.origin);
   }

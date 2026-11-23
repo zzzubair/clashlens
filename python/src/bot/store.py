@@ -26,12 +26,8 @@ from clashlens.domain import SEASON_START_TROPHIES
 
 from . import replies
 
-# The website's own freshness limit for a saved player profile.
 FRESHNESS_SECONDS = 900
-# The longest search the website takes; no player's name is longer.
 MAX_SEARCH_LENGTH = 80
-# Players found by name from the saved list of those not played yet this
-# Season, as many as one reply can show.
 MOST_SAVED_MATCHES = 25
 
 

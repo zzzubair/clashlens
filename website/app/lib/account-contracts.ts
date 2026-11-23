@@ -28,7 +28,6 @@ export interface AccountSummary {
   username: string;
   displayName: string;
   verifiedPlayers: VerifiedPlayer[];
-  /** The verified player the Discord bot uses when none is named, if chosen. */
   defaultPlayer: string | null;
   /** The default player once the default player is unlinked, if any. */
   nextDefaultPlayer: string | null;
@@ -49,7 +48,6 @@ export type GroupPlayerState =
   | "failed"
   | "unknown";
 
-/** One group member with the stored in-game name and trophies, when known. */
 export interface GroupPlayer {
   tag: string;
   name: string | null;
@@ -115,7 +113,6 @@ export interface LinkedPlayerCard extends VerifiedPlayer {
   reason: NonNullable<PlayerLookup["reason"]> | null;
   trophies: number | null;
   seasonResetPending: boolean;
-  /** Live Leaderboard position; null when not on the board. */
   rank: number | null;
   /** League its newest saved profile names; shown when it has no rank. */
   league: string | null;
@@ -414,7 +411,6 @@ export function mapPublicUser(value: unknown): PublicUser | null {
   };
 }
 
-/** One player's card on its own, as the owner's View as reads it. */
 export function mapLinkedPlayerCard(value: unknown): LinkedPlayerCard | null {
   const player = asVerifiedPlayer(value);
   return player === null ? null : asLinkedPlayerCard(value, player);

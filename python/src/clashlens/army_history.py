@@ -64,8 +64,6 @@ def usage_rows(
     rows = []
     for typed_id, quantity, count, one_star, two_star, three_star in stored:
         known = is_valid_typed_id(typed_id)
-        # Unclassified IDs appear explicitly ambiguous in both views until
-        # the catalogue can determine which category owns them.
         if typed_id.startswith("troop:") and known and is_siege_troop(typed_id) != (category == "siege"):
             continue
         rows.append({

@@ -20,7 +20,6 @@ const CHOICE_TEXT = {
   declined: "You declined visitor counting in this browser.",
 };
 
-/** GET /privacy — plain-words notice of who runs Clash Lens, visitor counting and the choice about it. */
 export default function Privacy() {
   const counting = Boolean(useRouteLoaderData<RootLoaderData>("root")?.analytics);
   const choice = useAnalyticsChoice();

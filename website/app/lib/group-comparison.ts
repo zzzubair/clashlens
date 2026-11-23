@@ -35,7 +35,6 @@ export interface ComparedPlayer {
   you: boolean;
   inGroup: boolean;
   status: MemberStatus;
-  /** This Season's Legend I part, for a player who left it. */
   leftLegendI?: LeftLegendI | null;
   trophies: number | null;
   /** The latest profile is from before this player's Season reset; trophies stay null. */
@@ -62,7 +61,6 @@ export interface ComparedPlayer {
     destruction: number;
     threeStars: number;
     trophies: number;
-    /** Days with at least one recorded attack. */
     days: number;
   };
   defense: {
@@ -71,7 +69,6 @@ export interface ComparedPlayer {
     destruction: number;
     trophies: number;
     starCounts: [number, number, number, number];
-    /** Days with at least one recorded defense. */
     days: number;
   };
 }
@@ -85,7 +82,6 @@ export interface GroupComparison {
   dayStarts: string[];
   todayStart: string;
   generatedAt: string;
-  /** The current Season: its first Reset, in Unix seconds. */
   season: string;
   players: ComparedPlayer[];
 }

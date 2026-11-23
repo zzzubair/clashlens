@@ -31,18 +31,12 @@ const RANKINGS_PATH = "/leaderboards/tracked?view=live&page=1";
 
 export interface FrontPageData {
   loginAvailable: boolean;
-  /** Off, the page leaves out what an account adds. */
   dashboardEnabled: boolean;
   leaderboard: TrackedLeaderboard | null;
   error: WebsiteErrorResponse | null;
 }
 
-/**
- * What `/` shows anyone not signed in, and search engines: search first,
- * then what an account adds with an example dashboard, then the top players.
- */
 export function FrontPage({ data }: { data: FrontPageData }) {
-  // Set by /logout: signed out, or signed out here but not recorded.
   const [searchParams] = useSearchParams();
   const logoutUnrecorded = searchParams.get("logout") === "unrecorded";
   const loggedOut = searchParams.get("saved") === "logout";
@@ -85,9 +79,6 @@ export function FrontPage({ data }: { data: FrontPageData }) {
   );
 }
 
-/** Three more things Clash Lens does, each led by three game portraits in
- *  the same tiles, a line apiece. Watchlists and Crews ask a visitor to sign
- *  in, and say why. */
 function MoreFeatures() {
   const crews = useRouteLoaderData<RootLoaderData>("root")?.crewsEnabled === true;
   return (
@@ -115,8 +106,6 @@ function MoreFeatures() {
   );
 }
 
-/** Proof the board is live, under the search: how many players it ranks
- *  and how long ago it last changed, the page's one update time. */
 function LiveProof({ leaderboard }: { leaderboard: TrackedLeaderboard | null }) {
   const now = useServerTime(leaderboard?.generatedAt);
   const observedAt = leaderboard
@@ -132,7 +121,6 @@ function LiveProof({ leaderboard }: { leaderboard: TrackedLeaderboard | null }) 
       ) : null}
       {leaderboard.totalEntries.toLocaleString("en-GB")}{" "}
       <span className="front-proof-wide">Legend </span>players ranked ·{" "}
-      {/* Wraps as one piece, never leaving "ago" alone on a line. */}
       <span className="front-proof-age">
         updated{" "}
         <time dateTime={observedAt} title={formatTimestamp(observedAt)}>
@@ -157,7 +145,6 @@ function TopPlayers({
         Math.floor((now - Date.parse(entry.freshness.observedAt)) / 1000) >
         OLD_UPDATE_SECONDS,
     ).length ?? 0;
-  // The freshest row's age, for when every row is old.
   const newestAge = Math.min(
     ...(leaderboard?.entries ?? []).map((entry) =>
       Math.floor((now - Date.parse(entry.freshness.observedAt)) / 1000),
@@ -171,7 +158,6 @@ function TopPlayers({
       <div className="section-heading">
         <div>
           <h2 id="live-leaderboard-title">Top {FRONT_PAGE_PLAYERS} now</h2>
-          {/* The update time is the hero's; a note only when rows lag. */}
           {leaderboard && staleEntries > 0 ? (
             <p className="standings-context">
               {staleEntries === leaderboard.entries.length
@@ -215,9 +201,6 @@ function TopPlayers({
   );
 }
 
-// The Top 10 as one list in Rankings' row style, under the same headings:
-// plate, places moved since Reset, name, clan (under the name on a phone),
-// the last 7 days, trophies since Reset and trophies.
 function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
   const backState = useBackState("Clash Lens");
   const compared = comparesWithReset(entries);

@@ -19,9 +19,6 @@ type BattleGroup = Pick<
   categories: Record<string, ArmyAnalytics["rows"]>;
 };
 
-// One bounded capture of official battle logs. The existing Python battle
-// parser, army decoder and build_army_result produced these aggregates.
-// This preview never treats the capture as a complete daily publication.
 const capture = captured as unknown as {
   fetchedAt: string;
   playerCount: number;

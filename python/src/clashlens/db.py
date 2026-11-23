@@ -26,8 +26,6 @@ from .past_reset_pacing import (
 DEFAULT_PARSER_VERSION = "supercell-source-parser-v2"
 CONTRACT_VERSION = 5
 PYTHON_LIVE_PRIORITY = 100
-# Reset readings, ended-day results, board builds; only other work gains 10 a minute,
-# so live jobs in the claim window, retried ones included, pass it at 20 minutes.
 PYTHON_RESET_PRIORITY = 300
 
 
@@ -624,7 +622,6 @@ class Database:
                     return []
             hold, first = background_pacing.reset_first_claim(
                 connection, work_types, reset_first, rush=reset_rush)
-            # In the window, planned responses yield to Reset work on a rush turn too.
             planned = planned or (reset_rush and hold and first is True and job_ids is not None)
             reset_first = first
             options = {
@@ -655,7 +652,6 @@ class Database:
                 for row in rows]
         ids = [int(job["job_id"]) for job in jobs]
         tokens = [uuid4().hex for _ in jobs]
-        # A dependency resumption reuses its ordinary attempt slot.
         resumes = [text_value(job["state"]) == "waiting_dependency" for job in jobs]
         previous = dict(connection.execute(
             "SELECT job_id, max(attempt_number) FROM python_processing_attempts"

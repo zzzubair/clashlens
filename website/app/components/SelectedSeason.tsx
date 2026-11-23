@@ -20,7 +20,6 @@ import { SeasonSummary, type SummarySide } from "./SeasonSummary";
 
 type PastShape = NonNullable<HistoricalSeasonSummary["seasonShape"]>;
 
-/** A chosen past Season: its finish, then its saved days in the log's short rows. */
 export function SelectedSeason({
   seasonId,
   bounds,
@@ -103,8 +102,6 @@ function SeasonFinish({
           }
         : tracked &&
           summary.coverageState !== "complete" && {
-            // Every day can be saved and the Season still partial, when a day
-            // or a total isn't confirmed.
             meta:
               summary.daysObserved < summary.dayCount
                 ? `${summary.dayCount - summary.daysObserved} of ${summary.dayCount} days missing`
@@ -145,14 +142,11 @@ function SeasonFinish({
   );
 }
 
-// The official in-game placement, never Clash Lens's own leaderboard position.
 function finalRank(summary: HistoricalSeasonSummary): string {
   const placement = summary.officialHistory?.finalPlacement ?? null;
   return placement === null ? "Not published yet" : `#${formatCount(placement)}`;
 }
 
-// Each saved day as one short row, like the Daily Legend log; opening it shows
-// its evidence and the rest of its numbers. A day link opens its day.
 function SeasonDays({
   summary,
   shape,
@@ -161,7 +155,6 @@ function SeasonDays({
   shape: PastShape;
 }) {
   const selectedDay = validDay(useSearchParams()[0].get("day"));
-  // Days outside Legend I, or before sign-up, as one row each stretch.
   const gaps = shape.partial ? logGaps(shape) : [];
   const rows = [
     ...summary.dailyEntries
@@ -171,7 +164,6 @@ function SeasonDays({
   ].sort((a, b) => a.start - b.start);
   const moves = rankMoves(summary.dailyEntries);
   const { hash } = useLocation();
-  // A day link opens at its row unless the link names a place on the page.
   useEffect(() => {
     if (!hash) document.getElementById(`legend-day-${selectedDay}`)?.scrollIntoView();
   }, [hash, selectedDay]);

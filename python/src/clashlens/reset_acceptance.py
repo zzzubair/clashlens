@@ -65,8 +65,6 @@ def refresh(
     with connection.transaction():
         connection.execute("SET LOCAL lock_timeout = '1s'")
         connection.execute("SET LOCAL statement_timeout = '20s'")
-        # The previous Reset too, for a stage the check was not running for,
-        # and any kept sweep the check never recorded while it was down.
         sweeps = connection.execute(
             """
             SELECT id, boundary_at, cardinality(member_ids), membership_captured_at
@@ -129,14 +127,6 @@ def _refresh_one(
     if collection_done:
         _first_seen(record, changes, Milestone.COLLECTION_FINISHED, finished_at)
     if record[Milestone.PROOF_PROCESSED] is None and collection_done:
-        # Every response a Reset item saved counts, even when a later request
-        # of that item failed or a newer response replaced it. Unchanged
-        # readings reuse a response saved before the Reset, whose finished job
-        # may already be cleaned up. A response saved since the Reset, or no
-        # longer kept, whose jobs are gone was cleaned up before the check saw
-        # it finish: the time is then unknown and stays empty, never the
-        # collection time. A response whose job failed counts once a replay
-        # job processed it, at the first time any of its jobs finished.
         pending, gone, processed_at = connection.execute(
             """
             SELECT count(*) FILTER (WHERE processing.jobs > 0 AND NOT processing.done),

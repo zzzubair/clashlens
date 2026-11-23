@@ -1,0 +1,1177 @@
+{
+  "app/components/AccountMenu.tsx": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/components/Analytics.tsx": {
+    "clashlens/no-comments": {
+      "count": 18
+    }
+  },
+  "app/components/ArmyCards.tsx": {
+    "clashlens/no-comments": {
+      "count": 3
+    }
+  },
+  "app/components/ArmyMap.tsx": {
+    "clashlens/no-comments": {
+      "count": 29
+    }
+  },
+  "app/components/ArmyPortraits.tsx": {
+    "clashlens/no-comments": {
+      "count": 3
+    }
+  },
+  "app/components/BackLink.tsx": {
+    "clashlens/no-comments": {
+      "count": 4
+    }
+  },
+  "app/components/BattleStatistics.tsx": {
+    "clashlens/no-comments": {
+      "count": 5
+    }
+  },
+  "app/components/BoardCards.tsx": {
+    "clashlens/no-comments": {
+      "count": 28
+    }
+  },
+  "app/components/CrewBoards.tsx": {
+    "clashlens/no-comments": {
+      "count": 7
+    }
+  },
+  "app/components/CrewDay.tsx": {
+    "clashlens/no-comments": {
+      "count": 3
+    }
+  },
+  "app/components/CrewForms.tsx": {
+    "clashlens/no-comments": {
+      "count": 10
+    }
+  },
+  "app/components/DashboardIcon.tsx": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "app/components/DashboardParts.tsx": {
+    "clashlens/no-comments": {
+      "count": 5
+    }
+  },
+  "app/components/FoldedBattles.tsx": {
+    "clashlens/no-comments": {
+      "count": 5
+    }
+  },
+  "app/components/GainLines.tsx": {
+    "clashlens/no-comments": {
+      "count": 18
+    }
+  },
+  "app/components/GameIcons.tsx": {
+    "clashlens/no-comments": {
+      "count": 5
+    }
+  },
+  "app/components/LastDays.tsx": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/components/LeaderboardShared.tsx": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "app/components/LegendClock.tsx": {
+    "clashlens/no-comments": {
+      "count": 38
+    }
+  },
+  "app/components/LegendDayCard.tsx": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "app/components/LegendLog.tsx": {
+    "clashlens/no-comments": {
+      "count": 19
+    }
+  },
+  "app/components/LinkedBattle.tsx": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "app/components/OpponentsCard.tsx": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "app/components/PageSearch.tsx": {
+    "clashlens/no-comments": {
+      "count": 5
+    }
+  },
+  "app/components/PlayerActions.tsx": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "app/components/PlayerSearch.tsx": {
+    "clashlens/no-comments": {
+      "count": 16
+    }
+  },
+  "app/components/Provenance.tsx": {
+    "clashlens/no-comments": {
+      "count": 3
+    }
+  },
+  "app/components/RefreshProgress.tsx": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "app/components/SeasonCards.tsx": {
+    "clashlens/no-comments": {
+      "count": 8
+    }
+  },
+  "app/components/SeasonHeatGrid.tsx": {
+    "clashlens/no-comments": {
+      "count": 7
+    }
+  },
+  "app/components/SeasonMenu.tsx": {
+    "clashlens/no-comments": {
+      "count": 4
+    }
+  },
+  "app/components/SeasonReread.ts": {
+    "clashlens/no-comments": {
+      "count": 5
+    }
+  },
+  "app/components/SeasonStory.tsx": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/components/SeasonSummary.tsx": {
+    "clashlens/no-comments": {
+      "count": 21
+    }
+  },
+  "app/components/SelectedSeason.tsx": {
+    "clashlens/no-comments": {
+      "count": 3
+    }
+  },
+  "app/components/SiteMenu.tsx": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/components/StandingsCells.tsx": {
+    "clashlens/no-comments": {
+      "count": 3
+    }
+  },
+  "app/components/TagSearchAgain.tsx": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/components/ThemeToggle.tsx": {
+    "clashlens/no-comments": {
+      "count": 4
+    }
+  },
+  "app/components/TrophyLine.tsx": {
+    "clashlens/no-comments": {
+      "count": 17
+    }
+  },
+  "app/components/ViewAs.tsx": {
+    "clashlens/no-comments": {
+      "count": 3
+    }
+  },
+  "app/entry.server.tsx": {
+    "clashlens/no-comments": {
+      "count": 3
+    }
+  },
+  "app/lib/account-contracts.ts": {
+    "clashlens/no-comments": {
+      "count": 10
+    }
+  },
+  "app/lib/account-validation.ts": {
+    "clashlens/no-comments": {
+      "count": 5
+    }
+  },
+  "app/lib/age-format.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "app/lib/analytics.ts": {
+    "clashlens/no-comments": {
+      "count": 7
+    }
+  },
+  "app/lib/army-stats.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "app/lib/army.ts": {
+    "clashlens/no-comments": {
+      "count": 3
+    }
+  },
+  "app/lib/blog.ts": {
+    "clashlens/no-comments": {
+      "count": 3
+    }
+  },
+  "app/lib/calendar.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/lib/clock-format.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "app/lib/contracts.ts": {
+    "clashlens/no-comments": {
+      "count": 11
+    }
+  },
+  "app/lib/crew-contracts.ts": {
+    "clashlens/no-comments": {
+      "count": 11
+    }
+  },
+  "app/lib/dashboard-armies.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/lib/dashboard-cards.ts": {
+    "clashlens/no-comments": {
+      "count": 59
+    }
+  },
+  "app/lib/dashboard-data.ts": {
+    "clashlens/no-comments": {
+      "count": 7
+    }
+  },
+  "app/lib/dashboard.ts": {
+    "clashlens/no-comments": {
+      "count": 5
+    }
+  },
+  "app/lib/day-bars.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "app/lib/discord.ts": {
+    "clashlens/no-comments": {
+      "count": 3
+    }
+  },
+  "app/lib/game-links.ts": {
+    "clashlens/no-comments": {
+      "count": 3
+    }
+  },
+  "app/lib/group-comparison.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "app/lib/group-text.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/lib/keep-page.ts": {
+    "clashlens/no-comments": {
+      "count": 19
+    }
+  },
+  "app/lib/left-legend.ts": {
+    "clashlens/no-comments": {
+      "count": 3
+    }
+  },
+  "app/lib/number-format.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "app/lib/obs-overlay-view.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/lib/player-refresh.ts": {
+    "clashlens/no-comments": {
+      "count": 7
+    }
+  },
+  "app/lib/root-data.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/lib/season-end.ts": {
+    "clashlens/no-comments": {
+      "count": 5
+    }
+  },
+  "app/lib/season-shape.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/root.tsx": {
+    "clashlens/no-comments": {
+      "count": 40
+    }
+  },
+  "app/routes/account.discord-alerts.tsx": {
+    "clashlens/no-comments": {
+      "count": 14
+    }
+  },
+  "app/routes/account.groups.redirect.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/routes/account.moved.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/routes/account.obs-overlay.save.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/routes/account.players.$tag.unlink.tsx": {
+    "clashlens/no-comments": {
+      "count": 3
+    }
+  },
+  "app/routes/account.saved-players.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/routes/account.settings.tsx": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "app/routes/account.setup.tsx": {
+    "clashlens/no-comments": {
+      "count": 4
+    }
+  },
+  "app/routes/account.verify-player.tsx": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/routes/army-analytics.tsx": {
+    "clashlens/no-comments": {
+      "count": 52
+    }
+  },
+  "app/routes/army-variant-examples.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "app/routes/auth.google.callback.tsx": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/routes/blog.media.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/routes/blog.rss.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/routes/crews.$crewId.settings.tsx": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/routes/crews.$crewId.tsx": {
+    "clashlens/no-comments": {
+      "count": 10
+    }
+  },
+  "app/routes/crews.join.$code.tsx": {
+    "clashlens/no-comments": {
+      "count": 6
+    }
+  },
+  "app/routes/crews.new.tsx": {
+    "clashlens/no-comments": {
+      "count": 4
+    }
+  },
+  "app/routes/crews.tsx": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/routes/dashboard.redirect.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/routes/dashboard.tsx": {
+    "clashlens/no-comments": {
+      "count": 33
+    }
+  },
+  "app/routes/logout.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/routes/obs-overlay.player.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/routes/player-armies.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "app/routes/player-bases.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/routes/player-search.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/routes/player.tsx": {
+    "clashlens/no-comments": {
+      "count": 39
+    }
+  },
+  "app/routes/refresh.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/routes/search.tsx": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "app/routes/signup.tsx": {
+    "clashlens/no-comments": {
+      "count": 3
+    }
+  },
+  "app/routes/users.$username.tsx": {
+    "clashlens/no-comments": {
+      "count": 18
+    }
+  },
+  "app/server/actions.server.ts": {
+    "clashlens/no-comments": {
+      "count": 11
+    }
+  },
+  "app/server/auth-cookies.server.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/server/auth-guard.server.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "app/server/auth.server.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "app/server/blog.server.ts": {
+    "clashlens/no-comments": {
+      "count": 32
+    }
+  },
+  "app/server/client-address.server.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/server/config.server.ts": {
+    "clashlens/no-comments": {
+      "count": 12
+    }
+  },
+  "app/server/google-oidc.server.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "app/server/login-session.server.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/server/provider-callback.server.ts": {
+    "clashlens/no-comments": {
+      "count": 18
+    }
+  },
+  "app/server/provider-start.server.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "app/server/public-origin.server.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "app/server/return-path.server.ts": {
+    "clashlens/no-comments": {
+      "count": 5
+    }
+  },
+  "app/server/root-navigation.server.ts": {
+    "clashlens/no-comments": {
+      "count": 6
+    }
+  },
+  "app/server/sign-in-page.server.ts": {
+    "clashlens/no-comments": {
+      "count": 6
+    }
+  },
+  "app/server/update-status.server.ts": {
+    "clashlens/no-comments": {
+      "count": 3
+    }
+  },
+  "app/server/view-as.server.ts": {
+    "clashlens/no-comments": {
+      "count": 10
+    }
+  },
+  "app/services/dashboard.server.ts": {
+    "clashlens/no-comments": {
+      "count": 21
+    }
+  },
+  "app/services/discord-alerts.server.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "app/services/group-add.server.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/services/group-players.server.ts": {
+    "clashlens/no-comments": {
+      "count": 4
+    }
+  },
+  "app/services/live-clan.server.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "app/services/past-seasons.server.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "app/services/player-response.server.ts": {
+    "clashlens/no-comments": {
+      "count": 7
+    }
+  },
+  "app/services/public-user-days.server.ts": {
+    "clashlens/no-comments": {
+      "count": 13
+    }
+  },
+  "app/services/python-transport.server.ts": {
+    "clashlens/no-comments": {
+      "count": 4
+    }
+  },
+  "app/services/python.server.ts": {
+    "clashlens/no-comments": {
+      "count": 3
+    }
+  },
+  "app/services/unlink-player.server.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "playwright.config.ts": {
+    "clashlens/no-comments": {
+      "count": 7
+    }
+  },
+  "react-router.config.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "server.ts": {
+    "clashlens/no-comments": {
+      "count": 17
+    }
+  },
+  "tests/e2e/accessibility.spec.ts": {
+    "clashlens/no-comments": {
+      "count": 8
+    }
+  },
+  "tests/e2e/account-isolation.spec.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "tests/e2e/account.spec.ts": {
+    "clashlens/no-comments": {
+      "count": 16
+    }
+  },
+  "tests/e2e/analytics.spec.ts": {
+    "clashlens/no-comments": {
+      "count": 24
+    }
+  },
+  "tests/e2e/army-analytics.spec.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "tests/e2e/auth-providers.spec.ts": {
+    "clashlens/no-comments": {
+      "count": 11
+    }
+  },
+  "tests/e2e/blog.spec.ts": {
+    "clashlens/no-comments": {
+      "count": 5
+    }
+  },
+  "tests/e2e/bottom-tabs.spec.ts": {
+    "clashlens/no-comments": {
+      "count": 7
+    }
+  },
+  "tests/e2e/crews.spec.ts": {
+    "clashlens/no-comments": {
+      "count": 14
+    }
+  },
+  "tests/e2e/dashboard.spec.ts": {
+    "clashlens/no-comments": {
+      "count": 44
+    }
+  },
+  "tests/e2e/helpers/account.ts": {
+    "clashlens/no-comments": {
+      "count": 9
+    }
+  },
+  "tests/e2e/helpers/player-page.ts": {
+    "clashlens/no-comments": {
+      "count": 4
+    }
+  },
+  "tests/e2e/helpers/worst-case-player.ts": {
+    "clashlens/no-comments": {
+      "count": 7
+    }
+  },
+  "tests/e2e/home.spec.ts": {
+    "clashlens/no-comments": {
+      "count": 21
+    }
+  },
+  "tests/e2e/iphone-search.spec.ts": {
+    "clashlens/no-comments": {
+      "count": 4
+    }
+  },
+  "tests/e2e/leaderboard-search.spec.ts": {
+    "clashlens/no-comments": {
+      "count": 6
+    }
+  },
+  "tests/e2e/legend-log.spec.ts": {
+    "clashlens/no-comments": {
+      "count": 5
+    }
+  },
+  "tests/e2e/menu-grow.spec.ts": {
+    "clashlens/no-comments": {
+      "count": 3
+    }
+  },
+  "tests/e2e/obs-overlay.spec.ts": {
+    "clashlens/no-comments": {
+      "count": 18
+    }
+  },
+  "tests/e2e/player-header.spec.ts": {
+    "clashlens/no-comments": {
+      "count": 5
+    }
+  },
+  "tests/e2e/player.spec.ts": {
+    "clashlens/no-comments": {
+      "count": 68
+    }
+  },
+  "tests/e2e/season-reset.spec.ts": {
+    "clashlens/no-comments": {
+      "count": 5
+    }
+  },
+  "tests/e2e/settings.spec.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "tests/e2e/worst-case-search.spec.ts": {
+    "clashlens/no-comments": {
+      "count": 13
+    }
+  },
+  "tests/fixtures/dashboard-player.ts": {
+    "clashlens/no-comments": {
+      "count": 10
+    }
+  },
+  "tests/fixtures/discord-provider.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "tests/fixtures/login-provider.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "tests/fixtures/oidc-provider.ts": {
+    "clashlens/no-comments": {
+      "count": 4
+    }
+  },
+  "tests/fixtures/player-route-data.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "tests/fixtures/player-worst-case.ts": {
+    "clashlens/no-comments": {
+      "count": 4
+    }
+  },
+  "tests/fixtures/test-values.ts": {
+    "clashlens/no-comments": {
+      "count": 4
+    }
+  },
+  "tests/fixtures/worst-case-accounts.ts": {
+    "clashlens/no-comments": {
+      "count": 8
+    }
+  },
+  "tests/fixtures/worst-case-players.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "tests/unit/abuse.test.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "tests/unit/account-contracts.test.ts": {
+    "clashlens/no-comments": {
+      "count": 4
+    }
+  },
+  "tests/unit/account-groups-players.test.ts": {
+    "clashlens/no-comments": {
+      "count": 14
+    }
+  },
+  "tests/unit/account-routes.test.ts": {
+    "clashlens/no-comments": {
+      "count": 4
+    }
+  },
+  "tests/unit/account-settings.test.ts": {
+    "clashlens/no-comments": {
+      "count": 10
+    }
+  },
+  "tests/unit/account-validation.test.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "tests/unit/add-to-group.test.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "tests/unit/analytics.test.ts": {
+    "clashlens/no-comments": {
+      "count": 9
+    }
+  },
+  "tests/unit/army-analytics-client.test.ts": {
+    "clashlens/no-comments": {
+      "count": 3
+    }
+  },
+  "tests/unit/army-analytics-route.test.ts": {
+    "clashlens/no-comments": {
+      "count": 56
+    }
+  },
+  "tests/unit/army-variant-examples.test.ts": {
+    "clashlens/no-comments": {
+      "count": 6
+    }
+  },
+  "tests/unit/army.test.ts": {
+    "clashlens/no-comments": {
+      "count": 8
+    }
+  },
+  "tests/unit/auth-cookies.test.ts": {
+    "clashlens/no-comments": {
+      "count": 4
+    }
+  },
+  "tests/unit/auth-guard.test.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "tests/unit/auth-routes.test.ts": {
+    "clashlens/no-comments": {
+      "count": 9
+    }
+  },
+  "tests/unit/battle-statistics-rendering.test.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "tests/unit/battle-statistics.test.ts": {
+    "clashlens/no-comments": {
+      "count": 3
+    }
+  },
+  "tests/unit/blog.test.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "tests/unit/crew-boards-parity.test.ts": {
+    "clashlens/no-comments": {
+      "count": 3
+    }
+  },
+  "tests/unit/crew-manage.test.ts": {
+    "clashlens/no-comments": {
+      "count": 8
+    }
+  },
+  "tests/unit/crews.test.ts": {
+    "clashlens/no-comments": {
+      "count": 26
+    }
+  },
+  "tests/unit/dashboard-armies.test.ts": {
+    "clashlens/no-comments": {
+      "count": 23
+    }
+  },
+  "tests/unit/dashboard-bases-days.test.ts": {
+    "clashlens/no-comments": {
+      "count": 4
+    }
+  },
+  "tests/unit/dashboard-cards.test.ts": {
+    "clashlens/no-comments": {
+      "count": 66
+    }
+  },
+  "tests/unit/dashboard-edit.test.ts": {
+    "clashlens/no-comments": {
+      "count": 3
+    }
+  },
+  "tests/unit/dashboard-live-cards.test.ts": {
+    "clashlens/no-comments": {
+      "count": 14
+    }
+  },
+  "tests/unit/dashboard-read-order.test.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "tests/unit/dashboard.test.ts": {
+    "clashlens/no-comments": {
+      "count": 44
+    }
+  },
+  "tests/unit/day-scale.test.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "tests/unit/detail-reads.test.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "tests/unit/discord-alerts.test.ts": {
+    "clashlens/no-comments": {
+      "count": 5
+    }
+  },
+  "tests/unit/front-page.test.ts": {
+    "clashlens/no-comments": {
+      "count": 20
+    }
+  },
+  "tests/unit/google-oidc.test.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "tests/unit/group-compare-route.test.ts": {
+    "clashlens/no-comments": {
+      "count": 38
+    }
+  },
+  "tests/unit/keep-page.test.ts": {
+    "clashlens/no-comments": {
+      "count": 6
+    }
+  },
+  "tests/unit/leaderboard-route.test.ts": {
+    "clashlens/no-comments": {
+      "count": 57
+    }
+  },
+  "tests/unit/leaderboard-search-route.test.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "tests/unit/linked-battle.test.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "tests/unit/login-renewal.test.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "tests/unit/obs-overlay-editor.test.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "tests/unit/obs-overlay-player.test.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "tests/unit/past-seasons.test.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "tests/unit/player-crews.test.ts": {
+    "clashlens/no-comments": {
+      "count": 3
+    }
+  },
+  "tests/unit/player-day-rendering.test.ts": {
+    "clashlens/no-comments": {
+      "count": 9
+    }
+  },
+  "tests/unit/player-facts-boundary.test.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "tests/unit/player-game-links.test.ts": {
+    "clashlens/no-comments": {
+      "count": 14
+    }
+  },
+  "tests/unit/player-live-day.test.ts": {
+    "clashlens/no-comments": {
+      "count": 24
+    }
+  },
+  "tests/unit/player-lookup-client.test.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "tests/unit/player-not-enrolled.test.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "tests/unit/player-refresh.test.ts": {
+    "clashlens/no-comments": {
+      "count": 3
+    }
+  },
+  "tests/unit/player-route.test.ts": {
+    "clashlens/no-comments": {
+      "count": 5
+    }
+  },
+  "tests/unit/player-search.test.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "tests/unit/player-season-client.test.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "tests/unit/player-season-history.test.ts": {
+    "clashlens/no-comments": {
+      "count": 26
+    }
+  },
+  "tests/unit/player-trends.test.ts": {
+    "clashlens/no-comments": {
+      "count": 2
+    }
+  },
+  "tests/unit/public-user-days-client.test.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "tests/unit/python-account-client.test.ts": {
+    "clashlens/no-comments": {
+      "count": 4
+    }
+  },
+  "tests/unit/python-client.test.ts": {
+    "clashlens/no-comments": {
+      "count": 9
+    }
+  },
+  "tests/unit/refresh-privacy.test.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "tests/unit/root-error-boundary.test.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "tests/unit/season-heat-grid.test.ts": {
+    "clashlens/no-comments": {
+      "count": 7
+    }
+  },
+  "tests/unit/season-reread.test.ts": {
+    "clashlens/no-comments": {
+      "count": 4
+    }
+  },
+  "tests/unit/season-shape.test.ts": {
+    "clashlens/no-comments": {
+      "count": 4
+    }
+  },
+  "tests/unit/site-header.test.ts": {
+    "clashlens/no-comments": {
+      "count": 6
+    }
+  },
+  "tests/unit/trophy-line.test.ts": {
+    "clashlens/no-comments": {
+      "count": 5
+    }
+  },
+  "tests/unit/updates-notice.test.ts": {
+    "clashlens/no-comments": {
+      "count": 1
+    }
+  },
+  "tests/unit/user-profile-route.test.ts": {
+    "clashlens/no-comments": {
+      "count": 29
+    }
+  },
+  "tests/unit/view-as.test.ts": {
+    "clashlens/no-comments": {
+      "count": 31
+    }
+  },
+  "tests/unit/website-server.test.ts": {
+    "clashlens/no-comments": {
+      "count": 5
+    }
+  }
+}

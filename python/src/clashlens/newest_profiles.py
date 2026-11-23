@@ -23,8 +23,6 @@ Reset's lock throughout, so the Daily board published at 06:09:31 UTC.
 
 from __future__ import annotations
 
-# Which of the member's profiles count: accepted ones, through migration
-# 0098's index, or any source state, through the (tag, time) index.
 ACCEPTED_VERSIONS = (
     "version.player_id = member.player_id"
     " AND version.source_contract_state = 'accepted'"
@@ -33,9 +31,6 @@ ANY_VERSIONS = """version.normalized_tag = (
             SELECT owner.normalized_tag FROM players AS owner
             WHERE owner.id = member.player_id)"""
 
-# Columns: player, profile, observation, sighting time, profile JSON, tag,
-# name, trophies, eligibility, current Season. Takes %(players)s and
-# %(boundary)s; ``{versions}`` is one of the two conditions above.
 NEWEST_PROFILES_SQL = """
     SELECT member.player_id, profile.id,
            COALESCE(effect.observation_id, profile.observation_id),

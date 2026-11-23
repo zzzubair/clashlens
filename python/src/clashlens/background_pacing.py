@@ -107,11 +107,8 @@ LIVE_LAG_SHARE = 0.05
 LIVE_COUNT_CAP = 200
 LOCK_STRAIN_SECONDS = 1
 LIVE_WORK_TYPES = ("process_observation", "replay_observation", "reconcile_ranked_day")
-# The Reset-first window ends at the latest this long after the Reset, 05:45 UTC.
 RESET_FIRST_CAP = timedelta(minutes=45)
-# Response lanes' rush turns take Reset work first until this long after it, 05:30 UTC.
 RESET_RUSH_CAP = timedelta(minutes=30)
-# The Reset whose window this process last saw open, to log when it ends.
 _open_window: list[datetime] = []
 _window_lock = Lock()
 
@@ -145,8 +142,6 @@ class BackgroundMode(StrEnum):
 @dataclass(frozen=True, slots=True)
 class Allowance:
     mode: BackgroundMode
-    # Each background priority with room, and how many more jobs it may
-    # lease, in the order to fill them; only ``NORMAL`` or ``REDUCED`` has any.
     lanes: tuple[tuple[int, int], ...] = ()
 
 
@@ -175,7 +170,6 @@ def claim_background(
     """
     from .job_contracts import SUPPORTED_WORK_TYPES
 
-    # Only a claim that may take daily results, off a Reset turn, has a floor.
     floor = not reset_first and "reconcile_ranked_day" in (work_types or SUPPORTED_WORK_TYPES)
     if planned or (len(rows) >= limit and not floor):
         return rows
@@ -221,7 +215,6 @@ def reset_first_window(connection: Any) -> bool:
     when it sees a window start and end."""
     now = _now()
     boundary = _newest_reset(now)
-    # A correction can replace a published board, so its event counts too.
     is_open = now < boundary + RESET_FIRST_CAP and connection.execute(
         """
         SELECT EXISTS (SELECT FROM collector_reset_sweeps WHERE boundary_at = %(at)s)

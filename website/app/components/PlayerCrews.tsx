@@ -4,7 +4,6 @@ import type { PlayerCrew } from "../lib/crew-contracts";
 import { useBackState } from "./BackLink";
 import { Crest } from "./GameIcons";
 
-// None, or an unavailable answer, shows nothing.
 export function PlayerCrews({
   crews,
   name,
@@ -16,12 +15,10 @@ export function PlayerCrews({
   if (!crews || crews.length === 0) return null;
   return (
     <span className="player-crews">
-      {/* Named, so a Crew called like the clan can't pass for it. */}
       <span className="player-crews-label">{crews.length === 1 ? "Crew" : "Crews"}</span>
       {crews.map((crew, index) => (
         <span key={crew.crewId}>
           {index > 0 ? " · " : null}
-          {/* The Crew's crest, as on its page, sets it apart from the clan. */}
           <Link to={`/crews/${crew.crewId}`} state={backState}>
             <Crest name={crew.name} />
             <bdi>{crew.name}</bdi>

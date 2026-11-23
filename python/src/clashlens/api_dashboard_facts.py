@@ -166,7 +166,6 @@ def goal_plan(data: dict) -> dict | None:
     return {
         "need": need, "pace": pace, "drift": drift, "gap": -behind, "days_left": left,
         "status": "ahead" if behind <= 0 and need <= 0 else "on" if pace >= need else "behind",
-        # Zero is the default plan. The old website additionally listed 1–3.
         "shields": [{"days": days, "need": (behind + drift * left) / (left - days),
                      "on_pace": pace >= (behind + drift * left) / (left - days)}
                     for days in range(4) if days < left],
@@ -185,8 +184,6 @@ def dashboard_goal(connection: Any, page: dict, rank: int) -> dict | None:
     if finished and context is not None:
         start = datetime.fromisoformat(context["start"])
         numbers = list(range(max(1, first), finished + 1))
-        # One batch selects the exact same newest publication as the Daily
-        # board API. At most eight Reset dates, independent of Season length.
         rows = connection.execute(
             f"""
             WITH requested AS (

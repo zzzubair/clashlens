@@ -107,7 +107,6 @@ export const middleware: Route.MiddlewareFunction[] = [
   },
 ];
 
-/** A dashboard save changes nothing the navigation bar shows. */
 export function shouldRevalidate({
   formMethod,
   formAction,
@@ -146,8 +145,6 @@ function useBarePage(): boolean {
   return useMatches().some((match) => (match.handle as BareHandle | undefined)?.bare);
 }
 
-// The files of the @font-face rules in brand.css: Archivo for words, and
-// Big Shoulders Display for titles and the scoreboard numbers.
 const FONT_FILES = [
   "/fonts/archivo-latin.woff2",
   "/fonts/big-shoulders-display-latin.woff2",
@@ -279,7 +276,6 @@ function useReplayGrowOnOpen() {
   }, []);
 }
 
-// The pages a tap most often opens: the tabs and a player.
 const TAB_ROUTES = [
   "routes/dashboard",
   "routes/tracked-leaderboard",
@@ -609,7 +605,6 @@ function SiteHeader({ data }: { data: RootLoaderData | undefined }) {
         <SiteTabs data={data} />
       </nav>
       <div className="site-nav">
-        {/* The search page keeps its own large search. */}
         {location.pathname !== "/search" ? (
           <HeaderSearch key={location.pathname} />
         ) : null}
@@ -682,7 +677,6 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   );
 }
 
-/** A page that needs an account, opened while signed out; see requireLogin. */
 function needsAccountOf(error: unknown): NeedsAccountData | null {
   if (!isRouteErrorResponse(error) || error.status !== 401) return null;
   const value = error.data as Partial<NeedsAccountData> | null;

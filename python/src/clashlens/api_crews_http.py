@@ -340,7 +340,6 @@ def _username(value: str) -> str:
 
 
 def _invite_code(value: str) -> str:
-    # Checked before any database read, so a malformed code costs nothing.
     if not _INVITE_CODE.fullmatch(value):
         raise ApiError(422, "invalid_request")
     return value

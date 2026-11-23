@@ -142,7 +142,6 @@ CONDITIONS = {
 }
 
 
-# Plain names for the worker's ordinary job types in processing alerts.
 WORK_NAMES = {
     "process_observation": "saved API responses",
     "replay_observation": "replayed API responses",
@@ -172,7 +171,6 @@ RECOVERY_HOLD = 900
 LEADERBOARD_STALE_SHARE = 0.05
 LEADERBOARD_OLDEST = 1200
 LEADERBOARD_HOLD = 300
-# Untracked recent Legend I battlers tolerated before the completeness alert.
 UNTRACKED_BATTLER_LIMIT = 10
 # The untracked battler and battle-day checks each read about a gigabyte of
 # battles (11 Oct 2026) for conditions at least an hour old, so they run once
@@ -923,7 +921,6 @@ def observe(
         # Daily result calculations are ordinary work with a shorter limit.
         if metrics.get(f"{prefix}oldest_job_reconcile_ranked_day_age_seconds", 0) >= 900:
             findings["processing"] = True
-        # Name the oldest ordinary job type so the alert says which work is behind.
         age, work = max(
             (
                 (age, name.removeprefix(f"{prefix}oldest_job_").removesuffix("_age_seconds"))
@@ -938,7 +935,6 @@ def observe(
             state["details"]["processing"] = (
                 f"Oldest waiting: {WORK_NAMES.get(work, work)}, {int(age // 60)} minutes"
             )
-        # Failed work counts, however old, until retried, replayed or accepted.
         jobs, uploads = (metrics.get(f"{prefix}failed_{kind}") for kind in ("processing", "uploads"))
         findings["failed_work"] = None if None in (jobs, uploads) else jobs + uploads > 0
         if findings["failed_work"]:

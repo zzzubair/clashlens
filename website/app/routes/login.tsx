@@ -11,12 +11,6 @@ export function meta() {
   return [{ title: "Sign in · Clash Lens" }];
 }
 
-/**
- * GET /login — sign in to an existing account with Google or Discord. An
- * existing valid browser login skips straight to the validated return path
- * (or /account). `?none=google` (or discord) comes back from a sign-in that
- * no account uses, and asks whether to make one instead of making it.
- */
 export async function loader({ request }: Route.LoaderArgs): Promise<SignInPageData> {
   const { loadSignInPage } = await import("../server/sign-in-page.server");
   return loadSignInPage(request, "login");
@@ -64,7 +58,6 @@ export default function LoginRoute() {
       className="page-shell narrow-shell sign-in-page"
     >
       <div className="sign-in-main">
-        {/* The brand's small mark, so the page reads as Clash Lens's own. */}
         <img
           className="sign-in-mark"
           src="/images/mark-cl-block.svg"
@@ -114,7 +107,6 @@ export default function LoginRoute() {
           </div>
         )}
       </div>
-      {/* A quiet picture of what signing in opens, where there is room. */}
       {data.loginAvailable ? <TeaserBoard link={false} /> : null}
     </main>
   );

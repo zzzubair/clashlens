@@ -10,8 +10,6 @@ from .db_rows import text_value as _text
 from .domain import SEASON_ANCHOR_RULE_VERSION, SEASON_DURATION
 
 SEASON_DETAIL_RETIRED = "season_detail_retired"
-# Late battles, replays and corrections land for a week after the Season
-# ends; finalization stops corrections and retirement deletes detail.
 SEASON_CLOSE_WAIT = timedelta(days=7)
 
 

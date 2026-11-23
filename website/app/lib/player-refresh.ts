@@ -6,7 +6,6 @@ import type {
 } from "./contracts";
 import { isRefreshStatusPayload, isWebsiteErrorResponse } from "./validation";
 
-/** How long one Refresh may take before the page stops checking. */
 export const REFRESH_LIMIT_MS = 60_000;
 
 export const REFRESH_TIMED_OUT: WebsiteErrorResponse = {
@@ -102,7 +101,6 @@ function stop(
   };
 }
 
-/** The only place a player Refresh moves; see `PlayerRefresh`. */
 export function playerRefreshStep(
   state: PlayerRefresh,
   event: PlayerRefreshEvent,
@@ -116,7 +114,6 @@ export function playerRefreshStep(
         event.status,
       );
     case "answered": {
-      // Only a submitted form answers; a fresh visit has none.
       if (state.phase === "idle") return state;
       const { answer } = event;
       if (event.now >= state.deadline) return stop(state, REFRESH_TIMED_OUT);
@@ -135,7 +132,6 @@ export function playerRefreshStep(
   }
 }
 
-/** The status the page shows: this visit's, or before any, the address's. */
 export function shownRefreshStatus(
   state: PlayerRefresh,
   addressStatus: RefreshStatus | null,
@@ -156,7 +152,6 @@ export function refreshSettled(state: PlayerRefresh, formIdle: boolean): boolean
   );
 }
 
-/** The event one status read makes. */
 export function pollAnswer(
   ok: boolean,
   payload: unknown,
@@ -207,7 +202,6 @@ export function pollStatus(
   };
 }
 
-/** A status read that threw, unless it was cancelled on purpose. */
 export function pollThrew(error: unknown): PlayerRefreshEvent | null {
   return error instanceof DOMException && error.name === "AbortError"
     ? null
@@ -226,7 +220,6 @@ export function pollThrew(error: unknown): PlayerRefreshEvent | null {
  */
 export type LookupWait = "waiting" | "exhausted";
 
-/** What one second of waiting does. */
 export function lookupWaitTick(
   startedAt: number,
   now: number,
@@ -250,7 +243,6 @@ export function lookupWaitTick(
  */
 export type AutomaticRefresh = "undecided" | "decided";
 
-/** What the visit's one decision sends, or null to skip. */
 export function automaticRefreshFor(
   ageSeconds: number,
   documentReload: boolean,

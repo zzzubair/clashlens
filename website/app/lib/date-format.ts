@@ -1,10 +1,7 @@
-// One formatter per option set: building an Intl formatter costs far more
-// than formatting with one, and pages format dozens of dates.
 const dateFormats = new Map<string, Intl.DateTimeFormat>();
 
 function formatDate(options: Intl.DateTimeFormatOptions, value: string | number | Date) {
   const date = new Date(value);
-  // As toLocaleDateString does; a formatter throws on an invalid date.
   if (Number.isNaN(date.getTime())) return "Invalid Date";
   const key = JSON.stringify(options);
   let format = dateFormats.get(key);
@@ -30,8 +27,6 @@ export function utcDate(
   ).replace("Sept", "Sep");
 }
 
-/** The days the bars cover, behind their ⓘ and in a chart's title:
- *  "22–28 Oct", or "29 Sep – 5 Oct" across a month's end. Null with no days. */
 export function dayRange(starts: string[]): string | null {
   const first = starts.at(0);
   const last = starts.at(-1);

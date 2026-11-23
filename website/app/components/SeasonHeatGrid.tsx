@@ -12,14 +12,11 @@ import { heatStep } from "../lib/dashboard-cards";
 
 const sign = (value: number) => (value > 0 ? "+" : value < 0 ? "−" : "");
 
-/** A day's result as a cell shows it: a gain plain, as most are, and only a
- *  loss signed (and red); a rare four-digit one in thousands. */
 function shown(value: number): string {
   const size = Math.abs(value);
   return `${value < 0 ? "−" : ""}${size < 1000 ? size.toLocaleString("en-GB") : `${(size / 1000).toFixed(1)}k`}`;
 }
 
-/** A day's result in words, for screen readers and readouts. */
 export function heatResult(cell: HeatCell): string {
   if (cell.kind === "today") return "today, not finished yet";
   if (cell.kind === "future") return "not played yet";
@@ -28,11 +25,6 @@ export function heatResult(cell: HeatCell): string {
   return `${sign(cell.value)}${Math.abs(cell.value).toLocaleString("en-GB")}`;
 }
 
-/**
- * The grid itself. With `onPick` each day is a button that can be picked and
- * read out (`onPoint` follows the pointer and keyboard focus); without it the
- * days are plain cells, named for screen readers.
- */
 export function SeasonHeatGrid({
   cells,
   label,
@@ -42,7 +34,6 @@ export function SeasonHeatGrid({
   onPoint,
 }: {
   cells: HeatCell[];
-  /** The list's name for screen readers. */
   label: string;
   /** The values are each day's net change, so a negative one is a day that
    *  lost trophies, named by the class is-loss, which shows its figure in red
@@ -118,7 +109,6 @@ export function SeasonHeatGrid({
   );
 }
 
-/** The scale in words: the same words on every page. */
 export function HeatKey() {
   return (
     <span className="season-heat-key">
@@ -138,12 +128,6 @@ export function HeatKey() {
   );
 }
 
-/**
- * The line under a grid: the key, covered by the pointed or picked day's
- * readout while there is one, so nothing jumps. A phone, with no pointer,
- * puts the readout on its own line over the key, and reads out `fallback`
- * (today) until a day is picked.
- */
 export function HeatFoot({
   readout,
   fallback = null,

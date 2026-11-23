@@ -675,7 +675,6 @@ function mapDataQuality(value: unknown): PlayerPage["dataQuality"] {
   return value as PlayerPage["dataQuality"];
 }
 
-// A day's rank on its Reset board; absent or null means unknown.
 function mapResetRank(value: unknown): number | null {
   if (value == null) return null;
   if (!isInteger(value) || value < 1) malformed();

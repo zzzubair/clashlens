@@ -9,7 +9,6 @@ export interface BlogIndexLoaderData {
   origin: string;
 }
 
-/** GET /blog — every published post, newest first, plus drafts for the site owner. */
 export async function loader({
   request,
 }: Route.LoaderArgs): Promise<BlogIndexLoaderData> {

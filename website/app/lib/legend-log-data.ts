@@ -6,7 +6,6 @@ export function validDay(day: string | null): string | null {
     : null;
 }
 
-/** A Legend day's date, such as "26 Oct 2026", from its period or its key. */
 export function legendDayDate(period: string): string {
   const date = new Date(period);
   return Number.isNaN(date.getTime())
@@ -14,7 +13,6 @@ export function legendDayDate(period: string): string {
     : utcDate(date, { year: true });
 }
 
-/** Places a day's Reset rank climbed since the day before's (a fall is negative). */
 export function rankMoves(
   days: Array<{ dayNumber: number | null; resetRank?: number | null }>,
 ): Map<number, number> {

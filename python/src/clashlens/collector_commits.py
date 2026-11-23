@@ -28,8 +28,6 @@ class HandoffRecoveryRequired(RuntimeError):
 
 # Pause between attempts; each attempt waits at most 3 s for a lock.
 _RETRY_SECONDS = 2.0
-# The newest saved response's turn: it resolves to None once that response
-# committed or failed in its own check, or to the task committing it later.
 Turn = asyncio.Future["asyncio.Task[None] | None"]
 Identity = tuple[str, str, str]
 
@@ -74,7 +72,6 @@ class CommitTurns:
     """The newest turn per player and request type."""
 
     def __init__(self) -> None:
-        # Kept only while a response waits; see forget.
         self._turns: dict[Identity, Turn] = {}
 
     def state(self, identity: Identity) -> TurnState:
@@ -116,8 +113,6 @@ def deserialize_handoff(payload: bytes) -> tuple[ResponseHandoff, bool]:
     value["response_completed_at"] = datetime.fromisoformat(
         value["response_completed_at"]
     )
-    # Sidecars written before field compaction replay with the raw digest:
-    # they count as changed once, which stores rather than loses them.
     value.setdefault("content_fingerprint", value["response_hash"])
     return ResponseHandoff(**value), protocol == _HANDOFF_PROTOCOL
 
@@ -143,8 +138,6 @@ class SavedResponses:
         self._turns = CommitTurns()
         self._later: dict[asyncio.Task[None], int | None] = {}
         self._unrecovered: list[tuple[str, ResponseHandoff, bool]] = []
-        # Newest committed time and field fingerprint, from this process only;
-        # empty after restart so the first new sighting always reaches the spool.
         self._committed: dict[Identity, tuple[datetime, str]] = {}
         self._stopping = asyncio.Event()
 
@@ -216,10 +209,6 @@ class SavedResponses:
             turn = asyncio.get_running_loop().create_future()
             try:
                 async with lock:
-                    # A predecessor may have failed after its durable
-                    # publish while this response was waiting for the
-                    # same stripe. Recovery must run before any
-                    # successor can become current.
                     if self.spool_health.recovery_required:
                         if cancelled:
                             raise asyncio.CancelledError
@@ -303,9 +292,6 @@ class SavedResponses:
             (name, *deserialize_handoff(payload))
             for name, payload in self.spool.iter_handoffs()
         ]
-        # Responses already applied go first, then the rest in the order they
-        # were received, so a later one never compacts away an earlier change
-        # or replaces the commit marker of one already applied.
         applied = (
             self.database.applied_occurrence_keys(
                 [handoff.occurrence_key for _name, handoff, _serialized in records]
@@ -337,7 +323,7 @@ class SavedResponses:
     def sweep_unreferenced(self) -> None:
         try:
             self.spool.remove_unreferenced(self.database.referenced_spool_hashes)
-        except psycopg.errors.QueryCanceled:  # over its time limit; next sweep
+        except psycopg.errors.QueryCanceled:
             self._count("spool_sweep_timeout")
 
     def _commit_later(

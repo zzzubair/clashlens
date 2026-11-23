@@ -11,8 +11,6 @@ from typing import Any
 from .domain import RANKED_DAY_DURATION, SEASON_START_TROPHIES, ranked_day_for
 from .profile import LEGEND_I_TIER_ID, normalize_player_tag
 
-# v3 orders equal trophies by the latest trophy change first; v2 by Season
-# average attack destruction; v1 by SHA-256 of the tag alone.
 SNAPSHOT_ORDERING_RULE_VERSION = "tracked-player-order-v3"
 SEASON_DESTRUCTION_ORDERING_RULE_VERSION = "tracked-player-order-v2"
 FRESHNESS_RULE_VERSION = "profile-freshness-10m-v1"
@@ -28,13 +26,6 @@ def deterministic_tag_hash(tag: str) -> str:
     return hashlib.md5(normalized_tag.encode("ascii")).hexdigest()
 
 
-# The owner's order for equal trophies on the Live board, and on Daily
-# boards frozen before the latest-change order (8 October 2026): the higher Season average attack destruction first,
-# destruction over attacks made, zero-star attacks included, compared as
-# exact fractions, with players who have made no attack last; then more
-# attacks; then the tag hash; then the tag. The game's own Season-end
-# placements agree with average destruction on all 274 equal-trophy pairs
-# whose attacks Clash Lens fully recorded (firstmate's tie-break research).
 def tie_order_key(attacks: int, destruction: int, tag: str) -> tuple[Any, ...]:
     """Sort key among equal trophies, smallest first."""
     if attacks <= 0:
@@ -53,12 +44,6 @@ def tie_order_sql(attacks: str, destruction: str, tag: str) -> str:
     )
 
 
-# The order for equal trophies on Daily boards (owner, 11 October 2026:
-# "based on most accurate"): the player whose trophies changed latest in the
-# ended Legend day comes first, players with no change that day last, then
-# the tag hash, then the tag. At the 11 October 2026 Reset the game's own
-# Reset ranks agreed with this on 70.4% of 1,237 equal-trophy pairs, against
-# 48.1% for Season average attack destruction and 53.8% for the tag hash.
 def latest_change_order_key(
     latest_change_at: datetime | None, tag: str
 ) -> tuple[Any, ...]:
@@ -71,12 +56,6 @@ def latest_change_order_key(
     )
 
 
-# Each player's latest trophy change in the Legend day starting
-# %(day_start)s, before %(cutoff)s: the end of their newest battle of the day
-# that moved their trophies. A battle ends at the attacker's report time; with
-# only the defender's report, 155 seconds after it, the median attack length
-# (999 battles on 11 October 2026). Each side's change comes from its own
-# report when there is one.
 _LATEST_CHANGE_SQL = """
 SELECT side.player_id, max(ended.at) AS latest_change_at
 FROM legend_battles AS battle
@@ -143,13 +122,6 @@ def season_end_placements(
     }
 
 
-# The game's order for equal trophies on a Season's last board (owner, 7
-# November 2026: "final trophies and rank shown after season should show
-# what the game says"). Inside each run of equal trophies, the players with
-# an official final rank (season_end_placements) take the places those
-# players hold, in the game's order; every other player keeps their place.
-# On 2 November 2026 the board ranked #92R8882Y9 2,083rd of a 14-way tie at
-# 5,210 that the game ranked 2,080th.
 def follow_official_ties(
     entries: list[dict[str, Any]], placements: dict[int, int]
 ) -> list[dict[str, Any]]:
@@ -216,10 +188,6 @@ def unplayed_since_sql(player_id: str, season_start: str, day: str) -> str:
           AND week.entry IN ('promoted', 'first_seen')))"""
 
 
-# Each attacker's attacks and summed attack destruction on the battle days
-# from %(season_start)s up to %(cutoff)s, from their own battle log's record
-# of each attack. On 8 October 2026, 37 of 311,182 recorded battles of the
-# Season had no record from the attacker's side.
 _SEASON_ATTACKS_SQL = """
 SELECT battle.attacker_player_id AS player_id,
        count(*)::integer AS attacks,
@@ -236,10 +204,6 @@ GROUP BY battle.attacker_player_id
 """
 
 
-# The Live board reads these counts from live_attack_tallies, recounted from
-# the current Season's recorded battles every LIVE_TALLY_SECONDS (about 5
-# seconds at a Season's end on 8 October 2026 data), so its tie order can lag
-# new attacks by that long.
 LIVE_TALLY_SECONDS = 300
 _next_live_tally_at = float("-inf")
 

@@ -54,7 +54,6 @@ export function GoalCard({ data }: { data: GoalData }) {
   const [shield, setShield] = useState(0);
   const plan = data.plan;
   const title = topLabel(data.rank);
-  // The plan's menu, once there is a plan, at the header's end.
   const head = (meta?: ReactNode) => (
     <CardHead
       icon={CARDS["goal"].icon}
@@ -589,7 +588,6 @@ function netOf(row: RivalRow): number | null {
 
 export function RivalsCard({ data }: { data: RivalsData }) {
   const [view, setView] = useState<"live" | "season">("live");
-  // A phone shows you and 2 either side until asked for every rival.
   const [allShown, setAllShown] = useState(false);
   const shown = view === "live" ? data.live : data.season;
   return (

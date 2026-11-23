@@ -6,8 +6,6 @@ import { ShieldIcon, Stars, SwordIcon } from "./GameIcons";
 import { signedNumber as signed } from "../lib/number-format";
 import { HeatFoot, HeatKey, SeasonHeatGrid } from "./SeasonHeatGrid";
 
-// An example Legend day, drawn small: what a dashboard shows, not anyone's data.
-// Each battle is its stars and trophies; the day's net is their sum.
 const ATTACKS = [
   [3, 40],
   [3, 40],
@@ -24,19 +22,12 @@ const DEFENSES = [
   [1, -16],
 ] as const;
 const SLOTS = 8;
-// The places the day card reads: the last Reset, now, the projected place
-// and the Next Reset range it falls in.
 const PLACES = { lastReset: 1288, now: 1188, projected: 1140, best: 1105, worst: 1190 };
-// Net trophies of the Season's played days, 1 to 22; today is day 23. The
-// eight losing days fill the heat map's two red shades, so every red day
-// here carries the lost-trophies mark and no gain is painted red.
 const NETS = [
   72, -18, 110, 45, -61, 88, -27, 124, -23, 96, 40, -8, 143, 57, 80, -47, 35, 101, -12,
   66, 118, -33,
 ];
 const RANKED = [...NETS].sort((a, b) => a - b);
-// The Season as the dashboard's heat map draws it: each played day ranked
-// against the others, worst to best, then today and the days to come.
 const HEAT: HeatCell[] = Array.from({ length: 28 }, (_, index) => {
   const day = index + 1;
   const value = NETS[index];
@@ -57,14 +48,6 @@ const HEAT: HeatCell[] = Array.from({ length: 28 }, (_, index) => {
 
 const place = (rank: number) => `#${rank.toLocaleString("en-GB")}`;
 
-/**
- * What the dashboard holds, shown to a visitor who is not signed in: the
- * example board under its caption, a short title and the way in, set to the
- * board's edges on every width, so Create account shows before the example
- * without standing in its way. The
- * example shows what an account adds, so no list repeats it. Sign in stays in
- * the header.
- */
 export function DashboardTeaser({ loginAvailable }: { loginAvailable: boolean }) {
   return (
     <section className="teaser-cta" aria-labelledby="front-teaser-title">
@@ -83,7 +66,6 @@ export function DashboardTeaser({ loginAvailable }: { loginAvailable: boolean })
   );
 }
 
-/** A small example dashboard: what an account shows, not anyone's data. */
 export function TeaserBoard({ link }: { link: boolean }) {
   return (
     <Board link={link}>
@@ -96,8 +78,6 @@ export function TeaserBoard({ link }: { link: boolean }) {
             +104<small> today</small>
           </span>
         </span>
-        {/* The dashboard card's three places, split by hairlines, over the
-            Next Reset range with the projected place's diamond on it. */}
         <span className="teaser-places">
           <span className="teaser-ranks">
             <span>
@@ -144,9 +124,6 @@ export function TeaserBoard({ link }: { link: boolean }) {
   );
 }
 
-// The example itself, a second way into Create account for a tap or click;
-// keyboards and screen readers use the buttons beside it. Without a link (sign-in
-// is off, or it already sits on the sign-in page) it is only a picture.
 function Board({ link, children }: { link: boolean; children: React.ReactNode }) {
   return link ? (
     <Link
@@ -164,8 +141,6 @@ function Board({ link, children }: { link: boolean; children: React.ReactNode })
   );
 }
 
-// A row of the day's battles as the dashboard's Legend day card draws them:
-// stars over trophies in a tile, the slots still to play dashed.
 function Battles({
   battles,
   kind,

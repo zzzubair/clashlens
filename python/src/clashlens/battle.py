@@ -375,7 +375,6 @@ def _battle_timestamp_value(source: dict[str, Any], parser_version: str) -> Any:
 
 
 def _parse_battle_timestamp(value: Any, parser_version: str) -> datetime:
-    # Accept the live timestamp text and dates from older archived shapes.
     if value is None:
         raise BattleLogParseError(
             "invalid_battle_timestamp", "battle row has no battleTimestamp"

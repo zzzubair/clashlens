@@ -1,6 +1,5 @@
 import type { Route } from "./+types/sitemap";
 
-/** GET /sitemap.xml — the public pages search engines should read; drafts never appear. */
 export async function loader({ request }: Route.LoaderArgs) {
   const { feedOrigin, publishedBlogPosts, siteMap } =
     await import("../server/blog.server");

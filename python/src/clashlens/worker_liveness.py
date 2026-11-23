@@ -33,10 +33,7 @@ from typing import Any
 
 from .spool import read_readiness
 
-# From 1 to 8 Oct 2026 the longest finished job other than a build took 465 s.
 STUCK_SECONDS = 1200.0
-# Threads that may run a population build or the timer's publication checks.
-# The longest finished build took 844 s; before 6 Oct some ran 63 minutes.
 LONG_RUNNING_STUCK_SECONDS = 3600.0
 MARK_INTERVAL_SECONDS = 5.0
 # The health check runs inside the worker's container, which has its own /tmp,
@@ -112,7 +109,7 @@ class ProgressMark:
                         os.unlink(temporary)
                     raise
             except OSError:
-                pass  # A file that stops changing reads as stuck, which is right.
+                pass
 
 
 def _progress_files() -> list[str]:
@@ -206,8 +203,6 @@ def worker_readiness(
         )()
     finally:
         database.close()
-    # A marker mismatch is terminal configuration drift, not an outage;
-    # readiness must fail so the operator resolves it before workers run.
     return {
         "status": "not_ready" if remote_health == "terminal" else "ready",
         "spool": spool,

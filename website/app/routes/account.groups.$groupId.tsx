@@ -41,10 +41,8 @@ const SORTS = {
   defense: "Defense",
 } as const;
 type SortKey = keyof typeof SORTS;
-/** What a phone row shows beside the name: there is room for only one of these. */
 const METRICS = { change: "Change", attack: "Attack", defense: "Defense" } as const;
 type Metric = keyof typeof METRICS;
-/** Each measure's own order: its heading sorts by it. */
 const MEASURE_SORT = { change: "net", attack: "attack", defense: "defense" } as const;
 
 export const handle: BackHandle = {
@@ -60,19 +58,12 @@ export interface GroupCompareLoaderData {
   error: WebsiteErrorResponse | null;
 }
 
-/**
- * GET /account/watchlists/:groupId — one private group side by side over the
- * same ended Legend days, read for the signed-in account only.
- */
 export async function loader({ request, params }: Route.LoaderArgs) {
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
   const url = new URL(request.url);
   const requestedDays = Number(url.searchParams.get("days") ?? "7");
-  // Unsupported address values keep the old default without a rejected Python read.
   const days = [3, 7, 14].find((value) => value === requestedDays) ?? 7;
-  // The days compared are what the page is for, so it opens best gain first;
-  // the Trophies heading still sorts by trophies now.
   const requestedSort = url.searchParams.get("sort") ?? "net";
   const sort = (
     Object.keys(SORTS).includes(requestedSort) ? requestedSort : "net"
@@ -142,11 +133,7 @@ export default function GroupCompareRoute() {
   const location = useLocation();
   const seasonEnded = useSeasonEnded(comparison?.calendar.season_end ?? null);
   const navigate = useNavigate();
-  // A phone row shows the measure the list is sorted by, so the order is always
-  // the one on screen; sorted by trophies, it keeps the measure last picked.
   const [picked, setPicked] = useState<Metric>("change");
-  // The player pointed at, or picked with a click or tap, lit up on the
-  // chart and in the table; a pick stays until it is clicked again.
   const [hovered, setHovered] = useState<string | null>(null);
   const [pinned, setPinned] = useState<string | null>(null);
   const lit = hovered ?? pinned;
@@ -189,22 +176,17 @@ export default function GroupCompareRoute() {
     comparison.players.some((player) => player.days[index].state === "retired"),
   ).length;
   const hasYou = comparison.players.some((player) => player.you);
-  // Said by the title: who the list holds, and your own players shown beside it.
   const watched = comparison.players.filter((player) => player.inGroup).length;
   const yours = comparison.players.length - watched;
-  // The best of each measure, the player first when sorted by it.
   const leads = {
     net: leaders(players, "net"),
     attack: leaders(players, "attack"),
     defense: leaders(players, "defense"),
   };
-  // Switching views replaces this history entry, so the browser's Back skips past them.
   const query = (next: { days?: number; sort?: SortKey }) =>
     `?days=${next.days ?? days}&sort=${next.sort ?? sort}`;
 
   const showVsGroup = comparison.players.some((player) => player.vsGroup !== null);
-  // When every player's trophies are equally old, the age is said once
-  // under the title instead of on every row.
   const ages = new Set(
     comparison.players.map((player) =>
       player.freshness === "stale" && player.ageSeconds !== null
@@ -217,8 +199,6 @@ export default function GroupCompareRoute() {
     player.days.some((day) => day.state === "partial" || day.state === "uncertain"),
   );
   const change = `${days}-day gain`;
-  // A heading sorts by its column; the arrow sits outside the link's name.
-  // An aside shares the link's line: what a cell's two numbers are.
   const heading = (key: SortKey, label: React.ReactNode, aside?: React.ReactNode) => (
     <th
       scope="col"
@@ -241,8 +221,6 @@ export default function GroupCompareRoute() {
     </th>
   );
 
-  // A phone's two headings sort the same way; the sorted one carries the
-  // arrow. Sorting by trophies keeps the measure on screen.
   const keySort = (key: SortKey, label: string, aside?: React.ReactNode) => (
     <Link
       className="compare-key-sort"
@@ -265,11 +243,9 @@ export default function GroupCompareRoute() {
           <div>
             <h1 id="compare-title">{comparison.name}</h1>
             <p className="compare-span">
-              {/* Each part wraps whole, a dot between parts (group-compare.css). */}
               <span>
                 {watched} watched{yours > 0 ? ` + ${yours} yours` : ""}
               </span>
-              {/* A phone's days menu already says how many. */}
               <span className="compare-span-days">{days} finished days</span>
               {sharedAge ? (
                 <span className="compare-stale">Trophies read {sharedAge} ago</span>
@@ -341,9 +317,6 @@ export default function GroupCompareRoute() {
             light={light}
           />
           <div className="compare-board open-board" data-metric={metric}>
-            {/* A phone has no heading row and room for one measure a row: the
-              tabs pick it for every row, and the two headings under them sort
-              by trophies or by that measure. */}
             <div className="compare-key">
               <div
                 className="leaderboard-view-switch compare-metric"
@@ -357,8 +330,6 @@ export default function GroupCompareRoute() {
                     aria-pressed={key === metric}
                     onClick={() => {
                       setPicked(key);
-                      // Picking a measure sorts by it, best first; the
-                      // Trophies heading still sorts by trophies.
                       void navigate(query({ sort: MEASURE_SORT[key] }), {
                         replace: true,
                         preventScrollReset: true,
@@ -369,8 +340,6 @@ export default function GroupCompareRoute() {
                   </button>
                 ))}
               </div>
-              {/* A phone picks the days here, beside the measures, instead of a
-                row of its own above the list. */}
               <label className="compare-days">
                 <span className="sr-only">Days compared</span>
                 <select
@@ -403,15 +372,12 @@ export default function GroupCompareRoute() {
                 {comparison.name}: {days}-day comparison sorted by {SORTS[sort]}
               </caption>
               <thead>
-                {/* Wide screens group the columns: where each player is now, and
-                  the finished days compared. */}
                 <tr className="compare-groups">
                   <td />
                   <th scope="colgroup" colSpan={2}>
                     <span>Now</span>
                   </th>
                   <th scope="colgroup" colSpan={showVsGroup ? 4 : 3}>
-                    {/* The days compared, named once here, their dates behind the ⓘ. */}
                     <span>
                       <LastDays count={days} range={dayRange(comparison.dayStarts)} />
                     </span>
@@ -426,7 +392,6 @@ export default function GroupCompareRoute() {
                   <th scope="col" data-col="today" className="compare-extra">
                     Today
                   </th>
-                  {/* The gain and its daily bars share one short heading. */}
                   {heading("net", change)}
                   {showVsGroup ? (
                     <th scope="col" data-col="vs" className="compare-extra">
@@ -438,7 +403,6 @@ export default function GroupCompareRoute() {
                       </span>
                     </th>
                   ) : null}
-                  {/* What each cell's two numbers are, said once here. */}
                   {heading(
                     "attack",
                     "Attack",
@@ -477,7 +441,6 @@ export default function GroupCompareRoute() {
               </tbody>
             </table>
           </div>
-          {/* The table's marks, keyed once under it. */}
           {hasPartDays || leads.net.size + leads.attack.size + leads.defense.size > 0 ? (
             <p className="compare-keys">
               {hasPartDays ? (
@@ -486,7 +449,6 @@ export default function GroupCompareRoute() {
                   day not fully recorded
                 </span>
               ) : null}
-              {/* Screen readers hear the crown on the number itself. */}
               {leads.net.size + leads.attack.size + leads.defense.size > 0 ? (
                 <span className="compare-lead-key" aria-hidden="true">
                   <span className="compare-crown" />
@@ -526,12 +488,9 @@ function PlayerRow({
   days: number;
   change: string;
   sort: SortKey;
-  /** Whether this player leads each measure, marked on its number. */
   lead: Record<"net" | "attack" | "defense", boolean>;
   showVsGroup: boolean;
-  /** Whether the title already says how old every player's trophies are. */
   sharedAge: boolean;
-  /** Lit up here and on the chart, from either. */
   lit: boolean;
   light: Light;
 }) {
@@ -542,9 +501,7 @@ function PlayerRow({
   const name = player.name ?? player.tag;
   const detailId = `compare-detail-${player.tag.slice(1)}`;
   const tripleShare = attack.count ? attack.threeStars / attack.count : 0;
-  // Defenses that kept the third star: the defense side's answer to triples.
   const heldShare = defense.count ? 1 - defense.starCounts[3] / defense.count : 0;
-  // The bars' own scale: this player's biggest day fills the band.
   const scale = rowScale(player.days.map((day) => day.net));
   return (
     <>
@@ -552,8 +509,6 @@ function PlayerRow({
         className={`compare-row${player.you ? " compare-you" : ""}`}
         data-lit={lit || undefined}
         {...pointed(light, player.tag)}
-        // The whole row opens its details for a pointer, and picks its line;
-        // keyboards use the button.
         onClick={(event) => {
           light.pin(player.tag);
           if (!(event.target as Element).closest("a, button")) setOpen(!open);
@@ -580,8 +535,6 @@ function PlayerRow({
               </span>
             ) : null}
           </span>
-          {/* The name tells players apart on sight; the tag, and whose player
-              this is, stay for screen readers. */}
           <span className="sr-only">
             {player.tag}
             {player.you
@@ -623,8 +576,6 @@ function PlayerRow({
               ) : null}
             </>
           )}
-          {/* A phone drops the Today column, so today's result rides under
-              trophies, except while they wait for the Season reset. */}
           {player.seasonResetPending || player.today?.net == null ? null : (
             <span className="compare-today-short">
               today{" "}
@@ -666,7 +617,6 @@ function PlayerRow({
               ) : (
                 <Signed value={player.net} lead={lead.net} />
               )}
-              {/* Missed days first, under the gain they make smaller. */}
               {player.countedDays < days ? (
                 <span className="compare-sub compare-sub-count">
                   {player.countedDays} of {days} days recorded
@@ -854,12 +804,6 @@ function PlayerRow({
   );
 }
 
-/**
- * Attack or defense led by its success share (triples, or defenses held), the
- * one where higher is better on both sides, over a bar of that share; the
- * average stars follow as the quieter figure. The heading names both once;
- * screen readers hear the words on each.
- */
 function Rate({
   share,
   shareWords,
@@ -897,11 +841,6 @@ function Rate({
   );
 }
 
-/**
- * A player's days as thin bars. Pointing at a bar, or stepping through them
- * with the arrow keys once the bars have focus, or with the Earlier and Later
- * buttons on touch screens, shows that day's date and result.
- */
 function Trend({ days, scale }: { days: DayResult[]; scale: number }) {
   const [active, setActive] = useState<number | null>(null);
   return (
@@ -987,7 +926,6 @@ export function TrendBars({
   );
 }
 
-/** One player's days at full size: each bar with its exact result and date. */
 function DayChart({ days, scale }: { days: DayResult[]; scale: number }) {
   return (
     <ol
@@ -1022,7 +960,6 @@ function direction(day: DayResult): string {
   return day.net > 0 ? "trend-up" : "trend-down";
 }
 
-/** A bar up or down from the zero line, its height on the player's own scale. */
 function DayBar({ day, scale }: { day: DayResult; scale: number }) {
   return (
     <span
@@ -1058,7 +995,6 @@ function Signed({
 
 const LEAD_TITLE = "The best in this watchlist";
 
-/** The leading number's mark, said for screen readers. */
 function LeadWords({ lead }: { lead: boolean }) {
   return lead ? <span className="sr-only">, the best in this watchlist</span> : null;
 }
@@ -1067,7 +1003,6 @@ function tone(value: number): string {
   return value > 0 ? "compare-up" : value < 0 ? "compare-down" : "";
 }
 
-/** A missing value; a phone's narrow column shows a dash and keeps the words for screen readers. */
 function Empty({ label = "No result" }: { label?: string }) {
   return (
     <span className="compare-empty">
@@ -1098,23 +1033,15 @@ const DAY_LABELS: Record<DayResult["state"], string> = {
   retired: "history no longer kept",
 };
 
-/**
- * What an order ranks by, bigger first: the number its column shows big (a
- * gain a day, so a missed day costs nothing; the share of triples; the share
- * of defenses held), then average stars to break a tie. Null has nothing to
- * rank.
- */
 function rankBy(player: ComparedPlayer, sort: SortKey): [number, number] | null {
   const { attack, defense } = player;
   if (sort === "trophies") return player.trophies === null ? null : [player.trophies, 0];
-  // The total gain shown big in its column, the number its crown sits on.
   if (sort === "net") return player.net === null ? null : [player.net, 0];
   if (sort === "attack") {
     return attack.count === 0
       ? null
       : [attack.threeStars / attack.count, attack.stars / attack.count];
   }
-  // Fewer stars given up is the better defense.
   return defense.count === 0
     ? null
     : [1 - defense.starCounts[3] / defense.count, -defense.stars / defense.count];
@@ -1135,8 +1062,6 @@ function sortPlayers(players: ComparedPlayer[], sort: SortKey): ComparedPlayer[]
   });
 }
 
-/** Who leads a measure, ties included: no one when fewer than two have a
- *  result or every one of them ties. */
 function leaders(players: ComparedPlayer[], sort: SortKey): Set<string> {
   const ranked = players.flatMap((player) => {
     const rank = rankBy(player, sort);

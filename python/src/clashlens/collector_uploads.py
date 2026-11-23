@@ -9,8 +9,6 @@ from uuid import UUID, uuid4
 
 from .archive import immutable_reference
 
-# Uploads retry at least 5 seconds apart, so a write that may yet land is
-# waited for through at least two and a half minutes of later attempts.
 UNRESOLVED_WRITE_ATTEMPTS = 30
 
 
@@ -66,11 +64,7 @@ class UploadLeaseLost(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class ArchivedCopy:
     reference: str
-    # True when the catalogue records a verified copy there. False for the
-    # upload's own location, which only bytes found there confirm.
     recorded: bool
-    # An upload of these bytes holds a lease right now, or its last write may
-    # yet land.
     uploading: bool
 
 

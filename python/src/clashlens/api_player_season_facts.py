@@ -17,8 +17,6 @@ from .domain import (
     ranked_day_for,
 )
 
-# Day and week starts repeat across a page's three day lists and every
-# request, so each string is parsed once.
 _at = lru_cache(maxsize=4096)(datetime.fromisoformat)
 
 
@@ -180,8 +178,6 @@ def battle_statistics(recent: list[dict], season: list[dict], start: datetime, n
         saved_count = len(days)
         expected_count = (today - first) // RANKED_DAY_DURATION
         incomplete = any(not day["battles_complete"] for day in days.values())
-        # BattleStatistics's Season summary leaves days outside Legend I,
-        # and the known wait before sign-up, out of its missing-day warning.
         if period == "season" and shape and shape.get("partial"):
             saved_count = shape["legend_days"]["saved"]
             expected_count = shape["legend_days"]["expected"]
@@ -238,8 +234,6 @@ def player_facts(page: dict[str, Any], now: datetime, *, battles: bool) -> tuple
         display_starts(group, page)
     season, recent, current = groups
     saved = [*season, *current, *recent]
-    # Copies of one day differ only in their start, so each day's
-    # presentation is worked out once.
     presented: dict[tuple[str, bool], dict[str, Any]] = {}
 
     def presentation(day: dict[str, Any], is_current: bool) -> dict[str, Any]:
@@ -257,8 +251,6 @@ def player_facts(page: dict[str, Any], now: datetime, *, battles: bool) -> tuple
         primary = copies[0]
         for key in ("display_start", "presentation", "display_end"):
             day[key] = primary[key]
-        # A group may lack the next day used for backward inference. Keep
-        # the answers addressable rather than silently changing one reader.
         alternatives = {name: next((item["display_start"] for item in group
                                     if item["ranked_day_start"] == day["ranked_day_start"]), None)
                         for name, group in zip(("season", "recent", "current"), groups)}
@@ -273,8 +265,6 @@ def player_facts(page: dict[str, Any], now: datetime, *, battles: bool) -> tuple
         number = (_at(day["ranked_day_start"]) - start) // RANKED_DAY_DURATION + 1
         if 1 <= number <= SEASON_DAY_COUNT:
             numbered.setdefault(number, day)
-    # Always the Season's 28 days, as the website's seasonShape drew them,
-    # even right after the Season Reset before anything is saved.
     ready["season_shape"] = shape_of(start, today, ready["season_weeks"], numbered)
     below = {_at(week["week_start"]) for week in ready["season_weeks"] if week["league"] == "below_legend_i"}
     ready["stats_day_starts"] = None if context is None else [
@@ -282,7 +272,6 @@ def player_facts(page: dict[str, Any], now: datetime, *, battles: bool) -> tuple
         for offset in range(context["current_day_number"])
         if _at(context["start"]) + (offset // 7 * 7) * RANKED_DAY_DURATION not in below
     ]
-    # selectPlayerHistory's anchor guard deliberately differs from seasonShape.
     history_start = _at(context["start"]) if context and now < _at(context["end"]) else calendar.season_start
     history = {}
     history_numbers = {}

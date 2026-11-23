@@ -48,7 +48,6 @@ import { PythonApiError } from "./python-response.server";
 import { requestJson } from "./python-transport.server";
 import { createPythonClient } from "./python.server";
 
-// The player page never waits for this list; a late answer hides only the list.
 const PLAYER_CREWS_TIMEOUT_MS = 1_000;
 
 export async function listCrews(identity: LoginIdentity): Promise<CrewList> {
@@ -89,7 +88,6 @@ export async function getCrew(identity: LoginIdentity, crewId: string): Promise<
   return crew;
 }
 
-/** What anyone sees of a crew; `identity` is the viewer's, if signed in. */
 export async function viewCrew(
   identity: LoginIdentity | undefined,
   crewId: string,
@@ -118,7 +116,6 @@ export async function getPlayerCrews(tag: string): Promise<PlayerCrew[]> {
   return mapped(mapPlayerCrews(payload, tag));
 }
 
-/** The crew's six boards for one period; anyone can read them. */
 export async function getCrewBoards(
   identity: LoginIdentity | undefined,
   crewId: string,
@@ -136,7 +133,6 @@ export async function getCrewBoards(
   return boards;
 }
 
-/** Repeat-safe writes return only values checked by their feature reader. */
 async function writeCrew<T>(
   identity: LoginIdentity,
   method: "POST" | "PATCH" | "DELETE",
@@ -296,7 +292,6 @@ export function revokeCrewInvite(
   );
 }
 
-/** The caller's newest invite link while it has a day left, or a new one. */
 export async function makeInvite(
   identity: LoginIdentity,
   crewId: string,
@@ -314,7 +309,6 @@ export async function makeInvite(
   );
 }
 
-/** What an invite link shows: to the account, or to anyone when `identity` is undefined. */
 export async function getInvite(
   identity: LoginIdentity | undefined,
   code: string,
@@ -362,13 +356,6 @@ export async function linkedAccounts(identity: LoginIdentity): Promise<LinkedAcc
 export type CheckedJoin<T> =
   { ok: true; value: T } | { ok: false; cause: unknown; unfinished: boolean };
 
-/**
- * Send a join (create, accept or add) that may name accounts Clash Lens has
- * not checked yet. Each one is checked with the game, then the join is sent
- * again under a key that follows from the first, so pressing the button
- * again replays the same requests. `unfinished` means the private API gave
- * no final answer, so the form keeps its key.
- */
 export async function joinCheckingAccounts<T>(
   clientAddress: string | undefined,
   idempotencyKey: string,
@@ -376,7 +363,6 @@ export async function joinCheckingAccounts<T>(
   send: (key: string) => Promise<T>,
 ): Promise<CheckedJoin<T>> {
   let key = idempotencyKey;
-  // Each retry follows a check of one more picked account, so this ends.
   for (let attempt = 0; ; attempt += 1) {
     try {
       return { ok: true, value: await send(key) };
@@ -419,10 +405,6 @@ export type CrewPage =
   | { crew: CrewView; boards: CrewBoards; error: null }
   | { crew: null; boards: null; error: WebsiteErrorResponse };
 
-/**
- * A crew page's header and boards, for anyone, signed in or not. Crews are
- * hidden while switched off.
- */
 export async function loadCrewPage(
   request: Request,
   crewId: string | undefined,
@@ -446,10 +428,6 @@ export type LoadedCrew =
   | { crew: Crew; accounts: LinkedAccount[]; error: null }
   | { crew: null; accounts: []; error: WebsiteErrorResponse };
 
-/**
- * A crew for Members and Edit crew, with the signed-in account's linked
- * accounts when asked for.
- */
 export async function loadCrew(
   request: Request,
   crewId: string | undefined,
@@ -477,7 +455,6 @@ async function crewGuard(
   return identity;
 }
 
-/** The viewer's login if they have a working one; otherwise they view signed out. */
 async function viewerIdentity(request: Request): Promise<LoginIdentity | undefined> {
   try {
     const config = getWebsiteConfig();
@@ -494,7 +471,6 @@ function loadFailure(request: Request, cause: unknown): WebsiteErrorResponse {
     throw redirect(accountSetupPath(url.pathname, url));
   }
   const code = crewErrorCode(cause);
-  // The private API's own switch answers crews_disabled.
   if (code === "crew_not_found" || code === "crews_disabled") {
     throw data(null, { status: 404 });
   }
@@ -512,7 +488,6 @@ export function crewErrorCode(cause: unknown): string | null {
 
 export interface CrewActionData {
   intent: string;
-  /** The key the page's forms send next: the same one until a final answer. */
   idempotencyKey: string;
   notice: string | null;
   error: string | WebsiteErrorResponse | null;
@@ -524,19 +499,9 @@ export interface CrewForm {
   crewId: string;
   intent: string;
   fields: Record<string, string>;
-  /**
-   * The key for one write, from the page's key and what the write does, so
-   * a page's forms never share a key and the same write sent again after a
-   * lost answer replays.
-   */
   key: (step: string) => string;
 }
 
-/**
- * Run one form on a crew page: crews switched on, signed in, same origin, a
- * crew id, a known intent and a form key, then `run`. A refusal reads as
- * its message; a crew switched off reads as a missing page.
- */
 export async function crewFormAction(
   request: Request,
   crewId: string | undefined,
@@ -597,8 +562,6 @@ export async function crewFormAction(
     const code = crewErrorCode(cause);
     if (code === "crews_disabled") throw data(null, { status: 404 });
     const status = (cause as { status?: number }).status ?? 503;
-    // Without a final answer the write may have happened, so the same key
-    // goes again and replays it.
     const next = status >= 500 ? idempotencyKey : freshIdempotencyKey();
     const payload = (cause as { payload?: object }).payload;
     return reply(status, intent, next, {
@@ -607,11 +570,6 @@ export async function crewFormAction(
   }
 }
 
-/**
- * The crew a sign-in, sign-up or linking page is on the way to, when the
- * clasher came from its invite link; null otherwise, for a link that has
- * ended, or when it can't be read.
- */
 export async function inviteCrewName(returnPath: string | null): Promise<string | null> {
   const code = /^\/crews\/join\/([^/]+)$/.exec(returnPathPage(returnPath ?? ""))?.[1];
   if (code === undefined || !INVITE_CODE.test(code) || !isCrewsEnabled()) return null;

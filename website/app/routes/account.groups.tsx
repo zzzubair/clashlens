@@ -39,12 +39,9 @@ const NO_STORE = { "Cache-Control": "no-store" };
 const ACTIONS = ["create", "update", "delete", "add-player", "remove-player"] as const;
 type GroupAction = (typeof ACTIONS)[number];
 
-/** One row of a card's preview: a player with their result today and on each
- *  of the last 7 finished Legend days, and whether they are the Clasher's own. */
 export interface PreviewPlayer extends GroupPlayer {
   you: boolean;
   today: number | null;
-  /** The 7 days' total, for screen readers; the bars show it to the eye. */
   net: number | null;
   days: (number | null)[];
 }
@@ -52,52 +49,31 @@ export interface PreviewPlayer extends GroupPlayer {
 export interface GroupsLoaderData {
   limits: import("../lib/account-contracts").GroupLimits | null;
   groups: ListedGroup[];
-  /** Each list's players as its comparison reads them, with the Clasher's own
-   *  players beside them, by group; a list whose comparison could not be read
-   *  has none and shows names and trophies only. */
   previews?: Record<string, PreviewPlayer[]>;
-  /** The 7 finished days every preview covers, named once over its bars. */
   previewDays?: string | null;
-  /** The Season the members' trophies were read in, once loaded. */
   season: string | null;
   seasonEnd: string | null;
-  /** Fresh idempotency key for the create form. */
   createIdempotencyKey: string;
-  /** Fresh per-group idempotency keys for the rename forms. */
   updateIdempotencyKeys: Record<string, string>;
-  /** Fresh per-group idempotency keys for the delete forms. */
   deleteIdempotencyKeys: Record<string, string>;
-  /** Fresh per-group idempotency keys for the add-player forms. */
   addIdempotencyKeys: Record<string, string>;
-  /** Fresh idempotency keys for each member's remove button, by group then tag. */
   removeIdempotencyKeys: Record<string, Record<string, string>>;
   error: WebsiteErrorResponse | null;
 }
 
 export interface GroupsActionData {
   action: GroupAction;
-  /** The group the fresh group keys belong to (all but create). */
   groupId: string | null;
-  /** Fresh idempotency key for the next create attempt. */
   createIdempotencyKey: string;
-  /** Fresh idempotency key for the next rename attempt on `groupId`. */
   updateIdempotencyKey: string;
-  /** Fresh idempotency key for the next delete attempt on `groupId`. */
   deleteIdempotencyKey: string;
-  /** Fresh idempotency key for the next add or remove on `groupId`. */
   playerIdempotencyKey: string;
   fieldErrors: { name?: string; tag?: string; confirm?: string };
-  /** What happened to the player just added or removed. */
   notice: string | null;
   generalError: WebsiteErrorResponse | null;
   values: { name: string; tag: string; action: string; groupId: string };
 }
 
-/**
- * GET /account/watchlists — list only the signed-in account's private groups with
- * explicit create, rename, add-player, remove-player and confirmed-delete
- * forms, each bound to its own idempotency key.
- */
 export async function loader({ request }: Route.LoaderArgs): Promise<GroupsLoaderData> {
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
@@ -120,8 +96,6 @@ export async function loader({ request }: Route.LoaderArgs): Promise<GroupsLoade
     const { groups, season, calendar, limits } =
       await createPythonClient(identity).listGroups();
     const { getGroupComparison } = await import("../services/group-comparison.server");
-    // Each card shows today and the last 7 days without opening it: every
-    // list's comparison is read at once, and one that fails only loses its bars.
     const comparisons = await Promise.all(
       groups.map((group) =>
         group.players.length === 0
@@ -138,7 +112,6 @@ export async function loader({ request }: Route.LoaderArgs): Promise<GroupsLoade
           return comparison == null ? [] : [[group.groupId, previewPlayers(comparison)]];
         }),
       ),
-      // Every list covers the same 7 days, up to the last Reset.
       previewDays: dayRange(
         comparisons.find((comparison) => comparison != null)?.dayStarts ?? [],
       ),
@@ -167,13 +140,6 @@ export async function loader({ request }: Route.LoaderArgs): Promise<GroupsLoade
   }
 }
 
-/**
- * POST /account/watchlists — create, rename, or delete a private group, or add or
- * remove one player. The action and group ID are explicit, deletion requires
- * an explicit confirmation, and every mutation is same-origin with a
- * canonical idempotency UUID. A player joins only after the game confirms
- * the tag belongs to a real player.
- */
 export async function action({ request, context }: Route.ActionArgs) {
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
@@ -266,7 +232,6 @@ export async function action({ request, context }: Route.ActionArgs) {
       await players.removeGroupPlayer(identity, groupId, tag as string, idempotencyKey);
       return reply(200, { notice: `Removed ${tag} from the watchlist.` });
     } else {
-      // Refuse duplicates and a full group before spending a player lookup.
       const list = await client.listGroups();
       const group = list.groups.find((row) => row.groupId === groupId);
       if (group === undefined) return reply(404, { generalError: GROUP_GONE });
@@ -340,7 +305,6 @@ export async function action({ request, context }: Route.ActionArgs) {
             : safeError,
     });
   }
-  // Replace the deleted group's history entry so Back does not return to it.
   throw replace("/account/watchlists");
 }
 
@@ -430,7 +394,6 @@ export default function GroupsRoute() {
   const listTitle = useRef<HTMLHeadingElement>(null);
   const shownGroups = useRef(groups.length);
   useEffect(() => {
-    // A deleted group's Edit takes the focus with it; hand it to the list.
     if (groups.length < shownGroups.current && document.activeElement === document.body) {
       listTitle.current?.focus();
     }
@@ -471,8 +434,6 @@ export default function GroupsRoute() {
       <header className="page-hero">
         <h1 id="groups-title">Watchlists</h1>
         <p>Private lists of up to 20 players, side by side.</p>
-        {/* With lists to show, making one waits behind a button, on the
-            title's right. */}
         {groups.length > 0 || loaderData.error ? (
           <details
             key={createKey}
@@ -488,7 +449,6 @@ export default function GroupsRoute() {
       {actionData?.generalError ? <ErrorNotice error={actionData.generalError} /> : null}
 
       <section className="data-section" aria-labelledby="group-list-title">
-        {/* The page title already names them; the heading stays for screen readers. */}
         <h2 id="group-list-title" className="sr-only" ref={listTitle} tabIndex={-1}>
           Your watchlists
         </h2>
@@ -537,10 +497,8 @@ function GroupCard({
 }: {
   maxPlayers: number;
   group: ListedGroup;
-  /** The list's players with today and their days, when the comparison was read. */
   preview: PreviewPlayer[] | null;
   loaderData: GroupsLoaderData;
-  /** A no-JavaScript form result for this group, if any. */
   actionData: GroupsActionData | undefined;
 }) {
   const id = group.groupId;
@@ -557,13 +515,10 @@ function GroupCard({
   }, [add.state, add.data]);
   const editResult = actionData?.action === "add-player" ? undefined : actionData;
   const count = group.players.length;
-  // The Clasher's own players outside the list still join its rows, as in the
-  // comparison, so the count says how many: "6 watched + 2 yours".
   const yours =
     preview?.filter(
       (player) => player.you && !group.players.some(({ tag }) => tag === player.tag),
     ).length ?? 0;
-  // Opened by its link without JavaScript, or kept open after that panel's form result.
   const [searchParams] = useSearchParams();
   const [panel, setPanel] = useState<Panel | null>(() =>
     actionData === undefined
@@ -600,8 +555,6 @@ function GroupCard({
             </p>
           ) : null}
         </div>
-        {/* Adding and editing wait in the card's one quiet menu, so its
-            title has room and Compare is the clear way on. */}
         <details className="group-more" ref={more}>
           <summary title="Add a player, rename, remove players or delete">
             <span aria-hidden="true">⋯</span>
@@ -618,8 +571,6 @@ function GroupCard({
             </a>
           </div>
         </details>
-        {/* The whole card opens the comparison; this link stretches over it,
-            and its button is all that shows of it. */}
         <Link
           className="group-card-open button-primary"
           to={`/account/watchlists/${id}`}
@@ -630,7 +581,6 @@ function GroupCard({
         </Link>
       </div>
 
-      {/* Both panels stay mounted while closed, so their request state survives. */}
       <div id={`group-${id}-add`} className="group-panel" hidden={panel !== "add"}>
         <add.Form method="post" action="." className="add-player-form" ref={addForm}>
           <input type="hidden" name="action" value="add-player" />
@@ -702,7 +652,6 @@ function GroupCard({
   );
 }
 
-/** Rename, remove players and delete, folded under the card's Edit. */
 function EditGroup({
   group,
   loaderData,
@@ -710,7 +659,6 @@ function EditGroup({
 }: {
   group: ListedGroup;
   loaderData: GroupsLoaderData;
-  /** A no-JavaScript rename, remove or delete result for this group, if any. */
   actionData: GroupsActionData | undefined;
 }) {
   const id = group.groupId;
@@ -836,11 +784,6 @@ function EditGroup({
   );
 }
 
-/**
- * A card lists its players highest first, as the comparison does. The saved
- * list has no order of its own (it comes back by tag), so this only changes
- * how it reads.
- */
 function byTrophies<T extends GroupPlayer>(players: T[]): T[] {
   return [...players].sort(
     (left, right) =>
@@ -848,7 +791,6 @@ function byTrophies<T extends GroupPlayer>(players: T[]): T[] {
   );
 }
 
-/** A small line icon in the text colour, for the card's buttons. */
 function LineIcon({ d }: { d: string }) {
   return (
     <svg
@@ -866,11 +808,6 @@ function LineIcon({ d }: { d: string }) {
   );
 }
 
-/**
- * A card's players, highest first, each with today's result and the last 7
- * days as small bars, so the race reads without opening the list. The
- * Clasher's own players join it, marked You, as in the comparison.
- */
 function Members({
   group,
   preview,
@@ -878,7 +815,6 @@ function Members({
 }: {
   group: ListedGroup;
   preview: PreviewPlayer[] | null;
-  /** The bars' days, such as "22–28 Oct". */
   days: string | null;
 }) {
   const backState = useBackState("Your watchlists");
@@ -959,11 +895,6 @@ function Members({
   );
 }
 
-/**
- * One player's last days as thin bars up (won) or down (lost) from their
- * zero line, on the player's own scale so every row shows its shape, all at
- * one strength in their gain or loss colour, as Rankings draws its own.
- */
 function DayBars({ days }: { days: (number | null)[] }) {
   const scale = rowScale(days);
   return (
@@ -987,7 +918,6 @@ function Signed({ value }: { value: number }) {
   );
 }
 
-/** A member's name and trophies, in Edit's list beside their Remove button. */
 function MemberName({ player }: { player: GroupPlayer }) {
   const backState = useBackState("Your watchlists");
   return (

@@ -254,7 +254,6 @@ def classify_transport_ambiguity() -> VerificationClassification:
 
 def load_official_api_key_file(path: str | Path) -> bytes:
     try:
-        # The key itself is at most 4,096 bytes, plus its line end.
         raw = read_small_file(path, 4098)
     except OSError as error:
         raise ValueError("official API key file could not be read") from error

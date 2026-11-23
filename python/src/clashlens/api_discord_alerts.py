@@ -21,10 +21,6 @@ from .api_db import ApiDatabase
 from .api_requests import OperationResult, RequestBinding
 from .db_rows import text_value
 
-# Whether the account `alert` names may get the DMs of the player it names:
-# the player is linked to it, or it is a site owner (migrations 0138, 0139),
-# whose switches for any player api_view_as saves. The bot checks this before
-# each DM, so none goes once the link or the owner record is gone.
 MAY_SEND = """(
     EXISTS (
         SELECT 1 FROM verified_player_links AS link

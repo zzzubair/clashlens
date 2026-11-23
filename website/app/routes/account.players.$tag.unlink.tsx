@@ -21,9 +21,7 @@ export function meta() {
 
 export interface UnlinkPlayerLoaderData {
   player: VerifiedPlayer;
-  /** The player /stats uses instead when this default player is unlinked. */
   nextDefault: VerifiedPlayer | null;
-  /** Crews the Clasher owns where this is their only player. */
   handOver: HandOverCrew[];
   idempotencyKey: string;
 }

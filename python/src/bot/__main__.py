@@ -90,14 +90,11 @@ def _commands(config: Config) -> Commands:
         database_url = read_secret_file(config.database_url_file)
     except BootstrapError as error:
         raise ConfigError("the database address file cannot be read") from error
-    # Two more connections than command reads: one for the attack alert loop
-    # and one for the Legend day summary loop.
     database = ApiDatabase(database_url, min_size=1, max_size=READ_SLOTS + 2)
     return Commands(Store(database), Site(config.origin))
 
 
 def _offline_commands() -> Commands:
-    # Registering commands reads nothing, so it needs no database or website.
     return Commands(store=None, site=Site("https://example.invalid"))  # type: ignore[arg-type]
 
 

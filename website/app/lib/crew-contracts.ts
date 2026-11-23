@@ -36,7 +36,6 @@ export interface CrewList {
   maxCrews: number;
 }
 
-/** Whether a placed account shows on boards this Season. */
 export type CrewPlayerStatus = "tracking" | "not_in_legend" | "no_battles_this_season";
 const PLAYER_STATUSES: readonly CrewPlayerStatus[] = [
   "tracking",
@@ -49,7 +48,6 @@ export interface CrewPlayer {
   name: string | null;
   trophies: number | null;
   status: CrewPlayerStatus;
-  /** This Season's Legend I part, for an account that left it. */
   leftLegendI?: LeftLegendI | null;
 }
 
@@ -84,7 +82,6 @@ export interface CrewView {
   players: CrewPlayer[];
 }
 
-/** A crew a player has a place in, for the player's page. */
 export interface PlayerCrew {
   crewId: string;
   name: string;
@@ -100,7 +97,6 @@ export interface Crew {
   invites: CrewInviteLink[];
 }
 
-/** An invite link just made or reused, with the code that goes in it. */
 export interface MadeInvite {
   inviteId: string;
   code: string;
@@ -108,7 +104,6 @@ export interface MadeInvite {
   openPlaces: number;
 }
 
-/** One of the signed-in account's linked Clash of Clans accounts. */
 export type LinkedAccount = Pick<
   LinkedPlayerCard,
   "tag" | "name" | "state" | "trophies" | "league"
@@ -119,10 +114,8 @@ export function canJoin(account: LinkedAccount): boolean {
   return !["not_in_legend", "uncertain", "not_found"].includes(account.state);
 }
 
-/** A made invite with its full address on this website. */
 export type InviteLink = MadeInvite & { link: string };
 
-/** The code in an invite link, as the private API makes it. */
 export const INVITE_CODE = /^[A-Za-z0-9_-]{22}$/;
 
 export type InviteState = "ok" | "invalid" | "ended" | "full" | "limit";
@@ -181,12 +174,10 @@ export const PERIOD_LABELS: Record<CrewPeriod, string> = {
   season: "Season",
 };
 
-/** A period from the address, or Season, the default. */
 export function crewPeriod(value: string | null): CrewPeriod {
   return PERIODS.find((period) => period === value) ?? "season";
 }
 
-/** Board keys, in the order the crew page shows them, with their address. */
 export const BOARDS = {
   live: { slug: "live", title: "Live leaderboard" },
   top: { slug: "top", title: "Top players" },
@@ -197,14 +188,12 @@ export const BOARDS = {
 } as const;
 export type BoardKey = keyof typeof BOARDS;
 export const BOARD_KEYS = Object.keys(BOARDS) as BoardKey[];
-/** Live and Top players are always "now"; the period switch changes the rest. */
 export const NOW_BOARDS: readonly BoardKey[] = ["live", "top"];
 
 export function boardFromSlug(slug: string | undefined): BoardKey | null {
   return BOARD_KEYS.find((key) => BOARDS[key].slug === slug) ?? null;
 }
 
-/** One line under a board's title saying what its number is. */
 export function boardDescription(board: BoardKey, period: CrewPeriod): string {
   const today = period === "today";
   switch (board) {
@@ -260,7 +249,6 @@ export interface CrewBoards {
   crewId: string;
   period: CrewPeriod;
   dayNumber: number;
-  /** Finished Legend days the averages cover; empty on a Season's Day 1. */
   windowDays: string[];
   boards: Record<BoardKey, Board>;
 }
@@ -276,7 +264,6 @@ const MISSING_REASONS: Record<string, string> = {
   not_on_live_board: "Not on the Live leaderboard yet",
 };
 
-/** Why an account is not on a board, in words. */
 export function missingReason(reason: string): string {
   return MISSING_REASONS[reason] ?? "No data here";
 }
@@ -396,7 +383,6 @@ export function mapCrew(value: unknown): Crew | null {
   return { ...header, myRole: value.my_role, members, invites };
 }
 
-/** The link a make-invite answer gives. */
 export function mapMadeInvite(value: unknown): MadeInvite | null {
   if (
     !isRecord(value) ||
@@ -472,7 +458,6 @@ export function mapInvitePreview(value: unknown): InvitePreview | null {
   };
 }
 
-/** What a refused account in a join or add reads as. */
 const ACCOUNT_REFUSALS: Record<string, (tag: string) => string> = {
   player_not_linked: (tag) => `${tag} is not linked to your account.`,
   player_not_in_legend: (tag) => `${tag} is not in Legend League, so it can't join.`,
@@ -519,7 +504,6 @@ export function crewRefusal(
   return messages[code] ?? null;
 }
 
-/** The new crew's id from a create answer. */
 export function mapCreatedCrew(value: unknown): string | null {
   return isRecord(value) && isUuid(value.crew_id) ? value.crew_id : null;
 }

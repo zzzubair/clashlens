@@ -73,10 +73,6 @@ log = logging.getLogger("clashlens.bot.summaries")
 BATCH = 10
 SUMMARY_SECONDS = 60.0
 
-# Where an account's summary, or one of its DMs, is still due: before the
-# Reset closing its Legend day, Discord still connected as the same user, and
-# every player in %(tags)s with its summary on and still verified to the
-# account, or the account still a site owner (`MAY_SEND`).
 _STILL_ON = """
     FROM clash_lens_accounts AS account
     JOIN account_provider_identities AS identity
@@ -212,9 +208,6 @@ class Summaries:
                 """,
                 {"reset": reset, "batch": BATCH},
             ).fetchall()
-            # Each player's place on that board, whether it went without them
-            # as their day's result was not saved in time, and their place on
-            # the board before.
             standing = {
                 tag: (position, unfinished, earlier)
                 for tag, position, unfinished, earlier in connection.execute(

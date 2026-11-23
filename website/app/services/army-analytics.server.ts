@@ -24,8 +24,6 @@ export async function getArmyAnalytics(query: URLSearchParams): Promise<ArmyAnal
       isRecord(cause.payload) &&
       cause.payload.error === "no_completed_legend_days"
     ) {
-      // The current season has no completed Legend day yet; keep the previous
-      // season reference so the page can link to it honestly.
       throw new NoCompletedLegendDaysError(
         isString(cause.payload.previous_season_id)
           ? cause.payload.previous_season_id
@@ -45,8 +43,6 @@ export async function getArmySeasonSummary(
   season: string,
   query: URLSearchParams,
 ): Promise<ArmyAnalytics> {
-  // Historical army reads cover the whole season only: the query carries
-  // lens/category/sort, never a day range or population filter.
   const payload = await requestJson<unknown>(
     `/v1/analytics/armies/seasons/${encodeURIComponent(season)}?${query.toString()}`,
     { method: "GET" },
@@ -54,7 +50,6 @@ export async function getArmySeasonSummary(
   return mapArmyAnalytics(payload, false);
 }
 
-// Finished seasons with saved attack summaries, newest first.
 export interface ArmySeason {
   id: string;
   start: string | null;

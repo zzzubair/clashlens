@@ -14,7 +14,6 @@ import { usePendingForm } from "../lib/pending-form";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
-/** Back leads to the page that sent the clasher here, or to their profile. */
 export const handle: BackHandle = {
   back: (match) => {
     const loaderData = match.loaderData as VerifyPlayerLoaderData | undefined;
@@ -35,22 +34,17 @@ const INVITE_PREFIX = "/crews/join/";
 
 export interface VerifyPlayerLoaderData {
   idempotencyKey: string;
-  /** The page to go on to once the player is linked, such as a crew invite. */
   returnPath: string | null;
-  /** The crew whose invite that page is. */
   crewName: string | null;
-  /** That page is the Dashboard, which `/` is only while its switch is on. */
   toDashboard: boolean;
 }
 
 export interface VerifyPlayerActionData {
-  /** Fresh idempotency key for the next submission attempt. */
   idempotencyKey: string;
   status: VerificationStatus | null;
   verificationRequestId: string | null;
   fieldErrors: { tag?: string; token?: string };
   generalError: WebsiteErrorResponse | null;
-  /** The submitted tag only. The API token never appears in returned data. */
   values: { tag: string };
 }
 
@@ -66,11 +60,6 @@ const STATUS_MESSAGES: Record<VerificationStatus, string> = {
   in_progress: "Verification is already in progress. Check again shortly.",
 };
 
-/**
- * GET /account/verify-player — link a player with their in-game API token.
- * The loader carries only a fresh idempotency key; no token state exists
- * server-side before or after submission.
- */
 export async function loader({
   request,
 }: Route.LoaderArgs): Promise<VerifyPlayerLoaderData> {
@@ -90,7 +79,6 @@ export async function loader({
   };
 }
 
-/** A same-origin page to go on to, or null; never this page or account setup. */
 async function linkReturnPath(value: string | null | undefined): Promise<string | null> {
   const { getWebsiteConfig } = await import("../server/config.server");
   const { returnPathPage, safeReturnPath, ACCOUNT_SETUP_PATH } =
@@ -149,7 +137,6 @@ export async function action({ request, context }: Route.ActionArgs) {
     );
   }
 
-  // The private service also limits each account; this stops one address first.
   const { clientAddressContext } = await import("../server/client-address.server");
   const { allowVerification, visitorRefusal } = await import("../server/abuse.server");
   const refusal = visitorRefusal(context?.get(clientAddressContext), allowVerification);
@@ -176,12 +163,10 @@ export async function action({ request, context }: Route.ActionArgs) {
       idempotencyKey,
     );
     if (result.status === "linked" || result.status === "already_linked") {
-      // The page that sent the clasher here, such as a crew invite, goes on.
       const returnPath = await linkReturnPath(form["return"]);
       if (returnPath !== null) {
         return redirect(returnPath, { status: 303, headers: NO_STORE });
       }
-      // The profile confirms the link by showing this tag.
       const linked = encodeURIComponent(result.tag ?? (tag as string));
       return redirect(`/account?linked=${linked}`, { status: 303, headers: NO_STORE });
     }
@@ -251,8 +236,6 @@ export default function VerifyPlayerRoute() {
   const [token, setToken] = useState("");
   const submitting = usePendingForm() !== undefined;
 
-  // The API token is cleared after every submission attempt so it is
-  // never left in the page after the request completes.
   useEffect(() => {
     setToken("");
   }, [actionData]);

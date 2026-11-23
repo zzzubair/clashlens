@@ -18,10 +18,7 @@ import psycopg
 
 EXAMPLE_LIMIT = 5
 CHECK_TIMEOUT = "10s"
-# Work from the Legend day before the Season can still feed its opening Reset.
 SCOPE_LOOKBACK = timedelta(days=1)
-# Completed results that prove the work applied. Superseded, gaps,
-# non-success and unknown outcomes stay unresolved until accounted for.
 SUCCESS_OUTCOMES = ("processed", "stale_superseded", "official_observed")
 SETTLED_GENERATION_STATES = ("published", "superseded")
 EXPANDED_HISTORY_UNAVAILABLE = "expanded_history_unavailable"
@@ -35,12 +32,6 @@ REQUIRED_RELATIONS = (
     "boundary_publication_corrections",
 )
 
-# Whether a job could still change or feed the Season. Responses count from
-# the day before the Season however late they were fetched; Legend days from
-# that day to the closing day, since the opening day reads the ending result;
-# publications at either Season edge; army redecodes for battles on the
-# Season's own days. Exports, unknown work types, missing sources and
-# unreadable dates or battle ids cannot prove themselves out of scope.
 _JOB_IN_SCOPE = """
 CASE
     WHEN job.work_type IN ('process_observation', 'replay_observation')
@@ -87,8 +78,6 @@ _CHECKS = {
           AND ({_JOB_IN_SCOPE})
         ORDER BY job.id LIMIT %(limit)s
     """,
-    # Finished-job cleanup removes completed jobs but keeps their outcome,
-    # so the newest retained outcome is the proof, not a missing job.
     "unproven_observations": """
         SELECT observation.id FROM collector_observations AS observation
         WHERE COALESCE(observation.response_completed_at >= %(scope_start)s, true)
@@ -107,7 +96,6 @@ _CHECKS = {
           AND COALESCE(observation.response_completed_at >= %(scope_start)s, true)
         ORDER BY request.id LIMIT %(limit)s
     """,
-    # Publications at both Season edges, the closing Reset included.
     "boundary_generations": """
         SELECT generation.id FROM boundary_publication_generations AS generation
         WHERE generation.boundary_at >= %(season_start)s
@@ -116,8 +104,6 @@ _CHECKS = {
                    AND generation.army_state = ANY(%(settled)s))
         ORDER BY generation.id LIMIT %(limit)s
     """,
-    # Later corrections can carry the Season's ending result forward. Only a
-    # finalized correction whose generation published is resolved.
     "boundary_corrections": """
         SELECT correction.id FROM boundary_publication_corrections AS correction
         LEFT JOIN boundary_publication_generations AS generation
@@ -128,8 +114,6 @@ _CHECKS = {
                            AND generation.army_state = ANY(%(settled)s), false)
         ORDER BY correction.id LIMIT %(limit)s
     """,
-    # A Reset's settlement check reads the two days before it, so it holds
-    # their detail until it finishes and its responses are processed.
     "reset_settlement_checks": """
         SELECT work.id FROM collector_work AS work
         JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id

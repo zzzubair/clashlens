@@ -13,9 +13,6 @@ from .operating import database_pool_health
 # Any other lock wait gives up after this long instead of holding a pool
 # connection behind a long worker transaction until every page times out.
 API_LOCK_TIMEOUT = "2s"
-# The website gives up on a request after 5 seconds. A query still running
-# well after that is cancelled so it stops holding one of the pool's
-# connections. Army reads keep their own shorter transaction limit.
 API_STATEMENT_TIMEOUT = "10s"
 
 

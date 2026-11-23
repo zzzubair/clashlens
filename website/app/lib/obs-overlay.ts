@@ -1,20 +1,10 @@
-/**
- * OBS overlay: what the account page saves and what an overlay in OBS reads.
- * Settings are short strings, the same as the overlay's address query, so a
- * preview and a saved link show exactly the same thing.
- */
-
-/** Saved overlay settings: w, h, x, y, cw, ch (stream pixels), fit, text,
- * bg, font, show, popup, demo and snap. */
 export type OverlaySettings = Record<string, string>;
 
 export interface OverlayAccount {
   settingsContract: OverlaySettingsContract;
-  /** The private link's id; the overlay's address is /o/<link>. */
   link: string;
   settings: OverlaySettings;
   version: number;
-  /** The verified player shown, or null when none is picked. */
   tag: string | null;
   players: Array<{ tag: string; name: string | null; league: string | null }>;
 }
@@ -41,14 +31,11 @@ export interface OverlayPlayer {
   state: "legend" | "not_in_legend" | "uncertain" | "missing";
   name?: string;
   trophies?: number;
-  /** When the profile was last read from the game. */
   profileReadAt?: string;
-  /** The Live Leaderboard place among tracked players. */
   rank?: number;
   day?: {
     number: number | null;
     of: number;
-    /** The day's totals; null unless every battle so far is in `battles`. */
     gained: number | null;
     lost: number | null;
     net: number | null;
@@ -112,7 +99,6 @@ export const OVERLAY_FONTS = {
   arcade: "Arcade",
 } as const;
 
-/** How often an overlay in OBS asks for its settings and for its player. */
 export const SETTINGS_POLL_MS = 3_000;
 export const PLAYER_POLL_MS = 20_000;
 

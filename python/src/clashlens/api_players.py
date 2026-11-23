@@ -118,8 +118,6 @@ def read_player_page(
     or a ``goal_rank``, adds the Dashboard's Season, window and rival facts."""
     dashboard = dashboard or goal_rank is not None
     metadata_join, metadata_columns = _current_profile_metadata()
-    # A player who has not played yet this Season shows the newest
-    # profile that ranks them at 5,000, as the Live Leaderboard does.
     unplayed = connection.execute(
         api_leaderboard.UNPLAYED_PROFILE_SQL,
         {**live_board.season_params(now), "tag": normalized_tag},
@@ -164,9 +162,6 @@ def read_player_page(
         max(row[5], row[11] or row[5]) if unplayed is None else unplayed[1]
     ).astimezone(UTC)
     not_found_at = None if row[16] is None else row[16].astimezone(UTC)
-    # A profile naming an earlier Season, or still showing the frozen
-    # pre-Reset trophies on a Season's first day, shows trophies from
-    # before this player's Season reset, not their current Season total.
     season_reset_pending = unplayed_id is None and awaits_season_reset(
         text_value(row[12]), int(row[4]), row[13], row[14], now
     )
@@ -501,8 +496,6 @@ def read_player_page(
                 "confidence": (
                     "uncertain" if not_found_at else public_confidence
                 ),
-                # Coverage is complete, partial, missing or unknown; an
-                # uncertain day is not complete, and says why itself.
                 "coverage": (
                     "missing"
                     if current_day is None
@@ -713,7 +706,6 @@ def player_cards(
             card["trophies"] = lookup["profile"]["trophies"]
             card["left_legend_i"] = left.get(player_id)
         elif reason is None and profile is not None:
-            # As on the player page: an earlier Season's trophies are no total.
             pending = awaits_season_reset(
                 text_value(profile[1]), int(profile[0]), profile[2], profile[3], now
             )
@@ -890,8 +882,6 @@ def get_player_season_summary(
             result["official_history"] = (
                 None if history is None else _official_history_payload(history)
             )
-            # Which weeks were Legend I, so a Season the player left or
-            # joined partway counts only its Legend I days as missing.
             result["season_weeks"] = [
                 {
                     "week_start": week["week_start"].isoformat(),
@@ -904,8 +894,6 @@ def get_player_season_summary(
                     datetime.fromtimestamp(int(official_season_id), UTC),
                 )
             ]
-            # Shaped from the Season's dates, which come from its id as the
-            # website's pastSeasonShape did.
             historical_facts(result)
             return result
         if history is None:

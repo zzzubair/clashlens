@@ -180,7 +180,6 @@ export async function action({ request, context }: Route.ActionArgs) {
     tags.length,
     (key) => createCrew(identity, { name: name as string, size, tags }, key),
   );
-  // The new crew opens with its invite link ready to share.
   if (created.ok) throw redirect(`/crews/${created.value}?invite=1`);
   const { cause, unfinished } = created;
   await setupRedirect(request, cause);

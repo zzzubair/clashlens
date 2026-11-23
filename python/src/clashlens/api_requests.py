@@ -69,7 +69,6 @@ class RequestPhase(StrEnum):
     DEADLINE_PASSED = "deadline_passed"
     COMPLETE = "complete"
 
-# The saved request's identity, state and deadline, in request_phase order.
 _REQUEST_COLUMNS = """caller, provider, provider_subject, account_id, operation,
                method, request_target, identity_json, state, in_progress_until"""
 

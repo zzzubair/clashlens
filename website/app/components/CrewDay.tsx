@@ -54,7 +54,6 @@ export function CrewDay({ live }: { live: Board }) {
         </b>
         <span className="sr-only"> trophies</span>
       </p>
-      {/* A count of none stays grey, so only real moves take a colour. */}
       <p className="crew-day-counts">
         <span className={up ? "crew-day-up" : undefined}>{up} up</span>
         <span className="crew-day-bar" aria-hidden="true">

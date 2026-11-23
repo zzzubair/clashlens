@@ -43,8 +43,6 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     const headers = {
       "Content-Type": contentType,
       "X-Content-Type-Options": "nosniff",
-      // A sync can replace a file under the same name, so browsers recheck after
-      // 5 minutes. Owner-only files are never stored.
       "Cache-Control": isPublic ? "public, max-age=300" : "no-store",
       ETag: etag,
     };

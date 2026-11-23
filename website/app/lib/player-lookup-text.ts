@@ -9,7 +9,6 @@ import type {
   SummarizedSeasonRef,
 } from "./contracts";
 
-/** What a player page says about a tag without current results. */
 export const LOOKUP_MESSAGES: Record<PlayerLookup["state"], string> = {
   unknown: "Waiting to check this tag with Clash of Clans.",
   checking:
@@ -23,10 +22,6 @@ export const LOOKUP_MESSAGES: Record<PlayerLookup["state"], string> = {
     "We could not finish checking this tag. This does not mean the player is missing or outside Legend I.",
 };
 
-/**
- * The player page's lookup note. That page has a search box, so a tag the game
- * doesn't know also asks for a typo check; a player outside Legend I gets their league.
- */
 export function lookupMessage(lookup: PlayerLookup): string {
   const message = LOOKUP_MESSAGES[lookup.state];
   if (lookup.state === "not_found")
@@ -35,7 +30,6 @@ export function lookupMessage(lookup: PlayerLookup): string {
   return league ? `${message} Current league: ${league}.` : message;
 }
 
-// The saved player, or a finished refresh's player when that is newer.
 export function newestPlayer(
   status: RefreshStatus | RefreshWork | null,
   data: { requestedTag: string | null; player: PlayerPage | null },
@@ -52,16 +46,10 @@ export function newestPlayer(
     : data.player;
 }
 
-// A newest profile we cannot use is explained, even over saved results.
 export function explainsNoResults(lookup: PlayerLookup | null): boolean {
   return lookup?.state === "tracking" && (lookup.reason ?? "pending") !== "pending";
 }
 
-// What a visit shows and how often it rereads saved data. A successful lookup
-// alone decides the state; saved results show as current only when it says
-// tracking too. Once explained, the visit rereads once a minute, through failed
-// or partial reads, until a successful lookup gives a normal page or a final
-// answer.
 export function playerLookupView(
   player: PlayerPage | null,
   fetched: PlayerLookup | null,
@@ -86,11 +74,6 @@ export function playerLookupView(
   return { trackedPlayer, lookup, minuteChecks, isChecking };
 }
 
-/**
- * Whether a player without current results has a current Season to show. A
- * player outside Legend I needs a saved Legend day this Season, so the page
- * never shows them an empty Season.
- */
 export function showsCurrentSeason(
   lookup: PlayerLookup | null,
   history: { day: RankedDaySummary }[],
@@ -104,11 +87,6 @@ export function showsCurrentSeason(
   );
 }
 
-/**
- * Why a tracked player's newest profile gives no current results, or null
- * when nothing needs explaining. Clash Lens rechecks these players' profiles
- * every 15 minutes.
- */
 export function lookupExplanation(
   reason: PlayerLookup["reason"] | null,
   name: string | null | undefined,
@@ -178,20 +156,12 @@ export function dayPresentation(day: {
   };
 }
 
-// The checks after Reset, which a Legend day in progress cannot have yet. The
-// automatic defense loss also waits for Reset, and for the previous day.
 const WAITING_REASONS = new Set([
   "missing_end_battle_log_baseline",
   "missing_end_baseline",
 ]);
 const AUTOMATIC_DEFENSE = "automatic_defense_basis_unavailable";
 
-/**
- * The note above the daily log for today's Legend day, or null when there is
- * nothing to add: a routine wait in progress is already shown by the day's
- * In progress badge. Once the page's clock passes Reset, a routine wait is no
- * longer in progress, even before the page rereads it; a caution stays.
- */
 export function liveDayNotice(day: RankedDaySummary, ended: boolean, label: string) {
   const { cautions } = dayPresentation(day);
   if (!day.presentation!.live_routine)
@@ -248,7 +218,6 @@ const REASON_TEXT: Record<string, string> = {
   defense_star_total_mismatch: "Recorded defenses do not match the day's defense count.",
   truncated_reasons: "More reasons were saved than can be shown.",
 };
-// Plain words for Python's reason codes.
 export function dayReasons(
   codes: string[],
   isCurrentDay: boolean,
@@ -281,7 +250,6 @@ export function legendDayKey(period: string): string {
   return period.slice(0, 10);
 }
 
-// Every saved record of a player, in the order the log prefers them.
 export function savedDays(player: PlayerPage) {
   return [
     ...player.seasonDays,
@@ -290,7 +258,6 @@ export function savedDays(player: PlayerPage) {
   ];
 }
 
-// Python supplies the end and its disagreement; only wording belongs here.
 export function dayEnd(day: RankedDaySummary) {
   const end = day.displayEnd!;
   const c = end.conflict;
@@ -322,7 +289,6 @@ export function selectPlayerHistory(player: PlayerPage | null) {
   }));
 }
 
-// The ended Season whose saved days include this Legend day (YYYY-MM-DD).
 export function seasonForDay(seasons: SummarizedSeasonRef[], day: string): string | null {
   const season = seasons.find(
     ({ seasonStart, seasonEnd, source }) =>

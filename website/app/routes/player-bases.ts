@@ -6,11 +6,6 @@ import type { Route } from "./+types/player-bases";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
-/**
- * GET /resources/players/:tag/bases?day= — what Bases you attacked loads
- * for an earlier Legend day of this Season. Signed-in users only; while
- * CLASHLENS_DASHBOARD_ENABLED is off it does not exist.
- */
 export async function loader({ params, request }: Route.LoaderArgs) {
   const { getWebsiteConfig, isDashboardEnabled } =
     await import("../server/config.server");

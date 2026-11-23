@@ -3,9 +3,6 @@ import { mapArmyUnits } from "./player-response.server";
 import { isInteger, isRecord, isString, PythonApiError } from "./python-response.server";
 import { requestJson } from "./python-transport.server";
 
-/** A variant's most-used armies for the Armies page's current-Season players,
- * over exactly the Legend days the page showed, or an error once those days
- * no longer resolve the same. */
 export async function getArmyVariantExamples(
   population: string,
   page: { season: string; days: number[] },

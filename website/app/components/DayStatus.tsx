@@ -1,6 +1,3 @@
-// A small dot for an ended day's status: hollow when Calculated, gold when
-// Uncertain, and none to see when Verified. Hover shows the status; opening
-// the day explains it.
 const MARK_CLASS: Record<string, string> = {
   Verified: "day-mark day-mark-verified",
   Calculated: "day-mark",
@@ -35,7 +32,6 @@ export function DayStatusNote({
   );
 }
 
-// A provisional end-of-day count keeps its number and gains a hollow dot.
 export function provisional(value: string, state: string | null) {
   return value === "Unknown" || state === "accepted" ? (
     value

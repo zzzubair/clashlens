@@ -12,9 +12,7 @@ from .api_requests import OperationResult, RequestBinding
 from .db_rows import text_value
 from .verification import KeyAction, VerificationOutcome
 
-# New verification attempts one account may start in any minute.
 VERIFICATION_ATTEMPTS_PER_MINUTE = 6
-# How long a support transfer candidate can be used after its verification.
 TRANSFER_CANDIDATE_MINUTES = 15
 
 
@@ -177,7 +175,6 @@ class TransferOutcome(StrEnum):
     TRANSFER_NOT_FOUND = "transfer_not_found"
     TRANSFER_CONFLICT = "transfer_conflict"
     FRESH_VERIFICATION_REQUIRED = "fresh_verification_required"
-    # Unreachable while the table's state check allows only the four states.
     TRANSFER_NOT_PENDING = "transfer_not_pending"
     LINK_OWNER_CHANGED = "link_owner_changed"
 
@@ -298,12 +295,10 @@ def reserve_verification(
 ) -> VerificationReservation:
     with database.pool.connection() as connection:
         with connection.transaction():
-            # One account's attempts take turns, so simultaneous ones see each other.
             connection.execute(
                 "SELECT 1 FROM clash_lens_accounts WHERE id = %s FOR NO KEY UPDATE",
                 (binding.account_id,),
             )
-            # A retry of a recorded request replays its answer without spending an attempt.
             recorded = connection.execute(
                 "SELECT 1 FROM private_api_requests WHERE request_id = %s",
                 (binding.request_id,),
@@ -430,9 +425,6 @@ def complete_verification(
                 payload["verification_request_id"] = binding.request_id
             result = OperationResult(_ANSWER_STATUS[answer], payload)
             if answer in (VerificationAnswer.LINKED, VerificationAnswer.ALREADY_LINKED):
-                # Check a linked player's profile at once, as a player page
-                # visit does, so its name and league show and its own profile
-                # decides whether it is tracked.
                 connection.execute(
                     "SELECT 1 FROM clashlens_enqueue_interactive('initial_collection', %s, 30, true)",
                     (normalized_tag,),

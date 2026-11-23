@@ -442,7 +442,6 @@ def complete_battle_log(
             reset_baselines._refresh_reset_baseline_evidence(
                 database, connection, claim
             )
-            # With the job's outcome row, saved just before.
             laps.lap("python_battle_log_reset_evidence")
             ranked_day = ranked_day_for(battle_log.observed_at)
             live_player_ids = {reporter_id}

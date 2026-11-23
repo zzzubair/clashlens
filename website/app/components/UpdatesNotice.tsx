@@ -2,7 +2,6 @@ import type { UpdateStatus } from "../lib/contracts";
 import { LocalTimestamp, useCurrentTime } from "./Provenance";
 import { formatAge } from "../lib/age-format";
 
-/** One quiet site-wide line; a tap shows the cause, when the data shows one. */
 export function UpdatesNotice({ status }: { status: UpdateStatus }) {
   const now = useCurrentTime(status.checkedAt);
   const ago = (value: string) =>

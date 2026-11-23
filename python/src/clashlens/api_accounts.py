@@ -343,7 +343,6 @@ def get_public_user(
         ).fetchone()
         if account is None:
             return None
-        # Initial profile and day reads are batched; lookup evidence is read per player.
         cards = api_players.player_cards(
             connection,
             api_players.linked_players(connection, int(account[0])),
@@ -360,7 +359,6 @@ def get_public_user(
         "username": text_value(account[1]),
         "display_name": text_value(account[2]),
         "verified_players": cards,
-        # When the cards' today numbers stop being today's.
         "calendar": calendar_payload(now),
     }
 
@@ -420,7 +418,6 @@ def get_multi_account_summary(database: ApiDatabase, account_id: int) -> dict[st
             "display_name": text_value(account[1]),
             "verified_players": api_players.verified_players(connection, account_id),
             "default_player": default,
-            # Who /stats uses once the default player is unlinked.
             "next_default_player": default_player_tag(connection, account_id, unlinked=default),
         }
 

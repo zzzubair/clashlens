@@ -26,7 +26,6 @@ import "../crews.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
-/** Back leads to the crew, on the same period. */
 export const handle: BackHandle = {
   back: (match: UIMatch) => {
     const loaded = match.loaderData as
@@ -38,7 +37,6 @@ export const handle: BackHandle = {
   },
 };
 
-/** GET /crews/:crewId/boards/:board — one crew board in full, and who is not on it. */
 export async function loader({ request, params }: Route.LoaderArgs) {
   const board = boardFromSlug(params.board);
   if (board === null) throw data(null, { status: 404 });

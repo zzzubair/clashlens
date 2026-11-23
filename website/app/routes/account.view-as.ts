@@ -6,15 +6,6 @@ import type { Route } from "./+types/account.view-as";
 const NO_STORE = { "Cache-Control": "private, no-store" };
 const INTENTS = ["pin", "unpin", "attack", "day_summary"] as const;
 
-/**
- * POST /account/view-as — the site owner's own choices from the View as bar:
- * `intent=pin` or `unpin` the viewed `tag`, or `intent=attack` or
- * `day_summary` with `on=on|off` for the owner's own Discord switch for it.
- * It never runs with `view_as` on its address (root middleware), and only
- * the Python service decides who the owner is; anyone else's request changes
- * nothing and comes back the same way whatever the tag. Each answer goes
- * back to the viewed player's View as, which says whether it saved.
- */
 export async function action({ request }: Route.ActionArgs): Promise<Response> {
   if (request.method !== "POST") {
     return new Response(null, { status: 405, headers: NO_STORE });

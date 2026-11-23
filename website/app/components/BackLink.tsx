@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useMatches, type UIMatch } from "react-router";
 
-/** Where Back leads: the page this one sits under, and its name. */
 export interface BackTarget {
   to: string;
   label: string;

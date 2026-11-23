@@ -31,12 +31,10 @@ export function meta() {
 
 export interface ObsOverlayLoaderData {
   overlay: OverlayAccount | null;
-  /** The site's public address, for the overlay's link. */
   origin: string;
   error: WebsiteErrorResponse | null;
 }
 
-/** GET /account/obs-overlay — set up the OBS overlay and copy its private link. */
 export async function loader({
   request,
 }: Route.LoaderArgs): Promise<ObsOverlayLoaderData> {
@@ -64,7 +62,6 @@ type Fit = "screen" | "overlay";
 type Part = string;
 type Corner = "tl" | "tc" | "tr" | "bl" | "bc" | "br";
 
-// Starting sizes for each shape, in stream pixels (each one's natural size).
 const PRESETS: Record<Shape, [number, number]> = {
   card: [366, 222],
   wide: [583, 146],
@@ -188,7 +185,6 @@ function fromSaved(overlay: OverlayAccount): { form: Form; place: Place } {
   };
 }
 
-/** The overlay's address query: what it shows, at what size. */
 function overlayQuery(form: Form, place: Place, parts: string[]): Record<string, string> {
   const q: Record<string, string> = {
     p: (form.tag ?? "").replace("#", ""),
@@ -204,7 +200,6 @@ function overlayQuery(form: Form, place: Place, parts: string[]): Record<string,
   return q;
 }
 
-/** Everything saved against the private link: the query, and where it sits. */
 function savedSettings(form: Form, place: Place, parts: string[]): OverlaySettings {
   const q = overlayQuery(form, place, parts);
   delete q.p;
@@ -245,7 +240,6 @@ function snapTo(place: Place, where: Corner): Place {
   });
 }
 
-// A new size keeps the overlay in its snapped spot, else where it was.
 const settle = (place: Place) =>
   place.anchor ? snapTo(place, place.anchor) : clamp(place);
 
@@ -280,19 +274,6 @@ export default function ObsOverlayRoute() {
   );
 }
 
-/**
- * The line under the editor that says how saving went:
- *
- * - `untouched`: nothing changed since the page loaded.
- * - `saving`: a save is on its way. Changes save 0.3 seconds after the last
- *   one, one save at a time; changes made while one is sending go when it
- *   lands, until the newest choices are saved.
- * - `saved`: the newest choices are saved; OBS follows within 3 seconds.
- * - `notSaved`: a save failed; the next change tries again.
- *
- * `OverlaySetup` owns it; leaving the page drops unsaved choices still in
- * their 0.3-second pause and stops any save still sending.
- */
 export type SaveStatus = "untouched" | "saving" | "saved" | "notSaved";
 
 const SAVE_STATUS: Record<SaveStatus, { text: string; ok: boolean }> = {
@@ -302,12 +283,6 @@ const SAVE_STATUS: Record<SaveStatus, { text: string; ok: boolean }> = {
   notSaved: { text: "Not saved. Check your connection.", ok: false },
 };
 
-/**
- * How the last new-link request went, kept apart from saving so a save that
- * lands later cannot hide it: `made`, or `unconfirmed` when the reply was lost
- * and the old link may already be retired (trying again returns the current
- * link). Null before any new link is asked for.
- */
 export type LinkStatus = "made" | "unconfirmed" | null;
 
 const LINK_STATUS: Record<"made" | "unconfirmed", { text: string; ok: boolean }> = {
@@ -321,28 +296,10 @@ const LINK_STATUS: Record<"made" | "unconfirmed", { text: string; ok: boolean }>
   },
 };
 
-/**
- * Where the automatic save stands, behind the `saving` line above:
- *
- * - `idle`: no save is sending; `saved` is the last choices Clash Lens took.
- * - `sending`: one save loop is running; it sends the newest choices until
- *   `saved` matches them, and a change meanwhile waits for it instead of
- *   starting a second loop.
- *
- * A failed save goes back to `idle` with `saved` null, since Clash Lens may
- * or may not have taken it, so the next change or Try again sends the newest
- * choices. `runAutosave` is its only writer.
- */
 export type Autosave = { phase: "idle" | "sending"; saved: string | null };
 
-/** The newest choices, as the save loop reads them each time round. */
 export type Choices = { json: string; tag: string | null; settings: OverlaySettings };
 
-/**
- * One run of the save loop, 0.3 seconds after the last change: nothing while
- * another run is sending, else send the newest choices until they are saved,
- * then say "saved", or "notSaved" on the first failure.
- */
 export async function runAutosave(
   autosave: { current: Autosave },
   latest: () => Choices,
@@ -367,12 +324,6 @@ export async function runAutosave(
   }
 }
 
-/**
- * One press on the preview's box, held until the pointer lifts: a move, or
- * with `dir` (the grabbed edge or corner) a resize. `k` is the preview's
- * scale when it began. `OverlaySetup`'s `drag` is it, or null with no press;
- * a pointer down sets it and a pointer up or cancel clears it.
- */
 export type PointerDrag = {
   sx: number;
   sy: number;
@@ -381,10 +332,8 @@ export type PointerDrag = {
   k: number;
 };
 
-/** The snap lines drawn while Shift is held, or null for none. */
 export type Guides = { v: number | null; h: number | null };
 
-/** A press at (`sx`, `sy`) on `place`, on `dir` if an edge or corner. */
 export function startDrag(
   place: Place,
   sx: number,
@@ -395,12 +344,6 @@ export function startDrag(
   return { sx, sy, start: { ...place, anchor: null }, dir, k };
 }
 
-/**
- * Where the box goes with the pointer at (`px`, `py`): a resize keeps the
- * opposite edge and leaves the guides as they are (`guides` null); a move
- * stays where it is dropped, or with `shift` snaps to the edges and middle.
- * With no press (`d` null) nothing moves: null.
- */
 export function dragTo(
   d: PointerDrag | null,
   px: number,
@@ -412,7 +355,6 @@ export function dragTo(
   const dy = (py - d.sy) / d.k;
   const { cw, ch } = d.start;
   if (d.dir) {
-    // Resize from the grabbed edge or corner; the opposite edge stays put.
     let { x, y, w, h } = d.start;
     if (d.dir.includes("e")) w = Math.min(cw - x, Math.max(MIN_W, w + dx));
     if (d.dir.includes("s")) h = Math.min(ch - y, Math.max(MIN_H, h + dy));
@@ -430,8 +372,6 @@ export function dragTo(
   }
   let x = d.start.x + dx;
   let y = d.start.y + dy;
-  // Free by default: it stays exactly where it is dropped. Hold Shift to
-  // snap to the edges and the middle.
   const snap = shift ? 14 / d.k : 0;
   const m = margin(cw);
   const { w, h } = d.start;
@@ -464,30 +404,13 @@ export function dragTo(
   return { place: clamp({ ...d.start, x, y }), guides: { v, h: hz } };
 }
 
-/** A pointer up or cancel: no press, and no snap lines. */
 export function releaseDrag(): { drag: null; guides: Guides } {
   return { drag: null, guides: { v: null, h: null } };
 }
 
-/**
- * What the editor knows of the preview in its frame, from the overlay's
- * messages (only from this page's origin and that frame):
- *
- * - `waiting`: no layout heard yet; the line under the preview is empty.
- * - `shown`: the overlay said how it laid out the box (`cl-overlay-size`,
- *   sent after each draw); `fit` is the line under the preview.
- *
- * `cl-overlay-ready`, sent once the overlay listens, is answered with the
- * newest settings in either state and changes nothing; every change after
- * that is posted at once (`cl-overlay-settings`). `OverlaySetup` owns it.
- * Nothing is retried: a lost message leaves the last line, and the next
- * change or draw sends again. The frame loads once per page, so coming back
- * to the page starts `waiting` again.
- */
 export type PreviewLink =
   { kind: "waiting" } | { kind: "shown"; fit: { text: string; warn: boolean } };
 
-/** One message from the preview: the handshake, a new layout, or neither. */
 export function previewMessage(data: unknown): "ready" | PreviewLink | null {
   const message = data as OverlaySize | { type?: string };
   if (message.type === "cl-overlay-ready") return "ready";
@@ -549,7 +472,6 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
   const update = (change: Partial<Form>) =>
     setForm((current) => ({ ...current, ...change }));
 
-  // The preview scales the whole stream down to the page's width.
   useEffect(() => {
     const element = wrap.current;
     if (!element) return;
@@ -560,7 +482,6 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
     return () => observer.disconnect();
   }, [place.cw]);
 
-  // The preview takes every change at once, without loading again.
   useEffect(() => {
     frame.current?.contentWindow?.postMessage(
       {
@@ -572,7 +493,6 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
     );
   }, [query]);
 
-  // The overlay says how it arranged itself in the box, and what it left out.
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (
@@ -623,8 +543,6 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
     );
   };
 
-  // Saved on Clash Lens against the private link, 0.3 seconds after the last
-  // change, one save at a time: the newest choices go once the one sending lands.
   useEffect(() => {
     if (savedJson === autosave.current.saved) return;
     const timer = setTimeout(saveNow, 300);
@@ -655,7 +573,6 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
     setGuides(ended.guides);
   }
 
-  // Arrow keys nudge it 1 pixel (10 with Shift) for an exact gap.
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     const step = event.shiftKey ? 10 : 1;
     const move = (
@@ -866,14 +783,11 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
       </form>
 
       <div className="obs-side">
-        {/* The picture leads, outside its panel, so narrow screens can keep it
-            in view while the choices change it. */}
         <div
           className="obs-stagewrap"
           ref={wrap}
           style={{ aspectRatio: `${place.cw} / ${place.ch}` }}
         >
-          {/* A touch screen's hint, on the picture it is about. */}
           <p className="obs-stage-hint" aria-hidden="true">
             Drag to move it, drag a dot to resize
           </p>
@@ -884,7 +798,6 @@ function OverlaySetup({ overlay, origin }: { overlay: OverlayAccount; origin: st
                 width: place.cw,
                 height: place.ch,
                 transform: `scale(${scale})`,
-                // Lets the touch resize dots keep one size on screen.
                 "--obs-k": scale || 1,
               } as CSSProperties
             }
@@ -1104,8 +1017,6 @@ function SizeInputs({
   place: Place;
   onChange: (w: number, h: number) => void;
 }) {
-  // Typed sizes apply when the field is left, as the overlay can't be smaller
-  // than 160 × 56 or bigger than the stream.
   const [typed, setTyped] = useState<{ w: string; h: string } | null>(null);
   const shown = typed ?? {
     w: String(Math.round(place.w)),
@@ -1222,7 +1133,6 @@ function steps(fit: Fit, w: number, h: number): ReactNode[] {
   return items.map((item, index) => <li key={index}>{item}</li>);
 }
 
-/** How saving went, and beside it how the last new-link request went. */
 export function StatusLine({
   saveStatus,
   linkStatus,
@@ -1241,8 +1151,6 @@ export function StatusLine({
   ));
 }
 
-/** The private address and Copy, both unavailable while the current link is
- * not known (a new one is being made, or its reply was lost). */
 export function AddressRow({
   address,
   known,
@@ -1273,8 +1181,6 @@ export function AddressRow({
   );
 }
 
-/** The new-link action outside the confirm: Try again, straight away, while
- * the current link is unconfirmed, else Make a new link, which asks first. */
 export function ReplaceAction({
   replacing,
   unconfirmed,
@@ -1298,8 +1204,6 @@ export function ReplaceAction({
   );
 }
 
-/** Asks before replacing the private link; after a lost reply, pressing again
- * fetches whichever link is now current. */
 export function ReplaceLinkConfirm({
   replacing,
   unconfirmed,
@@ -1336,8 +1240,6 @@ export function ReplaceLinkConfirm({
   );
 }
 
-/** The save route's own JSON answer. Anything else throws, a redirect to sign
- * in included. */
 export async function post<T>(
   values: Record<string, string>,
   page?: AbortSignal,

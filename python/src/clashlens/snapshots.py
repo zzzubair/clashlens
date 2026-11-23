@@ -207,17 +207,12 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                         "snapshot boundary does not match ranked-day boundary"
                     )
 
-            # A profile naming another Season than the ended day's shows
-            # trophies from before that player's Season reset.
             ended_season_id = ranked_day_for(
                 boundary_at - RANKED_DAY_DURATION
             ).official_season_id
             profile_version_ids: dict[int, int] = {}
             at_reset: dict[int, tuple[int, bool]] | None = None
             if generation_row is None:
-                # Direct snapshots use the newest accepted historical
-                # profile. Coordinated snapshots never execute this query:
-                # their manifest is the complete profile input.
                 profile_rows = connection.execute(
                     f"""
                     WITH accepted_profiles AS (
@@ -306,8 +301,6 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     and text_value(row[1].get("eligibility_state")) == "eligible"
                     and text_value(row[3]) == "eligible"
                 ]
-                # The trophies at the Reset, before the automatic defense
-                # loss, stored with each member's ended day.
                 at_reset = reset_trophies(
                     connection,
                     boundary_at,
@@ -390,16 +383,12 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
             }
             entries: list[dict[str, Any]] = []
             for row in profile_rows:
-                # A member without a saved day ranks by its reading,
-                # uncertain.
                 trophies, proven = (
                     at_reset.get(int(row[0]), (int(row[2]), False))
                     if at_reset is not None
                     else (int(row[2]), True)
                 )
                 age_seconds = int((boundary_at - row[4]).total_seconds())
-                # A player read only after the Reset ranks by their Complete
-                # day, named by that reading (boundary_members.first_readings).
                 if age_seconds < 0 and row[6:7] == (True,):
                     age_seconds = 0
                 if age_seconds < 0:
@@ -444,15 +433,11 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     ),
                 )
             )
-            # A Season's last board orders each tie as the game's final ranks.
             entries = follow_official_ties(entries, season_end_placements(
                 connection, boundary_at,
                 {entry["player_id"]: int(entry["trophies"]) for entry in entries},
             ))
 
-            # A coordinated board counts its exclusions from its frozen
-            # inputs below. This scan of every player's profile history,
-            # 66.5 s of the 14 Oct 2026 board's build, is for a direct one.
             quality_row = None if generation_row is not None else connection.execute(
                 f"""
                 WITH known_players AS (
@@ -1043,7 +1028,6 @@ def _enqueue_snapshot_analytics(
             PROCESSING_VERSION,
             DOMAIN_RULE_VERSION,
             ANALYTICS_RULE_VERSION,
-            # A Reset board's analytics go before the slower army build.
             PYTHON_LIVE_PRIORITY
             if boundary_at is None
             else PYTHON_BACKFILL_PRIORITY
