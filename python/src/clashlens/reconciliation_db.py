@@ -479,7 +479,8 @@ def recalculate_ranked_day(
         )
         day_unshown_report, first_unshown_report = ranked_day_inputs.load_unshown_reports(
             connection, player_id, ranked_day)
-        attack_ends = ranked_day_inputs.load_attack_ends(connection, ranked_day, contributions)
+        attack_ends = ranked_day_inputs.load_attack_ends(
+            connection, ranked_day, contributions, new_day_contributions)
         if not any(reading.read_at <= ranked_day.end and not reading.confirm_only
                    for reading in readings):
             older_reading = ranked_day_inputs.load_older_reading(connection, player_id, ranked_day)

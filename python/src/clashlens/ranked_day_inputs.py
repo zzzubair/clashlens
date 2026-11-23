@@ -696,12 +696,13 @@ def load_older_reading(
 
 def load_attack_ends(
     connection: Any, ranked_day: RankedDay, contributions: Iterable[BattleContribution],
+    new_day_contributions: Iterable[BattleContribution],
 ) -> dict[str, datetime]:
     """The attacker's report, the attack's end, of each of the player's
     defenses reported from ``reset_total.ATTACK_ENDS_WITHIN`` before the
-    day's end on, by battle, when saved: a defense is reported near the
-    attack's start."""
-    late = [int(item.battle_identity) for item in contributions
+    day's end on, the next day's included, by battle, when saved: a
+    defense is reported near the attack's start."""
+    late = [int(item.battle_identity) for item in (*contributions, *new_day_contributions)
             if item.lens == "defense" and item.battle_timestamp is not None
             and item.battle_timestamp >= ranked_day.end - reset_total.ATTACK_ENDS_WITHIN]
     return {} if not late else {str(battle_id): reported_at for battle_id, reported_at in connection.execute(
