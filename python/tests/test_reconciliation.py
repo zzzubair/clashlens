@@ -1016,7 +1016,9 @@ def test_a_dropped_sunday_proves_its_reset_total_as_before_the_drop() -> None:
     loss is unknown, but the Reset total is proven as before, setting the
     stale reading aside. Without its start, or with a start a reading
     during the day contradicts, the day leaves no end to prove, so readings
-    lagging the day's attack prove nothing."""
+    lagging the day's attack prove nothing. Nor does a day whose loss is
+    unknown for another reason: with a defense and no day before, any loss
+    may have landed."""
     sunday = ranked_day_for(datetime(2026, 11, 22, 12, tzinfo=UTC))
     shift = sunday.start - DAY.start
     coverage = tuple(replace(log, observed_at=log.observed_at + shift) for log in _coverage())
@@ -1056,3 +1058,15 @@ def test_a_dropped_sunday_proves_its_reset_total_as_before_the_drop() -> None:
     assert unstarted.formula_components["reset_total"]["proven"] is False
     assert contradicted.state == "Inconsistent"
     assert contradicted.formula_components["reset_total"]["proven"] is False
+    # 5,200 + 4 x 35 - 20 = 5,320 before a loss the day before would set: a
+    # 05:16 reading of 5,180 may show it landed, or credits still lagging.
+    midweek = reconcile_ranked_day(_input(
+        previous_day=None, start_trophies=5200, next_start_trophies=5180,
+        contributions=(BattleContribution("d", "defense", 20, battle_timestamp=DAY.end - timedelta(hours=3)),
+                       *(BattleContribution(f"a{i}", "offense", 35,
+                                            battle_timestamp=DAY.end - timedelta(minutes=120 - i * 5))
+                         for i in range(4))),
+        readings=(read(DAY.end - timedelta(minutes=15), 5180),), covered_until=DAY.end + timedelta(minutes=17),
+        end_baseline_evidence={"profile": {"observed_at": (DAY.end + timedelta(minutes=16)).isoformat()}}))
+    assert midweek.failure_reasons == ("automatic_defense_basis_unavailable",)
+    assert midweek.formula_components["reset_total"]["proven"] is False

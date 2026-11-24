@@ -492,7 +492,7 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
         "reset": data.boundary_kind == "season",
     }
     # Every reading from the end Reset on judges a clean, ended day (reading_rule), even one
-    # whose automatic loss alone is unknown: its end before that loss is still known.
+    # with no defense whose player dropped out of Legend I: its end before the loss is known.
     judged = ended and coverage_complete and not (malformed_evidence or inconsistent_evidence) and all(
         reason in {"missing_end_baseline", "automatic_defense_basis_unavailable"} for reason in failures)
     # One hidden by a reset a reading can only contradict.
@@ -759,10 +759,10 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
         ),
     )
     end_before_loss = None if final_trophies is None else final_trophies + (automatic_loss or 0)
-    # The automatic loss alone unknown: nothing else fails, not even a reading during the day.
-    loss_alone_unknown = not automatic_value_known and proof_rule is not None and set(unique_failures) <= {
-        "missing_end_baseline", "automatic_defense_basis_unavailable"}
-    if loss_alone_unknown:
+    # Nothing else fails, not even a reading during the day.
+    dropped = loss_rule.dropped_without_defense(data, defense_count) and proof_rule is not None and set(
+        unique_failures) <= {"missing_end_baseline", "automatic_defense_basis_unavailable"}
+    if dropped:
         # The day's end before its unknown loss; the EOD stays unknown. As for a day whose
         # loss is known (``reconcile_ranked_day``), a stale reading is set aside only when,
         # without that, a reading contradicts it.
@@ -776,7 +776,7 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
         final_trophies=final_trophies, end_before_loss=end_before_loss,
         # A reading during the day that contradicts it leaves no end to prove.
         end_proof=None if during is not None and during.reading is not None else proof_rule,
-        ledger=ledger if automatic_value_known or loss_alone_unknown else None,
+        ledger=ledger if automatic_value_known or dropped else None,
     )
 
     return ReconciliationResult(
@@ -875,8 +875,9 @@ def _reset_total(
     battles and its newest trustworthy reading at or before the Reset;
     ``end_proof`` is the rule the day's own end was judged by, ``None``
     when none was, and ``ledger`` what a reading may show from the end
-    Reset on, ``None`` when the automatic loss is not known and the day's
-    end before it cannot be judged."""
+    Reset on, ``None`` when the automatic loss is not known, unless only
+    because the player dropped out of Legend I
+    (``loss_rule.dropped_without_defense``)."""
     official = data.end_baseline_evidence.get("official_final_trophies")
     old = max((reading for reading in data.readings if reading.read_at <= data.ranked_day.end
                and not reading.confirm_only), key=lambda reading: reading.read_at,
