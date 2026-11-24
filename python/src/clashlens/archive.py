@@ -243,7 +243,7 @@ class S3ArchiveReader:
         self._marker_lock = threading.Lock()
         self._marker_error: ArchiveReadError | None = None
         self.marker_failure: dict[str, Any] | None = None
-        self.remote_attempts = {"get": 0, "bucket": 0, "marker": 0}
+        self.remote_attempts = {"get": 0, "marker": 0}
         self.secure = secure
         self.max_body_bytes = max_body_bytes
         self.connect_timeout_seconds = connect_timeout_seconds
@@ -284,18 +284,6 @@ class S3ArchiveReader:
         self, observer: Callable[[float], None] | None
     ) -> None:
         self.http_client.set_pool_acquire_observer(observer)
-
-    def check_ready(self) -> bool:
-        for attempt in range(self.max_retries + 1):
-            try:
-                self.remote_attempts["bucket"] += 1
-                return bool(self.client.bucket_exists(self.bucket))
-            except Exception:  # noqa: BLE001 - readiness is a safe boolean
-                if attempt == self.max_retries:
-                    return False
-                if self.retry_backoff_seconds:
-                    time.sleep(self.retry_backoff_seconds * (attempt + 1))
-        return False
 
     def validate_instance(self, database: Any) -> None:
         config = self.instance_config

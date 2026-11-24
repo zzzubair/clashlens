@@ -535,6 +535,7 @@ def test_run_forever_keeps_reported_results_bounded(monkeypatch, capsys) -> None
         archive_pool_size=None,
         operating_snapshot_file="/tmp/clashlens-worker-operating.json",
         disable_player_discovery=False,
+        spool_root="spool",
     )
 
     result = cli._run_worker(arguments)
@@ -1176,6 +1177,7 @@ def _terminal_namespace(tmp_path: Path, **overrides: object) -> Namespace:
         "operating_snapshot_file": str(tmp_path / "live.json"),
         "terminal_snapshot_file": str(tmp_path / "terminal.json"),
         "disable_player_discovery": False,
+        "spool_root": "spool",
     }
     defaults.update(overrides)
     return Namespace(**defaults)
@@ -1411,3 +1413,8 @@ def test_independent_maintenance_continues_after_one_task_fails(
         "event": "worker_maintenance", "status": "failed",
         "task": failed_task, "error": "RuntimeError",
     }]
+
+
+def test_worker_refuses_to_start_without_a_spool() -> None:
+    with pytest.raises(ValueError, match="spool root"):
+        cli._run_worker(_worker_namespace(spool_root=""))

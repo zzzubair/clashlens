@@ -838,6 +838,8 @@ def _run_collector(arguments: argparse.Namespace) -> int:
 
 
 def _run_worker(arguments: argparse.Namespace) -> int:
+    if not getattr(arguments, "spool_root", ""):
+        raise ValueError("the worker needs a spool root")
     concurrency = arguments.concurrency
     response_lanes = getattr(arguments, "response_lanes", None)
     database_pool_size = (

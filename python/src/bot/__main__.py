@@ -94,10 +94,6 @@ def _commands(config: Config) -> Commands:
     return Commands(Store(database), Site(config.origin))
 
 
-def _offline_commands() -> Commands:
-    return Commands(store=None, site=Site("https://example.invalid"))  # type: ignore[arg-type]
-
-
 def run(config: Config) -> None:
     token = read_token(config.token_file)
     commands = _commands(config)
@@ -129,10 +125,16 @@ def run(config: Config) -> None:
 
 async def register(config: Config) -> int:
     token = read_token(config.token_file)
-    client, tree = build_client(_offline_commands())
-    async with client:
-        await client.login(token)
-        synced = await tree.sync()
+    commands = _commands(config)
+    store = commands.store
+    assert isinstance(store, Store)
+    client, tree = build_client(commands)
+    try:
+        async with client:
+            await client.login(token)
+            synced = await tree.sync()
+    finally:
+        store.database.close()
     print(f"registered {len(synced)} commands: {', '.join(sorted(c.name for c in synced))}")
     return 0
 

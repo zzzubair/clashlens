@@ -162,7 +162,7 @@ def worker_readiness(
 ) -> dict[str, Any]:
     spool_root = getattr(arguments, "spool_root", "")
     spool_ready, reason = (
-        read_readiness(spool_root) if spool_root else (True, "unconfigured")
+        read_readiness(spool_root) if spool_root else (False, "unconfigured")
     )
     spool = {"ready": spool_ready, "component": "spool", "reason": reason}
     if not spool_ready:
@@ -196,8 +196,6 @@ def worker_readiness(
         validate_instance = getattr(archive, "validate_instance", None)
         if callable(validate_instance):
             validate_instance(database)
-        if not spool_root and not archive.check_ready():
-            return {"status": "not_ready", "reason": "archive", "spool": spool}
         remote_health = getattr(
             archive, "check_marker_health", lambda: "unconfigured"
         )()

@@ -20,6 +20,7 @@ def _worker_namespace(**overrides: object) -> Namespace:
         "archive_pool_size": None,
         "operating_snapshot_file": "",
         "disable_player_discovery": False,
+        "spool_root": "spool",
     }
     values.update(overrides)
     return Namespace(**values)
