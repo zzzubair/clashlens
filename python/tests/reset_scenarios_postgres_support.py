@@ -288,10 +288,11 @@ class Story:
             self.read(tag, at + timedelta(minutes=1))
 
     def history(self, at: datetime, season_end: datetime, finals: dict[str, int],
-                placements: dict[str, int] | None = None) -> None:
+                placements: dict[str, int] | None = None, tier_id: int = 105000036) -> None:
         """Each player's league history read at ``at``: the game's official
         final total for the Season ending at ``season_end``, and their final
-        rank from ``placements``, else 10,568."""
+        rank from ``placements``, else 10,568, in Legend I or ``tier_id``,
+        whose row names the Monday Reset starting its week."""
         self._at(at)
         for tag, final in finals.items():
             store_observation(
@@ -303,7 +304,7 @@ class Story:
                 domain_rule_version="clashlens-domain-rules-v1",
                 body=json.dumps({"items": [{
                     "leagueSeasonId": str(int(season_end.timestamp())),
-                    "leagueTrophies": final, "leagueTierId": 105000036,
+                    "leagueTrophies": final, "leagueTierId": tier_id,
                     "placement": (placements or {}).get(tag, 10568), "attackWins": 1, "attackLosses": 0,
                     "attackStars": 3, "defenseWins": 0, "defenseLosses": 8,
                     "defenseStars": 16, "maxBattles": 8,

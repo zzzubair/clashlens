@@ -1015,3 +1015,84 @@ def test_squad_attacks_are_typed_by_their_members_and_shown_as_squads(
     named = page["screen_ready"]["army_units"]
     assert {unit: named[unit]["name"] for unit in shown} == shown
     assert member not in named
+
+
+FOUND_LATE, UNPROVEN_LATE, CONFLICTED_LATE = "#2PP", "#8PP", "#PPP"
+
+
+def _reset_total(connection_info: str, tag: str, start: datetime) -> dict[str, object] | None:
+    """The Reset total stored with the player's newest result for the day."""
+    with psycopg.connect(connection_info) as connection:
+        row = connection.execute(
+            """
+            SELECT day.formula_components -> 'reset_total' FROM ranked_day_versions AS day
+            JOIN players AS player ON player.id = day.player_id
+            WHERE player.normalized_tag = %s AND day.ranked_day_start = %s
+            ORDER BY day.version DESC LIMIT 1
+            """,
+            (tag, start),
+        ).fetchone()
+    return None if row is None else row[0]
+
+
+def test_a_player_found_after_the_sweep_ranks_by_a_proven_reset_total(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """On 24 November 2026 #9YR8RG2C9 was found by a country list at 05:03,
+    after the sweep: its first profile read 5,026 in Legend I, its 04:07
+    attack of 26 was saved later and a 05:19 reading of 4,986 left its day
+    Inconsistent, but that first reading proved its Reset total of 5,026.
+    All seven boards left it off, as a player first read after the Reset
+    ranked only by a Complete day. FOUND_LATE lives that Monday and joins
+    the Tuesday board at its next rebuild at 5,026, confirmed.
+    UNPROVEN_LATE, the same without the 05:03 reading, proves no Reset
+    total, and CONFLICTED_LATE, the same as FOUND_LATE but with a league
+    history row putting its week in Legend II, has no Legend I week: both
+    stay off."""
+    monday, tuesday = day(8), day(9)
+    with domain_database(database_url) as info:
+        story = _story(info, archive_server, monkeypatch,
+                       STEADY, FOUND_LATE, UNPROVEN_LATE, CONFLICTED_LATE)
+        story.players[STEADY].battles = _even(day(7)) + _even(monday)
+        for tag in (FOUND_LATE, UNPROVEN_LATE, CONFLICTED_LATE):
+            story.players[tag].battles = [Battle(tuesday - timedelta(minutes=53), 26, True)]
+        story.reset(day(7), {STEADY: (5200, SEASON)})
+        story.reset(monday, {STEADY: (5200, SEASON)})
+        story.reset(tuesday, {STEADY: (5200, SEASON)})
+        before = _ranked(story.served_board(tuesday))
+        for tag in (FOUND_LATE, UNPROVEN_LATE, CONFLICTED_LATE):
+            if tag != UNPROVEN_LATE:
+                story.read(tag, tuesday + timedelta(minutes=3), 5026)
+            story.read(tag, tuesday + timedelta(minutes=19), 4986)
+            story.read(tag, tuesday + timedelta(minutes=20))
+        story.history(tuesday + timedelta(minutes=21), monday, {CONFLICTED_LATE: 4900},
+                      tier_id=105000035)
+        story.run_worker()
+        story.wait(timedelta(hours=1))
+        found = story.saved_day(FOUND_LATE, monday)
+        totals = {tag: _reset_total(info, tag, monday) for tag in (FOUND_LATE, UNPROVEN_LATE)}
+        members = story.board_members(tuesday)
+        board = story.served_board(tuesday)
+        with psycopg.connect(info) as connection:
+            weeks = dict(connection.execute(
+                """
+                SELECT player.normalized_tag, week.league || ':' || coalesce(week.unknown_reason, '')
+                FROM player_league_weeks AS week
+                JOIN players AS player ON player.id = week.player_id
+                WHERE week.week_start = %s AND player.normalized_tag = ANY(%s)
+                """,
+                (monday, [FOUND_LATE, CONFLICTED_LATE]),
+            ).fetchall())
+        unfinished = story.unfinished_jobs()
+
+    assert unfinished == []
+    assert before == {STEADY: 5200}
+    assert found is not None and found["state"] == "Inconsistent"
+    assert (found["start"], found["end"]) == (5000, 5026)
+    assert (totals[FOUND_LATE]["value"], totals[FOUND_LATE]["proven"]) == (5026, True)
+    assert totals[UNPROVEN_LATE]["proven"] is False
+    assert weeks == {FOUND_LATE: "legend_i:", CONFLICTED_LATE: "unknown:conflicting_evidence"}
+    assert set(members) == {STEADY, FOUND_LATE}
+    assert _ranked(board) == {STEADY: 5200, FOUND_LATE: 5026}
+    entries = {entry["tag"]: entry["confidence"] for entry in board["entries"]}
+    assert entries[FOUND_LATE] == "confirmed"
