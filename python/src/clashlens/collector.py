@@ -553,6 +553,8 @@ class Collector:
     ) -> None:
         """Run admissions, intent work, uploads, cleanup, and health together."""
         self.stopping = stop_requested
+        # Open health first: on 7 Oct 2026 a 60 s recovery read ran before it
+        # opened, so every restart was killed again before it could answer.
         server = await asyncio.start_server(
             partial(collector_liveness.serve, self), health_host, health_port
         )
@@ -749,6 +751,10 @@ class Collector:
         scheduled_boundary: datetime | None = None
         next_rankings_at = datetime.min.replace(tzinfo=UTC)
         next_expiry_at = next_rankings_at
+        # Discovery admission runs beside the picks, one at a time: after the
+        # 9 Nov 2026 Monday Reset each took 30 to 60 s, so inside the pick it
+        # held every Reset and settlement check behind it, and three timed out
+        # in a row stopped the collector. A failed one is retried next pass.
         admission: asyncio.Future[None] | None = None
         graceful = False
         try:

@@ -226,7 +226,7 @@
   },
   "app/lib/analytics.ts": {
     "clashlens/no-comments": {
-      "count": 7
+      "count": 9
     }
   },
   "app/lib/army-stats.ts": {
@@ -547,6 +547,11 @@
   "app/server/google-oidc.server.ts": {
     "clashlens/no-comments": {
       "count": 2
+    }
+  },
+  "app/server/login-renewal.server.ts": {
+    "clashlens/no-comments": {
+      "count": 1
     }
   },
   "app/server/login-session.server.ts": {

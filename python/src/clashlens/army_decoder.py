@@ -7,6 +7,13 @@ from dataclasses import dataclass
 from typing import Any
 
 DECODER_VERSION = "army-decoder-v2"
+# Saved armies hold the game's typed ids, never names: the unit list names
+# them only when a page shows them, so a unit the list does not name yet is
+# saved, counted and identified like any other. Siege machines share the troop
+# ids and the army identity leaves them out, so the decoder keeps its own fixed
+# list of them. A siege machine released later is saved and counted as a troop
+# under its own id; adding it here would change the identity of armies saved
+# afterwards, so it needs a new decoder version.
 SIEGE_TROOP_IDS = frozenset(
     f"troop:{number}" for number in (51, 52, 62, 75, 87, 91, 92, 135, 188)
 )

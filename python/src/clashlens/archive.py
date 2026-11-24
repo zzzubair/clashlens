@@ -368,6 +368,8 @@ class S3ArchiveReader:
             except ArchiveReadError as error:
                 if not error.retryable or attempt == self.max_retries:
                     raise
+                # Renew the caller's lease before backing off so the wall time
+                # of a bounded provider-outage retry window stays inside it.
                 if heartbeat is not None:
                     heartbeat()
                 if self.retry_backoff_seconds:

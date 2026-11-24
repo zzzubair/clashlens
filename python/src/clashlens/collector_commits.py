@@ -209,6 +209,10 @@ class SavedResponses:
             turn = asyncio.get_running_loop().create_future()
             try:
                 async with lock:
+                    # A predecessor may have failed after its durable
+                    # publish while this response was waiting for the
+                    # same stripe. Recovery must run before any
+                    # successor can become current.
                     if self.spool_health.recovery_required:
                         if cancelled:
                             raise asyncio.CancelledError

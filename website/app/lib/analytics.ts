@@ -472,6 +472,8 @@ function applyChoice(
   return accepted;
 }
 
+// `withdrawn` is a Decline from another tab, applied even if it was accepted
+// again before this tab heard of it.
 function notifyChoice(withdrawn = false): void {
   if (withdrawn || analyticsChoice() !== "accepted") withdrawals++;
   const client = readyClient();

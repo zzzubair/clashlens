@@ -2,7 +2,8 @@ import eslint from "@eslint/js";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
-const directive = /^\s*(eslint|global\b|@ts-|prettier-ignore|#region|#endregion)|^!/;
+const directive =
+  /^\s*(@ts-(ignore|expect-error|nocheck|check)\b|prettier-ignore\b)|^\/\s*<reference\b/;
 
 const noComments = {
   meta: {
@@ -33,6 +34,7 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   {
     files: ["**/*.{ts,tsx,js,mjs}"],
+    linterOptions: { noInlineConfig: true },
     languageOptions: {
       globals: {
         ...globals.browser,

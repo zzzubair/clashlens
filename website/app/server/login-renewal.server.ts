@@ -1,3 +1,14 @@
+/**
+ * Keeps a browser signed in while it is used. A request with a valid login
+ * cookie issued at least an hour ago gets a fresh 30-day cookie for the same
+ * login, so the 30 days restart from that visit. The hour limit keeps the
+ * extra logout check to one an hour per browser. A logged-out, removed, or
+ * unconfirmed login is never renewed, and a response that already sets or
+ * clears the login cookie (login, logout, removing a sign-in connection)
+ * keeps its own. Only a response marked `no-store` or `private` carries one,
+ * so a cookie never rides on a response a shared cache may keep, such as a
+ * permanent redirect with no Cache-Control; the page it leads to renews.
+ */
 import {
   buildSetCookieHeader,
   createLoginCookieValue,
