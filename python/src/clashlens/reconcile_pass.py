@@ -81,7 +81,9 @@ PASS_FIX_LIMIT = 2000
 STATEMENT_SECONDS = 60
 READ_SECONDS, WRITE_SECONDS = 360, 120
 STEP_LEASE_SECONDS = 600
-STEPS_STOP, SAVES_STOP, QUIET_END = time(3, 50), time(3, 58), time(7)
+QUIET_STEPS_FROM_UTC = time(3, 50)
+QUIET_SAVES_FROM_UTC = time(3, 58)
+QUIET_END = time(7)
 FIXED_CHECKS = ("recount", "missing_day")
 FIX_KEY = "reconcile:pass:"
 
@@ -514,7 +516,7 @@ def queue_pass(database: db.Database, slot: str) -> bool:
     """Queue ``slot``'s pass, a twice-daily recheck slot such as
     ``2026-10-13:night``, from its Season's first day, once; whether it was
     new. None starts from 03:50 to 07:00 UTC."""
-    if _quiet(_now(), STEPS_STOP):
+    if _quiet(_now(), QUIET_STEPS_FROM_UTC):
         return False
     with database.pool.connection() as connection, connection.transaction():
         return _queue_step(connection, PassStep(slot, _newest_day(slot).season_start))
@@ -531,7 +533,7 @@ def run_step(database: db.Database, claim: db.Claim) -> str:
         database.renew_claim(claim, lease_seconds=STEP_LEASE_SECONDS)
         with database.pool.connection() as connection:
             try:
-                if _quiet(_now(), STEPS_STOP):
+                if _quiet(_now(), QUIET_STEPS_FROM_UTC):
                     raise _Stopped
                 with connection.transaction():
                     connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
@@ -557,7 +559,7 @@ def run_step(database: db.Database, claim: db.Claim) -> str:
                         done["finished"] = True
                     claimed_jobs.finish_claim(connection, claim, job, state="complete",
                                            outcome="processed")
-                    if _quiet(_now(), SAVES_STOP):
+                    if _quiet(_now(), QUIET_SAVES_FROM_UTC):
                         raise _Stopped
                 detail, queued = done, total
             except _Stopped:

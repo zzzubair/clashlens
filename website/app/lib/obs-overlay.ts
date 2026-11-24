@@ -1,4 +1,22 @@
-export type OverlaySettings = Record<string, string>;
+export type OverlaySettingKey =
+  | "w"
+  | "h"
+  | "x"
+  | "y"
+  | "cw"
+  | "ch"
+  | "fit"
+  | "text"
+  | "bg"
+  | "font"
+  | "show"
+  | "popup"
+  | "demo"
+  | "snap";
+
+export interface OverlaySettings extends Partial<Record<OverlaySettingKey, string>> {
+  [key: string]: string | undefined;
+}
 
 export interface OverlayAccount {
   settingsContract: OverlaySettingsContract;
@@ -79,7 +97,10 @@ export function parseSettingsContract(value: unknown): OverlaySettingsContract |
       (key) => Array.isArray(choices[key]) && choices[key].length > 0,
     ) ||
     value.parts.length === 0 ||
-    !["text", "bg", "fit"].every((key) => choices[key].includes(defaults[key]))
+    !["text", "bg", "fit"].every((key) => {
+      const fallback = defaults[key];
+      return typeof fallback === "string" && choices[key].includes(fallback);
+    })
   )
     return null;
   return {

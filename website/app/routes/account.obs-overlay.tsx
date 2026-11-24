@@ -149,10 +149,11 @@ function fromSaved(overlay: OverlayAccount): { form: Form; place: Place } {
   const pick = <T extends string>(
     value: string | undefined,
     allowed: readonly T[],
-    fallback: T,
-  ) => (allowed.includes(value as T) ? (value as T) : fallback);
+    fallback: T | undefined,
+  ) => (allowed.includes(value as T) ? (value as T) : (fallback as T));
   const cw = Number(st.cw) || Number(contract.defaults.cw);
   const ch = Number(st.ch) || Number(contract.defaults.ch);
+  const show = st.show;
   return {
     form: {
       tag: overlay.tag ?? overlay.players[0]?.tag ?? null,
@@ -164,9 +165,9 @@ function fromSaved(overlay: OverlayAccount): { form: Form; place: Place } {
         contract.defaults.font ?? "clashlens",
       ) as Form["font"],
       show:
-        st.show === undefined
+        show === undefined
           ? [...parts]
-          : parts.filter((part) => st.show.split(",").includes(part)),
+          : parts.filter((part) => show.split(",").includes(part)),
       popup: st.popup !== "0",
       demo: st.demo === "1",
       fit: st.fit === "overlay" ? "overlay" : "screen",

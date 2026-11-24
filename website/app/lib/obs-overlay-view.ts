@@ -174,7 +174,20 @@ export function overlaySource(cfg: { demo: boolean; tag: string }): OverlaySourc
 type LinkFollow =
   { kind: "unread" } | { kind: "following"; key: string } | { kind: "retired" };
 
+const UNREAD_LINK: LinkFollow = { kind: "unread" };
+const RETIRED_LINK: LinkFollow = { kind: "retired" };
+const followingLink = (key: string): LinkFollow => ({ kind: "following", key });
+const linkChanged = (followed: LinkFollow, key: string): boolean =>
+  followed.kind !== "following" || followed.key !== key;
+const neverFollowed = (followed: LinkFollow): boolean => followed.kind !== "following";
+
 export type BattleRead = { kind: "first" } | { kind: "seen"; ids: Set<string> };
+
+const FIRST_BATTLE_READ: BattleRead = { kind: "first" };
+const seenBattles = (battles: OverlayBattle[]): BattleRead => ({
+  kind: "seen",
+  ids: new Set(battles.map((b) => b.id)),
+});
 
 export function readBattles(
   read: BattleRead,
@@ -183,13 +196,19 @@ export function readBattles(
 ): { read: BattleRead; fresh: OverlayBattle[] } {
   const fresh =
     read.kind === "seen" && !quiet ? battles.filter((b) => !read.ids.has(b.id)) : [];
-  return { read: { kind: "seen", ids: new Set(battles.map((b) => b.id)) }, fresh };
+  return { read: seenBattles(battles), fresh };
 }
 
 export type Notice = { kind: "hidden" } | { kind: "showing"; battles: OverlayBattle[] };
 
+const HIDDEN_NOTICE: Notice = { kind: "hidden" };
+const showingNotice = (battles: OverlayBattle[]): Notice => ({
+  kind: "showing",
+  battles,
+});
+
 export function noticeFor(battles: OverlayBattle[], popup: boolean): Notice | null {
-  return popup && battles.length ? { kind: "showing", battles } : null;
+  return popup && battles.length ? showingNotice(battles) : null;
 }
 
 type Mounted = "running" | "stopped";
@@ -232,9 +251,9 @@ export function mountOverlay(
   const stage = root.querySelector<HTMLElement>(".ov-stage")!;
   let cfg: Config;
   let data: View | null = null;
-  let read: BattleRead = { kind: "first" };
+  let read: BattleRead = FIRST_BATTLE_READ;
   let freshIds = new Set<string>();
-  let notice: Notice = { kind: "hidden" };
+  let notice: Notice = HIDDEN_NOTICE;
   let hidden: Part[] = [];
   const clock = overlayTimers();
   const { later, cancel } = clock;
@@ -515,7 +534,7 @@ export function mountOverlay(
     void el.offsetWidth;
     el.classList.add("ov-show");
     toastTimer = later(() => {
-      notice = { kind: "hidden" };
+      notice = HIDDEN_NOTICE;
       stage.querySelector(".ov-toast")?.classList.remove("ov-show");
     }, TOAST_MS);
   }
@@ -610,7 +629,7 @@ export function mountOverlay(
         quiet,
       );
     };
-    read = { kind: "first" };
+    read = FIRST_BATTLE_READ;
     for (let k = 0; k < 5; k++) push(true);
     const every = () => {
       push();
@@ -676,7 +695,7 @@ export function mountOverlay(
   void document.fonts.ready.then(render);
 
   if (link !== null) {
-    let followed: LinkFollow = { kind: "unread" };
+    let followed: LinkFollow = UNREAD_LINK;
     const follow = async () => {
       let wait = SETTINGS_POLL_MS;
       try {
@@ -688,7 +707,7 @@ export function mountOverlay(
           if (cfg) cfg = { ...cfg, tag: "", demo: false, w: 0, h: 0 };
           data = null;
           stage.innerHTML = "";
-          followed = { kind: "retired" };
+          followed = RETIRED_LINK;
           wait = 60_000;
         } else if (res.ok) {
           const reply = JSON.parse(res.text);
@@ -700,9 +719,9 @@ export function mountOverlay(
           if (!saved) throw new Error("Malformed overlay settings");
           contract = saved.settingsContract;
           const key = `${saved.version} ${saved.tag}`;
-          if (followed.kind !== "following" || followed.key !== key) {
-            const first = followed.kind !== "following";
-            followed = { kind: "following", key };
+          if (linkChanged(followed, key)) {
+            const first = neverFollowed(followed);
+            followed = followingLink(key);
             const query = new URLSearchParams({
               ...saved.settings,
               p: (saved.tag ?? "").replace(/^#/, ""),

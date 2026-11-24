@@ -56,7 +56,10 @@ def latest_change_order_key(
     )
 
 
-_LATEST_CHANGE_SQL = """
+_MEDIAN_ATTACK_LENGTH_SECONDS = 155
+
+
+_LATEST_CHANGE_SQL = f"""
 SELECT side.player_id, max(ended.at) AS latest_change_at
 FROM legend_battles AS battle
 LEFT JOIN battle_perspectives AS attacker_side
@@ -67,7 +70,8 @@ LEFT JOIN battle_perspectives AS defender_side
 LEFT JOIN battle_evidence AS defender ON defender.id = defender_side.evidence_id
 CROSS JOIN LATERAL (
     SELECT COALESCE(attacker.battle_timestamp,
-                    defender.battle_timestamp + interval '155 seconds') AS at
+                    defender.battle_timestamp
+                        + interval '{_MEDIAN_ATTACK_LENGTH_SECONDS} seconds') AS at
 ) AS ended
 CROSS JOIN LATERAL (VALUES
     (battle.attacker_player_id,

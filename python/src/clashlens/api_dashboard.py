@@ -65,7 +65,7 @@ from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from threading import Condition, Lock, Thread
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 from . import army_types, projected_place
 from .api_db import ApiDatabase
@@ -207,26 +207,44 @@ class _Similar:
     lost_below: list[int]
 
 
-def _similar(by_start: dict[int, list[int]]) -> _Similar:
-    """``by_start`` maps day start trophies to [defenses, held, lost]."""
+def _similar(by_start: dict[int, _Defenses]) -> _Similar:
+    """``by_start`` maps day start trophies to the day's defenses, held and lost."""
     starts = sorted(by_start)
     defenses_below, held_below, lost_below = [0], [0], [0]
     for value in starts:
-        defenses_below.append(defenses_below[-1] + by_start[value][0])
-        held_below.append(held_below[-1] + by_start[value][1])
-        lost_below.append(lost_below[-1] + by_start[value][2])
+        defenses = by_start[value]
+        defenses_below.append(defenses_below[-1] + defenses.defenses)
+        held_below.append(held_below[-1] + defenses.held)
+        lost_below.append(lost_below[-1] + defenses.lost)
     return _Similar(starts, defenses_below, held_below, lost_below)
+
+
+class _Defenses(NamedTuple):
+    defenses: int
+    held: int
+    lost: int
+
+
+class _Ends(NamedTuple):
+    best: int
+    worst: int
+
+
+class _Slots(NamedTuple):
+    basis: int
+    open_attacks: int
+    open_defenses: int
 
 
 @dataclass(frozen=True)
 class _Board:
     day_start: datetime
     computed_at: datetime
-    ends: dict[str, tuple[int, int]]
+    ends: dict[str, _Ends]
     best_ends: list[int]
     worst_ends: list[int]
     similar: _Similar
-    slots_left: dict[str, tuple[int, int, int]]
+    slots_left: dict[str, _Slots]
 
 
 @dataclass(frozen=True)
@@ -260,9 +278,9 @@ def _read_board(
             for row in connection.execute(_ZERO_SLOTS_SQL, (unread,)).fetchall()
         }
     slots = {version: slots[version] for version in versions if version in slots}
-    ends: dict[str, tuple[int, int]] = {}
-    slots_left: dict[str, tuple[int, int, int]] = {}
-    by_start: dict[int, list[int]] = {}
+    ends: dict[str, _Ends] = {}
+    slots_left: dict[str, _Slots] = {}
+    by_start: dict[int, _Defenses] = {}
     for row in live:
         tag, trophies = text_value(row[0]), row[2]
         start, attacks, gained, defended, lost, tripled, version = days.get(
@@ -279,22 +297,25 @@ def _read_board(
             basis = int(start) + int(gained) - int(lost)
             open_attacks = _open(int(attacks) + zero_attacks, MAX_DAILY_ATTACKS)
             open_defenses = _open(int(defended) + zero_defenses, MAX_DAILY_DEFENSES)
-        ends[tag] = (
+        ends[tag] = _Ends(
             basis + MAX_BATTLE_TROPHIES * open_attacks,
             basis - MAX_BATTLE_TROPHIES * open_defenses,
         )
-        slots_left[tag] = (basis, open_attacks, open_defenses)
+        slots_left[tag] = _Slots(basis, open_attacks, open_defenses)
         if defended and start is not None:
-            tally = by_start.setdefault(int(start), [0, 0, 0])
-            tally[0] += int(defended)
-            tally[1] += int(defended) - int(tripled or 0)
-            tally[2] += int(lost)
+            started = int(start)
+            seen = by_start.get(started, _Defenses(0, 0, 0))
+            by_start[started] = _Defenses(
+                seen.defenses + int(defended),
+                seen.held + int(defended) - int(tripled or 0),
+                seen.lost + int(lost),
+            )
     return _Board(
         day_start=day_start,
         computed_at=now,
         ends=ends,
-        best_ends=sorted(best for best, _ in ends.values()),
-        worst_ends=sorted(worst for _, worst in ends.values()),
+        best_ends=sorted(end.best for end in ends.values()),
+        worst_ends=sorted(end.worst for end in ends.values()),
         similar=_similar(by_start),
         slots_left=slots_left,
     ), slots
@@ -360,9 +381,10 @@ def _projection_inputs(
         ).fetchall()
     }
     latest, reports = _latest_changes(connection, board.day_start, reports)
-    trophies, open_attacks, open_defenses = (
-        list(column) for column in zip(*board.slots_left.values(), strict=True)
-    )
+    slots = list(board.slots_left.values())
+    trophies = [slot.basis for slot in slots]
+    open_attacks = [slot.open_attacks for slot in slots]
+    open_defenses = [slot.open_defenses for slot in slots]
     found = [players.get(tag, (None, 0, 0)) for tag in tags]
     return (
         trophies,
@@ -581,14 +603,17 @@ class DashboardBoard:
             similar = kept()
             if similar is not None:
                 return similar
-            by_start: dict[int, list[int]] = {}
+            by_start: dict[int, _Defenses] = {}
             with database.pool.connection() as connection:
                 rows = connection.execute(_PAST_DAY_SQL, (day_start,)).fetchall()
             for start, defended, held, lost in rows:
-                tally = by_start.setdefault(int(start), [0, 0, 0])
-                tally[0] += int(defended)
-                tally[1] += int(held)
-                tally[2] += int(lost or 0)
+                started = int(start)
+                seen = by_start.get(started, _Defenses(0, 0, 0))
+                by_start[started] = _Defenses(
+                    seen.defenses + int(defended),
+                    seen.held + int(held),
+                    seen.lost + int(lost or 0),
+                )
             similar = _similar(by_start)
             with self._lock:
                 self._past[day_start] = (self._clock(), similar)
@@ -632,9 +657,8 @@ def rank_range(board: _Board, tag: str) -> dict[str, int] | None:
     ends = board.ends.get(tag)
     if ends is None:
         return None
-    best_end, worst_end = ends
-    surely_above = len(board.worst_ends) - bisect_right(board.worst_ends, best_end)
-    maybe_above_or_self = len(board.best_ends) - bisect_left(board.best_ends, worst_end)
+    surely_above = len(board.worst_ends) - bisect_right(board.worst_ends, ends.best)
+    maybe_above_or_self = len(board.best_ends) - bisect_left(board.best_ends, ends.worst)
     return {"best": surely_above + 1, "worst": maybe_above_or_self}
 
 
@@ -920,7 +944,13 @@ def get_player_bases(
     }
 
 
-_Totals = dict[int, list[int]]
+class _Counts(NamedTuple):
+    battles: int
+    three_stars: int
+    trophies: int
+
+
+_Totals = dict[int, _Counts]
 _UNNAMED = frozenset({army_types.OTHER, army_types.UNREADABLE})
 
 
@@ -930,10 +960,12 @@ def _add_outcomes(totals: _Totals, rows: list[tuple[str, int, int, int, int]]) -
         trophies = (
             allocation.attacker_gain if lens == "offense" else allocation.defender_loss
         )
-        total = totals.setdefault(type_id, [0, 0, 0])
-        total[0] += battles
-        total[1] += battles if stars == 3 else 0
-        total[2] += battles * trophies
+        counted = totals.get(type_id, _Counts(0, 0, 0))
+        totals[type_id] = _Counts(
+            battles=counted.battles + battles,
+            three_stars=counted.three_stars + (battles if stars == 3 else 0),
+            trophies=counted.trophies + battles * trophies,
+        )
 
 
 class ArmyDays:
@@ -1086,7 +1118,11 @@ def get_player_armies(
         "covered_days": [_iso(day[0]) for day in covered],
         "rows": rows,
         "total": outcome(
-            [sum(counts[index] for counts in mine.values()) for index in range(3)]
+            _Counts(
+                sum(count.battles for count in mine.values()),
+                sum(count.three_stars for count in mine.values()),
+                sum(count.trophies for count in mine.values()),
+            )
         ),
     }
     if lens == "defense":

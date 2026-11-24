@@ -199,7 +199,10 @@ WARNING_DATABASE_STARTING = 300
 # board readable. Battle logs wait for 05:07:20 (collector_reset), and a
 # Season's opening Reset adds a league history each, at least 3 minutes of
 # six keys. Freezing by 05:25 leaves five minutes to publish by 05:30.
-RESET_COLLECTED, RESET_PROJECTED, RESET_FROZEN, RESET_READABLE = 12, 15, 25, 30
+RESET_COLLECTED_MINUTES = 12
+RESET_PROJECTED_MINUTES = 15
+RESET_FROZEN_MINUTES = 25
+RESET_READABLE_MINUTES = 30
 # Collector numbers sampled longer ago than this are unknown.
 METRICS_MAX_AGE = 300
 # board_deadline.MAX_UNFINISHED: this check runs on the host without the
@@ -1226,7 +1229,7 @@ def reset_stages(
     if served == boundary or (record is not None and record[0] == boundary and record[4]):
         return False, False
     # A board that could not be read by 05:30 missed it too.
-    late = minutes >= RESET_READABLE
+    late = minutes >= RESET_READABLE_MINUTES
     blocked = []
     if record is not None and record[0] == boundary:
         waiting, failed = (list(record[5:7]) + [0, 0])[:2]
@@ -1243,7 +1246,7 @@ def reset_stages(
             + ("; the website check could not read it" if served is None else "")
             + "".join(f"; {reason}" for reason in blocked)
         )
-    if minutes < RESET_COLLECTED:
+    if minutes < RESET_COLLECTED_MINUTES:
         return False, late
     if record is None:
         return None, late
@@ -1255,17 +1258,17 @@ def reset_stages(
         reasons.append(f"Reset collection has ended for {ended:,} of {captured:,} players")
     if swept == boundary and frozen:
         pass  # Inputs frozen; publication is checked at 05:30.
-    elif minutes >= RESET_FROZEN:
+    elif minutes >= RESET_FROZEN_MINUTES:
         reasons.append("the board's inputs were not frozen by 05:25")
         reasons += blocked
-    elif minutes >= RESET_PROJECTED:
+    elif minutes >= RESET_PROJECTED_MINUTES:
         if remaining is None or len(samples) < 2:
             unknown = True
         elif remaining > 0:
             (first_at, first), (last_at, last) = samples[0], samples[-1]
             pace = (first - last) / (last_at - first_at) if last_at > first_at else 0
             finish = now + remaining / pace if pace > 0 else math.inf
-            if finish > boundary + RESET_FROZEN * 60:
+            if finish > boundary + RESET_FROZEN_MINUTES * 60:
                 when = (
                     f"about {datetime.fromtimestamp(finish, UTC):%H:%M}"
                     if finish < math.inf

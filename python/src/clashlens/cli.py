@@ -838,8 +838,6 @@ def _run_collector(arguments: argparse.Namespace) -> int:
 
 
 def _run_worker(arguments: argparse.Namespace) -> int:
-    if not getattr(arguments, "spool_root", ""):
-        raise ValueError("the worker needs a spool root")
     concurrency = arguments.concurrency
     response_lanes = getattr(arguments, "response_lanes", None)
     database_pool_size = (
@@ -851,6 +849,8 @@ def _run_worker(arguments: argparse.Namespace) -> int:
     exit_code = start_processes(arguments, database_pool_size, _install_shutdown_handlers)
     if exit_code is not None:
         return exit_code
+    if not getattr(arguments, "spool_root", ""):
+        raise ValueError("the worker needs a spool root")
     archive_pool_size = (
         arguments.archive_pool_size
         if arguments.archive_pool_size is not None

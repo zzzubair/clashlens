@@ -300,9 +300,15 @@ def _decode(raw: str) -> DecodedArmy:
 
 
 # Where an old partial army kept each unnamed id, by army code section.
+_HOME_TROOPS_SECTION = "u"
+_CLAN_CASTLE_TROOPS_SECTION = "i"
+_HOME_SPELLS_SECTION = "s"
+_CLAN_CASTLE_SPELLS_SECTION = "d"
 _UNNAMED_SECTIONS = {
-    "u": ("home_troops", "troop"), "i": ("cc_troops", "troop"),
-    "s": ("spells", "spell"), "d": ("spells", "spell"),
+    _HOME_TROOPS_SECTION: ("home_troops", "troop"),
+    _CLAN_CASTLE_TROOPS_SECTION: ("cc_troops", "troop"),
+    _HOME_SPELLS_SECTION: ("spells", "spell"),
+    _CLAN_CASTLE_SPELLS_SECTION: ("spells", "spell"),
 }
 
 

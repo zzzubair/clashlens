@@ -996,6 +996,35 @@ def _load_reset_endpoint_evidence(
     }
 
 
+class ResetBaselineRow(NamedTuple):
+    id: int
+    version: int
+    state: str | None
+    sweep_id: int | None
+    work_id: int | None
+    profile_observation: int | None
+    battle_log_observation: int | None
+    profile_outcome: int | None
+    battle_log_outcome: int | None
+    profile_valid: bool
+    battle_log_valid: bool
+    failure_reasons: list[str] | None
+    evidence_json: dict[str, Any] | None
+    evidence_key: str | None
+    boundary_at: datetime
+    profile_id: int | None
+    trophies: int | None
+    eligibility_state: str | None
+    contract_state: str | None
+    observed_at: datetime | None
+    battle_log_id: int | None
+    battle_log_rows: int | None
+    battle_log_gap: bool | None
+    profile_hash: str | None
+    battle_log_hash: str | None
+    league_season_id: str | None
+
+
 def _load_reset_baseline(
     database: Database,
     connection: Any,
@@ -1063,27 +1092,28 @@ def _load_reset_baseline(
     ).fetchone()
     if row is None:
         return None
+    row = ResetBaselineRow(*row)
 
-    state = text_value(row[2])
-    profile_valid = bool(row[9])
-    battle_log_valid = bool(row[10])
-    profile_accepted = row[15] is not None and text_value(row[18]) == "accepted"
-    profile_eligible = text_value(row[17]) == "eligible"
-    battle_log_valid_evidence = row[20] is not None and not bool(row[22])
+    state = text_value(row.state)
+    profile_valid = bool(row.profile_valid)
+    battle_log_valid = bool(row.battle_log_valid)
+    profile_accepted = row.profile_id is not None and text_value(row.contract_state) == "accepted"
+    profile_eligible = text_value(row.eligibility_state) == "eligible"
+    battle_log_valid_evidence = row.battle_log_id is not None and not bool(row.battle_log_gap)
     season_reset_pending = profile_accepted and (
-        not season_is_current(text_value(row[25]), row[14])
+        not season_is_current(text_value(row.league_season_id), row.boundary_at)
         or (
-            is_season_boundary(row[14])
+            is_season_boundary(row.boundary_at)
             and profile_eligible
-            and row[16] != SEASON_START_TROPHIES
+            and row.trophies != SEASON_START_TROPHIES
         )
     )
     battle_log_usable = bool(
-        row[4] is not None
+        row.work_id is not None
         and battle_log_valid
         and battle_log_valid_evidence
-        and row[6] is not None
-        and row[8] is not None
+        and row.battle_log_observation is not None
+        and row.battle_log_outcome is not None
     )
     reading_starts = bool(
         not season_reset_pending
@@ -1092,15 +1122,15 @@ def _load_reset_baseline(
         and profile_eligible
     )
     complete = state == "complete" and battle_log_usable and reading_starts
-    failure_reasons = row[11] if isinstance(row[11], list) else []
+    failure_reasons = row.failure_reasons if isinstance(row.failure_reasons, list) else []
     season_rule = bool(
         not reading_starts
-        and (season_rule or _unplayed(connection, player_id, row[14], row[15], row[19]))
+        and (season_rule or _unplayed(connection, player_id, row.boundary_at, row.profile_id, row.observed_at))
     )
     complete = complete or bool(
         season_rule and battle_log_usable and state in {"complete", "failed"}
     )
-    stored_evidence = row[12] if isinstance(row[12], dict) else {}
+    stored_evidence = row.evidence_json if isinstance(row.evidence_json, dict) else {}
     evidence = {
         "id": int(row[0]),
         "version": int(row[1]),

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, NamedTuple
 
 from psycopg.errors import LockNotAvailable
 from psycopg.types.json import Jsonb
@@ -319,6 +319,18 @@ def _supersede_generation(
     return new_id, new_generation
 
 
+class PublicationGeneration(NamedTuple):
+    number: int
+    sweep_id: int | None
+    snapshot_state: str
+    army_state: str
+    expected_member_count: int
+    affected_artifacts: list[str] | None
+    target_at: datetime
+    target_rule: str
+    ordering_rule_version: str
+
+
 def _try_enqueue_boundary_artifacts(
     database, connection: Any, *, boundary_at: datetime, generation_id: int, army: bool = False
 ) -> None:
@@ -338,10 +350,11 @@ def _try_enqueue_boundary_artifacts(
     ).fetchone()
     if generation is None:
         return
-    generation_number = int(generation[0])
+    generation = PublicationGeneration(*generation)
+    generation_number = generation.number
     if past_reset_build_waits(connection, boundary_at):
         return
-    sweep_id = int(generation[1]) if generation[1] is not None else None
+    sweep_id = generation.sweep_id
     if sweep_id is None:
         return
 
@@ -361,18 +374,22 @@ def _try_enqueue_boundary_artifacts(
     member_count, snapshot_pending, army_pending, bad_snapshot, bad_army = (
         int(value) for value in classifications
     )
-    if member_count != int(generation[4]) or bad_snapshot or bad_army:
+    if member_count != generation.expected_member_count or bad_snapshot or bad_army:
         return
     boundary_text = boundary_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    if text_value(generation[7]) != "boundary-delay-v1":
+    if text_value(generation.target_rule) != "boundary-delay-v1":
         return
-    target = generation[6]
+    target = generation.target_at
     now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
     if now < target:
         return
-    affected_artifacts = [text_value(value) for value in (generation[5] or [])]
-    for column, pending, state in (("snapshot_state", snapshot_pending, generation[2]),
-                                   ("army_state", army_pending, generation[3])):
+    affected_artifacts = [
+        text_value(value) for value in (generation.affected_artifacts or [])
+    ]
+    for column, pending, state in (
+        ("snapshot_state", snapshot_pending, generation.snapshot_state),
+        ("army_state", army_pending, generation.army_state),
+    ):
         if pending == 0 and text_value(state) == ArtifactState.PENDING:
             connection.execute(
                 f"UPDATE boundary_publication_generations SET {column} = %s, updated_at = clock_timestamp() WHERE id = %s AND {column} = %s",
@@ -388,7 +405,7 @@ def _try_enqueue_boundary_artifacts(
         and text_value(snapshot[0]) == "ready"
         and (not affected_artifacts or "snapshot" in affected_artifacts)
     ):
-        if text_value(generation[8]) != SNAPSHOT_ORDERING_RULE_VERSION:
+        if text_value(generation.ordering_rule_version) != SNAPSHOT_ORDERING_RULE_VERSION:
             new_id, _ = _supersede_generation(
                 database,
                 connection,

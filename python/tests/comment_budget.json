@@ -58,7 +58,7 @@
   "python/src/clashlens/collector_uploads.py": 13,
   "python/src/clashlens/crew_states.py": 7,
   "python/src/clashlens/day_result.py": 4,
-  "python/src/clashlens/db.py": 47,
+  "python/src/clashlens/db.py": 46,
   "python/src/clashlens/domain.py": 3,
   "python/src/clashlens/domain_repair.py": 11,
   "python/src/clashlens/filesystem.py": 9,

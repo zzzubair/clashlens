@@ -8,6 +8,7 @@ from time import monotonic
 from typing import Any
 from uuid import uuid4
 
+from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
 from . import background_pacing, job_contracts
@@ -316,17 +317,6 @@ def _claim_select_statement(
     )
 
 
-# The claim SELECT's columns in order, for tuple rows.
-_CLAIM_COLUMNS = (
-    "job_id", "work_type", "deduplication_key", "input_json", "observation_id",
-    "parser_version", "processing_version", "domain_rule_version",
-    "analytics_rule_version", "attempt_count", "max_attempts", "state",
-    "dependency_deferral_count", "normalized_tag", "endpoint", "endpoint_version",
-    "schema_version", "response_observed_at", "http_status", "response_hash",
-    "archive_reference",
-)
-
-
 class LeaseLost(RuntimeError):
     """The claim no longer has a live owner/token fence."""
 
@@ -633,8 +623,14 @@ class Database:
             }
 
             def claim(size: int, **kwargs: Any) -> list[Any]:
-                return [] if size < 1 else connection.execute(*_claim_select_statement(
-                    "python_processing_jobs_worker", **{**options, "limit": size, **kwargs})).fetchall()
+                if size < 1:
+                    return []
+                statement = _claim_select_statement(
+                    "python_processing_jobs_worker", **{**options, "limit": size, **kwargs}
+                )
+                with connection.cursor(row_factory=dict_row) as cursor:
+                    cursor.execute(*statement)
+                    return cursor.fetchall()
 
             rows = [] if job_ids is None else claim(limit, job_ids=job_ids, planned=planned)
             if job_ids is None or (not rows and planned):
@@ -648,8 +644,7 @@ class Database:
     ) -> list[Claim]:
         if not rows:
             return []
-        jobs = [dict(row) if isinstance(row, dict) else dict(zip(_CLAIM_COLUMNS, row))
-                for row in rows]
+        jobs = [dict(row) for row in rows]
         ids = [int(job["job_id"]) for job in jobs]
         tokens = [uuid4().hex for _ in jobs]
         resumes = [text_value(job["state"]) == "waiting_dependency" for job in jobs]

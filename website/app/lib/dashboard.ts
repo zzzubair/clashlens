@@ -169,6 +169,8 @@ export function cardPlaces(
 ): { span: number; order: number }[] {
   const width = (index: number) =>
     Math.min({ s: 1, m: 2, l: columns }[CARDS[cards[index]].size], columns);
+  const fitsAheadOfLargeCard = (at: number, largeCard: number) =>
+    at > 0 && (largeCard < 0 || at < largeCard);
   const places = cards.map(() => ({ span: 0, order: 0 }));
   const waiting = cards.map((_, index) => index);
   let order = 0;
@@ -182,10 +184,10 @@ export function cardPlaces(
   while (waiting.length > 0) {
     const room = columns - used;
     if (width(waiting[0]) > room) {
-      const large = waiting.findIndex((index) => CARDS[cards[index]].size === "l");
+      const largeCard = waiting.findIndex((index) => CARDS[cards[index]].size === "l");
       const fits = fill
         ? waiting.findIndex(
-            (index, at) => at > 0 && (large < 0 || at < large) && width(index) <= room,
+            (index, at) => fitsAheadOfLargeCard(at, largeCard) && width(index) <= room,
           )
         : -1;
       if (fits > 0) {
