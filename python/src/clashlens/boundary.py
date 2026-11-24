@@ -530,7 +530,8 @@ def _record_boundary_generation(
 
     The board's members follow the weekly league record
     (``boundary_members``): a player whose day is saved after the members
-    were taken joins, at once while nothing froze, else as a changed member.
+    were taken joins at the board's next rebuild, paced like a changed
+    member's.
     A generation is reused until either artifact has frozen; after that a
     changed member starts one superseding generation and later corrections
     coalesce into it. A member is changed only for the artifacts whose row
@@ -601,6 +602,10 @@ def _record_boundary_generation(
                     f"Reset {boundary_at.isoformat()} queues a new member only under its full lock"
                 )
             prior_member = (None, None, None, None)
+        # Only a member published without a day result, whose day has saved
+        # since, rebuilds the newest Reset at once; a new member waits for
+        # the normal pace (docs/domain.md, section 6).
+        arrival = not joins and prior_member[0] is None
         if prior_member[0] is None:
             changes = ["snapshot", "army"]
         elif (int(prior_member[0]), text_value(prior_member[1])) == (
@@ -684,7 +689,7 @@ def _record_boundary_generation(
                 and (
                     queued is not None
                     or boundary_held(connection, boundary_at)
-                    or correction_waits(connection, boundary_at, prior_member[0] is None)
+                    or correction_waits(connection, boundary_at, arrival)
                 )
             )
         )
@@ -743,7 +748,7 @@ def _record_boundary_generation(
                 "player_id": player_id,
                 "ranked_day_version_id": ranked_day_version_id,
                 "input_hash": ranked_day_input_hash,
-                **(ARRIVAL if prior_member[0] is None else {}),
+                **(ARRIVAL if arrival else {}),
             }
             correction_artifacts = frozen_artifacts
             if queued is None:

@@ -70,7 +70,9 @@ def test_goal_and_windows_from_fourteen_real_worker_boards(database_url, archive
             story.reads(day(number + 1) - timedelta(minutes=10), totals)
             story.reset(day(number + 1), {tag: (total, SEASON) for tag, total in totals.items()})
             story.reads(day(number + 1) + timedelta(minutes=20), totals)
-            story.run_worker()
+            # The Day 1 board is first built before the record decides the
+            # players' Monday week Legend I: they join at its hourly rebuild.
+            story.wait(timedelta(hours=1))
         story.wait(timedelta(hours=1))
         assert story.unfinished_jobs() == []
         for number in range(1, 15):
@@ -119,7 +121,9 @@ def test_day_one_goal_uses_5000_baseline(database_url, archive_server, monkeypat
         story.reads(day(2) - timedelta(minutes=10), {tag: 5080})
         story.reset(day(2), {tag: (5080, SEASON)})
         story.reads(day(2) + timedelta(minutes=20), {tag: 5080})
-        story.run_worker()
+        # The player joins the Day 1 board at its hourly rebuild, as their
+        # Monday week is Legend I only from Tuesday's Reset reading.
+        story.wait(timedelta(hours=1))
         assert story.served_board(day(2))["entries"][0]["trophies"] == 5080
         full = served_player(story, tag, day(2) + timedelta(hours=1), goal_rank=1)["screen_ready"]
         assert full["trophy_trends"]["7"] == {"span": 1, "counted": 1, "total": 80}

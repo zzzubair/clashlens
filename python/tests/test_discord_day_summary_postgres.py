@@ -100,7 +100,9 @@ def test_one_summary_a_day_from_the_published_board_for_each_player_turned_on(
         story.reads(day_2 - timedelta(minutes=10), {FULL: 5070})
         story.reset(day_2, {FULL: (5070, SEASON)})
         story.reads(day_2 + timedelta(minutes=20), {FULL: 5070})
-        story.run_worker()
+        # The Day 1 board is first built before the record decides FULL's
+        # Monday week Legend I: FULL joins at its hourly rebuild.
+        story.wait(timedelta(hours=1))
         story.reads(day_3 - timedelta(minutes=10), {FULL: 5060})
 
         owner = ApiDatabase(connection_info)

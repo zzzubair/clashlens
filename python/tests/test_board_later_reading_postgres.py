@@ -422,6 +422,9 @@ def test_a_day_with_no_reading_of_its_own_stores_the_older_reading(
         story.reset(first_day, {UNREAD: (5000, SEASON)})
         story.reads(first_day + timedelta(hours=5), {UNREAD: 5040})
         story.reset(start, {UNREAD: (None, SEASON)}, no_log=(UNREAD,))
+        # The Day 1 board is first built before the record decides UNREAD's
+        # Monday week Legend I: UNREAD joins at its hourly rebuild.
+        story.wait(timedelta(hours=1))
         story.reset(end, {UNREAD: (5080, SEASON)})
         board = _entries(story.served_board(end))
         stored = _stored(connection_info, start, (UNREAD,))
