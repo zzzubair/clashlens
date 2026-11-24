@@ -128,8 +128,8 @@ async def register(config: Config) -> int:
     commands = _commands(config)
     store = commands.store
     assert isinstance(store, Store)
-    client, tree = build_client(commands)
     try:
+        client, tree = build_client(commands)
         async with client:
             await client.login(token)
             synced = await tree.sync()

@@ -1,7 +1,8 @@
 """No Python file may gain comments; files that lose some must lower their budget.
 
 Run with CLASHLENS_UPDATE_COMMENT_BUDGET=1 to rewrite comment_budget.json after
-deleting comments. Directives such as noqa, type: ignore and pragma do not count.
+deleting comments. Directives such as noqa, type: ignore and pragma: no cover, and
+a shebang or coding line at the top of a file, do not count.
 """
 
 import io
@@ -16,8 +17,17 @@ REPOSITORY_ROOT = PYTHON_ROOT.parent
 BUDGET_PATH = Path(__file__).with_name("comment_budget.json")
 SCANNED = (PYTHON_ROOT / "src", PYTHON_ROOT / "tests", REPOSITORY_ROOT / "development")
 DIRECTIVE = re.compile(
-    r"#(!|\s*(noqa\b|type:\s*ignore\b|pragma:|fmt:\s*(on|off|skip)\b|-\*- coding))"
+    r"#\s*(noqa\b|type:\s*ignore\b|pragma:\s*no\s+(cover|branch)\b|fmt:\s*(on|off|skip)\b)"
 )
+CODING = re.compile(r"#.*?coding[:=]\s*[-\w.]+")
+
+
+def _directive(token: tokenize.TokenInfo) -> bool:
+    if DIRECTIVE.match(token.string):
+        return True
+    line, column = token.start
+    shebang = line == 1 and token.string.startswith("#!")
+    return column == 0 and (shebang or (line <= 2 and CODING.match(token.string) is not None))
 
 
 def comment_count(path: Path) -> int:
@@ -25,7 +35,7 @@ def comment_count(path: Path) -> int:
     return sum(
         1
         for token in tokenize.generate_tokens(io.StringIO(source).readline)
-        if token.type == tokenize.COMMENT and not DIRECTIVE.match(token.string)
+        if token.type == tokenize.COMMENT and not _directive(token)
     )
 
 

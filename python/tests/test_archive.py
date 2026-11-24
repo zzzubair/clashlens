@@ -320,7 +320,6 @@ def test_s3_archive_reader_counts_remote_attempts(archive_server) -> None:
     assert reader.remote_attempts == {"get": 0, "marker": 0}
     reader.read_verified(reference, digest)
     assert reader.remote_attempts["get"] == 1
-    assert reader.remote_attempts["get"] == 1
 
 
 def test_a_marker_check_still_running_is_never_reported_ready() -> None:
