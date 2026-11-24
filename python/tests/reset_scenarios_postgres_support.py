@@ -379,6 +379,22 @@ class Story:
             (text(row[0]), *row[1:]), strict=True,
         ))
 
+    def reset_total(self, tag: str, start: datetime) -> tuple[int, bool] | None:
+        """The Reset total the player's newest result for the Legend day from
+        ``start`` stores, and whether it is proven."""
+        with psycopg.connect(self.connection_info) as connection:
+            row = connection.execute(
+                """
+                SELECT day.formula_components -> 'reset_total'
+                FROM ranked_day_versions AS day
+                JOIN players AS player ON player.id = day.player_id
+                WHERE player.normalized_tag = %s AND day.ranked_day_start = %s
+                ORDER BY day.version DESC LIMIT 1
+                """,
+                (tag, start),
+            ).fetchone()
+        return None if row is None or row[0] is None else (row[0]["value"], row[0]["proven"])
+
     def board_members(self, boundary: datetime) -> dict[str, str]:
         """Each member of the Reset's newest board and its day's status."""
         with psycopg.connect(self.connection_info) as connection:

@@ -325,6 +325,71 @@ def test_monday_reset_with_sundays_ending_around_5000(
     }
 
 
+DROPPED_SUNDAY, LAGGING = "#2PP", "#8PP"
+
+
+def test_dropping_out_of_legend_i_keeps_sundays_confirmed_total(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """#2U8VQPQU9 of 23 November 2026, by its saved data: Sunday started at
+    3,792 and two attacks of 12 at 01:40:56 and 01:41:45 ended it at 3,816,
+    with no defense, so the game may charge it for all 8 missing defenses or
+    nothing. A 02:00:27 reading and the 05:05:29 Reset reading showed 3,816,
+    proving the Reset total, and the first board confirmed it. From 05:23
+    its profile read Legend II, and once the new week was recorded below
+    Legend I the day's automatic loss had no basis: the saved result lost
+    its proof and the entry turned uncertain at the same 3,816, as 54 did
+    that day. The loss is still unknown, so the day stays Partial with no
+    EOD and the Reset reading as its next start, but the total at 05:00 was
+    proven before it, and stays so. LAGGING, last read at 01:20, has a Reset
+    reading still lacking the credit of its last attack, which proves
+    nothing, before the drop or after it."""
+    saturday, sunday, monday = day(6), day(7), day(8)
+    with domain_database(database_url) as connection_info:
+        story = _story(connection_info, archive_server, monkeypatch, DROPPED_SUNDAY, LAGGING)
+        # From 3,952 Saturday ends at 3,792, its 8 defenses averaging 30.
+        for player in story.players.values():
+            player.battles = _saturday(saturday) + [
+                Battle(monday - timedelta(hours=3, minutes=19, seconds=4), 12, True),
+                Battle(monday - timedelta(hours=3, minutes=18, seconds=15), 12, True)]
+        story.reset(saturday, {tag: (3952, SEASON) for tag in story.players})
+        story.reset(sunday, {tag: (3792, SEASON) for tag in story.players})
+        story.read(DROPPED_SUNDAY, monday - timedelta(hours=2, minutes=59, seconds=33), 3816)
+        story.read(LAGGING, monday - timedelta(hours=3, minutes=40), 3792)
+        story.reset(monday, {DROPPED_SUNDAY: (3816, SEASON), LAGGING: (3804, SEASON)})
+        first = _marks(story.served_board())
+        # Both drop to Legend II, whose profiles name Season 0 and show no
+        # Legend trophies: the worker records the week below Legend I.
+        for tag, player in story.players.items():
+            player.dropped = True
+            for minutes in (24, 66):
+                story.read(tag, monday + timedelta(minutes=minutes), 0)
+        story.run_worker()
+        story.wait(timedelta(hours=1))
+        unfinished = story.unfinished_jobs()
+        days = {tag: story.saved_day(tag, sunday) for tag in story.players}
+        totals = {tag: story.reset_total(tag, sunday) for tag in story.players}
+        newest = _marks(story.served_board())
+
+    assert unfinished == []
+    assert first == {DROPPED_SUNDAY: (3816, "confirmed"), LAGGING: (3816, "uncertain")}
+    # The day's EOD and next start wait for the loss, as before.
+    dropped_day = {
+        "state": "Partial", "start": 3792, "end": None, "next_start": 3816,
+        "automatic_loss": None, "raise": 0, "attacks": 2, "defenses": 0, "residual": None,
+    }
+    assert days == {DROPPED_SUNDAY: dropped_day, LAGGING: {**dropped_day, "next_start": 3804}}
+    # The stored Reset total keeps its proof, so the board keeps its mark.
+    assert newest == first
+    assert totals == {DROPPED_SUNDAY: (3816, True), LAGGING: (3816, False)}
+
+
+def _marks(board: dict[str, object] | None) -> dict[str, tuple[int, str]]:
+    """Each served board entry's trophies and mark."""
+    _ranked(board)
+    return {entry["tag"]: (entry["trophies"], entry["confidence"]) for entry in board["entries"]}
+
+
 OFFICIAL, LATE_RESET, NO_DEFENSE, DAY_1_LOSS, SHIELDED, END_LOSS, DISAGREES, DROPPED = (
     "#2PP", "#8PP", "#9PP", "#PPP", "#YPP", "#LPP", "#QPP", "#GPP")
 
