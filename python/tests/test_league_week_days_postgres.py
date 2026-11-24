@@ -24,6 +24,8 @@ from collector_db_postgres_support import _handoff
 from domain_test_support import domain_database, store_observation, text
 from league_week_days_postgres_support import (
     Climber,
+    _decide_below,
+    _player_id,
     _public_days,
 )
 from reconcile_pass_postgres_support import _open, _queued, _run_pass
@@ -40,7 +42,7 @@ from reset_scenarios_postgres_support import (
     multiplayer,
 )
 
-from clashlens import board_deadline, league_days, reset_baselines
+from clashlens import board_deadline, reset_baselines
 from clashlens.api_db import ApiDatabase
 from clashlens.api_players import (
     get_player_season_summary,
@@ -53,7 +55,6 @@ from clashlens.collector_uploads import claim_upload, complete_upload
 from clashlens.db import Database
 from clashlens.domain import SEASON_DURATION
 from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
-from clashlens.league_week import Below, Claim, League, ProofKind
 from clashlens.season_summaries import materialize_player_season
 
 (DROPPED, STALE, STALE_LATE, PROMOTED, IDLE_PROMOTED, IDLE_BELOW, FAILED, FAILED_TWICE,
@@ -951,22 +952,3 @@ def _board_version(connection_info: str, boundary: datetime) -> tuple[int, int]:
             {"at": boundary},
         ).fetchone()
 
-
-def _decide_below(connection_info: str, tags: tuple[str, ...], now: datetime) -> None:
-    """Decide each player's week of 5 October below Legend I."""
-    database = Database(connection_info)
-    try:
-        with database.pool.connection() as connection, connection.transaction():
-            for tag in tags:
-                league_days.save_season(
-                    database, connection, _player_id(connection, tag), SEASON,
-                    {SEASON: Below(Claim(SEASON - timedelta(days=7), None,
-                                         ProofKind.PREVIOUS_WEEK, League.BELOW))},
-                    now, queue_days=False)
-    finally:
-        database.close()
-
-
-def _player_id(connection: psycopg.Connection, tag: str) -> int:
-    return connection.execute(
-        "SELECT id FROM players WHERE normalized_tag = %s", (tag,)).fetchone()[0]

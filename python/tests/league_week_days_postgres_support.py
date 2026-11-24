@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import psycopg
 from domain_test_support import text
 from reset_scenarios_postgres_support import (
+    SEASON,
     Player,
 )
+
+from clashlens import league_days
+from clashlens.db import Database
+from clashlens.league_week import Below, Claim, League, ProofKind
 
 
 @dataclass
@@ -48,3 +53,23 @@ def _public_days(connection_info: str, tag: str) -> dict[datetime, dict[str, obj
                 (tag,),
             ).fetchall()
         }
+
+
+def _decide_below(connection_info: str, tags: tuple[str, ...], now: datetime) -> None:
+    """Decide each player's week of 5 October below Legend I."""
+    database = Database(connection_info)
+    try:
+        with database.pool.connection() as connection, connection.transaction():
+            for tag in tags:
+                league_days.save_season(
+                    database, connection, _player_id(connection, tag), SEASON,
+                    {SEASON: Below(Claim(SEASON - timedelta(days=7), None,
+                                         ProofKind.PREVIOUS_WEEK, League.BELOW))},
+                    now, queue_days=False)
+    finally:
+        database.close()
+
+
+def _player_id(connection: psycopg.Connection, tag: str) -> int:
+    return connection.execute(
+        "SELECT id FROM players WHERE normalized_tag = %s", (tag,)).fetchone()[0]
