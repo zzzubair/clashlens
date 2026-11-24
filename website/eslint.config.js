@@ -2,8 +2,9 @@ import eslint from "@eslint/js";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
-const directive = /^\s*(@ts-(ignore|expect-error|nocheck|check)\b|prettier-ignore\b)/;
-const reference = /^\/\s*<reference\s+(path|types|lib|no-default-lib)="[^"]*"\s*\/>\s*$/;
+const directive = /^\s*(@ts-(ignore|expect-error|nocheck|check)\b|prettier-ignore\s*$)/;
+const reference =
+  /^\/\s*<reference\s+(path|types|lib|no-default-lib)=("[^"]*"|'[^']*')\s*\/>\s*$/;
 
 const noComments = {
   meta: {
@@ -16,12 +17,15 @@ const noComments = {
   },
   create(context) {
     return {
-      Program() {
+      Program(program) {
+        const code = program.body[0]?.range[0] ?? Infinity;
         for (const comment of context.sourceCode.getAllComments()) {
           if (
             comment.type === "Shebang" ||
             directive.test(comment.value) ||
-            (comment.type === "Line" && reference.test(comment.value))
+            (comment.type === "Line" &&
+              comment.range[0] < code &&
+              reference.test(comment.value))
           )
             continue;
           context.report({ loc: comment.loc, messageId: "comment" });

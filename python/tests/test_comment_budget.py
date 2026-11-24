@@ -19,15 +19,15 @@ SCANNED = (PYTHON_ROOT / "src", PYTHON_ROOT / "tests", REPOSITORY_ROOT / "develo
 DIRECTIVE = re.compile(
     r"#\s*(noqa\b|type:\s*ignore\b|pragma:\s*no\s+(cover|branch)\b|fmt:\s*(on|off|skip)\b)"
 )
-CODING = re.compile(r"#.*?coding[:=]\s*[-\w.]+")
+CODING = re.compile(r"[ \t\f]*#.*?coding[:=][ \t]*[-\w.]+")
 
 
 def _directive(token: tokenize.TokenInfo) -> bool:
     if DIRECTIVE.match(token.string):
         return True
-    line, column = token.start
-    shebang = line == 1 and token.string.startswith("#!")
-    return column == 0 and (shebang or (line <= 2 and CODING.match(token.string) is not None))
+    line = token.start[0]
+    shebang = line == 1 and token.line.startswith("#!")
+    return shebang or (line <= 2 and CODING.match(token.line) is not None)
 
 
 def comment_count(path: Path) -> int:
