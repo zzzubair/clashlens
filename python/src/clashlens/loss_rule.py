@@ -81,15 +81,15 @@ def adjustment(
     failures: list[str],
 ) -> tuple[int | None, LossEvidence]:
     """The day's automatic defense loss and its evidence state."""
+    if dropped_without_defense(data, defense_count):
+        failures.append("automatic_defense_basis_unavailable")
+        return None, LossEvidence.UNKNOWN
     # The game fills missing defense slots, counting its "no opponent, no
     # battle" rows as used slots with no loss. Of 3,643 Day 1 results checked
     # against a profile read after the loss on 6 October 2026, 3,623 matched
     # counting them and 3,581 without.
     attack_count += data.zero_result_attack_slots
     defense_count += data.zero_result_defense_slots
-    if defense_count == 0 and "dropped_from_legend_i" in data.end_baseline_evidence:
-        failures.append("automatic_defense_basis_unavailable")
-        return None, LossEvidence.UNKNOWN
     if defense_count == 0 or defense_count >= MAX_DAILY_DEFENSES:
         return None, LossEvidence.NOT_APPLICABLE
     previous = data.previous_day
@@ -114,6 +114,15 @@ def adjustment(
         previous_defense_loss=0 if first else previous.observed_defense_loss,
         first=first,
     ), LossEvidence.CALCULATED
+
+
+def dropped_without_defense(data: ReconciliationInput, defense_count: int) -> bool:
+    """A day with no used defense slot whose player dropped out of Legend I
+    at the Reset ending it: no Legend I profile follows to show whether the
+    game charged it for all 8 or nothing (``possible_losses``), so its loss
+    stays unknown, though its end before the loss is known."""
+    return defense_count + data.zero_result_defense_slots == 0 and (
+        "dropped_from_legend_i" in data.end_baseline_evidence)
 
 
 def first_day(data: ReconciliationInput) -> bool:

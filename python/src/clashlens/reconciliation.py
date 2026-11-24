@@ -491,10 +491,18 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
         "floor": 5000 if data.boundary_kind in {"weekly", "season"} else None,
         "reset": data.boundary_kind == "season",
     }
-    # Every reading from the end Reset on judges a clean, ended day (reading_rule).
+    # Every reading from the end Reset on judges a clean, ended day (reading_rule), even one
+    # with no defense whose player dropped out of Legend I: its end before the loss is known.
     judged = ended and coverage_complete and not (malformed_evidence or inconsistent_evidence) and all(
-        reason == "missing_end_baseline" for reason in failures)
-    proof_rule: dict[str, Any] | None = None
+        reason in {"missing_end_baseline", "automatic_defense_basis_unavailable"} for reason in failures)
+    # One hidden by a reset a reading can only contradict.
+    proof_rule: dict[str, Any] | None = {
+        "readings": _readings(replace(data, readings=(), unreadable_from=None, covered_until=None)
+                              if official_end else data),
+        "reset_at": data.ranked_day.end, "start_proven": start_proven, **ledger, "history": history,
+        "unknown_from": None if official_end else data.first_unshown_report, "proof": proof,
+        "stale": stale,
+    } if judged and start_available else None
     if start_available and automatic_value_known:
         assert start_trophies is not None
         final_trophies = (
@@ -516,14 +524,6 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
 
         rule = {"end_before_loss": expected_next if official_end else final_trophies + (automatic_loss or 0),
                 **ledger}
-        # One hidden by a reset a reading can only contradict.
-        proof_rule = {
-            "readings": _readings(replace(data, readings=(), unreadable_from=None, covered_until=None)
-                                  if official_end else data),
-            "reset_at": data.ranked_day.end, "start_proven": start_proven, **ledger, "history": history,
-            "unknown_from": None if official_end else data.first_unshown_report, "proof": proof,
-            "stale": stale,
-        } if judged else None
         verdict = reading_rule.decide(end_before_loss=rule["end_before_loss"], **proof_rule) if (
             proof_rule is not None) else None
         if verdict is not None and verdict.outcome == "verified" and verdict.loss in possible and (
@@ -758,12 +758,25 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
             or (verdict is not None and verdict.outcome == "verified" and not verdict.exact)
         ),
     )
+    end_before_loss = None if final_trophies is None else final_trophies + (automatic_loss or 0)
+    # Nothing else fails, not even a reading during the day.
+    dropped = loss_rule.dropped_without_defense(data, defense_count) and proof_rule is not None and set(
+        unique_failures) <= {"missing_end_baseline", "automatic_defense_basis_unavailable"}
+    if dropped:
+        # The day's end before its unknown loss; the EOD stays unknown. As for a day whose
+        # loss is known (``reconcile_ranked_day``), a stale reading is set aside only when,
+        # without that, a reading contradicts it.
+        assert start_trophies is not None
+        end_before_loss = start_trophies + attack_gain - defense_loss
+        if not stale and reading_rule.decide(
+                end_before_loss=end_before_loss, **proof_rule).outcome == "contradicted":
+            proof_rule = {**proof_rule, "stale": True}
     at_reset = _reset_total(
         data, contributions, state=state, failures=unique_failures, coverage_complete=coverage_complete,
-        final_trophies=final_trophies, automatic_loss=automatic_loss,
+        final_trophies=final_trophies, end_before_loss=end_before_loss,
         # A reading during the day that contradicts it leaves no end to prove.
         end_proof=None if during is not None and during.reading is not None else proof_rule,
-        ledger=ledger if automatic_value_known else None,
+        ledger=ledger if automatic_value_known or dropped else None,
     )
 
     return ReconciliationResult(
@@ -856,13 +869,15 @@ def _settled_start(data: ReconciliationInput) -> tuple[int | None, int, int]:
 def _reset_total(
     data: ReconciliationInput, contributions: tuple[BattleContribution, ...], *, state: DayState,
     failures: tuple[str, ...], coverage_complete: bool, final_trophies: int | None,
-    automatic_loss: int | None, end_proof: dict[str, Any] | None, ledger: dict[str, Any] | None,
+    end_before_loss: int | None, end_proof: dict[str, Any] | None, ledger: dict[str, Any] | None,
 ) -> reset_total.ResetTotal:
     """The ended day's Reset total (``reset_total``), from its counted
     battles and its newest trustworthy reading at or before the Reset;
     ``end_proof`` is the rule the day's own end was judged by, ``None``
     when none was, and ``ledger`` what a reading may show from the end
-    Reset on, ``None`` when the automatic loss is not known."""
+    Reset on, ``None`` when the automatic loss is not known, unless only
+    because the player dropped out of Legend I
+    (``loss_rule.dropped_without_defense``)."""
     official = data.end_baseline_evidence.get("official_final_trophies")
     old = max((reading for reading in data.readings if reading.read_at <= data.ranked_day.end
                and not reading.confirm_only), key=lambda reading: reading.read_at,
@@ -870,8 +885,8 @@ def _reset_total(
     return reset_total.reset_total(
         reset_at=data.ranked_day.end, day_start=data.ranked_day.start, state=state,
         failure_reasons=failures,
-        end_before_loss=None if final_trophies is None else final_trophies + (automatic_loss or 0),
-        eod=final_trophies, season_end=data.boundary_kind == "season" or official is not None,
+        end_before_loss=end_before_loss, eod=final_trophies,
+        season_end=data.boundary_kind == "season" or official is not None,
         official_final=None if official is None else int(official),
         battles=[reset_total.Battle(
             -(item.amount or 0) if item.lens == "defense" else item.amount or 0,
