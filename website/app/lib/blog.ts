@@ -1,15 +1,11 @@
 import type { MetaDescriptor } from "react-router";
 
 export interface BlogPostSummary {
-  /** The file name without `.md`; the post lives at `/blog/<slug>`. */
   slug: string;
   title: string;
-  /** Publication day, `YYYY-MM-DD`. */
   date: string;
-  /** One line shown in the list, link previews and the feed. */
   summary: string;
   author: string | null;
-  /** A site path such as `/blog/media/x.png`, or an https URL. */
   cover: string | null;
   coverAlt: string;
   /** Seen only by the signed-in site owner, never listed in the feed or indexed. */
@@ -17,7 +13,6 @@ export interface BlogPostSummary {
 }
 
 export interface BlogPost extends BlogPostSummary {
-  /** Rendered Markdown with all raw HTML removed. */
   html: string;
 }
 
@@ -32,7 +27,6 @@ export function formatBlogDate(date: string): string {
   return blogDateFormatter.format(new Date(`${date}T00:00:00Z`));
 }
 
-/** Makes a site path absolute so link previews outside the site can load it. */
 export function absoluteBlogUrl(pathOrUrl: string, origin: string): string {
   return new URL(pathOrUrl, origin).href;
 }
@@ -40,7 +34,6 @@ export function absoluteBlogUrl(pathOrUrl: string, origin: string): string {
 interface PageMeta {
   title: string;
   description: string;
-  /** Absolute page address. */
   url: string;
   origin: string;
   type: "website" | "article";
@@ -106,7 +99,6 @@ export function publicPageMeta(
   });
 }
 
-/** The shared preview tags plus the blog's publish date and feed link. */
 export function blogMeta(page: BlogPageMeta): MetaDescriptor[] {
   return [
     ...pageMeta(page),

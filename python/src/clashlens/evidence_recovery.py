@@ -50,7 +50,6 @@ class Evidence(StrEnum):
     NEVER_ARCHIVED = "never_archived"
 
 
-# The job failure each state that raises its own error records.
 FAILURES: dict[Evidence, tuple[str, str, bool]] = {
     Evidence.NO_LOCAL_READER: (
         "spool_missing", "new observation has no local spool reader", False),
@@ -98,8 +97,6 @@ def read_saved_evidence(
     try:
         body = verify(claim.response_hash)
     except (OSError, SpoolError) as error:
-        # A failed disk read is not a missing response: wait and retry it
-        # without spending an attempt. Database failures stay separate.
         raise _failure(Evidence.LOCAL_READ_FAILED) from error
     if body is not None:
         return ArchiveReadResult(

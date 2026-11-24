@@ -156,9 +156,6 @@ def queue_earlier_days(
     ]
     if saved_day.start == saved_day.season_start:
         earlier = [saved_day.start]
-    # Whether an older log is saved, from the index alone: finding the
-    # earliest log reads every log the player has, 552 pages and 393 ms for
-    # one with 749 logs on 8 November 2026, once per battle log processed.
     if not earlier or connection.execute(
         "SELECT EXISTS (SELECT FROM battle_log_observations"
         " WHERE player_id = %s AND observed_at < %s)",
@@ -171,9 +168,6 @@ def queue_earlier_days(
 def backfill(
     database: Database, season_id: str, *, queue: bool, max_jobs: int
 ) -> dict[str, Any]:
-    # An operator's batch: queued at backfill priority, like the Season
-    # repair, so a worker thread runs it only when no higher-priority work
-    # that thread can claim is due.
     """Find, and with ``queue`` recalculate, the days that players first
     tracked during the Season can now fill: Day 1 for each player whose first
     battle log was saved on Day 1, and, for a player first tracked later, the

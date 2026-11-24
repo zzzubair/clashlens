@@ -31,12 +31,10 @@ from .season_history import official_history_rows
 
 CLASHKING_ORIGIN = "https://api.clashk.ing"
 REFRESH_AFTER = timedelta(days=1)
-# Also stops a second view fetching while the first one is still waiting.
 RETRY_AFTER = timedelta(hours=1)
 REQUEST_TIMEOUT_SECONDS = 2.5
 MAX_RESPONSE_BYTES = 512 * 1024
 MIN_REQUEST_GAP_SECONDS = 0.5
-# Stops a slow ClashKing from holding more than two of the website's threads.
 MAX_CONCURRENT_REQUESTS = 2
 FIRST_BACKOFF_SECONDS = 60.0
 MAX_BACKOFF_SECONDS = 3600.0
@@ -54,7 +52,6 @@ _LAST_MONTH_SEASON = "2025-09"
 _FIRST_SEASON_ID = str(
     int((datetime(2025, 10, 6, 5, tzinfo=UTC) - SEASON_DURATION).timestamp())
 )
-# Player-page history cutoff; see website/README.md.
 _FIRST_SHOWN = datetime(2025, 1, 1, tzinfo=UTC)
 
 

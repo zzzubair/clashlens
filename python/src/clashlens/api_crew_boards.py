@@ -38,7 +38,6 @@ from .live_board import season_params
 PERIODS = ("today", "week", "season")
 _WEEK_DAYS = 7
 
-# Each place's newest saved log per Legend day from ``%(first)s`` to today.
 _DAYS_SQL = """
 SELECT DISTINCT ON (daily.player_id, daily.ranked_day_start)
        player.normalized_tag, daily.ranked_day_start, daily.battles,

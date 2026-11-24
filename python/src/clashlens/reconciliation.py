@@ -19,11 +19,6 @@ from .domain import MAX_DAILY_ATTACKS, MAX_DAILY_DEFENSES, RankedDay
 from .loss_rule import Landing, LossEvidence, StartCharge
 from .profile import ProfileParseError, normalize_player_tag
 
-# Version 3 freezes the selected battle-event projection (including the source
-# opponent identity) in each ranked-day version. Version 2 records the complete
-# formula and evidence boundary but could not reproduce the public event rows.
-# Version 1 used an incomplete automatic-defense average and could infer a
-# shield from counts.
 RECONCILIATION_RULE_VERSION = "legend-ranked-day-reconciliation-v3"
 BATTLE_EVENT_SERIALIZATION_VERSION = "legend-ranked-day-battle-events-v1"
 BATTLE_LOG_MAX_ROWS = 50
@@ -67,8 +62,6 @@ class BattleContribution:
     stars: int | None = None
     destruction_percentage: int | None = None
     army_share_code: str | None = None
-    # The source row's battleTime: how many seconds the battle lasted, or None
-    # for older rows, whose battleTime is the date.
     battle_seconds: int | None = None
     attacker_gain: int | None = None
     defender_loss: int | None = None
@@ -106,27 +99,13 @@ class PreviousRankedDay:
     ranked_day_start: datetime | None = None
     state: str | None = None
     confidence: str | None = None
-    # The automatic defense loss that day's Reset reading had not yet applied
-    # (see ``_settled_start``), and the Reset evidence the reading came from.
     unsettled_automatic_loss: int = 0
     end_baseline_id: int | None = None
-    # That day's "no opponent, no battle" defense rows (see
-    # ``ReconciliationInput``).
     zero_result_defense_slots: int = 0
-    # How far a later reading settled that day's end Reset reading, which
-    # the game had not finished crediting, and that day's automatic loss,
-    # which may land after this day's first readings.
     reset_reading_correction: int = 0
     automatic_loss: int = 0
-    # That day's end after its automatic loss, before any reset.
     final_trophies: int | None = None
-    # That day's calculated end, after any weekly or Season reset, when its
-    # battles and automatic loss are known: the next day's start when its
-    # Reset reading cannot give one (see ``recalculate_ranked_day``).
     expected_next_start: int | None = None
-    # Continuous battle logs and established counts, whether or not that
-    # day's readings were usable; ``None`` keeps the older meaning, Complete
-    # with continuous coverage.
     battles_known: bool | None = None
 
 
@@ -143,15 +122,8 @@ class ReconciliationInput:
     previous_day: PreviousRankedDay | None
     boundary_kind: str | None
     season_anchor_valid: bool
-    # The battle-log responses that the start and end reset-baseline sweeps
-    # selected. A sweep requests its endpoints after the 05:00 UTC boundary,
-    # so these observations are normally observed after the ranked-day
-    # boundary timestamps; the continuity chain is bound to these exact
-    # observation identities, not to boundary-time comparisons.
     start_baseline_battle_log_observation_id: int | None = None
     end_baseline_battle_log_observation_id: int | None = None
-    # None preserves the original seam's meaning: an existing baseline ID is
-    # accepted. False is explicit incomplete reset evidence.
     start_baseline_complete: bool | None = None
     end_baseline_complete: bool | None = None
     player_eligible: bool = True
@@ -165,43 +137,20 @@ class ReconciliationInput:
     domain_rule_version: str | None = None
     season_anchor_rule_version: str | None = None
     trophy_allocation_rule_versions: tuple[str, ...] = ()
-    # A Season's first Legend day, whose day before belongs to the previous
-    # Season.
     season_first_day: bool = False
-    # The day's "no opponent, no battle" Legend rows: not battles, but the
-    # game counts each as a used attack or defense, with no loss, when it
-    # charges the automatic defense loss.
     zero_result_attack_slots: int = 0
     zero_result_defense_slots: int = 0
-    # Every other profile read from the day's start Reset to the next Reset after its
-    # end that can judge it (``reading_rule``), the day before's and new day's battles,
-    # the first report of a new-day battle only the opponent has, from when an unreadable
-    # row leaves no reading usable, and until when logs cover readings from the Reset on.
     readings: tuple[reading_rule.Reading, ...] = ()
     previous_day_contributions: tuple[BattleContribution, ...] = ()
     new_day_contributions: tuple[BattleContribution, ...] = ()
     first_unshown_report: datetime | None = None
     unreadable_from: datetime | None = None
     covered_until: datetime | None = None
-    # The latest report of a battle of the day only the opponent has
-    # reported: the player's own log may not hold it yet.
     day_unshown_report: datetime | None = None
-    # Whether the day before's automatic loss came off this day's start: as
-    # the day before's result says (``_settled_start``), else the other way
-    # (``loss_rule.other_start``).
     start_charged: StartCharge = StartCharge.AS_RESULT_SAYS
-    # Whether the day starts from the weekly raise to 5,000 that the day
-    # before's result could not give (``reconcile_ranked_day``).
     weekly_raise: bool = False
-    # The next day's saved start, when that day ended proven from this day's
-    # end Reset reading (``loss_rule.next_day_landing``).
     next_day_start: int | None = None
-    # The attacker's report, the attack's end, of each defense reported in
-    # the last minutes before the day's end or in the next day, by battle
-    # (``reset_total``, ``_effects``).
     attack_ends: Mapping[str, datetime] = field(default_factory=dict)
-    # The newest reading at or before the day's start Reset, when none from
-    # the day can be its old reading (``reset_total``).
     older_reading: reading_rule.Reading | None = None
 
     def __post_init__(self) -> None:
@@ -235,12 +184,7 @@ class ReconciliationResult:
     formula_components: dict[str, Any] = field(default_factory=dict)
     shield_evidence: dict[str, Any] = field(default_factory=dict)
     input_evidence: dict[str, Any] = field(default_factory=dict)
-    # The day's starting trophies: the Reset reading, less the previous day's
-    # unsettled automatic defense loss when that reading predates it.
     start_trophies: int | None = None
-    # The next day's starting trophies: the end Reset reading, less this
-    # day's unsettled automatic defense loss, the loss the reading had not
-    # yet applied.
     next_start_trophies: int | None = None
     unsettled_automatic_loss: int = 0
 
@@ -253,7 +197,6 @@ class ReconciliationResult:
         return self.observed_defense_loss
 
 
-# Any of these means the battle logs may have missed a battle.
 COVERAGE_GAP_REASONS = frozenset(
     {
         "missing_start_battle_log_baseline",
@@ -411,9 +354,6 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
     end_reading_evidence: dict[str, Any] | None = None
 
     ended = data.now >= data.ranked_day.end
-    # The Season rule can start Day 1 without a saved Reset reading, and the
-    # day before's calculated end can start any other day whose reading
-    # cannot; both are calculations, not readings.
     start_source = data.start_baseline_evidence.get("start_trophies_source")
     season_rule_start = start_source == "season_rule"
     chain_start = start_source == "previous_day_end"
@@ -455,11 +395,8 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
     observed_boundary_adjustment: int | None = None
     expected_next: int | None = None
     residual: int | None = None
-    # A Season reset, or the weekly raise for a total at or below 5,000, makes the next start
-    # 5,000 whatever the day ended on: that reading proves neither the end total nor the loss.
     end_hidden_by_reset = False
 
-    # Readings during the day (reading_rule.contradiction_during_day); a pre-reset Day 1 shows the official total.
     previous = None if data.season_first_day or season_rule_start else data.previous_day
     reset = data.season_first_day and (data.start_baseline_evidence.get("official_final_trophies")
                                        or data.previous_day and data.previous_day.final_trophies)
@@ -477,9 +414,6 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
     ) if ended and coverage_complete and start_trophies is not None and start_available and not (
         malformed_evidence or inconsistent_evidence) else (None, None, None)
     automatic_value_known = automatic_state is not LossEvidence.UNKNOWN
-    # What a reading may show from the end Reset on: the day's end before its loss, or
-    # after it raised to 5,000 on a Monday or reset to it at a Season's end, either of
-    # which can land after the Reset; the official Season-end total shows only the end.
     possible = loss_rule.possible_losses(data, attack_count, defense_count, defense_loss)
     ledger: dict[str, Any] = {
         "loss_candidates": () if official_end and automatic_loss else
@@ -491,7 +425,6 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
         "floor": 5000 if data.boundary_kind in {"weekly", "season"} else None,
         "reset": data.boundary_kind == "season",
     }
-    # Every reading from the end Reset on judges a clean, ended day (reading_rule).
     judged = ended and coverage_complete and not (malformed_evidence or inconsistent_evidence) and all(
         reason == "missing_end_baseline" for reason in failures)
     proof_rule: dict[str, Any] | None = None
@@ -516,7 +449,6 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
 
         rule = {"end_before_loss": expected_next if official_end else final_trophies + (automatic_loss or 0),
                 **ledger}
-        # One hidden by a reset a reading can only contradict.
         proof_rule = {
             "readings": _readings(replace(data, readings=(), unreadable_from=None, covered_until=None)
                                   if official_end else data),
@@ -534,7 +466,6 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
         if end_available and data.next_start_trophies is not None:
             residual = data.next_start_trophies - expected_next
             reset = next((item for item in _readings(data) if item.reset_reading), None)
-            # A late Reset reading may already show new-day battles, landed or in flight.
             judged = reading_rule.judge(reset, **rule) if (
                 end_hidden_by_reset and residual and reset is not None) else None
             if judged is not None and judged.matched:
@@ -546,28 +477,16 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
         if verdict is not None and verdict.outcome == "verified":
             assert verdict.reading is not None
             if verdict.loss in possible:
-                # The game can charge a day with no used defense slots the
-                # automatic loss for all 8, or charge it nothing; its battles
-                # do not say which. On 6 October 2026, 3 such days lost
-                # exactly this (304, 272 and 248) and 86 kept their trophies.
-                # A first Legend day with fewer attacks than defenses is the
-                # same (``loss_rule.possible_losses``). Only a reading showing
-                # the charge takes it.
                 automatic_loss = verdict.loss
                 automatic_state = LossEvidence.CALCULATED
                 final_trophies -= verdict.loss
                 net_trophy_change = final_trophies - start_trophies
                 expected_next = final_trophies + boundary_adjustment
             if automatic_loss in rule["loss_candidates"] and not verdict.loss:
-                # The reading came before the loss landed: the day's end is
-                # calculated and the next day starts from the reading less it.
-                # 589, 998 and 2,889 days at the 2, 3 and 5 October 2026 Resets.
                 unsettled_loss = automatic_loss
             next_start_trophies = expected_next
             observed_trophy_change = next_start_trophies - start_trophies
             if data.next_start_trophies is not None:
-                # What the Reset reading was short of: credits that had not
-                # landed, a loss it was read before, or new-day battles it showed.
                 reading_correction = (
                     expected_next + unsettled_loss - data.next_start_trophies
                 )
@@ -579,9 +498,6 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
             failures = [reason for reason in failures if reason != "missing_end_baseline"]
             end_available = True
         elif verdict is not None and verdict.outcome == "contradicted":
-            # The saved residual is the Reset reading's, less what it was found
-            # to show above, so the saved next start still adds up; the
-            # contradicting reading's own is kept with that reading.
             residual = next_start_trophies - expected_next if next_start_trophies is not None else None
             failures = [reason for reason in failures if reason != "missing_end_baseline"]
             failures.append("trophy_equation_mismatch")
@@ -622,12 +538,9 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
             and not end_hidden_by_reset
             and not unsettled_loss
         ):
-            # The readings isolate the calculated settlement loss.
             automatic_state = LossEvidence.CONFIRMED
     elif automatic_value_known and loss_rule.next_day_landing(
             data, automatic_loss, 0, next_start_trophies) is Landing.LATE:
-        # With no start the day takes its Reset reading as is: the next
-        # day's proven start says its loss landed after it.
         assert automatic_loss is not None and next_start_trophies is not None
         landed, unsettled_loss = Landing.LATE, automatic_loss
         next_start_trophies -= automatic_loss
@@ -638,7 +551,6 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
             "trophies": during.reading.trophies, "residual": during.residual}}
 
     if not day_totals_supported(coverage_complete, attack_count, defense_count, failures):
-        # The equation check above has already recorded any mismatch it found.
         final_trophies = None
         net_trophy_change = None
         boundary_adjustment = 0
@@ -726,15 +638,11 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
         previous=data.previous_day,
     )
     if shield_state is ShieldState.UNKNOWN and coverage_complete is False:
-        # The coverage reasons already carry the precise cause. This marker is
-        # useful to consumers that only inspect the shield evidence state.
         shield_evidence.setdefault("unknown_reason", "coverage_incomplete")
 
     if net_trophy_change is None and all_battles_recorded(
         attack_count, defense_count, failures
     ):
-        # Without a usable start, the recorded battles alone give the day's
-        # result.
         net_trophy_change = attack_gain - defense_loss
 
     unique_failures = tuple(dict.fromkeys(failures))
@@ -749,19 +657,14 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
         shield=shield_state,
         calculated=bool(
             end_hidden_by_reset
-            # A start from the day before's end is a calculation. One from the
-            # Season rule is the game's own rule, so it is known exactly.
             or chain_start
-            # The reading predates the loss, so the day's end is calculated.
             or unsettled_loss
-            # A reading in a battle's landing span, read the one way that fits.
             or (verdict is not None and verdict.outcome == "verified" and not verdict.exact)
         ),
     )
     at_reset = _reset_total(
         data, contributions, state=state, failures=unique_failures, coverage_complete=coverage_complete,
         final_trophies=final_trophies, automatic_loss=automatic_loss,
-        # A reading during the day that contradicts it leaves no end to prove.
         end_proof=None if during is not None and during.reading is not None else proof_rule,
         ledger=ledger if automatic_value_known else None,
     )
@@ -1195,8 +1098,6 @@ def log_has_row_gap(observation: CoverageObservation) -> bool:
 def logs_leave_gap(previous: CoverageObservation, current: CoverageObservation) -> bool:
     """A full battle log sharing no row with the log before it: battles
     between the two may be in neither."""
-    # A saved source row shared by both logs is the same reported row,
-    # Legend or not: each row's saved identity includes its battle time.
     return current.row_count >= BATTLE_LOG_MAX_ROWS and not (
         set(previous.battle_identities) & set(current.battle_identities)
         or set(previous.source_row_ids) & set(current.source_row_ids)
@@ -1208,7 +1109,6 @@ def _readings(data: ReconciliationInput) -> tuple[reading_rule.Reading, ...]:
     usable and timed, and every later one loaded with the day."""
     readings = list(data.readings)
     observed_at = (data.end_baseline_evidence.get("profile") or {}).get("observed_at")
-    # A Reset reading saved without its time is read as taken at the Reset.
     read_at = datetime.fromisoformat(observed_at) if isinstance(observed_at, str) else data.ranked_day.end
     if data.next_start_trophies is not None and (
             data.unreadable_from is None or read_at < data.unreadable_from):
@@ -1321,7 +1221,6 @@ def _formula_components(
     if later_reading_at is not None:
         components["next_start_later_reading_at"] = later_reading_at.isoformat()
     if next_day is not None:
-        # The next day's start that showed when this day's loss landed.
         components["next_day_start_trophies"] = next_day[0]
     if next_day is not None and next_day[1]:
         components["automatic_loss_never_landed"] = next_day[1]
@@ -1359,8 +1258,6 @@ def _input_evidence(
            if data.zero_result_attack_slots else {}),
         **({"zero_result_defense_slots": data.zero_result_defense_slots}
            if data.zero_result_defense_slots else {}),
-        # The reading that judged the day's end, or one during the day that
-        # contradicted it, only when one did.
         **({"end_reading": end_reading} if end_reading is not None else {}),
         "perspective_disagreement": data.perspective_disagreement,
         "malformed_evidence": data.malformed_evidence,
@@ -1393,7 +1290,6 @@ def _previous_day_evidence(previous: PreviousRankedDay | None) -> dict[str, Any]
     return evidence
 
 
-# Where a battle's saved report came from: the poll that saved it and when.
 _POLL_KEYS = frozenset({"source_observation_id", "source_observed_at"})
 
 

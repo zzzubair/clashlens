@@ -2,29 +2,7 @@ import {
   isSafeReturnPath,
   MAX_RETURN_PATH_LENGTH,
   type LoginIdentity,
-} from "./auth.server"; /**
- * Server-only signed browser cookies for Google and Discord logins and one-time
- * OAuth transactions.
- *
- * Values are canonical JSON bound by an HMAC-SHA256 signature using the
- * exactly-32-byte login secret, so any tamper is detected by a constant-time
- * comparison and the value is rejected as null. Login cookies carry only the
- * immutable provider and provider subject, a random value that makes every
- * login's cookie unique, and a 30-day lifetime that the website renews as the
- * browser keeps using it. A renewed cookie also carries the fingerprint and
- * sign-in time of the login it continues, so logout, or removing the sign-in
- * connection it came through, ends every copy of that login. Cookies from
- * before the 30-day lifetime keep their 24 hours. OAuth transaction cookies
- * carry only the provider they belong to, the state, nonce, PKCE verifier and
- * challenge, and same-origin return path with a ten-minute lifetime. No provider
- * tokens, email, or other personal data ever appears in a cookie value, and
- * every value stays far below the 4 KB cookie limit.
- *
- * The route layer composes Set-Cookie headers from these values; this module
- * stays pure (no request, response, or storage access) so tests can call it
- * directly and the callback route can consume the transaction cookie
- * later in the same login flow.
- */
+} from "./auth.server";
 
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
@@ -34,24 +12,18 @@ import { isPlausibleTransaction, isProvider, isProviderSubject } from "./auth.se
 export const LOGIN_COOKIE_NAME = "clashlens_login";
 export const OAUTH_COOKIE_NAME = "clashlens_oauth";
 export const LOGIN_COOKIE_LIFETIME_SECONDS = 30 * 24 * 60 * 60;
-/** A signed-in request renews a login cookie once it is this old. */
 export const LOGIN_COOKIE_RENEW_AFTER_SECONDS = 60 * 60;
 const LEGACY_LOGIN_COOKIE_LIFETIME_SECONDS = 24 * 60 * 60;
 const SESSION_BINDING = /^[A-Za-z0-9_-]{43}$/;
 
 const COOKIE_VERSION = 1;
-/** Hard cap for any cookie value; real values are a few hundred bytes. */
 const MAX_COOKIE_VALUE_BYTES = 4096;
 
-/** A verified login cookie: who signed in and when, in Unix milliseconds. */
 export interface LoginSession extends LoginIdentity {
-  /** When this cookie was issued; its 30 days and renewal count from here. */
   issuedAtMs: number;
-  /** When its login signed in: the first cookie's issue time, kept by renewals. */
   signedInAtMs: number;
 }
 
-/** The login a renewed cookie continues. */
 interface ContinuedLogin {
   sessionBinding: string;
   signedInAtMs: number;
@@ -77,7 +49,6 @@ function encodeValue(payload: Buffer, key: Buffer): string {
   return `${payload.toString("base64url")}.${sign(payload, key).toString("base64url")}`;
 }
 
-/** Decode a strict single base64url part, or null for junk or oversized bytes. */
 function decodePart(value: string, maxLength: number): Buffer | null {
   if (value.length === 0 || !/^[A-Za-z0-9_-]+$/.test(value)) return null;
   const decoded = Buffer.from(value, "base64url");
@@ -152,12 +123,6 @@ function canonicalLoginPayload(
   return payload;
 }
 
-/**
- * Build a signed login cookie value. `nowMs` is the current epoch time in
- * milliseconds; the cookie expires exactly 30 days later. A renewal passes the
- * fingerprint and sign-in time of the login it continues, so both cookies
- * belong to one login.
- */
 export function createLoginCookieValue(
   identity: LoginIdentity,
   key: Buffer,
@@ -195,11 +160,6 @@ export function createLoginCookieValue(
   );
 }
 
-/**
- * Parse and verify a login cookie value. Returns the identity, issue time,
- * and sign-in time, or null for any missing, malformed, tampered, or expired
- * value. Never throws for input.
- */
 export function parseLoginCookieValue(
   value: string | undefined | null,
   key: Buffer,
@@ -221,8 +181,6 @@ export function parseLoginCookieValue(
   ) {
     return null;
   }
-  // Cookies issued before the millisecond field count from the start of
-  // their second.
   const issuedMillisecond = parsed.m === undefined ? 0 : parsed.m;
   if (
     !isSafeInteger(issuedMillisecond) ||
@@ -234,7 +192,6 @@ export function parseLoginCookieValue(
   const issuedAt = parsed.i;
   const expiresAt = parsed.e;
   const issuedAtMs = issuedAt * 1000 + issuedMillisecond;
-  // A cookie that was never renewed is its login's first cookie.
   const signedInAtMs = parsed.o === undefined ? issuedAtMs : parsed.o;
   if (
     (expiresAt - issuedAt !== LOGIN_COOKIE_LIFETIME_SECONDS &&
@@ -280,7 +237,6 @@ function canonicalOAuthPayload(transaction: OAuthTransaction): Buffer {
   return payload;
 }
 
-/** Build a signed OAuth transaction cookie value with its fixed ten-minute lifetime. */
 export function createOAuthTransactionCookieValue(
   transaction: OAuthTransaction,
   key: Buffer,
@@ -292,12 +248,6 @@ export function createOAuthTransactionCookieValue(
   return encodeValue(canonicalOAuthPayload(transaction), key);
 }
 
-/**
- * Parse and verify an OAuth transaction cookie value. Returns the
- * transaction or null for any missing, malformed, tampered, expired, or
- * cross-provider value. The callback route consumes (clears) the cookie
- * after a successful parse. Never throws for input.
- */
 export function parseOAuthTransactionCookieValue(
   value: string | undefined | null,
   key: Buffer,
@@ -345,11 +295,6 @@ export function parseOAuthTransactionCookieValue(
   return transaction;
 }
 
-/**
- * The fingerprint of the login a verified cookie value belongs to: the
- * SHA-256 of the cookie that started the login, which renewed cookies carry.
- * Logout records it, and privileged OAuth transactions are bound to it.
- */
 export function createLoginSessionBinding(loginCookieValue: string): string {
   const payload = decodePart(loginCookieValue.split(".", 1)[0] ?? "", 320);
   try {
@@ -368,10 +313,6 @@ export function createLoginSessionBinding(loginCookieValue: string): string {
   return createHash("sha256").update(loginCookieValue, "utf8").digest("base64url");
 }
 
-/**
- * The fixed cookie attribute suffix shared by all login cookies:
- * Path=/, HttpOnly, SameSite=Lax, and Secure for any https origin.
- */
 export function cookieAttributes(secure: boolean): string {
   return `Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`;
 }

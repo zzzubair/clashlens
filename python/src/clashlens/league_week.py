@@ -27,7 +27,6 @@ from .domain import SEASON_DURATION
 from .profile import LEGEND_I_TIER_ID, RECOGNIZED_NON_LEGEND_TIERS_V1
 
 WEEK = timedelta(days=7)
-# A Monday Reset; every week starts a whole number of weeks from it.
 _MONDAY = datetime(2026, 10, 12, 5, tzinfo=UTC)
 RULE_VERSION = 1
 
@@ -76,13 +75,11 @@ class League(StrEnum):
 class Entry(StrEnum):
     """How a Legend I week began at its Monday Reset."""
 
-    SEASON_START = "season_start"  # the Season's first week: everyone starts at 5,000
-    STAYED = "stayed"  # Legend I the week before
-    PROMOTED = "promoted"  # proven below Legend I the week before: 5,000
-    # No Legend I evidence earlier this Season: promoted at this Monday,
-    # 5,000 (the owner's rule of 14 October 2026).
+    SEASON_START = "season_start"
+    STAYED = "stayed"
+    PROMOTED = "promoted"
     FIRST_SEEN = "first_seen"
-    UNKNOWN = "unknown"  # Legend I earlier this Season, then a week not known
+    UNKNOWN = "unknown"
 
 
 class Strength(IntEnum):
@@ -94,8 +91,8 @@ class Strength(IntEnum):
     # A Legend I answer naming Season 0 (not signed up yet), or two lower
     # league answers naming Season 0 from separate responses.
     UNCONFIRMED = 2
-    ACCEPTED = 3  # an answer whose Season passed the parser's check
-    OFFICIAL = 4  # a Legend battle that week, or the game's league history
+    ACCEPTED = 3
+    OFFICIAL = 4
 
 
 class ProofKind(StrEnum):

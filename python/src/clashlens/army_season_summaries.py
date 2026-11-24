@@ -14,15 +14,10 @@ from . import army_types
 from .army_analytics import TOP_PRESETS, public_army_states
 from .army_history import HISTORY_CATEGORIES, count_usage, usage_by_category
 from .army_rank_bands import counted_boards
-
-# The completed-season gate is shared with the player summaries so both
-# slices agree on when a season is finalizable.
 from .season_lifecycle import season_completed
 
 PROJECTION_VERSION = "army-unit-usage-v3"
 LENSES = ("offense", "defense")
-# Historical army reads cover the whole-season sample, never a
-# population-filtered cohort; per-cohort historical filters are out of scope.
 _SEASON_DAYS = tuple(range(1, 29))
 
 _SUMMARY_COLUMNS = (
@@ -52,8 +47,6 @@ def _text(value: Any) -> str:
 
 
 def _check_season_lens(season_id: str, lens: str) -> None:
-    # Same 80-char contract as ArmyAnalyticsSelection.parse: the API path
-    # already enforces it, so materialization rejects anything longer here.
     if not season_id or len(season_id) > 80:
         raise ValueError("official season id is outside the supported range")
     if lens not in LENSES:
@@ -336,17 +329,12 @@ def materialize_army_season(
     for category in sorted(projected):
         summary = projected[category]
         digest = _digest(summary)
-        # No per-category savepoint: a single failed upsert must abort the
-        # enclosing transaction so a lens never publishes partially. The
-        # caller decides whether that aborts just this lens (backfill) or
-        # is isolated from day facts (late-correction refresh).
         unchanged = _upsert_category(
             connection, season_id, lens, category, summary, digest
         )
         report["unchanged" if unchanged else "materialized"] += 1
         report["content_digests"][category] = digest
     if lens == "offense":
-        # Army types count attacks only, so they publish with this lens.
         report["army_types"] = materialize_army_type_season(connection, season_id)
     return report
 

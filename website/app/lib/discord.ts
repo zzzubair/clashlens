@@ -1,7 +1,6 @@
 /** The permanent Clash Lens Discord invite, linked from the site header. */
 export const DISCORD_INVITE_URL = "https://discord.gg/792KJQTtRf";
 
-/** One verified player's Discord attack alert and Legend day summary switches. */
 export interface AttackAlertPlayer {
   tag: string;
   name: string | null;
@@ -15,7 +14,6 @@ export type UndeliveredReason =
 
 export interface AttackAlerts {
   players: AttackAlertPlayer[];
-  /** The newest alert Discord did not deliver, while none has been delivered since. */
   undelivered: { tag: string; reason: UndeliveredReason; at: string } | null;
   /** The account's switch for a dark picture in each attack alert. */
   darkPicture: boolean;
@@ -33,7 +31,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** The private API's attack alert settings, or null when malformed. */
 export function mapAttackAlerts(value: unknown): AttackAlerts | null {
   if (
     !isRecord(value) ||

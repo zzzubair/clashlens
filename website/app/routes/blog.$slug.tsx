@@ -12,7 +12,6 @@ export interface BlogPostLoaderData {
   origin: string;
 }
 
-/** GET /blog/:slug — one post; unknown slugs, and drafts unless the owner is signed in, are a 404. */
 export async function loader({
   params,
   request,
@@ -60,7 +59,6 @@ export default function BlogPostRoute() {
         {post.cover ? (
           <img className="blog-cover" src={post.cover} alt={post.coverAlt} />
         ) : null}
-        {/* Rendered on the server from the blog folder's Markdown with raw HTML removed. */}
         <div className="blog-body" dangerouslySetInnerHTML={{ __html: post.html }} />
       </article>
     </main>

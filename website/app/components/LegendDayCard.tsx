@@ -75,10 +75,6 @@ export function dayReadAt(
   return times.length ? Math.min(...times) : null;
 }
 
-/**
- * Card 1: live trophies, net today, the rank at the last Reset, the live rank,
- * the range the next Reset can still land in and the projected place in it.
- */
 export function LegendDayCard({
   player,
   day,
@@ -90,7 +86,6 @@ export function LegendDayCard({
   player: LinkedPlayerCard;
   day: PlayerDay | null;
   range: RankRange | null;
-  /** When the board behind `range` was read. */
   rangeAtMs?: number | null;
   projected?: number | null;
   nowMs?: number | null;
@@ -108,8 +103,6 @@ export function LegendDayCard({
   const fresh = updatedAgo(dayReadAt(day, rangeAtMs), nowMs);
   return (
     <div className="legend-day-card">
-      {/* The tab above shows whose day this is; screen readers hear it here.
-          How old the numbers are is said once for the page, here. */}
       <CardHead
         info={
           projected ? (
@@ -138,7 +131,6 @@ export function LegendDayCard({
       <div className="legend-day-numbers">
         <span className="legend-day-score">
           <span className="sr-only">Trophies</span>
-          {/* A Legend day means the account is in Legend League: its badge. */}
           {day ? (
             <img
               className="legend-day-badge"

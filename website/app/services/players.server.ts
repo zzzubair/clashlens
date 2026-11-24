@@ -41,7 +41,6 @@ export async function searchPlayers(query: string, limit = 50): Promise<SearchRe
   return mapSearch(payload, query);
 }
 
-/** A player's page. Only the Dashboard asks for its Season and rival facts. */
 export async function getPlayer(
   tag: string,
   battles = true,

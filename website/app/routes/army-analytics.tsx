@@ -78,7 +78,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
     source.set("category", "cc-troops");
   }
   const season = source.get("season") ?? "current";
-  // Armies show first, attacks only.
   const category = source.get("category") ?? "army-types";
   // Players are a leaderboard top only, Top 1,000 unless the link names another.
   const population = topPlayers.some(
@@ -408,7 +407,6 @@ const extraColumns: SortColumn[] = [
   "average-destruction",
 ];
 const nameOrder = new Intl.Collator("en", { sensitivity: "base", numeric: true });
-// A long list shows its first rows, then Show all.
 const FIRST_ROWS = 20;
 
 /** Other and unidentified armies are no army type of their own: last, with no rank. */
@@ -439,7 +437,6 @@ function sortedRows(rows: ArmyRow[], sort: TableSort) {
   });
 }
 
-/** The sort a tap on a column's heading, or a pick in the Sort menu, asks for. */
 function nextSort(column: SortColumn, sort: TableSort): TableSort {
   const direction =
     sort.column === column
@@ -484,7 +481,6 @@ function SortButton({
       title={sortName(next)}
       onClick={() => onSort(next)}
     >
-      {/* Headings stay short; the trophy says what "Per attack" counts. */}
       {column === "average-trophies" ? (
         <>
           <TrophyIcon /> Per attack
@@ -691,8 +687,6 @@ function ArmyResultRow({
       <th scope="row" role="rowheader" data-sorted={sort === "name" || undefined}>
         <div className="analytics-name-cell">
           <span className="analytics-rank" aria-hidden="true" />
-          {/* Other and Unreadable have no troops to show; a plain tile keeps
-              their names in line with the armies'. */}
           {isLeftover(row) ? (
             <span
               className="unit-art analytics-leftover-art"
@@ -712,15 +706,12 @@ function ArmyResultRow({
             >
               <span className="analytics-name">
                 {row.label}
-                {/* Only a count of two or more, a pill on every screen; one
-                    variant says nothing the arrow doesn't. The sheet names them. */}
                 {named > 1 ? <small> {named} variants</small> : null}
               </span>
             </button>
           ) : (
             <span className="analytics-name">{row.label}</span>
           )}
-          {/* A phone drops the Battles column; the count sits under the name. */}
           {armies ? (
             <small className="analytics-name-battles" aria-hidden="true">
               {row.usageCount.toLocaleString("en")} battles
@@ -1178,8 +1169,6 @@ export default function ArmyAnalyticsRoute() {
               ) : (
                 `${analytics.selection.endDay - analytics.selection.startDay + 1} of ${dayCount ?? "unknown"} days`
               )}
-              {/* What the differences are against, said once for the table;
-                  the averages and the one colouring rule a tap away. */}
               {averages !== null ? (
                 <span className="analytics-average-key">
                   vs Legend avg
@@ -1225,8 +1214,6 @@ export default function ArmyAnalyticsRoute() {
               threeStar={averages.threeStar}
             />
           ) : null}
-          {/* Phones and iPads: one Sort menu with every choice, and its direction
-              beside it; wide screens sort by the table's headings. */}
           <div className="analytics-sort-menu" role="group" aria-label="Sort">
             <label className="analytics-sort-field">
               <span>Sort</span>
@@ -1266,9 +1253,6 @@ export default function ArmyAnalyticsRoute() {
               </span>
             </button>
           </div>
-          {/* Phones: one strip names the cards' numbers and the bars' scales,
-              so each card shows only values. Screen readers hear each
-              card's own labels. */}
           <div
             className="analytics-phone-key"
             aria-hidden="true"
@@ -1282,7 +1266,6 @@ export default function ArmyAnalyticsRoute() {
                   data-column={column}
                   data-sorted={tableSort.column === column || undefined}
                 >
-                  {/* The trophy says what Per attack counts; the rows don't repeat it. */}
                   {column === "average-trophies" ? (
                     <>
                       <TrophyIcon /> Per attack
@@ -1383,7 +1366,6 @@ export default function ArmyAnalyticsRoute() {
               >
                 Show all {rows.length.toLocaleString()}
               </button>
-              {/* Without JavaScript every row shows. */}
               <noscript>
                 <style>
                   {
@@ -1413,7 +1395,6 @@ export default function ArmyAnalyticsRoute() {
               ) : null}
             </div>
           ) : null}
-          {/* What was counted, and how, a tap away under the list. */}
           <details className="analytics-footnote">
             <summary>How these are counted</summary>
             <div className="analytics-coverage" role="group" aria-label="Battle coverage">
@@ -1444,9 +1425,9 @@ export default function ArmyAnalyticsRoute() {
             <ArmyDetail
               key={opened.key}
               row={opened}
-              variants={sortedRows(opened.variants ?? [], tableSort)
-                // A type's Other stays last.
-                .sort((a, b) => Number(a.variantId === 0) - Number(b.variantId === 0))}
+              variants={sortedRows(opened.variants ?? [], tableSort).sort(
+                (a, b) => Number(a.variantId === 0) - Number(b.variantId === 0),
+              )}
               audience={populationDescription(population)}
               // Example armies are read from the current Season's battles.
               examplesUrl={

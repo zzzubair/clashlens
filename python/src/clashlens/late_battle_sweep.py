@@ -32,8 +32,6 @@ from .job_contracts import (
 from .ranked_day_inputs import PREVIOUS_DAY_VALUES
 from .reconciliation import RECONCILIATION_RULE_VERSION
 
-# First check 30 minutes after the Reset, then every 10 minutes until every
-# selected player has been corrected.
 SWEEP_DELAY = timedelta(minutes=30)
 CHECK_INTERVAL_SECONDS = 600
 # Ended Legend days whose late battles are corrected. The recalculation

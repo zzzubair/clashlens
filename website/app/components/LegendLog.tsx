@@ -14,20 +14,17 @@ import { FoldedBattles } from "./FoldedBattles";
 import { ShieldIcon, Stars, SwordIcon } from "./GameIcons";
 import { linkedBattleId } from "./LinkedBattle";
 
-/** The change a day's bar shows: its saved change, or today's battles so far. */
 function barChange(day: RankedDaySummary, isCurrentDay: boolean): number | null {
   return isCurrentDay && day.trophyChange === null && day.battlesComplete
     ? day.presentation!.battle_net_complete
     : day.trophyChange;
 }
 
-/** How far the log bars' shared track reaches each side of zero, in trophies. */
 interface BarScale {
   up: number;
   down: number;
 }
 
-/** What a day's bar draws: its attacks' gain, its defenses' loss and its net. */
 interface DayBar {
   gain: number;
   loss: number;
@@ -75,7 +72,6 @@ function recordedCount(value: number | null): string {
     : `${formatCount(value)}${value <= 8 ? " of 8" : ""} recorded`;
 }
 
-/** The date in a log row: day and month shown, the year for screen readers. */
 export function LogDate({ period }: { period: string }) {
   const label = legendDayDate(period);
   const year = label.lastIndexOf(" ");
@@ -89,7 +85,6 @@ export function LogDate({ period }: { period: string }) {
   );
 }
 
-/** A day's Reset rank on a rank plate, gold to bronze in the top 3, over its move. */
 export function LogRank({ rank, move }: { rank: number | null; move?: number }) {
   const places = formatCount(Math.abs(move ?? 0));
   return (
@@ -116,25 +111,13 @@ export function LogRank({ rank, move }: { rank: number | null; move?: number }) 
   );
 }
 
-/**
- * The labels over a wide screen's log columns, for sighted readers; each row
- * names its own values. A phone's stacked rows read on their own.
- */
-export function LogHead({
-  scale,
-}: {
-  /** The bars' track, its zero line marked over their column. */
-  scale?: BarScale;
-}) {
+export function LogHead({ scale }: { scale?: BarScale }) {
   const zero = scale ? scale.down / (scale.up + scale.down) : 0;
   return (
     <div className="log-head" aria-hidden="true">
       <span>Date</span>
       <span>End of day</span>
       {scale ? (
-        // The bars' zero line starts here, with the scale's two ends; the key
-        // beside the title says what each side and the mark are. An end too
-        // close to zero to fit its figure leaves it out.
         <span
           className="log-head-scale"
           style={{ "--zero": zero } as React.CSSProperties}
@@ -146,8 +129,6 @@ export function LogHead({
       ) : (
         <span />
       )}
-      {/* Where each day's trophies came from, then its net result, named
-          with the bars' own mark. */}
       <span>Attacks</span>
       <span>Defenses</span>
       <span className="log-head-net">Net</span>
@@ -156,7 +137,6 @@ export function LogHead({
   );
 }
 
-/** What the bars' colours and mark are, in a few words beside the log's title. */
 export function LogBarsKey() {
   return (
     <p className="log-bars-key">
@@ -167,13 +147,8 @@ export function LogBarsKey() {
   );
 }
 
-/** How many ended days a long log shows before its "Show all" fold. */
 const LATEST = 7;
 
-/**
- * The current Season's Legend days: today's day first on its own card, then
- * every other day, each one short row that opens to its battles.
- */
 export function LegendLog({
   history,
   player,
@@ -186,12 +161,10 @@ export function LegendLog({
   now: number;
   today: RankedDaySummary | null;
   openDay: string | null;
-  /** Rows standing for days with no Legend I battles, each placed by its last day. */
   gaps?: Array<{ start: number; label: string; kind: "outside" | "waiting" }>;
 }) {
   const todayKey = today ? legendDayKey(today.start) : null;
   const moves = rankMoves(history.map(({ day }) => day));
-  // Every day's bar shares one scale, so the Season's days compare at a glance.
   const scale = barScale(
     history.map(({ day }) => dayBar(day, legendDayKey(day.start) === todayKey)),
   );
@@ -237,7 +210,6 @@ export function LegendLog({
   );
   return (
     <>
-      {/* On a wide screen the columns are named over today's row too. */}
       {current.length > 0 ? (
         <>
           <LogHead scale={scale} />
@@ -299,7 +271,6 @@ function LegendDay({
     if (linked && defenseIds.split(" ").includes(linked)) setSide("defense");
   }, [hash, defenseIds]);
   const facts = [
-    // Phones show an ended day's start in its open row; wider rows have no room.
     day.startTrophies != null ? (
       <span key="start" className="log-fact-start">
         Started at <b>{day.startTrophies.toLocaleString("en-GB")}</b>
@@ -316,7 +287,6 @@ function LegendDay({
       </span>
     ) : null,
   ].filter(Boolean);
-  // Where the start came from sits with the day's status, behind its mark.
   const source = day.startTrophiesSource ? (
     <p>
       <strong>Start: {day.startTrophiesSource}.</strong>{" "}
@@ -410,18 +380,14 @@ function LegendDay({
             <span>{formatSigned(battleNet)} from battles</span>
           ) : null}
         </span>
-        {/* The day's bar: beside the numbers on a wide screen, under them on
-            a phone. */}
         <span className="log-swing" aria-hidden="true" />
       </summary>
       <div className="log-open">
-        {/* The day's start leads; its status stays one quiet mark beside it. */}
         <div className="log-open-head">
           {facts.length > 0 ? <p className="log-facts">{facts}</p> : null}
           <BattleZone day={day} />
           {isCurrentDay ? (
             reasons.length > 0 || source ? (
-              // Today's why-not-final waits behind one line.
               <details className="day-status" data-status="Live">
                 <summary>Final result confirmed after Reset</summary>
                 <div className="day-status-tip">
@@ -495,7 +461,6 @@ function LegendDay({
   );
 }
 
-/** What today's slots need of a Legend day. */
 export interface TodayBattles {
   presentation: RankedDaySummary["presentation"];
   dayNumber: number | null;
@@ -510,11 +475,6 @@ type TodayBattle = Pick<
   "battleTimestamp" | "stars" | "trophyChange"
 >;
 
-/**
- * Today's 8 attacks and 8 defenses as slots, as the dashboard's Legend day
- * card draws them: stars over the trophies each one moved, in the order
- * played, with dashed slots still to play, headed by the Legend day.
- */
 export function TodaySlots({ day }: { day: TodayBattles }) {
   const net = day.presentation!.battle_net_complete;
   const defense = day.defense.trophyLoss === null ? null : -day.defense.trophyLoss;
@@ -524,7 +484,6 @@ export function TodaySlots({ day }: { day: TodayBattles }) {
   ] as const;
   return (
     <div className="player-today" role="group" aria-label="Today's battles">
-      {/* Names the day the slots belong to, apart from the Season chart under them. */}
       <p className="today-day">
         {day.dayNumber === null ? "Legend day" : `Legend day ${day.dayNumber}`}
         <span> · today</span>
@@ -586,7 +545,6 @@ function LiveBadge() {
   );
 }
 
-// A linked day's Attacks and Defenses, or a note when the page no longer has them.
 export function DayBattles({
   day,
   battles,
@@ -632,11 +590,6 @@ export function DayBattles({
   );
 }
 
-/**
- * One side of a day: its total, then one short row per battle. A day has 8
- * of each; the slots not recorded share one line. Each army, the opponent's
- * tag, their log and Copy army stay one tap away, so the result leads the row.
- */
 function BattleList({
   title,
   total,
@@ -655,9 +608,7 @@ function BattleList({
   day: string;
   dayLabel: string;
   units: ArmyUnitNames;
-  /** Today's empty slots are not recorded yet, not missing. */
   live?: boolean;
-  /** The day's total came from the profile, so it counts the missing ones. */
   confirmed?: boolean;
 }) {
   const [shown, setShown] = useState<ReadonlySet<string>>(new Set());
@@ -673,7 +624,6 @@ function BattleList({
   return (
     <section className={`battle-side battle-side-${side}`} aria-label={title}>
       <div className="battle-side-head">
-        {/* The log's words: attacks gained, defenses lost. */}
         <h3>
           {title} <span>{side === "attack" ? "gained" : "lost"}</span>{" "}
           <strong className={valueTone(total)}>{formatSigned(total)}</strong>{" "}
@@ -783,7 +733,6 @@ function BattleRow({
           <small>{event.destructionPercentage}%</small>
         </span>
         <span className="battle-who">
-          {/* A nameless opponent shows its tag once, as the name. */}
           <bdi className="battle-name">{opponent}</bdi>
           <small>
             <BattleTime value={event.battleTimestamp} />
@@ -808,7 +757,6 @@ function BattleRow({
           <span className="sr-only">{open ? "Hide army" : "Show army"}</span>
         </button>
       </div>
-      {/* Their log link is always in the page, so it is there before scripts run. */}
       <div className="battle-more" id={`more-${event.battleId}`} hidden={!open}>
         <p>
           {event.opponent.name ? (
@@ -843,8 +791,6 @@ function BattleRow({
 
 let clock: Intl.DateTimeFormat | null = null;
 
-/** A battle's time of day: UTC as the server wrote it, then the viewer's own,
- *  in the zone the open day names once. */
 function BattleTime({ value }: { value: string }) {
   const [local, setLocal] = useState<string | null>(null);
   useEffect(() => {
@@ -862,7 +808,6 @@ function BattleTime({ value }: { value: string }) {
   );
 }
 
-/** An open day's time zone, named once so its battle rows show only the time. */
 function BattleZone({ day }: { day: RankedDaySummary }) {
   const first = day.offenseEvents[0] ?? day.defenseEvents[0];
   return first ? (

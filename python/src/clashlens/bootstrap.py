@@ -79,8 +79,6 @@ def parse_manifest(
         raise BootstrapError("manifest_is_not_utf8") from error
     lines = text.split("\n")
     if lines and lines[-1] == "":
-        # One trailing newline terminates the last tag line; anything else
-        # blank (including a blank final line) is rejected below.
         lines = lines[:-1]
     if len(lines) > MANIFEST_MAX_LINES:
         raise BootstrapError("manifest_exceeds_line_limit")
@@ -265,7 +263,6 @@ def bootstrap_population(
                 )
                 _write_result_file(result_file, report)
                 return report
-            # A started run replays every batch below and converges.
             if state is BootstrapRun.NEW:
                 other_runs = connection.execute(
                     "SELECT count(*) FROM population_bootstrap_runs"

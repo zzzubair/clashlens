@@ -2,13 +2,6 @@ import { ProviderCallbackError } from "../components/ProviderCallbackError";
 
 import type { Route } from "./+types/auth.discord.callback";
 
-/**
- * GET /auth/discord/callback — validate the Discord callback exactly once and
- * complete its intent: a browser login, or a link/unlink started from an
- * authenticated account. The transaction cookie is always cleared, Discord
- * responses and access tokens never leave this request, and every failure
- * renders a safe error.
- */
 export async function loader({ request }: Route.LoaderArgs) {
   const { getWebsiteConfig } = await import("../server/config.server");
   const discord = await import("../server/discord-oauth.server");

@@ -846,6 +846,8 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         else (max(8, concurrency) if concurrency > 1 else 4)
     )
     process_index = getattr(arguments, "process_index", 0)
+    if not getattr(arguments, "spool_root", ""):
+        raise ValueError("the worker needs a spool root")
     exit_code = start_processes(arguments, database_pool_size, _install_shutdown_handlers)
     if exit_code is not None:
         return exit_code

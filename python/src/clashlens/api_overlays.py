@@ -241,7 +241,6 @@ def read_link(database: ApiDatabase, link_id: str) -> dict[str, Any] | None:
     return {"kind": "obs-overlay-link", "settings_contract": settings_contract(), **result}
 
 
-# The player is shown only while it is still one of the account's verified players.
 _OVERLAY_SQL = """
     SELECT overlay.link_id, overlay.settings, overlay.version,
            CASE WHEN link.player_id IS NOT NULL THEN player.normalized_tag END

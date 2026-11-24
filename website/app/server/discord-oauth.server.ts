@@ -1,20 +1,4 @@
 import { constantTimeEqual } from "./auth.server";
-/**
- * Server-only Discord OAuth2 service (Authorization Code + PKCE S256).
- *
- * Discord login and linking ask for `identify` plus `applications.commands`
- * as a user install, so the same consent adds the Clash Lens bot to the
- * user's own Discord, which lets its alert DMs through; unlinking asks for
- * `identify` only. The access token is used once
- * in memory to read `/users/@me` and is then dropped: it is never persisted,
- * logged, or placed in a cookie. Only the immutable numeric Discord user ID
- * survives validation. Errors are safe, typed OAuthCallbackError values that
- * never carry provider responses, tokens, or secret values.
- *
- * The fetch boundary is injectable so deterministic tests can substitute a
- * fake Discord server; production uses the global fetch against the fixed
- * Discord origins.
- */
 
 import { readBoundedBody } from "./actions.server";
 import { isProviderSubject, OAuthCallbackError, type OAuthIntent } from "./auth.server";
@@ -23,7 +7,6 @@ import type { WebsiteConfig } from "./config.server";
 
 export const DISCORD_CALLBACK_PATH = "/auth/discord/callback";
 
-/** Fixed Discord path layout under the configured API base origin. */
 export function discordEndpoints(apiBase: URL): {
   authorization: string;
   token: string;
@@ -35,7 +18,6 @@ export function discordEndpoints(apiBase: URL): {
     usersMe: new URL("/api/users/@me", apiBase).toString(),
   };
 }
-/** Discord snowflake IDs are 17–20 digit numeric strings. */
 const DISCORD_ID_PATTERN = /^[0-9]{17,20}$/;
 
 export interface DiscordServiceDeps {
@@ -65,7 +47,6 @@ type JsonFetcher = (
 const DISCORD_TIMEOUT_MS = 10_000;
 const MAX_DISCORD_RESPONSE_BYTES = 64 * 1024;
 
-/** Discord's answers are small and never redirect; anything else reads as no answer. */
 const defaultFetchJson: JsonFetcher = async (url, init) => {
   const response = await fetch(url, {
     ...init,
@@ -114,8 +95,6 @@ export async function createDiscordOAuthService(
       url.searchParams.set("state", transaction.state);
       url.searchParams.set("code_challenge", transaction.codeChallenge);
       url.searchParams.set("code_challenge_method", "S256");
-      // Discord shows the authorization prompt on every attempt, which keeps
-      // each link or unlink a fresh explicit authorization.
       url.searchParams.set("prompt", "consent");
       return url;
     },
@@ -170,7 +149,6 @@ export async function createDiscordOAuthService(
       } catch {
         throw new OAuthCallbackError("invalid_callback");
       }
-      // The one-time access token never leaves this scope again.
       if (userResponse.status !== 200 || !isRecord(userResponse.json)) {
         throw new OAuthCallbackError("invalid_claims");
       }

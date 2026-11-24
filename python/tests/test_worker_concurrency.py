@@ -623,6 +623,7 @@ def test_no_job_or_maintenance_starts_after_stop_during_a_slow_ready_check() -> 
 
 WORKER_ARGV = ["worker", "--database-url", "postgresql://prototype@postgres/db",
                "--owner", "production-python-1", "--run-forever", "--processes", "2",
+               "--spool-root", "/var/lib/clashlens/spool",
                "--concurrency", "16", "--response-lanes", "12"]
 
 
@@ -812,7 +813,8 @@ def test_every_worker_lane_has_its_own_database_connection(monkeypatch) -> None:
     monkeypatch.setattr(cli, "start_processes", lambda _arguments, pool, _signals: pools.append(pool) or 0)
     assert cli.main(WORKER_ARGV) == 0
     assert cli.main(["worker", "--database-url", "postgresql://prototype@postgres/db",
-                     "--owner", "one", "--run-forever", "--concurrency", "2"]) == 0
+                     "--owner", "one", "--run-forever", "--concurrency", "2",
+                     "--spool-root", "/var/lib/clashlens/spool"]) == 0
     assert pools == [16, 8]
 
 

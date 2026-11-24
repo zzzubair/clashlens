@@ -1,14 +1,6 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { useLocation } from "react-router";
 
-/**
- * More, the last tab of the bottom bar on narrow screens: a sheet with the
- * rest of the site (Watchlists, Blog, Join Discord); the account and the
- * theme switch stay in the top bar. Tapping a link in it (at once, so the bar shows the
- * page loading), opening a page, tapping outside it, Escape and tabbing away
- * close it. It is a native disclosure, so it also opens before or without
- * page scripts. `current` marks it while one of its pages is open.
- */
 export function SiteMenu({
   current,
   children,

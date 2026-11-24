@@ -46,7 +46,6 @@ export function normalizeSubmittedPlayerTag(value: string): string | null {
   return normalizePlayerTag(trimmed.startsWith("#") ? trimmed : `#${trimmed}`);
 }
 
-/** Normalized username or null when the value does not meet the Python rules. */
 export function normalizeUsername(value: string): string | null {
   const normalized = value.trim().toLowerCase();
   if (!USERNAME_PATTERN.test(normalized)) return null;
@@ -54,12 +53,10 @@ export function normalizeUsername(value: string): string | null {
   return normalized;
 }
 
-/** NFC-normalized display name without surrounding space, or null when invalid. */
 export function normalizeDisplayName(value: string): string | null {
   return normalizeName(value);
 }
 
-/** NFC-normalized group name without surrounding space, or null when invalid. */
 export function normalizeGroupName(value: string): string | null {
   return normalizeName(value);
 }

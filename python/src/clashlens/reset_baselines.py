@@ -52,8 +52,6 @@ def _refresh_reset_baseline_evidence(
     )
 
 
-# The Season whose Reset pairs a repair re-checks: the one named, or else the
-# latest confirmed one.
 _REPAIR_SEASON_SQL = """
     SELECT to_timestamp(season_id::bigint) AS current_start,
            season_id AS current_league_season_id
@@ -264,7 +262,6 @@ def _clear_no_opponent_gaps(
     )
 
 
-# Failures from running out of time or retries, not from bad input.
 TRANSIENT_REPAIR_FAILURES = ("lease_expired_max_attempts", "database_deadlock")
 
 
@@ -576,8 +573,6 @@ def _evaluate_reset_baseline(
     profile_valid = bool(profile["valid"])
     battle_log_valid = bool(battle_log["valid"])
     hard_failure = any(endpoint["hard_failure"] for endpoint in endpoints.values())
-    # The profile proves the Reset only if the battle log was collected at or
-    # after it, so the log shows every battle before the profile.
     if (
         profile["collected_at"] is not None
         and battle_log["collected_at"] is not None
@@ -694,8 +689,6 @@ def _evaluate_reset_baseline(
         )
     if state == "partial":
         return [], reasons
-    # Failed evidence still finishes the day it ends, as incomplete; only a
-    # complete pair is new starting evidence for the day it starts.
     day_starts = [boundary_at - timedelta(days=1)] if ends_day else []
     if starts_ended_day and state == "complete":
         day_starts.append(boundary_at)
@@ -763,11 +756,6 @@ def _record_boundary_baseline(
             supersedes_id=None,
         )
         generation = (generation_id, "pending", "pending", "none", None, None)
-    # A frozen board keeps the member as it froze them; their day, saved
-    # later, corrects it. On 8 November 2026 two Reset logs that waited in
-    # the worker past the freeze put their players back to waiting on the
-    # published board, and its army results then waited for them for good,
-    # holding back the correction with their days.
     if generation[4] is not None or generation[5] is not None or (
         text_value(generation[1]) == "superseded"
         and text_value(generation[2]) == "superseded"
@@ -962,8 +950,6 @@ def _load_reset_endpoint_evidence(
             else:
                 reasons.append(f"unprocessed_{endpoint}")
         elif processing_outcome == "non_success":
-            # A server error or rate limit is final only once the collector
-            # stops retrying; a later response replaces it on the work row.
             retrying = (row[5] == 429 or row[5] >= 500) and text_value(
                 row[14]
             ) in {"pending", "waiting_retry"}
@@ -978,8 +964,6 @@ def _load_reset_endpoint_evidence(
             reasons.append(f"{endpoint}_{category}")
             hard_failure = True
         elif endpoint == "profile":
-            # A Legend I profile at 5,000 before the player's first Legend
-            # battle of the Season passes, accepted or naming Season 0.
             if (
                 row[9] is None
                 or text_value(row[11]) != "eligible"
@@ -989,8 +973,6 @@ def _load_reset_endpoint_evidence(
                 reasons.append("profile_invalid")
                 hard_failure = True
             else:
-                # Bounded by Legend day like the day's results, so it reads this
-                # player's battles, not every battle: 105 ms to 11 ms on 8 Oct.
                 window_start, window_end = battle_window(boundary_at)
                 first_event = ranked_day_inputs.load_first_reports(
                     connection, player_id, window_start, window_start, window_end
@@ -1012,6 +994,35 @@ def _load_reset_endpoint_evidence(
         "hard_failure": hard_failure,
         "valid": not reasons and not missing and not hard_failure,
     }
+
+
+class ResetBaselineRow(NamedTuple):
+    id: int
+    version: int
+    state: str | None
+    sweep_id: int | None
+    work_id: int | None
+    profile_observation: int | None
+    battle_log_observation: int | None
+    profile_outcome: int | None
+    battle_log_outcome: int | None
+    profile_valid: bool
+    battle_log_valid: bool
+    failure_reasons: list[str] | None
+    evidence_json: dict[str, Any] | None
+    evidence_key: str | None
+    boundary_at: datetime
+    profile_id: int | None
+    trophies: int | None
+    eligibility_state: str | None
+    contract_state: str | None
+    observed_at: datetime | None
+    battle_log_id: int | None
+    battle_log_rows: int | None
+    battle_log_gap: bool | None
+    profile_hash: str | None
+    battle_log_hash: str | None
+    league_season_id: str | None
 
 
 def _load_reset_baseline(
@@ -1081,35 +1092,28 @@ def _load_reset_baseline(
     ).fetchone()
     if row is None:
         return None
+    row = ResetBaselineRow(*row)
 
-    state = text_value(row[2])
-    profile_valid = bool(row[9])
-    battle_log_valid = bool(row[10])
-    profile_accepted = row[15] is not None and text_value(row[18]) == "accepted"
-    profile_eligible = text_value(row[17]) == "eligible"
-    battle_log_valid_evidence = row[20] is not None and not bool(row[22])
-    # Only an accepted profile that passed the Reset checks can start a day.
-    # Any other stays evidence; a rejected one, such as one reporting Season
-    # ID 0, also leaves its Season unknown.
-    # An accepted profile read after any Reset that names another Season than
-    # the Reset's own shows trophies from before that player's Season reset.
-    # It stays evidence, but never becomes that Season's starting total.
-    # Every Legend I player starts a Season at exactly 5,000, so at a
-    # Season-opening Reset a Legend I profile showing anything else is too.
+    state = text_value(row.state)
+    profile_valid = bool(row.profile_valid)
+    battle_log_valid = bool(row.battle_log_valid)
+    profile_accepted = row.profile_id is not None and text_value(row.contract_state) == "accepted"
+    profile_eligible = text_value(row.eligibility_state) == "eligible"
+    battle_log_valid_evidence = row.battle_log_id is not None and not bool(row.battle_log_gap)
     season_reset_pending = profile_accepted and (
-        not season_is_current(text_value(row[25]), row[14])
+        not season_is_current(text_value(row.league_season_id), row.boundary_at)
         or (
-            is_season_boundary(row[14])
+            is_season_boundary(row.boundary_at)
             and profile_eligible
-            and row[16] != SEASON_START_TROPHIES
+            and row.trophies != SEASON_START_TROPHIES
         )
     )
     battle_log_usable = bool(
-        row[4] is not None
+        row.work_id is not None
         and battle_log_valid
         and battle_log_valid_evidence
-        and row[6] is not None
-        and row[8] is not None
+        and row.battle_log_observation is not None
+        and row.battle_log_outcome is not None
     )
     reading_starts = bool(
         not season_reset_pending
@@ -1118,25 +1122,15 @@ def _load_reset_baseline(
         and profile_eligible
     )
     complete = state == "complete" and battle_log_usable and reading_starts
-    failure_reasons = row[11] if isinstance(row[11], list) else []
-    # A Reset whose reading cannot give the start itself, whatever the
-    # reason, starts at 5,000 when the game starts the player there
-    # (``season_rule``). So does any
-    # Reset whose reading is a Legend I profile at 5,000 taken before the
-    # player's first Legend battle of the Season, or since their latest
-    # promotion into Legend I, whatever Season it names: the player has not
-    # played yet, so 5,000 is their total. On 11 October
-    # 2026, 1,374 tracked players read so named Season 0. The reading's
-    # trophies stay unused; the Reset is complete only once its battle log
-    # proves the day's battles from the Reset.
+    failure_reasons = row.failure_reasons if isinstance(row.failure_reasons, list) else []
     season_rule = bool(
         not reading_starts
-        and (season_rule or _unplayed(connection, player_id, row[14], row[15], row[19]))
+        and (season_rule or _unplayed(connection, player_id, row.boundary_at, row.profile_id, row.observed_at))
     )
     complete = complete or bool(
         season_rule and battle_log_usable and state in {"complete", "failed"}
     )
-    stored_evidence = row[12] if isinstance(row[12], dict) else {}
+    stored_evidence = row.evidence_json if isinstance(row.evidence_json, dict) else {}
     evidence = {
         "id": int(row[0]),
         "version": int(row[1]),

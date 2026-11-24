@@ -156,7 +156,6 @@ def get_group_comparison(
                     "you": player_id in own_ids,
                     "in_group": player["in_group"],
                     "status": status,
-                    # This Season's Legend I part, for a player who left it.
                     "left_legend_i": left.get(player_id) if status == "not_in_legend" else None,
                     **_current(profile, now, freshness_seconds),
                     **_window(player_id, logs, day_starts, today_start, retired),
@@ -362,7 +361,6 @@ def _add_group_difference(players: list[dict[str, Any]]) -> None:
         player["vs_group"] = round(sum(gaps) / len(gaps), 1) if gaps else None
 
 
-# Saving starts at most the comparison limit of new player checks.
 GROUP_LOOKUP_LIMIT = MAX_COMPARED_MEMBERS
 
 def create_group(
@@ -526,8 +524,6 @@ def add_group_player(
                 elif state == api_player_lookup.LookupState.NOT_FOUND:
                     result = OperationResult(422, {"error": "player_not_found"})
                 elif state not in api_player_lookup.CONFIRMED:
-                    # Unchecked, still checking or a failed check: the caller
-                    # starts or waits for the player lookup and tries again.
                     result = OperationResult(
                         409, {"error": "player_not_checked", "state": state}
                     )
@@ -672,7 +668,6 @@ def _replace_group_players(
 
 
 def _lock_group(connection: Any, binding: RequestBinding, group_id: str) -> int | None:
-    # Filtering by the account means another account's group reads as missing.
     row = connection.execute(
         """
         SELECT id FROM account_groups

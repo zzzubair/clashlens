@@ -5,11 +5,6 @@ import type { ArmyVariantExamples } from "../lib/contracts";
 import type { VariantExamplesResponse } from "../lib/variant-examples-data";
 import { ArmyPortraits } from "./ArmyPortraits";
 
-/**
- * A variant's example armies, loaded again each time the variant opens;
- * closing it drops what loaded. `loading` until the answer, then `ready`, or
- * `failed`, which says to close and open the variant to try again.
- */
 export type VariantExamplesRead =
   | { phase: "loading" }
   | { phase: "failed" }
@@ -23,11 +18,6 @@ export function variantExamplesRead(
   return examples === null ? { phase: "failed" } : { phase: "ready", examples };
 }
 
-/**
- * An opened army on the Armies page: a sheet over the list (from the bottom
- * on a phone, the side when wide) with the army's numbers, then its variants,
- * all closed so every choice shows. A tap opens one with its most-used armies.
- */
 export function ArmyDetail({
   row,
   variants,
@@ -36,12 +26,8 @@ export function ArmyDetail({
   onClose,
 }: {
   row: ArmyRow;
-  /** The army's variants in the list's order, its Other last. */
   variants: ArmyRow[];
-  /** Whose attacks these are, such as "top-1,000 players". */
   audience: string;
-  /** Where a variant's example armies load from; without one, variants
-   * show their numbers only. */
   examplesUrl?: (variant: ArmyRow) => string;
   onClose: () => void;
 }) {
@@ -51,8 +37,6 @@ export function ArmyDetail({
     const sheet = dialog.current;
     if (sheet && !sheet.open) sheet.showModal();
   }, []);
-  // A variant opened under the sheet's heading or low on the screen scrolls
-  // up to it, as the one closing above it moves it.
   const tapped = useRef<HTMLElement | null>(null);
   useEffect(() => {
     const toggle = tapped.current;
@@ -69,7 +53,6 @@ export function ArmyDetail({
       });
   }, [openVariant]);
   const titleId = `${row.key}-title`;
-  // As on the list, the most-used variant fills its bar.
   const shareMax = Math.max(0, ...variants.map((variant) => variant.usageRate));
   return (
     <dialog
@@ -77,7 +60,6 @@ export function ArmyDetail({
       className="analytics-sheet"
       aria-labelledby={titleId}
       onClose={onClose}
-      // A tap on the dimmed page around the sheet closes it.
       onClick={(event) => {
         if (event.target === event.currentTarget) event.currentTarget.close();
       }}
@@ -193,7 +175,6 @@ export function ArmyDetail({
   );
 }
 
-/** An opened variant's most-used armies, loaded from the address the page gives. */
 function VariantExamples({
   id,
   label,
@@ -205,8 +186,6 @@ function VariantExamples({
   attacks: number;
   url: string;
 }) {
-  // Loaded via fetch (not a router fetcher) so a dropped connection or 502
-  // stays inside this variant instead of replacing the Analytics page.
   const [answer, setAnswer] = useState<VariantExamplesResponse | undefined>(undefined);
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
@@ -262,9 +241,6 @@ function VariantExamples({
   );
 }
 
-/** What decides the variant, then each group of alike armies with its
- * share of the variant's attacks, its attacks and Copy army. The first group
- * shows; the rest wait for Show more, so the next variant stays near. */
 export function ExampleArmies({
   id,
   label,

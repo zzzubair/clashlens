@@ -48,8 +48,6 @@ def official_history_rows(
                 observed_at=observed_at,
             )
         except DomainRuleError:
-            # Old rows predate reader-side validation. They stay retained as
-            # evidence, but an invalid boundary never reaches a season page.
             continue
         season_start = season_end - SEASON_DURATION
         trophies = None if row[2] is None else int(row[2])

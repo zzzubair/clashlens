@@ -61,24 +61,16 @@ DAYS = 7
 DRAWS = 200
 MIN_POOL = 40
 MIN_DAY_POOL = 20
-# A battle counts from this long after it was first saved.
 GUARD = timedelta(seconds=60)
-# Those who move are ordered at random among this many tie numbers each.
 SPREAD = 1 << 20
-# Below rank 1,000, level is the trophy bracket: under 4,800, 4,800s, 4,900s,
-# 5,000s, 5,100s, 5,200-5,399 and 5,400+.
 TROPHY_EDGES = (4800, 4900, 5000, 5100, 5200, 5400)
 LEVELS = 2 + len(TROPHY_EDGES) + 1
 ACTIVITIES = 4
-# A day counted from an older Daily board is counted again from the newest
-# one at most this often.
 RECOUNT_AFTER = timedelta(hours=6)
 REFRESH_SECONDS = 60
 RETRY_SECONDS = 600
 _next_refresh_at = float("-inf")
 
-# Each player's attacks on the Legend day before %(day_start)s, and on the
-# two days before that, from their newest published log of each day.
 RECENT_ATTACKS_SQL = """
 LEFT JOIN LATERAL (
     SELECT COALESCE(sum(latest.attack_count) FILTER (
@@ -99,9 +91,6 @@ LEFT JOIN LATERAL (
 ) AS recent ON true
 """
 
-# The game's "no opponent, no battle" attack and defense slots of the
-# player's newest published log for the Legend day %(day_start)s, which the
-# game counts as used.
 ZERO_SLOTS_SQL = """
 LEFT JOIN LATERAL (
     SELECT COALESCE((ranked_day.input_evidence ->> 'zero_result_attack_slots')::int, 0)
@@ -142,7 +131,6 @@ def situations(
     for points, attacks, defenses, act in zip(
         trophies, open_attacks, open_defenses, activities, strict=True
     ):
-        # The middle of the places this player shares with equal trophies.
         middle = (1 + 2 * n - bisect_right(ordered, points) - bisect_left(ordered, points)) / 2
         if middle <= 200:
             level = 0
@@ -166,10 +154,6 @@ def _open_bounds(situation: int) -> tuple[int, int]:
     """The most a player in ``situation`` can lose and win before the Reset."""
     attacks, defenses = _open_slots(situation)
     return -MAX_BATTLE_TROPHIES * defenses, MAX_BATTLE_TROPHIES * attacks
-
-
-# ---------------------------------------------------------------------------
-# Worker: saving each finished day's examples.
 
 
 def _now() -> datetime:
@@ -304,11 +288,7 @@ def build_day(
     index = {int(row[0]): position for position, row in enumerate(players)}
     final = [int(row[1]) for row in players]
     activities = [activity(int(row[2]), int(row[3])) for row in players]
-    # (known at, player, is attack, trophy change)
     events: list[tuple[datetime, int, bool, int]] = []
-    # The Daily board's total is taken at exactly the Reset, so a battle
-    # whose attacker's report is stamped at or after it is not in it
-    # (reset_total).
     for attacker, defender, saved_at, gain, loss in connection.execute(
         """
         SELECT battle.attacker_player_id, battle.defender_player_id,
@@ -334,8 +314,6 @@ def build_day(
         if (player := index.get(int(defender))) is not None:
             events.append((known, player, False, -int(loss)))
     events.sort(key=itemgetter(0))
-    # Each player's trophy change from battles not counted yet, and how many
-    # of those moved their trophies.
     remaining = [0] * len(players)
     moving = [0] * len(players)
     for _known, player, _attack, change in events:
@@ -375,10 +353,6 @@ def build_day(
             [moved for _, _, moved in triples],
         ))
     return rows
-
-
-# ---------------------------------------------------------------------------
-# Dashboard: the projected places, worked out after each board read.
 
 
 def read_examples(
@@ -434,9 +408,6 @@ class ProjectedPlaces:
     ) -> None:
         keys = situations(trophies, open_attacks, open_defenses, activities)
         size = len(keys)
-        # The examples by situation, then without level, then by open slots
-        # only: pooled over the days and for each day. An example's change is
-        # None when no battle that moved their trophies was still to come.
         steps = (1, LEVELS, LEVELS * ACTIVITIES)
         pooled: list[dict[int, list[int | None]]] = [{} for _ in steps]
         by_day: list[list[dict[int, list[int | None]]]] = []
@@ -448,9 +419,6 @@ class ProjectedPlaces:
                     everyday.setdefault(key // step, []).append(example)
                     today.setdefault(key // step, []).append(example)
             by_day.append(day)
-        # Among equal trophies, a larger tie number places first: the
-        # board's order for players whose trophies stay put, and above
-        # everyone who stays put for those who move.
         order = sorted(
             range(size), key=lambda player: latest_change_order_key(
                 latest_changes[player], tags[player]
@@ -463,11 +431,7 @@ class ProjectedPlaces:
         groups: dict[int, list[int]] = {}
         for player, key in enumerate(keys):
             groups.setdefault(key, []).append(player)
-        # Players in situation order, so each imagined day is built one
-        # situation at a time; ``position`` finds a player in that order.
         self.position = [0] * size
-        # For each day, each situation's players' ranking keys if they stay
-        # put, and the examples, None when no one in them moved.
         day_pools: list[list[tuple[list[int], list[int | None] | None]]] = [
             [] for _ in by_day
         ]
@@ -517,9 +481,6 @@ class ProjectedPlaces:
                     ranked.extend(still)
                     continue
                 count = len(pool)
-                # Those who move rank above those who stay put on the same
-                # trophies, at random by what is left of ``pick``, then by
-                # tie number, so no two keys are equal.
                 ranked.extend([
                     stays if (change := pool[int(pick := draw() * count)]) is None
                     else stays + change * width + size * (1 + int(pick % 1 * SPREAD))

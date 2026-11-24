@@ -81,9 +81,6 @@ def merged_battles(
     return moved, unlisted
 
 
-# Each published day a listed move is not yet reflected in: the moved
-# report's old day still lists it, or its new day lacks the report now
-# selected for that battle side.
 UNFINISHED_MOVES = """
 SELECT own.player_id, own.evidence_id, own.from_day, own.to_day,
        day.ranked_day_start, day.season_id
@@ -155,7 +152,6 @@ def enqueue_rebuilds(
     season = {"start": start, "end": start + SEASON_DURATION if start else None}
     with database.pool.connection() as connection, connection.transaction():
         if queue:
-            # A battle that gained or lost a side's report compares them again.
             refresh_disagreements(
                 connection,
                 [
@@ -312,9 +308,6 @@ def enqueue_rebuilds(
 def refresh_disagreements(connection: Any, battle_ids: list[int]) -> None:
     if not battle_ids:
         return
-    # Battles are already matched by Legend day, attacker and defender. Keep
-    # each report's timestamp as evidence, but compare the army and result:
-    # different reported times alone do not make this a different attack.
     connection.execute(
         """
         WITH target AS (

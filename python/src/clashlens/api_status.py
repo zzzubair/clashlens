@@ -10,7 +10,6 @@ from .db import PYTHON_LIVE_PRIORITY
 from .domain import RANKED_DAY_DURATION, ranked_day_for
 from .reconciliation_db import DAY_END_RECALCULATION_DELAY
 
-# Normal processing takes about a second; a busy Reset can take ten minutes or more.
 DELAY_SECONDS = 900
 
 
@@ -59,7 +58,6 @@ def get_update_status(database: ApiDatabase, *, now: datetime) -> dict[str, Any]
         "kind": "update-status",
         "checked_at": now.isoformat(),
         "delay_seconds": DELAY_SECONDS,
-        # No answer at all counts as delayed only once something was ever collected.
         "collection_delayed": last_success is not None and last_success < limit,
         "last_collected_at": None if last_success is None else last_success.isoformat(),
         "processing_delayed": (

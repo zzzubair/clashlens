@@ -572,9 +572,6 @@ def _delete_retirement_batch(
             (season_id, limit),
         ).fetchall()
         ids = [int(row[0]) for row in rows]
-        # Version chains link newer facts to older ones through a
-        # restrictive self-FK; delete leaves first so one batch never
-        # trips the constraint. Anything left stays for the next batch.
         deleted["army_facts"] = _delete_version_chain(
             connection, "army_analytics_battle_facts", ids
         )
@@ -640,8 +637,6 @@ def _delete_battles(connection: Any, battle_ids: list[int]) -> int:
         """,
         (battle_ids,),
     ).fetchone():
-        # A deep supersedes chain needs another bounded run. Do not remove
-        # evidence while restrictive decode references still exist.
         return 0
     connection.execute(
         "DELETE FROM battle_perspectives WHERE battle_id = ANY(%s::bigint[])",
@@ -673,8 +668,6 @@ def _delete_battles(connection: Any, battle_ids: list[int]) -> int:
             "DELETE FROM battle_payload_rows WHERE source_row_id = ANY(%s::bigint[])",
             (unreferenced,),
         )
-        # A list keeps each remaining battle at its log position; a list
-        # with nothing left goes, as its per-row predecessors did.
         connection.execute(
             """
             DELETE FROM battle_payload_row_lists AS list

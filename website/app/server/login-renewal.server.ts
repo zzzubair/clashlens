@@ -9,7 +9,6 @@
  * so a cookie never rides on a response a shared cache may keep, such as a
  * permanent redirect with no Cache-Control; the page it leads to renews.
  */
-
 import {
   buildSetCookieHeader,
   createLoginCookieValue,
@@ -27,24 +26,6 @@ import { isLoginRevoked } from "./login-session.server";
 
 const RENEWAL_CHECK_TIMEOUT_MS = 1_000;
 
-/**
- * Where one browser's login cookie stands for renewal.
- *
- * - `absent`: no login cookie, or login is switched off.
- * - `unusable`: not signed by this site, malformed, or past its 30 days.
- * - `recent`: valid and issued under an hour ago; used as it is, and the
- *   API is not asked.
- * - `due`: valid and issued an hour or more ago; the API is asked whether
- *   the login still stands (`LoginStanding` in Python's login_sessions).
- *
- * A `due` login becomes a fresh 30-day cookie for the same login (same
- * fingerprint and signed-in time) only when the API answers that it still
- * stands. A login that logged out or whose sign-in connection was removed
- * keeps its old cookie, which every request that relies on it refuses
- * (login-session.server). An API that fails or takes over a second leaves
- * the cookie as it is, and the next visit asks again. `loginCookieStage` is
- * the only place the stage is decided; nothing is stored here.
- */
 export type LoginCookieStage =
   | { kind: "absent" }
   | { kind: "unusable" }
@@ -75,11 +56,9 @@ export async function renewLoginCookie(
   request: Request,
   next: () => Promise<Response>,
 ): Promise<Response> {
-  // The logout check runs alongside the page's own loaders.
   const renewal = renewedLoginCookie(request);
   const response = await next();
   const cookie = await renewal;
-  // Quoted values are blanked first, so a word inside one is never a directive.
   const directives = (response.headers.get("Cache-Control") ?? "")
     .replace(/"(?:[^"\\]|\\.)*"/g, '""')
     .split(",")
@@ -134,7 +113,6 @@ async function renewedLoginCookie(request: Request): Promise<string | null> {
       config.cookieSecure,
     );
   } catch {
-    // Without a confirmed login the cookie stays as it is.
     return null;
   }
 }

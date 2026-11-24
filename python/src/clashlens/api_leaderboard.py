@@ -4,7 +4,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, NamedTuple
 
 from .analytics import (
     tie_order_sql,
@@ -37,9 +37,7 @@ from .live_board import (
 from .shared_copy import SharedCopy
 
 _LIVE_FRESHNESS_SECONDS = 600
-# Rows kept beside a selected player when their page edge would hide them.
 _FOCUS_NEIGHBORS = 5
-# Finished Legend days each Live row's chart shows; today has its own column.
 RECENT_DAYS = 7
 
 
@@ -108,7 +106,6 @@ _LIVE_CANDIDATES_SQL = _live_candidates_sql()
 _LIVE_PLAYERS_SQL = f"""
 SELECT * FROM ({_LIVE_CANDIDATES_SQL}) AS candidate WHERE season_current
 """
-# The profile that ranks one player at 5,000 when their current one does not.
 UNPLAYED_PROFILE_SQL = f"""
 SELECT unplayed.id, unplayed.observed_at
 FROM players AS player
@@ -116,9 +113,6 @@ FROM players AS player
 WHERE player.normalized_tag = %(tag)s
 """
 
-# Equal trophies in the Daily board's order (analytics.tie_order_key), from
-# the counts the worker last saved (analytics.refresh_live_attack_tallies).
-# v1 ordered them by MD5 of the tag alone.
 _LIVE_ORDER_VERSION = "tracked-trophies-attack-destruction-v2"
 _LIVE_ORDER_SQL = (
     f"trophies DESC, {tie_order_sql('attacks', 'destruction', 'normalized_tag')}"
@@ -143,22 +137,24 @@ def search_live_leaderboard(
     tag = "#" + query.removeprefix("#").upper()
     ranked = list(enumerate(_live_board(database, now, cache).rows, start=1))
     exact = [
-        (rank, row) for rank, row in ranked if query.startswith("#") and row[0] == tag
+        (rank, row)
+        for rank, row in ranked
+        if query.startswith("#") and row.normalized_tag == tag
     ]
     needle = query.casefold()
     found = exact or [
         (rank, row)
         for rank, row in ranked
-        if row[0] == tag or needle in text_value(row[1]).casefold()
+        if row.normalized_tag == tag or needle in text_value(row.name).casefold()
     ]
     return {
         "exact_tag": tag if exact else None,
         "has_more": len(found) > 20,
         "results": [
             {
-                "tag": text_value(row[0]),
-                "name": text_value(row[1]),
-                "trophies": int(row[2]),
+                "tag": text_value(row.normalized_tag),
+                "name": text_value(row.name),
+                "trophies": int(row.trophies),
                 "rank": rank,
             }
             for rank, row in found[:20]
@@ -214,18 +210,26 @@ def live_freshness_metrics(database: ApiDatabase, *, now: datetime) -> dict[str,
     }
 
 
+class _LiveEntry(NamedTuple):
+    normalized_tag: str
+    name: str
+    trophies: int
+    observed_at: datetime | None
+    eligibility_state: str
+    clan: str | None
+
+
 @dataclass(frozen=True)
 class _LiveBoard:
     tracked_population: int
     season_reset_pending: int
-    # (tag, name, trophies, observed_at, eligibility_state, clan) in rank order.
-    rows: list[tuple[Any, ...]]
+    rows: list[_LiveEntry]
 
     def tied(self, index: int) -> bool:
         """Whether the row at ``index`` shares its trophies with a neighbor."""
-        trophies = self.rows[index][2]
+        trophies = self.rows[index].trophies
         return any(
-            0 <= other < len(self.rows) and self.rows[other][2] == trophies
+            0 <= other < len(self.rows) and self.rows[other].trophies == trophies
             for other in (index - 1, index + 1)
         )
 
@@ -233,9 +237,9 @@ class _LiveBoard:
         """Each tag's position on this board; a tag off it is left out."""
         wanted = set(tags)
         return {
-            text_value(row[0]): position
+            text_value(row.normalized_tag): position
             for position, row in enumerate(self.rows, start=1)
-            if text_value(row[0]) in wanted
+            if text_value(row.normalized_tag) in wanted
         }
 
 
@@ -278,7 +282,7 @@ def _read_live_board(connection: Any, now: datetime) -> _LiveBoard:
     return _LiveBoard(
         tracked_population=int(rows[0][0]),
         season_reset_pending=int(rows[0][1]),
-        rows=[tuple(row[2:]) for row in rows if row[2] is not None],
+        rows=[_LiveEntry(*row[2:]) for row in rows if row[2] is not None],
     )
 
 
@@ -336,7 +340,7 @@ def get_live_leaderboard(
     first, last = offset + 1, offset + limit
     if focus_tag is not None:
         focus_position = next(
-            (index + 1 for index, row in enumerate(rows) if row[0] == focus_tag),
+            (index + 1 for index, row in enumerate(rows) if row.normalized_tag == focus_tag),
             None,
         )
         if focus_position is None:
@@ -346,7 +350,7 @@ def get_live_leaderboard(
         last = max(offset + limit, focus_position + _FOCUS_NEIGHBORS)
     if offset and offset >= total_entries:
         return None
-    observed = [row[3] for row in rows if row[3] is not None]
+    observed = [row.observed_at for row in rows if row.observed_at is not None]
     stale_before = now - timedelta(seconds=_LIVE_FRESHNESS_SECONDS)
     stale_count = sum(1 for value in observed if value < stale_before)
     oldest_observed_at = min(observed, default=None)
@@ -354,22 +358,24 @@ def get_live_leaderboard(
     entries = []
     first = max(first, 1)
     for position, row in enumerate(rows[first - 1 : last], start=first):
-        observed_at = row[3].astimezone(UTC)
+        observed_at = row.observed_at.astimezone(UTC)
         age = max(0.0, (now.astimezone(UTC) - observed_at).total_seconds())
         age_seconds = int(age)
         freshness = "fresh" if age <= _LIVE_FRESHNESS_SECONDS else "stale"
         entries.append(
             {
                 "position": position,
-                "tag": text_value(row[0]),
-                "name": text_value(row[1]),
-                "trophies": int(row[2]),
+                "tag": text_value(row.normalized_tag),
+                "name": text_value(row.name),
+                "trophies": int(row.trophies),
                 "observed_at": observed_at.isoformat(),
                 "age_seconds": age_seconds,
                 "freshness": freshness,
-                "confidence": text_value(row[4]),
-                "public_confidence": player_confidence(True, text_value(row[4])),
-                "clan": None if row[5] is None else text_value(row[5]),
+                "confidence": text_value(row.eligibility_state),
+                "public_confidence": player_confidence(
+                    True, text_value(row.eligibility_state)
+                ),
+                "clan": None if row.clan is None else text_value(row.clan),
                 "official_rank": None,
                 "tied": board.tied(position - 1),
             }
@@ -392,7 +398,6 @@ def get_live_leaderboard(
         "calendar": calendar_payload(now),
         "tracked_population": board.tracked_population,
         "total_entries": total_entries,
-        # Tracked players left off until a profile names this Season.
         "season_reset_pending": board.season_reset_pending,
         "page": page,
         "page_size": limit,
@@ -611,7 +616,6 @@ def linked_season_days(
             "entry": None if entry is None else text_value(entry),
         })
     for player in players.values():
-        # One letter per day tuple, in the same order: played, shield or missing.
         player["heatmap_day_kinds"] = "".join(heatmap_kind(kept[1], kept[2], kept[3])[0] for kept in player["days"])
         player["heatmap_day_numbers"] = heatmap_day_numbers(
             day.season_start, day.day_number, player["season_weeks"], player["days"]

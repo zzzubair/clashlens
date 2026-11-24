@@ -115,7 +115,6 @@ export function Analytics() {
   const page = matches[matches.length - 1];
   const routeId = page?.id;
   const data = page?.loaderData;
-  // What the open page shows.
   const shown = useRef<{ path: string; selection: Selection } | null>(null);
   const withdrawals = useSyncExternalStore(
     onAnalyticsChoiceChange,

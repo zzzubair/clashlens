@@ -13,11 +13,6 @@ export interface AccountLoaderData {
   error: WebsiteErrorResponse | null;
 }
 
-/**
- * GET /account — open the signed-in user's public profile. The
- * provider identity signs the private Python calls and never appears here.
- * A `linked` player tag passes through so the profile can confirm the link.
- */
 export async function loader({ request }: Route.LoaderArgs): Promise<AccountLoaderData> {
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);

@@ -15,11 +15,6 @@ import type { LoginSession } from "./auth-cookies.server";
 import { createLoginSessionBinding } from "./auth-cookies.server";
 import type { LoginIdentity } from "./auth.server";
 
-/**
- * True when this login has logged out or its sign-in connection was removed
- * after it signed in. Throws PythonApiError when the API cannot answer, so
- * no caller treats an unchecked cookie as signed in.
- */
 export async function isLoginRevoked(
   session: LoginSession,
   loginCookieValue: string,
@@ -37,7 +32,6 @@ export async function isLoginRevoked(
   return payload.revoked;
 }
 
-/** Record that this login logged out. Throws PythonApiError on failure. */
 export async function revokeLogin(
   identity: LoginIdentity,
   loginCookieValue: string,

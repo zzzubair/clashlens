@@ -3,14 +3,11 @@ import type { PlayerLookup } from "../lib/contracts";
 import type { LoginIdentity } from "../server/auth.server";
 import { addGroupPlayer, checkPlayerTag } from "./group-players.server";
 
-// Adding one player to a group, shared by Your groups and Add to group.
-
 export const INVALID_TAG =
   "Enter one valid player tag, like #2PY0LQ. Tags use only 0, 2, 8, 9 and the letters P Y L Q G R J C U V.";
 export const groupFull = (max: number) =>
   `This watchlist already has ${max} players, the most a comparison shows. Remove a player to add another.`;
 
-/** The message under the tag field for a refused add or remove, if it has one. */
 export function groupTagError(code: unknown, tag: string, max?: number): string | null {
   if (code === "group_full" && max === undefined) return null;
   const messages: Record<string, string> = {
@@ -33,7 +30,6 @@ function stillChecking(tag: string): string {
   return `Still checking ${tag} with Clash of Clans. Press Add again in a few seconds.`;
 }
 
-/** Why a checked tag cannot join a group yet; null once the game confirms the player. */
 export function lookupRefusal(
   lookup: PlayerLookup,
   tag: string,

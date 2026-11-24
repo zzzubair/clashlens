@@ -39,13 +39,8 @@ from .catalog import CATALOG_VERSION, unit_label
 from .domain import DomainRuleError, allocate_trophies
 
 CATEGORY = "army-types"
-# Bump on any change to the rules, camp spaces, variant list,
-# ``army_composition`` or ``army_group`` below, never for a rename. v5 is v4's
-# types plus the first variant list; v6 saves each army's composition keys;
-# v7 adds Squads, typed by their members; v8 the Hog Rider and Miner Squads.
 RULES_VERSION = "army-types-v8"
 
-# Permanent type ids: rename freely, never reuse or renumber one.
 OTHER, UNREADABLE = 1, 2
 THROWER, HYDRA, SUPER_BOWLER, FIREBALL_SUPER_MINION = 3, 4, 5, 6
 SUPER_YETI, DRAGON_RIDER, LAVALOON, RUIN_WITCH = 7, 8, 9, 10
@@ -86,17 +81,11 @@ CAMP_SPACE = {
     "troop:84": 12, "troop:95": 32, "troop:97": 20, "troop:98": 12,
     "troop:109": 26, "troop:110": 20, "troop:123": 16, "troop:132": 16,
     "troop:147": 35, "troop:150": 18, "troop:177": 40,
-    # Squads, from 16 Nov 2026, by the release notes' camp space, which
-    # their saved armies' 352 confirm. P.E.K.K.A Titan and Baby Dragon Squads
-    # take 46 and 26 below level 3 by the notes, but every saved army fits
-    # only 44 and 24, and an army link names no level.
     "troop:195": 15, "troop:196": 25, "troop:197": 8, "troop:198": 12,
     "troop:199": 16, "troop:200": 55, "troop:201": 48, "troop:202": 48,
     "troop:203": 70, "troop:204": 44, "troop:205": 85, "troop:206": 24,
 }
 
-# Each Squad's members: an army is typed by them, the Squad's camp space
-# shared among them by their own (docs/domain.md, Army types).
 SQUADS = {
     "troop:195": (("troop:0", 15), ("troop:1", 15)),
     "troop:196": (("troop:3", 3), ("troop:6", 5)),
@@ -131,26 +120,17 @@ class Combination:
         ) and sum(space.get(troop, 0) for troop in troops) * 100 >= self.share * total
 
 
-# Checked first. One match names the army; two or more make it Other.
 COMBINATIONS = (
     Combination(HYDRA, ((("troop:8",), 4), (("troop:65",), 2)), 50),
     Combination(LAVALOON, ((("troop:5",), 12), (("troop:17", "troop:76"), 1)), 40),
     Combination(FIREBALL_SUPER_MINION, ((("troop:84",), 4), (("troop:57",), 8)), 35),
     Combination(SUPER_ARCHER_RUIN_WITCH, ((("troop:27",), 8), (("troop:109",), 3)), 55),
 )
-# Support troops never name an army and are left out of the leader check:
-# Healer, Druid, Ice Golem, Golem, Lava Hound, Ice Hound, Apprentice Warden,
-# Headhunter, Wall Breaker, Super Wall Breaker, Archer, Barbarian, Goblin,
-# Sneaky Goblin, Minion and Baby Dragon.
 SUPPORT_TROOPS = frozenset({
     "troop:7", "troop:123", "troop:58", "troop:13", "troop:17", "troop:76",
     "troop:97", "troop:82", "troop:4", "troop:28", "troop:1", "troop:0",
     "troop:2", "troop:55", "troop:10", "troop:23",
 })
-# Otherwise the main troop (any troop not in support) with the most camp
-# space names the army when it is clearly ahead of the other main troops: at
-# least 3 of it, at least 35% of their camp space, and ahead of the next main
-# troop by at least 10% of that space. Leaders not listed here make it Other.
 LEADER_TYPES = {
     "troop:132": THROWER,
     "troop:80": SUPER_BOWLER,
@@ -163,9 +143,6 @@ LEADER_TYPES = {
     "troop:66": SUPER_WITCH,
 }
 LEADER_MINIMUM, LEADER_SHARE, LEADER_MARGIN = 3, 35, 10
-# When no main troop is clearly ahead, the two leading main troops name the
-# army if they are a pair listed here, with at least 3 of each and together at
-# least 50% of the main troops' camp space.
 LEADING_PAIRS = {frozenset({"troop:132", "troop:109"}): THROWER_RUIN_WITCH}
 PAIR_MINIMUM, PAIR_SHARE = 3, 50
 
@@ -180,7 +157,6 @@ def classify(home_troops: Iterable[Any]) -> int:
         troop, count = str(entry[0]), int(entry[1])
         if troop not in CAMP_SPACE:
             return UNREADABLE
-        # A Squad counts as its members, its camp space shared among them.
         members = SQUADS.get(troop, ((troop, 1),))
         ordinary = sum(CAMP_SPACE[member] * each for member, each in members)
         for member, each in members:
@@ -216,11 +192,6 @@ def classify(home_troops: Iterable[Any]) -> int:
     return pair
 
 
-# Variants: per type, (permanent variant id, name, equipment the army's heroes
-# must all carry), checked in order. The first match names the army; an army
-# matching none is its type's Other, variant 0. Names are the equipment word
-# plus the type, as Clashers say them. Rename freely; never reuse or renumber
-# an id. A new variant gets the next unused id and a RULES_VERSION bump.
 OTHER_VARIANT = 0
 QUEEN, WARDEN, PRINCE, DUKE = "hero:1", "hero:2", "hero:6", "hero:7"
 MONOLITH, GIANT_ARROW, MAGIC_MIRROR = (
@@ -244,7 +215,6 @@ VARIANTS: dict[int, tuple[tuple[int, str, tuple[tuple[str, str], ...]], ...]] = 
         (6, "Revenge Hydra", (REVENGE,)),
         (7, "Backpack Hydra", (BACKPACK,)),
     ),
-    # The Queen's Monolith Arrow first, then the Duke, as other trackers split it.
     SUPER_BOWLER: (
         (8, "Monolith Super Bowler", (MONOLITH,)),
         (9, "Electro Fangs Super Bowler", (ELECTRO_FANGS,)),
@@ -267,8 +237,6 @@ VARIANTS: dict[int, tuple[tuple[int, str, tuple[tuple[str, str], ...]], ...]] = 
         (18, "Revenge Fireball Ruin Witch", (REVENGE,)),
         (19, "Backpack Fireball Ruin Witch", (BACKPACK,)),
     ),
-    # The Minion Prince's Portal Pendant first: nearly all of them also carry
-    # the Warden's Fireball.
     LAVALOON: (
         (20, "Portal Pendant LaLo", (PORTAL_PENDANT,)),
         (21, "Fireball LaLo", (FIREBALL,)),
@@ -335,7 +303,6 @@ def variant_rule(type_id: int, variant_id: int) -> str:
         missing = tuple(item for item in items if item not in carries)
         if missing not in lacks:
             lacks.append(missing)
-    # Lacking Revenge already rules out Revenge with Backpack.
     alone = {missing[0] for missing in lacks if len(missing) == 1}
     without = [
         " and ".join(unit_label(equipment) for _hero, equipment in missing)
@@ -351,17 +318,8 @@ def variant_rule(type_id: int, variant_id: int) -> str:
     return text[0].upper() + text[1:] + "."
 
 
-# Variant examples group a variant's distinct armies by what is in them: the
-# same troops, the same spells (not how many) and the same heroes with the
-# same equipment. A troop under FILLER_SHARE percent of the army's camp space
-# is a filler and is left out, so 4 or 5 Archers make no difference. Pets,
-# siege machines and Clan Castle troops are left out too (saved armies never
-# hold the last two); Clan Castle spells count with the army's spells.
 FILLER_SHARE = 5
 EXAMPLE_GROUPS = 3
-# An example's Copy army code is the one most of its newest selected attacks
-# used, from at least this many of them when there are, a whole player's day
-# at a time.
 LINK_ATTACKS = 200
 
 
@@ -438,17 +396,9 @@ def _key(value: Any) -> int:
     return int.from_bytes(hashlib.sha256(text).digest()[:8], "big", signed=True)
 
 
-# The worker counts nothing in this UTC window, which keeps it free for the
-# Reset, the same window past Resets wait out.
 QUIET_START, QUIET_END = time(4, 30), time(7, 0)
 LABEL_BATCH = 50_000
-# The dashboard's Armies on offense card compares up to the last 7 finished
-# Legend days with these counts, so those days are counted whatever their
-# Season.
 OFFENSE_CARD_DAYS = 7
-# The Armies on defense card looks back up to 28 finished Legend days. Each
-# day's defenses are about 88,000 rows, so a day is counted at most once a
-# minute: after a deploy the current Season fills in under half an hour.
 DEFENSE_CARD_DAYS = 28
 DEFENSE_PACE_SECONDS = 60
 RETRY_SECONDS = 600
@@ -501,7 +451,6 @@ def _label(connection: Any) -> dict[str, Any] | None:
         (RULES_VERSION,),
     ).fetchone():
         return None
-    # Labels are being replaced, so no other version's labelling is complete.
     connection.execute(
         "DELETE FROM army_type_rule_versions WHERE rules_version <> %s", (RULES_VERSION,)
     )
@@ -561,15 +510,12 @@ def _facts(lens: str) -> str:
 
 
 _FACTS = _facts("offense")
-# Per lens: the counts table, its battle column, its counted-days table, how
-# many recent days are counted whatever their Season, and its trophies column.
 _COUNTS = {
     "offense": ("army_package_day_counts", "attacks", "army_type_counted_days",
                 OFFENSE_CARD_DAYS, "trophies"),
     "defense": ("army_package_defense_day_counts", "defenses",
                 "army_type_defense_counted_days", DEFENSE_CARD_DAYS, "trophies_lost"),
 }
-# Every 3-star wins these; a miss wins fewer.
 THREE_STAR_TROPHIES = allocate_trophies(3, 100).attacker_gain
 _TROPHIES_JOIN = """
     LEFT JOIN unnest(%s::integer[], %s::integer[], %s::integer[])
@@ -621,11 +567,6 @@ def _count_day(connection: Any, lens: str) -> dict[str, Any] | None:
     connection.execute(
         f"DELETE FROM {counted_table} WHERE ranked_day_start = %s", (ranked_day_start,)
     )
-    # This day's older count goes; earlier Seasons' counts stay. Only rows
-    # that changed are written: a recount mostly repeats the last one, and
-    # deleting and saving the whole day again wrote about 1 GB of change log
-    # a day on production. Attacks save the trophies they won, defenses the
-    # trophies they lost.
     same = f"""saved.population_player_id = fresh.population_player_id
               AND saved.exact_army_id = fresh.exact_army_id
               AND saved.{battles} = fresh.{battles}
@@ -715,8 +656,6 @@ def read_type_rows(
         """,
         params,
     ).fetchall()
-    # An older partly read army has no distinct army: its saved decode is
-    # read once, after the totals, so the totals never join the decodes.
     partial_ids = [row[2] for row in rows if row[2] is not None]
     partial = {
         decode_id: with_unnamed_ids({
@@ -872,9 +811,6 @@ def variant_examples(
     )
     columns = """population_player_id, exact_army_id, attacks, one_star, two_star,
                  three_star, destruction, trophies, ranked_day_start"""
-    # Each selected army, by its id as the attacks name it, as the key of
-    # what is in it, and each of those keys' group key: saved with its labels
-    # (``composition_keys``), so the armies themselves are never read.
     used: dict[int, int] = {}
     compositions: dict[int, int] = {}
     group_keys: dict[int, int] = {}
@@ -925,9 +861,6 @@ def variant_examples(
     examples = {group[2] for group in top}
     example_ids = [army_id for army_id, composition in compositions.items()
                    if composition in examples]
-    # Each example's newest player days, newest day first and on a day its
-    # keenest players first, until they hold LINK_ATTACKS of its attacks.
-    # Reading every attack's code took up to 25 s at the top 10,000.
     per_day: dict[int, Counter[tuple[Any, int]]] = {}
     for day, player_id, army_id, attacks in connection.execute(
         f"""
@@ -1037,7 +970,6 @@ def read_type_outcomes(
         (season_id, day_numbers, lens, player_id),
     ).fetchall():
         if type_id != UNREADABLE and troops is not None:
-            # An older partly read army, typed from its saved home troops.
             type_id = classify(with_unnamed_ids(
                 {"home_troops": troops, "unresolved_components": unnamed}
             )["home_troops"])
@@ -1073,7 +1005,6 @@ def read_day_totals(
         (days,),
     ).fetchall():
         if troops is not None:
-            # An older partly read army, typed from its saved home troops.
             type_id = classify(with_unnamed_ids(
                 {"home_troops": troops, "unresolved_components": unnamed}
             )["home_troops"])

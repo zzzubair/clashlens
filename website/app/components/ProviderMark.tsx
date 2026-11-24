@@ -1,5 +1,3 @@
-// The Google and Discord marks on the sign-in and sign-up buttons, so each way
-// in is known at a glance. Drawn inline; the button's words name it.
 export function ProviderMark({ provider }: { provider: "google" | "discord" }) {
   return provider === "google" ? (
     <svg

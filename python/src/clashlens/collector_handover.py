@@ -12,7 +12,6 @@ from typing import Any
 
 from . import collector_reset
 
-# Regular checks stop this long before each Reset, at 04:55 UTC.
 _CLOSE_BEFORE_RESET = timedelta(minutes=5)
 
 
@@ -58,8 +57,6 @@ def admission_phase(connection: Any, now: datetime) -> AdmissionPhase:
         is None
     ):
         return AdmissionPhase.AWAITING_SWEEP
-    # Asked per sweep so each probe reads only that sweep's unfinished
-    # rows from collector_work_sweep_order, not the whole work table.
     running = connection.execute(
         """
         SELECT 1

@@ -2,7 +2,6 @@ import { signedNumber } from "../lib/number-format";
 import type { DayResult } from "../lib/group-comparison";
 import { utcDate, dayRange } from "../lib/date-format";
 
-/** One player's line: who, and the days the table's gain counts. */
 export interface GainLine {
   tag: string;
   name: string;
@@ -10,8 +9,6 @@ export interface GainLine {
   days: DayResult[];
 }
 
-/** Lighting a player up: while a mouse points at them, or picked with a
- *  click or tap until picked again. */
 export interface Light {
   hover: (tag: string | null) => void;
   pin: (tag: string) => void;
@@ -30,7 +27,6 @@ export function pointed(light: Light, tag: string) {
   };
 }
 
-/** A day the gain counts: finished, or still settling, with a result. */
 function counted(day: DayResult): boolean {
   return (day.state === "complete" || day.state === "correcting") && day.net !== null;
 }
@@ -101,7 +97,6 @@ export function GainLines({
   light,
 }: {
   lines: GainLine[];
-  /** The days compared, one a segment, first to last. */
   dayStarts: string[];
   lit: string | null;
   light: Light;

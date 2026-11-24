@@ -140,8 +140,6 @@ def supported_job_filter(
         "coordinator": coordinator_input_shape,
         "analytics": f"({coordinator_input_shape} AND ({analytics_input_shape}))",
     }
-    # Kinds with the same checks share one clause, so each check (above all
-    # the source contract) appears once in the statement the planner reads.
     groups: dict[tuple[Any, ...], list[str]] = {}
     for kind, spec in JOB_CONTRACTS.items():
         signature = (spec.analytics_version, spec.source, spec.input_shape)
@@ -173,8 +171,6 @@ def supported_job_filter(
     )
     predicate = "(" + " OR ".join(clauses) + ")"
     if claim:
-        # Keep earlier claim generations for queued work and explicit replay.
-        # The build kinds are written out, as constants the planner can read.
         builds = ", ".join(f"'{kind}'" for kind in POPULATION_BUILD_WORK_TYPES)
         predicate = f"""{alias}.claim_compatibility_version IN (1, 2, 3, 4, 5, 6, 7)
             AND {predicate}

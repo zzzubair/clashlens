@@ -1,13 +1,10 @@
 import { Link } from "react-router";
 
-/** What a page answers, with status 401, to a visitor who is not signed in. */
 export interface NeedsAccountData {
   needsAccount: true;
-  /** Where Create account and Sign in come back to; null when unsafe. */
   returnPath: string | null;
 }
 
-/** "[Create account] Already have one? [Sign in]", both coming back to `returnPath`. */
 export function AccountButtons({ returnPath }: { returnPath: string | null }) {
   const back = returnPath === null ? "" : `?returnPath=${encodeURIComponent(returnPath)}`;
   return (
@@ -15,7 +12,6 @@ export function AccountButtons({ returnPath }: { returnPath: string | null }) {
       <Link className="button button-primary" to={`/signup${back}`}>
         Create account
       </Link>
-      {/* The question wraps with the button it introduces, never apart from it. */}
       <span className="account-buttons-pair">
         <span>Already have one?</span>
         <Link className="button button-secondary" to={`/login${back}`}>
@@ -26,7 +22,6 @@ export function AccountButtons({ returnPath }: { returnPath: string | null }) {
   );
 }
 
-// Each page that needs an account, by address, with its title and why.
 const PAGES: ReadonlyArray<readonly [string, string, string]> = [
   [
     "/crews",
@@ -66,7 +61,6 @@ const ACCOUNT_PAGE = [
   "Your profile, linked players and settings. Sign in to see them.",
 ] as const;
 
-/** The title and reason for the page at `pathname`. */
 export function needsAccountText(pathname: string): { title: string; reason: string } {
   const [, title, reason] =
     PAGES.find(([path]) => pathname === path || pathname.startsWith(`${path}/`)) ??
@@ -74,11 +68,6 @@ export function needsAccountText(pathname: string): { title: string; reason: str
   return { title, reason };
 }
 
-/**
- * What a page that needs an account shows a visitor who is not signed in,
- * in place of itself: what the page is for, and Create account and Sign in
- * as two separate buttons that both come back here.
- */
 export function NeedsAccount({
   pathname,
   returnPath,
@@ -89,7 +78,6 @@ export function NeedsAccount({
   const { title, reason } = needsAccountText(pathname);
   return (
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
-      {/* The same title block as every other top-level page. */}
       <header className="page-hero">
         <h1>{title}</h1>
       </header>

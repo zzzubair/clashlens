@@ -10,7 +10,6 @@ from enum import StrEnum
 
 from .spool import SpoolError
 
-# A probe that fails waits this long before the next one may run.
 PROBE_RETRY_SECONDS = 1.0
 
 
@@ -56,7 +55,6 @@ class SpoolHealth:
 
     def __init__(self, count: Callable[[str], None]) -> None:
         self._count = count
-        # None while writable; otherwise the monotonic time a probe may next run.
         self._next_probe_at: float | None = None
         self._io_failed = False
         self._recovery_required = False

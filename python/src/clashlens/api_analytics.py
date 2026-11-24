@@ -51,7 +51,6 @@ ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS = 0.1
 # reads to finish, on a first open; the read keeps the rest of its budget.
 ARMY_ANALYTICS_PRIMARY_POOL_TIMEOUT_SECONDS = 2.0
 ARMY_ANALYTICS_PARALLEL_POOL_TIMEOUT_SECONDS = 0.3
-# Rows read per round trip when a request reads battle facts directly.
 ARMY_ANALYTICS_FACT_BATCH_ROWS = 2000
 
 
@@ -73,9 +72,6 @@ class ArmyAnalyticsReader:
         )
         self._cache: OrderedDict[tuple[Any, ...], dict[str, Any]] = OrderedDict()
         self._cache_lock = Lock()
-        # Requests that read battle facts directly share a quarter of the
-        # pool (a troop request holds two connections), so the API's other
-        # pages always keep connections free.
         self.fact_slots = BoundedSemaphore(max(1, pool.max_size // 4))
 
     def cache_get(self, key: tuple[Any, ...]) -> dict[str, Any] | None:
@@ -285,8 +281,6 @@ def _army_type_season_summary(
 
 @contextmanager
 def _army_fact_admission(database: ArmyAnalyticsReader, selection: ArmyAnalyticsSelection, deadline: float):
-    # Top N and rank ranges read saved totals; every other population, in
-    # every category, reads battle facts directly.
     if selection.population.startswith(("top-", "band-")):
         yield
         return
@@ -332,8 +326,6 @@ def get_army_analytics(
     same players and Legend days."""
     now = datetime.now(tz=UTC) if now is None else now.astimezone(UTC)
     deadline = monotonic() + database.request_timeout_seconds
-    # A bounded pre-checkout gate caps requests that read battle facts
-    # directly, before they take a pool connection.
     with (
         _army_fact_admission(database, selection, deadline),
         database.pool.connection(
@@ -366,15 +358,8 @@ def get_army_analytics(
                     # current-season identity; never fall back to the most
                     # recently published season.
                     raise CurrentSeasonEmpty(None)
-                # Bound the default range using Reset chronology (05:00 UTC).
-                # Publication delays do not make an ended day unfinished; the
-                # population-specific coverage checks below decide availability.
                 current_time = now
                 if current_time >= anchor[2] + SEASON_DURATION:
-                    # The anchor advances only when a newer profile is
-                    # processed, which can lag the Reset. Once its 28 days
-                    # have ended, the calendar's new season is current and
-                    # has no anchor-confirmed day to serve yet.
                     ended_start = (
                         ranked_day_for(current_time).season_start - SEASON_DURATION
                     )
@@ -382,9 +367,6 @@ def get_army_analytics(
                 if current_time < anchor[2]:
                     latest_ended_day = 0
                 else:
-                    # A Legend day's interval ends one full day after the
-                    # season anchor, so the count of fully elapsed days is
-                    # the latest ended day number.
                     latest_ended_day = int(
                         (current_time - anchor[2]) // RANKED_DAY_DURATION
                     )
@@ -396,9 +378,6 @@ def get_army_analytics(
                         # explicitly instead of silently serving its
                         # publications for season=current.
                         raise CurrentSeasonEmpty(text_value(anchor[1]))
-                    # Intervals have ended but the requested range starts
-                    # beyond them; name the affected days instead of
-                    # clipping.
                     raise ArmyAnalyticsUnavailable(
                         list(range(selection.start_day, selection.end_day + 1))
                     )
@@ -454,7 +433,6 @@ def get_army_analytics(
             completed_days = {int(row[0]) for row in completed_day_rows}
             population = resolved.population
             streak = population.startswith("streak-top-")
-            # Top N and rank ranges count each day by its own saved board.
             banded = population.startswith(("top-", "band-"))
             requested_days = list(range(resolved.start_day, resolved.end_day + 1))
             covered_days = [
@@ -491,8 +469,6 @@ def get_army_analytics(
                 (list(boundary_by_day.values()),),
             ).fetchall()
             by_boundary = {row[0]: (int(row[1]), int(row[2])) for row in snapshots}
-            # Ended requested days a Consistent top view cannot use: no
-            # completed army data or no published saved board.
             streak_gap_days = [
                 day
                 for day in requested_days
@@ -500,14 +476,12 @@ def get_army_analytics(
             ]
             boards = counted_boards(connection, resolved.season) if banded else {}
             if selection.season == "current" and banded:
-                # Days the worker has not counted yet are left out and named.
                 covered_days = [day for day in covered_days if day in boards]
             if resolved.category == army_types.CATEGORY and not army_types.rules_ready(
                 connection
             ):
                 raise ArmyTypesPreparing(covered_days)
             if banded and resolved.category == army_types.CATEGORY:
-                # Army types too, so a page never adds up attacks as it loads.
                 counted = army_types.counted_days(
                     connection, [day_starts[day] for day in covered_days]
                 )
@@ -558,8 +532,6 @@ def get_army_analytics(
                     member_ids = consistent_top_members(
                         connection, snapshot_ids, limit
                     )
-                    # Excluded streak players appear in the selected Top-N
-                    # on at least one saved board but miss it on another.
                     any_snapshot_ids = {
                         int(row[0])
                         for row in connection.execute(
@@ -573,9 +545,6 @@ def get_army_analytics(
                         ).fetchall()
                     }
                     excluded_players = len(any_snapshot_ids - set(member_ids))
-                    # Shielded-day evidence for streak members:
-                    # one row per member-day whose current ranked-day
-                    # version inferred a shield.
                     if member_ids is not None:
                         version_row = connection.execute(
                             """
@@ -721,7 +690,6 @@ def get_army_analytics(
                 fact_filters.append("battle_time_trophies BETWEEN %s AND %s")
                 fact_params.extend((minimum, maximum))
             if banded and resolved.category != army_types.CATEGORY:
-                # At most 28 x 17 saved rows, never the facts.
                 saved = read_rank_band_totals(
                     connection,
                     dict(zip(covered_days, snapshot_ids)),
@@ -873,9 +841,6 @@ def get_army_analytics(
                 "legend_days": [resolved.start_day, resolved.end_day],
                 "snapshot_versions": snapshot_versions,
             }
-            # The result hash covers both the aggregates and the retained
-            # source-evidence hash, so corrected inputs always change the
-            # published identity.
             result_hash = hashlib.sha256(
                 json.dumps(
                     {
@@ -1134,9 +1099,6 @@ def _query_troops_aggregates(
         snapshot_row = connection.execute("VALUES (pg_export_snapshot())").fetchone()
         assert snapshot_row is not None
         shared_snapshot = text_value(snapshot_row[0])
-        # Acquire the paired connection before either expensive query starts.
-        # Contention fails quickly instead of consuming the caller's five-second
-        # budget and then repeating the source hash sequentially.
         with pool.connection(
             timeout=_army_timeout(
                 deadline, ARMY_ANALYTICS_PARALLEL_POOL_TIMEOUT_SECONDS

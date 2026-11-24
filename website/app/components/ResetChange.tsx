@@ -6,20 +6,12 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { RecentDay, TrackedPlayerEntry } from "../lib/contracts";
 import { signedNumber as signed } from "../lib/number-format";
 
-/** Finished days a row's chart draws; today has its own column. */
 const RECENT_DAYS = 7;
 
-/**
- * Whether a Live board can say how its rows moved since the last Reset. On a
- * Season's first Legend day, and on a Daily board, no row has a Reset place.
- */
 export function comparesWithReset(entries: TrackedPlayerEntry[]) {
   return entries.some((entry) => entry.resetRank !== null);
 }
 
-/** Places moved since the last Reset: ▲ up, ▼ down, a quiet "new" when the
- *  player was not on that board, and a dash when they hold their place, so
- *  every row's name starts at the same point. */
 export function RankMove({ entry }: { entry: TrackedPlayerEntry }) {
   if (entry.resetRank === null)
     return (
@@ -49,14 +41,10 @@ export function RankMove({ entry }: { entry: TrackedPlayerEntry }) {
   );
 }
 
-/** Whether any row knows today's net, so the board shows the Today column. */
 export function hasToday(entries: TrackedPlayerEntry[]) {
   return entries.some((entry) => entry.todayChange !== null);
 }
 
-/** Trophies won or lost today so far, from the Legend day's settled start,
- *  as the dashboard's Legend day card counts them; coloured only when they
- *  moved. */
 export function TodayChange({ entry }: { entry: TrackedPlayerEntry }) {
   const change = entry.todayChange;
   if (change === null) return null;
@@ -70,34 +58,23 @@ export function TodayChange({ entry }: { entry: TrackedPlayerEntry }) {
   );
 }
 
-/**
- * A row's 7 chart slots, oldest first: its last 7 finished Legend days, each
- * named by its own start, after empty slots for days before the Season's
- * first, so every row's days line up.
- */
 function dailyChanges(entry: TrackedPlayerEntry): (RecentDay | null)[] {
   const days = entry.recentDays.slice(-RECENT_DAYS);
   return [...Array<null>(RECENT_DAYS - days.length).fill(null), ...days];
 }
 
-/** Whether any row has a finished day to chart, so the board shows the
- *  Last 7 days column at all. */
 export function hasRecentDays(entries: TrackedPlayerEntry[]): boolean {
   return entries.some((entry) =>
     entry.recentDays.some((day) => day.trophyChange !== null),
   );
 }
 
-/** The finished days the charts draw, named once from the rows' own days:
- *  "22–28 Oct", or "29 Sep – 5 Oct" across a month's end. */
 function dayRange(entries: TrackedPlayerEntry[]): string {
   const days = entries.find((entry) => entry.recentDays.length)?.recentDays ?? [];
   if (!days.length) return "The last 7 finished Legend days";
   return compactDayRange(days.map(({ start }) => start))!;
 }
 
-/** The chart's column heading, two words; its tooltip names the dates and
- *  says how to read the bars. */
 export function RecentDaysHead({ entries }: { entries: TrackedPlayerEntry[] }) {
   return (
     <th
@@ -110,20 +87,10 @@ export function RecentDaysHead({ entries }: { entries: TrackedPlayerEntry[] }) {
   );
 }
 
-/**
- * The last 7 finished days as thin bars up (won) or down (lost) from a zero
- * line across the middle, scaled to the row's own biggest day either way, so
- * every row shows its shape however big another row's days are. The last bar
- * is the latest finished day; today is the Today column's, not a bar. A day
- * without a result is an empty slot. Each day is named by its own start.
- * Pointing at a bar, or tapping it, shows its date and trophies; screen
- * readers hear every day in the chart's label.
- */
 export function RecentDays({ entry }: { entry: TrackedPlayerEntry }) {
   const [shown, setShown] = useState<number | null>(null);
   const chart = useRef<HTMLSpanElement>(null);
   const pointer = useRef("mouse");
-  // A tapped day's readout stays until the next tap somewhere else.
   useEffect(() => {
     if (shown === null) return;
     const away = (event: PointerEvent) => {
@@ -134,7 +101,6 @@ export function RecentDays({ entry }: { entry: TrackedPlayerEntry }) {
   }, [shown]);
   const days = dailyChanges(entry);
   if (days.every((day) => day?.trophyChange == null)) return null;
-  // The row's biggest day, won or lost, reaches the top or the bottom.
   const biggest = rowScale(
     days.map((day) => day?.trophyChange ?? null),
     0,
@@ -165,8 +131,6 @@ export function RecentDays({ entry }: { entry: TrackedPlayerEntry }) {
         if (event.pointerType === "mouse") setShown(null);
       }}
       onClick={(event) => {
-        // A click opens the player, as anywhere else on the row; a tap reads
-        // the day out.
         if (pointer.current === "mouse")
           event.currentTarget
             .closest("tr")
@@ -179,7 +143,6 @@ export function RecentDays({ entry }: { entry: TrackedPlayerEntry }) {
       }}
     >
       {days.map((day, index) => {
-        // A slot before the Season's first day is no day: nothing to read out.
         if (day === null) return <span key={index} className="recent-day" />;
         const change = day.trophyChange;
         const sign =

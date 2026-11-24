@@ -159,7 +159,6 @@ function mapLeaderboard(
             : "available",
       confidence: entry.public_confidence,
       tied: entry.tied === true,
-      // Missing from an older API, or on a Daily board.
       resetRank: isInteger(entry.reset_position) ? entry.reset_position : null,
       todayChange: isInteger(entry.today_change) ? entry.today_change : null,
       recentDays: mapRecentDays(entry.recent_days) ?? [],

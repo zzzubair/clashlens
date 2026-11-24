@@ -54,7 +54,6 @@ export function GoalCard({ data }: { data: GoalData }) {
   const [shield, setShield] = useState(0);
   const plan = data.plan;
   const title = topLabel(data.rank);
-  // The plan's menu, once there is a plan, at the header's end.
   const head = (meta?: ReactNode) => (
     <CardHead
       icon={CARDS["goal"].icon}
@@ -259,6 +258,12 @@ function gridValues(low: number, high: number): number[] {
   return [];
 }
 
+const END_NAME_GAP_PX = 8;
+const EDGE_CLEAR_PX = 10;
+const END_NAME_CHAR_PX = 7.2;
+const LEAST_RANK_CHARS = 3;
+const END_NAME_LEAD_CHARS = 6;
+
 /**
  * You (ember) against the goal line (ink) over the days the pace covers,
  * then both carried on to the Season's end, dashed, at their own paces: you
@@ -287,7 +292,11 @@ function GoalChart({
   // days and on the right for the ends' names, "#200 6,441" at about 7.2 a
   // character, kept 10 clear of the card's edge.
   const left = 40;
-  const right = width - 18 - 7.2 * (Math.max(3, rank.length) + 6);
+  const right =
+    width -
+    EDGE_CLEAR_PX -
+    END_NAME_GAP_PX -
+    END_NAME_CHAR_PX * (Math.max(LEAST_RANK_CHARS, rank.length) + END_NAME_LEAD_CHARS);
   const top = 10;
   const bottom = height - 24;
   const steps = data.history.length - 1;
@@ -428,7 +437,7 @@ function GoalChart({
         <text
           key={end.name}
           className={end.you ? "goal-name goal-name-you" : "goal-name"}
-          x={right + 8}
+          x={right + END_NAME_GAP_PX}
           y={(nameY[index] as number) + 5}
         >
           {end.name} <tspan>≈{Math.round(end.value).toLocaleString("en-US")}</tspan>
@@ -589,7 +598,6 @@ function netOf(row: RivalRow): number | null {
 
 export function RivalsCard({ data }: { data: RivalsData }) {
   const [view, setView] = useState<"live" | "season">("live");
-  // A phone shows you and 2 either side until asked for every rival.
   const [allShown, setAllShown] = useState(false);
   const shown = view === "live" ? data.live : data.season;
   return (

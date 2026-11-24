@@ -4,18 +4,12 @@ import { SavedLine } from "./SavedLine";
 import { VIEW_AS_PARAM } from "../lib/dashboard";
 import type { OwnerFollow } from "../server/view-as.server";
 
-/** The owner's own dashboard, even while a player is pinned. */
 export const OWN_DASHBOARD = "/?mine=1";
 
-/** The site owner's own choices, read for the owner only. */
 export interface OwnerChoices {
-  /** The player a plain load of the dashboard opens, if pinned. */
   pinned: string | null;
-  /** The owner's own Discord switches for the viewed player. */
   follow: OwnerFollow;
-  /** How the last choice went, shown once. */
   saved: "saved" | "failed" | null;
-  /** Whether the owner's account has Discord connected, for the switches. */
   discord: boolean;
   idempotencyKey: string;
 }
@@ -56,12 +50,6 @@ export function ViewAsForm({ pinned = null }: { pinned?: string | null }) {
   );
 }
 
-/**
- * While View as is on: whose dashboard this is, that it is read only, and
- * the way out. For the owner's pinned player that is My dashboard; for any
- * other, Exit (back to the pinned player, if any) and My dashboard when a
- * player is pinned. Then the owner's own choices for this player.
- */
 export function ViewAsBar({
   viewAs,
   choices,
@@ -112,7 +100,6 @@ export function ViewAsBar({
   );
 }
 
-/** Pin, and the owner's own Discord switches for the viewed player. */
 function OwnerControls({ tag, choices }: { tag: string; choices: OwnerChoices }) {
   const pinned = choices.pinned === tag;
   const choice = (intent: string, on?: boolean) => (

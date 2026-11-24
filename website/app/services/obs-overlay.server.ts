@@ -14,7 +14,6 @@ import { getPlayer } from "./players.server";
 import { PythonApiError, isRecord } from "./python-response.server";
 import { requestJson } from "./python-transport.server";
 
-/** The account's overlay, made on first ask, and its verified players. */
 export async function getOverlay(identity: LoginIdentity): Promise<OverlayAccount> {
   const payload = await requestJson<unknown>("/v1/account/obs-overlay", {
     method: "GET",
@@ -26,7 +25,6 @@ export async function getOverlay(identity: LoginIdentity): Promise<OverlayAccoun
   return overlay;
 }
 
-/** Save the player shown and the settings; returns the new version. */
 export async function saveOverlay(
   identity: LoginIdentity,
   tag: string | null,
@@ -41,8 +39,6 @@ export async function saveOverlay(
   return payload.version;
 }
 
-/** Replace the private link `replaces`; the old one shows nothing from then
- * on. Returns the new link. */
 export async function newOverlayLink(
   identity: LoginIdentity,
   replaces: string,
@@ -58,7 +54,6 @@ export async function newOverlayLink(
   return payload.link;
 }
 
-/** What an overlay in OBS shows, by its private link; null once replaced. */
 export async function readOverlayLink(link: string): Promise<OverlayLink | null> {
   const payload = await requestJson<unknown>(`/v1/overlays/${encodeURIComponent(link)}`, {
     method: "GET",
@@ -70,14 +65,10 @@ export async function readOverlayLink(link: string): Promise<OverlayLink | null>
   return overlay;
 }
 
-// Every overlay showing a player shares one read of it per 15 seconds. Reads
-// are kept oldest first, so expired ones sit at the front, and at most 2,000
-// players are kept; past that the oldest read is dropped.
 const PLAYER_CACHE_MS = 15_000;
 const MAX_CACHED_PLAYERS = 2_000;
 const players = new Map<string, { at: number; value: Promise<OverlayPlayer> }>();
 
-/** One player's live Legend day, trophies and Rank, as the overlay shows it. */
 export function getOverlayPlayer(tag: string): Promise<OverlayPlayer> {
   const now = Date.now();
   const hit = players.get(tag);
@@ -101,7 +92,6 @@ export function getOverlayPlayer(tag: string): Promise<OverlayPlayer> {
 }
 
 async function readPlayer(tag: string): Promise<OverlayPlayer> {
-  // The Rank read starts with the page read; only a Legend I player uses it.
   const searchRead = searchLeaderboard(tag).catch(() => null);
   let page;
   try {
@@ -138,7 +128,6 @@ async function readPlayer(tag: string): Promise<OverlayPlayer> {
     };
   }
   if (out.state === "legend") {
-    // Rank is the Live Leaderboard's place among the players Clash Lens tracks.
     const search = await searchRead;
     const entry = search?.results.find((result) => result.tag === tag);
     if (entry) out.rank = entry.rank;

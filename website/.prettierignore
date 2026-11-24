@@ -1,2 +1,3 @@
 # Generated, bounded capture of public army statistics.
 app/services/army-preview-data.json
+eslint-suppressions.json

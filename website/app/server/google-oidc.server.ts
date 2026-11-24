@@ -97,10 +97,6 @@ const discoveries = new WeakMap<
   Map<string, { value: Promise<unknown>; expiresAtMs: number }>
 >();
 
-/**
- * The issuer's discovery document, fetched at most once an hour per issuer
- * and client; a failed fetch is forgotten so the next sign-in tries again.
- */
 function discoverOnce(
   discovery: OidcDiscovery,
   issuerUrl: URL,

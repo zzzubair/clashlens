@@ -38,23 +38,15 @@ export interface UserLoaderData {
   user: PublicUser | null;
   notFound: boolean;
   error: WebsiteErrorResponse | null;
-  /** Only for the signed-in owner of this profile, null for everyone else. */
   owner: OwnerTools | null;
-  /** Each linked player's rank at the last Reset and Season, by tag, from
-   *  one read of every linked player, streamed in after their cards; none
-   *  when it could not be read. */
   days?: Promise<Record<string, LinkedDay>>;
 }
 
-/** What a linked player's card draws from their player page. */
 export interface LinkedDay {
-  /** The place on the last Reset's Daily board. */
   resetRank: number | null;
-  /** The Season heat map, as the player page's Season summary draws it. */
   season: { dayCount: number; start: number; today: number; days: SeasonDay[] } | null;
 }
 
-/** The status line on each of the owner's tools; null when it could not be read. */
 export interface OwnerTools {
   alerts: string | null;
   overlay: string | null;
@@ -338,9 +330,7 @@ export default function UserRoute() {
   );
 }
 
-/** A tool that is not working yet shows the step that starts it instead of its state. */
 const NEXT_STEPS: Record<string, string> = {
-  // The row says Discord already, so its step is one short word.
   "Discord not connected": "Connect",
   "Not set up": "Set up",
   Off: "Turn on",
@@ -433,7 +423,6 @@ function LinkedPlayer({
 }) {
   const backState = useBackState(backLabel);
   const id = `linked-player-${player.tag.slice(1)}`;
-  // The Legend League badge, as on the dashboard; otherwise a trophy.
   const legend = inLegend(player);
   const note =
     player.state === "tracking" && player.reason === null
@@ -505,7 +494,6 @@ function LinkedPlayer({
                   className="rank-mark"
                   data-podium-rank={player.rank <= 3 ? player.rank : undefined}
                 >
-                  {/* A podium plate shows the bare place, as on Rankings. */}
                   {player.rank <= 3
                     ? player.rank
                     : `#${player.rank.toLocaleString("en-GB")}`}

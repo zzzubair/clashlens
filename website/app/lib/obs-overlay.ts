@@ -1,20 +1,28 @@
-/**
- * OBS overlay: what the account page saves and what an overlay in OBS reads.
- * Settings are short strings, the same as the overlay's address query, so a
- * preview and a saved link show exactly the same thing.
- */
+export type OverlaySettingKey =
+  | "w"
+  | "h"
+  | "x"
+  | "y"
+  | "cw"
+  | "ch"
+  | "fit"
+  | "text"
+  | "bg"
+  | "font"
+  | "show"
+  | "popup"
+  | "demo"
+  | "snap";
 
-/** Saved overlay settings: w, h, x, y, cw, ch (stream pixels), fit, text,
- * bg, font, show, popup, demo and snap. */
-export type OverlaySettings = Record<string, string>;
+export interface OverlaySettings extends Partial<Record<OverlaySettingKey, string>> {
+  [key: string]: string | undefined;
+}
 
 export interface OverlayAccount {
   settingsContract: OverlaySettingsContract;
-  /** The private link's id; the overlay's address is /o/<link>. */
   link: string;
   settings: OverlaySettings;
   version: number;
-  /** The verified player shown, or null when none is picked. */
   tag: string | null;
   players: Array<{ tag: string; name: string | null; league: string | null }>;
 }
@@ -41,14 +49,11 @@ export interface OverlayPlayer {
   state: "legend" | "not_in_legend" | "uncertain" | "missing";
   name?: string;
   trophies?: number;
-  /** When the profile was last read from the game. */
   profileReadAt?: string;
-  /** The Live Leaderboard place among tracked players. */
   rank?: number;
   day?: {
     number: number | null;
     of: number;
-    /** The day's totals; null unless every battle so far is in `battles`. */
     gained: number | null;
     lost: number | null;
     net: number | null;
@@ -92,7 +97,10 @@ export function parseSettingsContract(value: unknown): OverlaySettingsContract |
       (key) => Array.isArray(choices[key]) && choices[key].length > 0,
     ) ||
     value.parts.length === 0 ||
-    !["text", "bg", "fit"].every((key) => choices[key].includes(defaults[key]))
+    !["text", "bg", "fit"].every((key) => {
+      const fallback = defaults[key];
+      return typeof fallback === "string" && choices[key].includes(fallback);
+    })
   )
     return null;
   return {
@@ -112,7 +120,6 @@ export const OVERLAY_FONTS = {
   arcade: "Arcade",
 } as const;
 
-/** How often an overlay in OBS asks for its settings and for its player. */
 export const SETTINGS_POLL_MS = 3_000;
 export const PLAYER_POLL_MS = 20_000;
 

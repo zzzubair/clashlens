@@ -44,7 +44,6 @@ const NO_STORE = { "Cache-Control": "no-store" };
 /** Each card shows the top of its board; the board's own page shows the rest. */
 const CARD_ROWS = 5;
 
-/** A phone shows one board at a time, picked from these tabs. */
 const TABS: readonly { label: string; boards: readonly BoardKey[] }[] = [
   { label: "Live", boards: ["live"] },
   { label: "Reset", boards: ["top"] },
@@ -61,12 +60,6 @@ export const handle: BackHandle = {
       : null,
 };
 
-/**
- * GET /crews/:crewId — one crew's boards and accounts, for anyone. Only its
- * members see Invite, Members and Edit; `?saved=joined`, after an invite, tells a
- * member they joined. `?board=` picks the board a phone shows, and whether
- * defenders read best or worst first.
- */
 export async function loader({ request, params }: Route.LoaderArgs) {
   const period = crewPeriod(new URL(request.url).searchParams.get("period"));
   const { loadCrewPage } = await import("../services/crews.server");
@@ -78,7 +71,6 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   );
 }
 
-/** POST /crews/:crewId — Invite: the clasher's live link, or a new one. */
 export async function action({ request, params }: Route.ActionArgs) {
   const { crewFormAction, makeInvite } = await import("../services/crews.server");
   const { getWebsiteConfig } = await import("../server/config.server");
@@ -204,7 +196,6 @@ export default function CrewRoute() {
         <CrewDay live={boards.boards.live} />
       </section>
 
-      {/* The dock sticks under the top bar; its bar fills in only once stuck (crews.css). */}
       <div className="crew-tabs-dock">
         <div className="crew-tabs-bar">
           <nav aria-label="Boards" className="leaderboard-view-switch crew-tabs">
@@ -228,9 +219,7 @@ export default function CrewRoute() {
         </div>
       </div>
 
-      {/* A phone shows only the picked board (crews.css); wider screens show them all. */}
       <div className="crew-boards" id="crew-boards">
-        {/* The live boards speak for themselves; the heading only keeps the outline whole. */}
         <h2 className="sr-only">Right now</h2>
         {card("live")}
         {card("top")}
@@ -287,12 +276,10 @@ function BoardCard({
   order,
 }: {
   board: BoardKey;
-  /** The board a phone shows. */
   current: boolean;
   crew: CrewView;
   boards: CrewBoards;
   period: CrewPeriod;
-  /** Defenders' Best and Worst switch. */
   order?: React.ReactNode;
 }) {
   const { rows, missing } = boards.boards[board];
@@ -319,8 +306,6 @@ function BoardCard({
       data-empty={rows.length === 0 ? "" : undefined}
       style={rows.length === 0 ? undefined : span}
     >
-      {/* The title is the one way to a board's own page, with every account
-          and who is missing. */}
       <div className="crew-board-head">
         <div>
           <h3 id={`board-${board}`}>
@@ -355,8 +340,6 @@ function BoardCard({
         </div>
       )}
       <div className="crew-board-foot">
-        {/* The board's own page has every account, as Show all does on the
-            dashboard's lists. */}
         {rows.length > CARD_ROWS ? (
           <Link className="show-all" to={path}>
             Show all {rows.length}

@@ -160,7 +160,6 @@ def _add_places(
         if state in {"not_in_legend", "uncertain"}:
             raise _Refused(422, {"error": "player_not_in_legend", "tag": tag})
         if state != "tracking":
-            # The website checks the account and tries again, as Group adds do.
             raise _Refused(
                 409, {"error": "player_not_checked", "state": state, "tag": tag}
             )
@@ -195,8 +194,6 @@ def _add_places(
             """,
             (crew_row, account_id, new_role.value),
         )
-    # Only accounts already tracked can take a place, so unlike a Group add
-    # there is no player check to start.
     for tag in tags:
         connection.execute(
             """
@@ -314,7 +311,6 @@ def _players(
                     "trophies": player["trophies"],
                     "lookup": player["state"],
                     "status": status,
-                    # This Season's Legend I part, for an account that left it.
                     "left_legend_i": left.get(int(row[9]))
                     if status == "not_in_legend"
                     else None,
@@ -371,8 +367,6 @@ def get_crew(
                 member["username"],
             ),
         )
-        # Owners and admins can turn off any link, so they see them all; a
-        # member sees only their own.
         invites = connection.execute(
             f"""
             SELECT invite.public_id, account.display_name, invite.expires_at,
@@ -633,8 +627,6 @@ def remove_player(
             (crew_row, holder, player_id),
         ).fetchone()
         if not other_place[0]:
-            # The owner is refused; anyone else is out of the crew, which
-            # the database's crew_players_member_without_places trigger does.
             after = move(holder_role, CrewEvent.LAST_PLACE)
         connection.execute(
             "DELETE FROM crew_players WHERE crew_id = %s AND player_id = %s",
@@ -724,8 +716,6 @@ def hand_over(
         # after every statement.
         _set_role(connection, crew_row, account_id, move(my_role, CrewEvent.HAND_OVER))
         _set_role(connection, crew_row, target, new_owner)
-        # An owner whose game accounts all moved away kept the crew; as an
-        # admin with no places they are out of it.
         left = connection.execute(
             """
             DELETE FROM crew_accounts AS member
@@ -754,7 +744,6 @@ def leave_crew(
     def leave(connection: Any) -> OperationResult:
         crew_row, _size, role = _membership(connection, crew_id, account_id, lock=True)
         move(role, CrewEvent.LEAVE)
-        # The member's places go with it.
         connection.execute(
             "DELETE FROM crew_accounts WHERE crew_id = %s AND account_id = %s",
             (crew_row, account_id),
@@ -1014,8 +1003,6 @@ def accept_invite(
             "SELECT 1 FROM crew_accounts WHERE crew_id = %s AND account_id = %s",
             (invite.crew_row, account_id),
         ).fetchone()
-        # A full crew or the account's crew limit is refused by the join's
-        # own checks, in their order.
         _add_places(
             connection,
             crew_row=invite.crew_row,

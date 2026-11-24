@@ -12,30 +12,11 @@ from .analytics import LIVE_TALLY_SECONDS, unplayed_since_sql, unplayed_sql
 from .domain import SEASON_START_TROPHIES, ranked_day_for, season_opening_reset
 from .season_reset_sql import season_reset_waiting_sql
 
-# Shared membership and confirmation rule for the page and operator measurements.
-# A profile still naming an earlier Season than the calendar shows trophies from
-# before that player's Season reset, so it waits off the board until it updates.
-# On a Season's first Legend day, trophies other than 5,000 that still equal
-# the player's frozen pre-Reset final trophies, or that the day's recorded
-# battles cannot explain, wait the same way.
 _OPENING_DAY_WAITING_SQL = season_reset_waiting_sql(
     "player.id", "profile.trophies", "%(opening_reset)s"
 )
-# When the player last entered Legend I: the Season's start, or the Monday
-# Reset the weekly league record says they were promoted or first seen at,
-# as Daily boards count it.
 _ENTERED_SQL = unplayed_since_sql("player.id", "%(season_start)s", "%(week_start)s")
-# A tracked Legend I player at 5,000 with no Legend battle saved since they
-# entered Legend I has not played yet, so they rank at 5,000 from their
-# newest profile even when it names no current Season, such as Season ID 0,
-# or was rejected for it. On 11 October 2026, 1,374 tracked players waited
-# off the board so.
 _UNPLAYED_SQL = unplayed_sql("player.id", "version", _ENTERED_SQL, "%(season_end)s")
-# The player's current accepted profile, and whether it ranks them this Season:
-# a Legend I one read since they entered Legend I. On 26 October 2026, 317
-# players promoted into Legend I still had a current Legend II profile from
-# the Season's first week, whose Season ID passed, and 98 promoted back had a
-# Legend I one from before their drop; each ranked at those old trophies.
 CURRENT_PROFILE_JOINS = f"""
 LEFT JOIN LATERAL (
     SELECT name, trophies, profile_json, current_league_season_id,

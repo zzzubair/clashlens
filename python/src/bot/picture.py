@@ -75,7 +75,7 @@ _DARK = {
 WIDTH, HEIGHT = 1200, 860
 # Drawn at twice the size, then shrunk, for smooth edges.
 _SCALE = 2
-_MOST = 8  # the game's attacks, and defenses, a Legend day
+_BATTLES_PER_SIDE = 8
 
 
 @cache
@@ -407,12 +407,12 @@ def draw(day: Mapping[str, Any], dark: bool) -> bytes:
         x1 = x0 + 560
         canvas.text(x0 + 4, 268, title, 22, colours["muted"], "label")
         canvas.text(x0 + 16 + _measure(title, canvas.s(22), "label") / _SCALE, 268,
-                    f"{len(battles)} of {_MOST}", 18, colours["faint"], "label")
+                    f"{len(battles)} of {_BATTLES_PER_SIDE}", 18, colours["faint"], "label")
         canvas.text(x1 - 4, 272, _signed(sum(battle["trophies"] for battle in battles)), 46,
                     colours["positive" if attack else "negative"], "score", "right")
         # A day with more than 8 battles shows its last 8, the new defense among them.
-        shown = battles[-_MOST:]
-        for index in range(_MOST):
+        shown = battles[-_BATTLES_PER_SIDE:]
+        for index in range(_BATTLES_PER_SIDE):
             box = (x0, 290 + index * 62, x1, 342 + index * 62)
             if index < len(shown):
                 _battle(canvas, box, shown[index], attack)

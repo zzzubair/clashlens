@@ -18,10 +18,6 @@ SIEGE_TROOP_IDS = frozenset(
     f"troop:{number}" for number in (51, 52, 62, 75, 87, 91, 92, 135, 188)
 )
 
-# Each listed battle side's saved army: its newest active decode under this
-# decoder, whichever unit list was current when it was saved. Since rows hold
-# ids, a change to the unit list never needs a battle decoded again.
-# Parameters: DECODER_VERSION, then the battle ids.
 CURRENT_DECODES = """(
     SELECT DISTINCT ON (battle_id, perspective) *
     FROM battle_army_decodes
@@ -304,9 +300,15 @@ def _decode(raw: str) -> DecodedArmy:
 
 
 # Where an old partial army kept each unnamed id, by army code section.
+_HOME_TROOPS_SECTION = "u"
+_CLAN_CASTLE_TROOPS_SECTION = "i"
+_HOME_SPELLS_SECTION = "s"
+_CLAN_CASTLE_SPELLS_SECTION = "d"
 _UNNAMED_SECTIONS = {
-    "u": ("home_troops", "troop"), "i": ("cc_troops", "troop"),
-    "s": ("spells", "spell"), "d": ("spells", "spell"),
+    _HOME_TROOPS_SECTION: ("home_troops", "troop"),
+    _CLAN_CASTLE_TROOPS_SECTION: ("cc_troops", "troop"),
+    _HOME_SPELLS_SECTION: ("spells", "spell"),
+    _CLAN_CASTLE_SPELLS_SECTION: ("spells", "spell"),
 }
 
 

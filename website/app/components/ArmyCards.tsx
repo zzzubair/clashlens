@@ -45,7 +45,6 @@ export function armyDaysStart(initial: PlayerArmies): ArmyDaysRead {
   return { phase: "ready", ask: 0, days: initial.days, armies: initial };
 }
 
-/** The only place an Armies card's days move; see `ArmyDaysRead`. */
 export function armyDaysStep(state: ArmyDaysRead, event: ArmyDaysEvent): ArmyDaysRead {
   if (event.type === "answered") {
     return event.ask === state.ask
@@ -59,22 +58,15 @@ export function armyDaysStep(state: ArmyDaysRead, event: ArmyDaysEvent): ArmyDay
   return { phase: "loading", ask: event.ask, days: event.days, shown };
 }
 
-/** The numbers an Armies card shows: while loading, the ones already shown. */
 export function armyDaysShown(state: ArmyDaysRead): PlayerArmies | null {
   return state.phase === "ready" ? state.armies : state.shown;
 }
 
-/** Armies on defense lists this many army types. */
 const DEFENSE_ROWS = 5;
-/** A phone shows this many army types before Show all. */
 const PHONE_DEFENSE_ROWS = 3;
-/** Held is coloured only when this many points or more from the Legends... */
 const HELD_MARGIN = 5;
-/** ...and Avg lost only when this many trophies or more. */
 const LOST_MARGIN = 3;
-/** The colouring rule in words, the same as Analytics'. */
 const RULE = `Green or red when ${HELD_MARGIN}+ pts or ${LOST_MARGIN}+ trophies from the Legend average.`;
-/** Armies on offense lists this many before "Other armies". */
 const OFFENSE_ROWS = 3;
 const DAY_OPTIONS = [
   ["3", "3 days"],
@@ -91,16 +83,13 @@ export function armiesPath(tag: string, lens: ArmyLens, days: ArmyDays): string 
   return `/resources/players/${encodeURIComponent(tag)}/armies?lens=${lens}&days=${days}`;
 }
 
-/** The numbers for the chosen days: the page's first read, then the card's own. */
 function useArmies(lens: ArmyLens, { tag, armies: initial }: ArmiesData) {
   const [read, dispatch] = useReducer(armyDaysStep, initial, armyDaysStart);
-  // Numbers each ask, so only the newest one's answer lands.
   const asked = useRef(0);
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
   return {
     days: read.days,
-    // While the chosen days load, the numbers already shown stay, faded.
     armies: armyDaysShown(read),
     loading: read.phase === "loading",
     choose(days: ArmyDays) {
@@ -129,7 +118,6 @@ function useArmies(lens: ArmyLens, { tag, armies: initial }: ArmiesData) {
   };
 }
 
-/** "3 defenses", "1 attack". */
 function count(value: number, noun: string): string {
   return `${value.toLocaleString("en-US")} ${noun}${value === 1 ? "" : "s"}`;
 }
@@ -138,22 +126,15 @@ function percent(value: number | null): string {
   return value === null ? "–" : `${value}%`;
 }
 
-/** Every tracked player's hit rate with this army type, on Armies on offense. */
 function legendsHit(army: ArmyRow): number | null {
   return army.legends ? hitPercent(army.legends) : null;
 }
 
-/**
- * " is-better" when a is at least `margin` above b, " is-worse" when at least
- * `margin` below, and "" when closer or unknown, so a gap of a point or two
- * stays uncoloured. Both are whole numbers, as shown.
- */
 function beyond(a: number | null, b: number | null, margin: number): string {
   if (a === null || b === null || Math.abs(a - b) < margin) return "";
   return a > b ? " is-better" : " is-worse";
 }
 
-/** a − b, rounded; null when either is unknown. */
 function difference(a: number | null, b: number | null): number | null {
   return a === null || b === null ? null : Math.round(a - b);
 }
@@ -163,7 +144,6 @@ function lost(outcome: ArmyOutcome | null): string {
   return average === null ? "–" : signed(-average);
 }
 
-/** An army's share as an ember bar on a fixed scale, 0–100. */
 function Bar({ own }: { own: number | null }) {
   return (
     <span className="army-bar" aria-hidden="true">
@@ -172,7 +152,6 @@ function Bar({ own }: { own: number | null }) {
   );
 }
 
-/** Held's difference: "+10 pts", said "10 points above". */
 function pointsDiff(diff: number | null): [string, string] {
   if (diff === null) return ["–", "no Legends average yet"];
   if (diff === 0) return ["0 pts", "same as the Legends average"];
@@ -183,10 +162,6 @@ function pointsDiff(diff: number | null): [string, string] {
   ];
 }
 
-/**
- * Trophies per defense's difference in the value's own sign, the value less the
- * Legends': −27 against −32 is "+5", 5 fewer lost; −33 against −32 is "−1".
- */
 function lostDiff(fewer: number | null): [string, string] {
   if (fewer === null) return ["–", "no Legends average yet"];
   if (fewer === 0) return ["0", "same as the Legends average"];
@@ -194,12 +169,6 @@ function lostDiff(fewer: number | null): [string, string] {
   return [signed(fewer), `${Math.abs(fewer)} ${word} lost than the Legends average`];
 }
 
-/**
- * One comparison: the user's number with its unit, then one signed
- * difference from the Legends with its own, which the column heading names.
- * Only the difference is coloured, by the rule the header's ⓘ states.
- * Screen readers hear it as a sentence.
- */
 function WithLegends({
   label,
   own,
@@ -209,7 +178,6 @@ function WithLegends({
 }: {
   label: string;
   own: string;
-  /** A unit drawn after the number, such as the trophy for trophies. */
   unit?: React.ReactNode;
   diff: [string, string];
   tone: string;
@@ -228,11 +196,6 @@ function WithLegends({
   );
 }
 
-/**
- * The days and battles the numbers cover: said aloud always, and shown only
- * when the switch doesn't already say it, such as Custom days or days
- * without army data.
- */
 function WindowLine({ armies, noun }: { armies: PlayerArmies; noun: string }) {
   const plain =
     !armies.season &&
@@ -245,7 +208,6 @@ function WindowLine({ armies, noun }: { armies: PlayerArmies; noun: string }) {
   );
 }
 
-/** What the card says instead of numbers, or null when it has numbers to show. */
 function emptyText(armies: PlayerArmies | null, noun: string): string | null {
   if (!armies) return "Army numbers aren't available right now.";
   if (armies.coveredDays.length === 0)
@@ -254,7 +216,6 @@ function emptyText(armies: PlayerArmies | null, noun: string): string | null {
   return null;
 }
 
-/** 3 days / 7 days, then Season on Armies on offense or Custom 1–28 days on defense. */
 function DaySwitch({
   days,
   choose,
@@ -316,14 +277,8 @@ function DaySwitch({
   );
 }
 
-/**
- * Armies on defense: the army types that cost the user the most trophies
- * over the chosen finished days, and every defense together, each beside
- * every tracked player's defenses against that army.
- */
 export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
   const { days, armies, loading, choose } = useArmies("defense", data);
-  // A phone shows the first few armies until asked for every one.
   const [allShown, setAllShown] = useState(false);
   const listed = armies?.rows.slice(0, DEFENSE_ROWS) ?? [];
   const empty = emptyText(armies, "defense");
@@ -352,14 +307,12 @@ export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
             <Name>{name}</Name>
           </span>
         )}
-        {/* Bars against the most common army, so the gaps between armies show. */}
         <span className="army-share">
           {all ? null : (
             <>
               <Bar own={(100 * outcome.battles) / Math.max(1, mostBattles)} />
               <span>
                 {percent(share)}
-                {/* Said aloud. */}
                 <span className="army-share-of"> of defenses</span>
               </span>
             </>
@@ -377,7 +330,6 @@ export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
             HELD_MARGIN,
           )}
         />
-        {/* Trophies lost read as negatives, so fewer lost is above the Legends. */}
         <WithLegends
           label="Trophies per defense"
           own={lost(outcome)}
@@ -402,7 +354,6 @@ export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
       <CardHead
         icon={CARDS["armies-defense"].icon}
         title="Armies on defense"
-        // The short headings in full, and the one colouring rule.
         info={
           empty || !armies ? null : (
             <InfoTip label="What the columns mean">
@@ -420,7 +371,6 @@ export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
         }
         meta={
           <>
-            {/* The one reference every difference is against, said once. */}
             {empty || !armies ? null : (
               <span className="dash-card-ref">vs Legend avg</span>
             )}
@@ -445,7 +395,6 @@ export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
       ) : (
         <>
           <WindowLine armies={armies} noun="defense" />
-          {/* One word or two a column; a narrow card puts Usage with Army. */}
           <div className="army-defense-row army-head" aria-hidden="true">
             <span>
               Army<span className="army-head-usage"> · usage</span>
@@ -486,11 +435,6 @@ export function ArmiesOnDefenseCard({ data }: { data: ArmiesData }) {
   );
 }
 
-/**
- * Armies on offense: the user's hit rate (share of attacks tripled) with
- * each army type over the last 3 or 7 finished days or this Season's, beside
- * everyone's with that army. A one-army player sees the two numbers big.
- */
 export function ArmiesOnOffenseCard({ data }: { data: ArmiesData }) {
   const { days, armies, loading, choose } = useArmies("offense", data);
   const empty = emptyText(armies, "attack");

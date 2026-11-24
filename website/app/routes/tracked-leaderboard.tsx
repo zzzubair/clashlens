@@ -44,14 +44,7 @@ import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
 import type { Route } from "./+types/tracked-leaderboard";
 
 const PAGE_SIZE = RANKINGS_PAGE_SIZE;
-// A saved Daily board is incomplete when none of its players was saved in the
-// 30 minutes before Reset. Collection pauses at 04:55, so normal boards end about
-// 5 minutes before Reset; the Oct 3, 2026 outage board ended 5 hours before.
 const INCOMPLETE_INPUT_GAP_SECONDS = 30 * 60;
-// Each board explains the tie order it was saved with: Daily boards since v3
-// by the latest trophy change, which matched the game's Reset order more
-// often; the Live board and older v2 Daily boards by attack destruction; older
-// boards by player tags alone.
 function rankExplanation(orderVersion: string | undefined) {
   const tieOrder =
     orderVersion === "tracked-player-order-v3"
@@ -81,7 +74,6 @@ function playerRankUrl(tag: string, rank: number) {
   return `${leaderboardUrl("live", Math.ceil(rank / PAGE_SIZE))}&player=${encodeURIComponent(tag)}`;
 }
 
-// Each board page is its own address; a search or a picked player is not.
 export function meta({ location, matches }: Route.MetaArgs) {
   const query = new URLSearchParams(location.search);
   const season = query.get("season");
@@ -98,12 +90,6 @@ export function meta({ location, matches }: Route.MetaArgs) {
   });
 }
 
-/**
- * The signed-in Clasher's own place on the Live board, for Jump to me: the
- * linked player their dashboard leads with, the first one being tracked, or
- * else the first. Anyone signed out, or a player off the board, gets none,
- * and a failed read never stops the board.
- */
 async function myPlace(request: Request): Promise<{ tag: string; rank: number } | null> {
   try {
     const { getWebsiteConfig } = await import("../server/config.server");
@@ -139,7 +125,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
       throw new Response(null, { status: 422 });
     selector = { officialSeasonId: season, dayNumber: Number(dayValue) };
   }
-  // Go to rank: the page holding that rank, with its row picked.
   const rankValue = url.searchParams.get("rank");
   const focusRank = rankValue === null ? null : Number(rankValue);
   if (rankValue !== null) {
@@ -157,8 +142,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (!Number.isSafeInteger(page) || !Number.isSafeInteger((page - 1) * PAGE_SIZE))
     throw new Response(null, { status: 422 });
   const query = (url.searchParams.get("q") ?? "").trim();
-  // The Live search also goes to a rank: a plain number such as 130 or 1,250
-  // is a rank; "#130" stays a player tag.
   const typedRank = query.replace(/[,\s]/g, "");
   if (viewValue === "live" && /^[1-9][0-9]{0,8}$/.test(typedRank))
     throw redirect(
@@ -175,8 +158,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
     throw new Response(null, { status: 422 });
   const me = viewValue === "live" ? myPlace(request) : Promise.resolve(null);
   try {
-    // The board and the search start together. An exact tag still redirects
-    // first, leaving the board unread, and a failed search is still the error.
     const boardRead = getTrackedLeaderboard(
       PAGE_SIZE,
       viewValue,
@@ -193,8 +174,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
       leaderboard,
       error: null,
       pageUnavailableUrl: null,
-      // The newest Daily board, read without a Season and day: the page shows
-      // it at once and then names its Season and day in the address.
       latestDailyUrl:
         viewValue === "daily" && !selector && leaderboard.daily
           ? leaderboardUrl("daily", page, leaderboard.daily)
@@ -240,7 +219,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
           query,
           search: null,
           focusTag: null,
-          // A rank asked for past the board's end says so.
           focusRank,
           me: null,
         } as const,
@@ -286,7 +264,6 @@ export default function TrackedLeaderboardRoute() {
   const navigate = useNavigate();
   const shownWithoutDay = !new URLSearchParams(location.search).has("season");
   useEffect(() => {
-    // Give the shown board its shareable address without reading it again.
     if (latestDailyUrl && shownWithoutDay)
       void navigate(latestDailyUrl, {
         replace: true,
@@ -305,7 +282,6 @@ export default function TrackedLeaderboardRoute() {
   const search = seasonExpired ? null : savedSearch;
   const unlistedTag = search?.results.length === 0 ? normalizePlayerTag(query) : null;
   const navigation = useNavigation();
-  // Only a name search says so; Jump to me or a page turn loads quietly.
   const searching = navigation.state !== "idle" && !!navigation.formData?.has("q");
   const backState = useBackState("Rankings");
   const selectedRow = useRef<HTMLTableRowElement>(null);
@@ -315,12 +291,9 @@ export default function TrackedLeaderboardRoute() {
     if ((focusTag || focusRank) && selectedRow.current) {
       selectedRow.current.focus({ preventScroll: true });
       selectedRow.current.scrollIntoView({ block: "center", inline: "nearest" });
-      // The rows don't light under a pointer left where it pressed until it
-      // moves, so only the picked row stands out.
       if (board.current) board.current.dataset.still = "";
     }
   }, [focusTag, focusRank, leaderboard]);
-  // A player found by name or tag, or the row of a rank asked for.
   const isPicked = (entry: { tag: string; rank: number }) =>
     focusTag ? entry.tag === focusTag : entry.rank === focusRank;
   const daily = leaderboard?.daily;
@@ -337,8 +310,6 @@ export default function TrackedLeaderboardRoute() {
       )
     : 0;
   const pageKey = location.pathname + location.search;
-  // ‹ or ›, the same at the board's head and its foot; a missing step keeps
-  // its place, faded.
   const pageStep = (step: "prev" | "next") => {
     const to = step === "prev" ? leaderboard?.hasPrevious : leaderboard?.hasNext;
     const arrow = step === "prev" ? "‹" : "›";
@@ -370,9 +341,6 @@ export default function TrackedLeaderboardRoute() {
   const now = useCurrentTime(leaderboard?.generatedAt);
   const ageSeconds = (observedAt: string) =>
     Math.max(0, Math.floor((now - Date.parse(observedAt)) / 1000));
-  // The board's update time shows once, under the title. A Live row only
-  // gets a dot when it fell over 10 minutes behind the board's newest update,
-  // not when the whole board has aged; its exact time is on hover or tap.
   const isOld = (observedAt: string) =>
     view === "live" &&
     !!newestObservedAt &&
@@ -389,8 +357,6 @@ export default function TrackedLeaderboardRoute() {
         {formatAge(secondsBeforeReset(observedAt))} before Reset
       </span>
     ) : null;
-  // Live's search also takes a rank; At Reset, without a player search, has
-  // a box of its own for any rank on the board.
   const rankJump =
     daily && leaderboard && leaderboard.totalEntries > PAGE_SIZE ? (
       <Form method="get" className="rank-jump" aria-label="Go to rank">
@@ -414,8 +380,6 @@ export default function TrackedLeaderboardRoute() {
         <button type="submit">Go</button>
       </Form>
     ) : null;
-  // Which board: at the head of the board, beside its ranks, or over the
-  // page's message when there is no board.
   const boardShown = !pageUnavailableUrl && !seasonExpired && !!leaderboard;
   const viewSwitch = (
     <nav aria-label="Leaderboard views" className="leaderboard-view-switch">
@@ -438,7 +402,6 @@ export default function TrackedLeaderboardRoute() {
 
   return (
     <main id="main-content" tabIndex={-1} className="page-shell rankings-page">
-      {/* The title and the board's one time line: its Reset, or its update. */}
       <header className="page-hero rankings-header">
         <h1 id="leaderboard-title">
           {daily
@@ -449,19 +412,14 @@ export default function TrackedLeaderboardRoute() {
         </h1>
         {daily ? (
           <p className="rankings-date">
-            {/* The private alert check reads the board's Reset from this time
-                (website_daily_board in python/src/clashlens/alerts.py). */}
             Day {daily.dayNumber} ·{" "}
             <LocalTimestamp className="board-reset" value={daily.resetAt} />
           </p>
         ) : newestObservedAt ? (
           <p className="rankings-date">
-            {/* One update time for the whole board; rows show theirs only
-                when they fall behind. The pulse goes once the board does. */}
             {ageSeconds(newestObservedAt) <= OLD_UPDATE_SECONDS ? (
               <span className="live-pip" aria-hidden="true" />
             ) : null}
-            {/* A phone keeps the age; the exact time stays for screen readers. */}
             Updated{" "}
             <span className="rankings-stamp">
               <LocalTimestamp value={newestObservedAt} /> ·{" "}
@@ -472,8 +430,6 @@ export default function TrackedLeaderboardRoute() {
           </p>
         ) : null}
       </header>
-      {/* The Season's last board shows Complete days' EODs, as the game's
-            Season-end result does. */}
       {daily && Date.parse(daily.resetAt) === Date.parse(daily.seasonEndAt) ? (
         <p className="rankings-context">
           Complete days show trophies after the automatic defense loss.
@@ -499,8 +455,6 @@ export default function TrackedLeaderboardRoute() {
         </div>
       ) : null}
 
-      {/* Finding a player or a rank on the board, and the Clasher's own place:
-          one row of controls over the board. */}
       <div className="rankings-controls">
         {boardShown ? null : viewSwitch}
         {daily && (daily.previousSnapshot || daily.nextSnapshot) ? (
@@ -527,7 +481,6 @@ export default function TrackedLeaderboardRoute() {
           <section
             className="leaderboard-search"
             aria-label="Find your rank"
-            // The page's own search, so the header's shows as its icon alone.
             data-page-search
             onKeyDown={(event) =>
               moveFocusWithArrows(event, ".rank-search-results a", rankInput.current)
@@ -606,7 +559,6 @@ export default function TrackedLeaderboardRoute() {
             aria-label={`Jump to me, rank ${me.rank.toLocaleString()}`}
           >
             <DashboardIcon name="target" />
-            {/* A phone says "You #130", as the row's own pill. */}
             <span className="jump-words">Jump to me</span>
             <span className="jump-you">You</span>
             <span className="jump-rank">#{me.rank.toLocaleString()}</span>
@@ -614,7 +566,6 @@ export default function TrackedLeaderboardRoute() {
         ) : null}
       </div>
 
-      {/* Without a board, its own message below says what went wrong. */}
       {error && leaderboard ? <ErrorNotice error={error} /> : null}
 
       {pageUnavailableUrl ? (
@@ -639,7 +590,6 @@ export default function TrackedLeaderboardRoute() {
           Loading the new Season's rankings…
         </p>
       ) : leaderboard ? (
-        // The page's main table sits open on the page, with no box round it.
         <section
           ref={board}
           className="standings-board open-board"
@@ -662,8 +612,6 @@ export default function TrackedLeaderboardRoute() {
                 "No listed players"
               )}
             </h2>
-            {/* The pager again, small, so the next page is a click from
-                the top as well as the foot. */}
             {entries.length && (leaderboard.hasPrevious || leaderboard.hasNext) ? (
               <nav aria-label="Previous and next page" className="standings-steps">
                 {pageStep("prev")}
@@ -709,8 +657,6 @@ export default function TrackedLeaderboardRoute() {
                       </th>
                       {compared ? (
                         <th scope="col" className="move-cell">
-                          {/* Says once what the ▲▼ count from; phones keep it
-                              for screen readers. */}
                           <span className="move-head">Since Reset</span>
                         </th>
                       ) : null}
@@ -815,8 +761,6 @@ export default function TrackedLeaderboardRoute() {
                           }
                         />
                         <td className="update-cell" data-label="Last updated">
-                          {/* Live reads each row's age out, and shows only a dot on
-                              a row behind the rest, its exact time in the tooltip. */}
                           {view === "live" ? (
                             <time
                               className="local-time player-update-age"
@@ -831,7 +775,6 @@ export default function TrackedLeaderboardRoute() {
                             </time>
                           ) : (
                             <>
-                              {/* The board's date is in its heading; the time is enough. */}
                               <LocalTimestamp
                                 value={entry.freshness.observedAt}
                                 timeOnly
@@ -845,7 +788,6 @@ export default function TrackedLeaderboardRoute() {
                   </tbody>
                 </table>
               </div>
-              {/* The same pager at the board's foot: ‹ 1–50 of 9,000 ›. */}
               {leaderboard.hasPrevious || leaderboard.hasNext ? (
                 <nav aria-label="Leaderboard pages" className="standings-pagination">
                   {pageStep("prev")}

@@ -54,18 +54,13 @@ import { type PythonClient } from "./python.server";
 /** One player's dashboard numbers for today, from GET /v1/players/{tag}/today. */
 export interface PlayerToday {
   calendar: import("../lib/contracts").Calendar;
-  /** Today's Legend day of the Season; null from a data service before it was sent. */
   dayNumber: number | null;
   rankRange: RankRange | null;
-  /** The place the player is projected to finish on; null before it can be worked out. */
   projectedRank: number | null;
-  /** The projected place is still to be worked out, so the page asks again. */
   projectedRankPending: boolean;
   openDefenses: number | null;
   automaticDefenseEach: number | null;
-  /** Null until the player's battles for today are saved. */
   opponents: OpponentRow[] | null;
-  /** When the board behind the range and the bases' comparisons was read; null without one. */
   boardComputedAtMs: number | null;
 }
 
@@ -150,7 +145,6 @@ function opponents(value: unknown): OpponentRow[] {
   return value.slice(0, 8).map(opponent);
 }
 
-/** `waitForBoard` asks Python to wait a few seconds for the shared board's read under way. */
 export async function getPlayerToday(
   tag: string,
   waitForBoard = false,
@@ -188,13 +182,8 @@ export async function getPlayerToday(
   };
 }
 
-/**
- * A first read of an earlier day takes about 4 s, after any other day's read
- * the private API is running (it runs one at a time, up to 8 s).
- */
 const BASES_TIMEOUT_MS = 15_000;
 
-/** Day `day` of this Season's bases, from GET /v1/players/{tag}/bases?day=. */
 export async function getPlayerBases(tag: string, day: number): Promise<PastBases> {
   if (!isCanonicalPlayerTag(tag) || !Number.isInteger(day) || day < 1)
     throw new PythonApiError(422, { error: "invalid_request" });
@@ -209,10 +198,8 @@ export async function getPlayerBases(tag: string, day: number): Promise<PastBase
 
 export interface CardContext {
   client: PythonClient;
-  /** The account the cards follow; always in Legend I. */
   selected: LinkedPlayerCard;
   settings: DashboardSettings;
-  /** Wait a few seconds for the shared board's read under way. */
   waitForBoard?: boolean;
 }
 
@@ -221,7 +208,6 @@ const RIVALS_BELOW = 3;
 const RIVAL_ROWS = RIVALS_ABOVE + RIVALS_BELOW + 1;
 const BOARD_PAGE = 10;
 
-/** Player pages read once per load, however many cards use them. */
 type PageReader = (tag: string) => Promise<PlayerPage | null>;
 
 export function seasonData(page: PlayerPage): SeasonData {
@@ -238,7 +224,6 @@ function rivalSeason(page: PlayerPage) {
 function legendDay(page: PlayerPage, today: PlayerToday | null): PlayerDay {
   const day = page.currentDay;
   const complete = day?.battlesComplete === true;
-  // The finished day that ended at the Reset that started today.
   const dayStartMs = Date.parse(page.calendar.day_start);
   const previous = [...page.recentDays, ...page.seasonDays].find(
     (finished) => Date.parse(finished.end ?? "") === dayStartMs,
@@ -265,7 +250,6 @@ function legendDay(page: PlayerPage, today: PlayerToday | null): PlayerDay {
     defenses: day?.defense.defenses ?? null,
     lastResetRank: previous?.resetRank ?? null,
     trophies: page.profile.seasonResetPending ? null : page.profile.trophies,
-    // The older of the trophy and battle reads, so the card never looks newer than it is.
     observedAtMs: observed.length ? Math.min(...observed) : null,
     battlesObservedAtMs: Number.isFinite(battlesAt) ? battlesAt : null,
     openDefenses: today?.openDefenses ?? null,
@@ -321,7 +305,6 @@ async function lastReset(ctx: CardContext, pages: PageReader) {
   };
 }
 
-/** What `read` returns, or null when Python says it is not there. */
 function unlessMissing<T>(read: Promise<T>): Promise<T | null> {
   return read.catch((cause: unknown) => {
     if (cause instanceof PythonApiError && cause.status === 404) return null;
@@ -361,16 +344,11 @@ async function boardTrophies(
   return entry?.tag === ctx.selected.tag ? entry.trophies : null;
 }
 
-/** The oldest of the readings a card shows; null when any of them has no time. */
 function observedMs(times: (string | null | undefined)[]): number | null {
   const parsed = times.map((time) => Date.parse(time ?? ""));
   return parsed.length && parsed.every(Number.isFinite) ? Math.min(...parsed) : null;
 }
 
-/**
- * The places from 3 above to 3 below `rank`, filled from the other side at
- * either end of a board of `total`.
- */
 function rivalPlaces(rank: number, total: number): number[] {
   const start = Math.max(
     1,
@@ -390,7 +368,6 @@ function rowsAt(entries: TrackedPlayerEntry[], places: number[]): TrackedPlayerE
   });
 }
 
-/** The rows `first` holds around `rank`, plus any page of 10 holding the rest. */
 async function rivalEntries(
   first: TrackedLeaderboard,
   rank: number,
@@ -429,7 +406,6 @@ async function cutoffsData(
   pages: PageReader,
 ): Promise<CutoffsData | null> {
   const lines = ctx.settings.cutoffs;
-  // The live lines need nothing from the player page, so both reads start at once.
   const [reset, live] = await Promise.all([
     lastReset(ctx, pages),
     Promise.all(lines.map((top) => trophiesAt(top))),

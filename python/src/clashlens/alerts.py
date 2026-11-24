@@ -142,7 +142,6 @@ CONDITIONS = {
 }
 
 
-# Plain names for the worker's ordinary job types in processing alerts.
 WORK_NAMES = {
     "process_observation": "saved API responses",
     "replay_observation": "replayed API responses",
@@ -172,7 +171,6 @@ RECOVERY_HOLD = 900
 LEADERBOARD_STALE_SHARE = 0.05
 LEADERBOARD_OLDEST = 1200
 LEADERBOARD_HOLD = 300
-# Untracked recent Legend I battlers tolerated before the completeness alert.
 UNTRACKED_BATTLER_LIMIT = 10
 # The untracked battler and battle-day checks each read about a gigabyte of
 # battles (11 Oct 2026) for conditions at least an hour old, so they run once
@@ -201,7 +199,10 @@ WARNING_DATABASE_STARTING = 300
 # board readable. Battle logs wait for 05:07:20 (collector_reset), and a
 # Season's opening Reset adds a league history each, at least 3 minutes of
 # six keys. Freezing by 05:25 leaves five minutes to publish by 05:30.
-RESET_COLLECTED, RESET_PROJECTED, RESET_FROZEN, RESET_READABLE = 12, 15, 25, 30
+RESET_COLLECTED_MINUTES = 12
+RESET_PROJECTED_MINUTES = 15
+RESET_FROZEN_MINUTES = 25
+RESET_READABLE_MINUTES = 30
 # Collector numbers sampled longer ago than this are unknown.
 METRICS_MAX_AGE = 300
 # board_deadline.MAX_UNFINISHED: this check runs on the host without the
@@ -923,7 +924,6 @@ def observe(
         # Daily result calculations are ordinary work with a shorter limit.
         if metrics.get(f"{prefix}oldest_job_reconcile_ranked_day_age_seconds", 0) >= 900:
             findings["processing"] = True
-        # Name the oldest ordinary job type so the alert says which work is behind.
         age, work = max(
             (
                 (age, name.removeprefix(f"{prefix}oldest_job_").removesuffix("_age_seconds"))
@@ -938,7 +938,6 @@ def observe(
             state["details"]["processing"] = (
                 f"Oldest waiting: {WORK_NAMES.get(work, work)}, {int(age // 60)} minutes"
             )
-        # Failed work counts, however old, until retried, replayed or accepted.
         jobs, uploads = (metrics.get(f"{prefix}failed_{kind}") for kind in ("processing", "uploads"))
         findings["failed_work"] = None if None in (jobs, uploads) else jobs + uploads > 0
         if findings["failed_work"]:
@@ -1230,7 +1229,7 @@ def reset_stages(
     if served == boundary or (record is not None and record[0] == boundary and record[4]):
         return False, False
     # A board that could not be read by 05:30 missed it too.
-    late = minutes >= RESET_READABLE
+    late = minutes >= RESET_READABLE_MINUTES
     blocked = []
     if record is not None and record[0] == boundary:
         waiting, failed = (list(record[5:7]) + [0, 0])[:2]
@@ -1247,7 +1246,7 @@ def reset_stages(
             + ("; the website check could not read it" if served is None else "")
             + "".join(f"; {reason}" for reason in blocked)
         )
-    if minutes < RESET_COLLECTED:
+    if minutes < RESET_COLLECTED_MINUTES:
         return False, late
     if record is None:
         return None, late
@@ -1259,17 +1258,17 @@ def reset_stages(
         reasons.append(f"Reset collection has ended for {ended:,} of {captured:,} players")
     if swept == boundary and frozen:
         pass  # Inputs frozen; publication is checked at 05:30.
-    elif minutes >= RESET_FROZEN:
+    elif minutes >= RESET_FROZEN_MINUTES:
         reasons.append("the board's inputs were not frozen by 05:25")
         reasons += blocked
-    elif minutes >= RESET_PROJECTED:
+    elif minutes >= RESET_PROJECTED_MINUTES:
         if remaining is None or len(samples) < 2:
             unknown = True
         elif remaining > 0:
             (first_at, first), (last_at, last) = samples[0], samples[-1]
             pace = (first - last) / (last_at - first_at) if last_at > first_at else 0
             finish = now + remaining / pace if pace > 0 else math.inf
-            if finish > boundary + RESET_FROZEN * 60:
+            if finish > boundary + RESET_FROZEN_MINUTES * 60:
                 when = (
                     f"about {datetime.fromtimestamp(finish, UTC):%H:%M}"
                     if finish < math.inf

@@ -6,14 +6,6 @@ import { clanProfileLink, playerProfileLink } from "../lib/game-links";
 import type { LiveClan } from "../services/live-clan.server";
 import { RANKINGS_PAGE_SIZE } from "./LeaderboardShared";
 
-/**
- * The player page's name, then its tag, clan and Crews on one line. The tag,
- * with a small arrow, opens the player's profile in Clash of Clans, so the
- * arrow never reads as part of the name. The saved clan shows first as plain
- * text; the game's
- * answer for the clan right now replaces it, linked to the clan's profile,
- * when it streams in, and leaves it when the game gave none.
- */
 export function PlayerHeading({
   name,
   tag,
@@ -25,7 +17,6 @@ export function PlayerHeading({
   tag: string;
   clan: string | null;
   liveClan?: Promise<LiveClan | null>;
-  /** The player's Crews, at the end of the tag and clan line. */
   children?: React.ReactNode;
 }) {
   const saved = <Clan name={clan} tag={null} />;
@@ -72,30 +63,17 @@ function Clan({
   if (!name) return null;
   return (
     <span className="player-clan">
-      {/* The word, after the Clan Castle the stylesheet draws, so a Crew
-          named like the clan can't pass for it. The castle stays out of the
-          markup, so the live clan stays small enough to arrive in place. */}
       <span className="player-clan-label">Clan</span>
       {tag ? <GameLink href={clanProfileLink(tag)} name={name} /> : <bdi>{name}</bdi>}
     </span>
   );
 }
 
-/** The player's live place and their place on the last Reset's Daily board,
- *  both from the live board, as Rankings shows them. */
 export interface LiveRankRead {
   now: number;
   atReset: number | null;
 }
 
-/**
- * The player's place on the live Leaderboard now, and the places they moved
- * since the last Reset's Daily board. It streams in after the page and leaves
- * nothing when the board doesn't hold the player or can't be read. It opens
- * the board at the player. The move is the live board's alone, as Rankings
- * shows it: with no place at the last Reset, such as on a Season's first
- * Legend day, when that board belongs to the Season before, it shows none.
- */
 export function LiveRank({
   rank,
   tag,
@@ -123,10 +101,8 @@ export function LiveRank({
               }. Open the Leaderboard`}
             >
               <strong className="rank-mark" data-podium-rank={now <= 3 ? now : undefined}>
-                {/* A podium plate shows the bare place, as on Rankings. */}
                 {now <= 3 ? now : `#${now.toLocaleString("en-GB")}`}
               </strong>
-              {/* One line: the place, its move, and what the move is against. */}
               {moved ? (
                 <>
                   <span className={moved > 0 ? "score-positive" : "score-negative"}>
@@ -144,8 +120,6 @@ export function LiveRank({
   );
 }
 
-/** A link into the game, named for what it opens and showing `text`, the
- *  name unless given. */
 function GameLink({
   href,
   name,

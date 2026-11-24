@@ -37,8 +37,6 @@ export function BattleStatistics({
     incomplete || saved < expected ? "Some battles may be missing" : "",
     stats.attack.disputed || stats.defense.disputed ? "Conflicting reports" : "",
   ].filter(Boolean);
-  // Only what the Clasher needs to weigh the numbers: days with no saved
-  // result, and how many days a partial Season had in Legend I.
   const missing = expected - saved;
   const count = [
     shape?.partial ? `${expected} Legend I ${expected === 1 ? "day" : "days"}` : "",

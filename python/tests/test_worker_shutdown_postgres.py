@@ -50,7 +50,8 @@ def test_sigterm_during_a_stuck_maintenance_step_exits_promptly(
              "worker", "--database-url", connection_info, "--owner", "shutdown-test",
              "--run-forever", "--concurrency", "2", "--poll-interval-seconds", "0.2",
              "--archive-endpoint", endpoint, "--archive-insecure-test-only",
-             "--archive-access-key", "test", "--archive-secret-key", "test"],
+             "--archive-access-key", "test", "--archive-secret-key", "test",
+             "--spool-root", str(tmp_path / "spool")],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             env={**os.environ, "PYTHONPATH": str(Path(clashlens.__file__).parents[1])},
         )

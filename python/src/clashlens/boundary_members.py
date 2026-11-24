@@ -93,8 +93,6 @@ def board_members(
     ).fetchall()]
 
 
-# Whether the player was read in the ended day's week, from %(week)s, up to
-# its Reset at %(reset)s, as a new profile or a sighting of an older one.
 _READ_THIS_WEEK = """EXISTS (
     SELECT 1 FROM player_profile_versions AS version_read
     WHERE version_read.normalized_tag = {tag} AND version_read.observed_at <= %(reset)s
@@ -376,9 +374,6 @@ def snapshot_status(
     status = day_snapshot_status(text_value(ranked[0]) if ranked else "")
     if status != "complete":
         return status
-    # Whether any accepted reading is at or before the Reset: stop at the
-    # first. Sorting the whole history for it read about 118 pages a member
-    # cold on the copy of 14 October 2026, at every member result.
     profile = connection.execute(
         """
         SELECT EXISTS (
@@ -392,8 +387,6 @@ def snapshot_status(
         """,
         (player_id, boundary_at),
     ).fetchone()[0]
-    # A player not read in the ended day's week before the Reset ranks by
-    # their Complete day, named by their first Legend I reading since.
     return "complete" if profile or (
         first_readings(
             connection, boundary_at, {player_id: ranked_day_version_id})
@@ -423,7 +416,6 @@ def army_status(
         """,
         (player_id, ranked_day_version_id),
     ).fetchone()
-    # Publication requires daily-log evidence before army readiness.
     if daily_log is None:
         return "pending"
     daily_state = text_value(daily_log[1])

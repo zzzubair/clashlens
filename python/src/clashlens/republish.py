@@ -49,22 +49,10 @@ def add_republish_command(
     republish_current_season.add_argument(
         "--repair", choices=domain_repair.REPAIR_ACTIONS
     )
-    # With --players, the Season repair recalculates only the players a rule
-    # change can affect; see domain_repair._scoped_players.
     republish_current_season.add_argument("--players", choices=domain_repair.REPAIR_SCOPES)
-    # With --campaign, run one action of a Season's repair campaign instead
-    # of queueing a batch; see domain_repair.
     republish_current_season.add_argument("--campaign", choices=domain_repair.ACTIONS)
-    # With --first-logs, preview or queue the days that players first tracked
-    # during the Season can now fill; see first_battle_log.backfill.
     republish_current_season.add_argument("--first-logs", choices=("preview", "queue"))
-    # With --boards, preview or queue rebuilds of the Season's Reset boards
-    # still ranking a reading the board now leaves out or whose entries the
-    # board rule now changes; see boundary.queue_board_rebuilds.
     republish_current_season.add_argument("--boards", choices=("preview", "queue"))
-    # With --armies, preview or queue army rebuilds of the Season's Resets
-    # that published a side as unread although an army is now saved for it,
-    # at most --max-jobs at once; see boundary.queue_army_corrections.
     republish_current_season.add_argument("--armies", choices=("preview", "queue"))
     republish_current_season.add_argument("--season", type=_season_id)
 
@@ -149,9 +137,6 @@ def enqueue_current_season_republication(
 
     if isinstance(max_jobs, bool) or not 1 <= max_jobs <= 1000:
         raise ValueError("current-season republication batch must be 1 to 1000")
-    # Days whose battles migration 0057 moved come first. Then days left Live
-    # by Reset pairs wrongly recorded as partial: finishing them is what lets
-    # those days publish at all.
     moved = battle_day_repair.enqueue_rebuilds(database, max_jobs=max_jobs)
     if moved["job_ids"]:
         return moved

@@ -2,7 +2,6 @@ import { useEffect, useRef } from "react";
 import { Form, Link } from "react-router";
 import { usePendingForm } from "../lib/pending-form";
 
-/** The account menu's pages, after the profile and before Sign out. */
 const MENU_PAGES = [
   ["/account/discord-alerts", "Discord alerts"],
   ["/account/obs-overlay", "Stream overlay"],

@@ -29,7 +29,6 @@ export const handle: BackHandle = {
   },
 };
 
-/** GET /crews/:crewId/settings — Edit crew: name, places, links, owner. */
 export async function loader({ request, params }: Route.LoaderArgs) {
   const { loadCrew } = await import("../services/crews.server");
   const loaded = await loadCrew(request, params.crewId, false);
@@ -52,10 +51,6 @@ export function meta({ loaderData: loaded }: Route.MetaArgs) {
   ];
 }
 
-/**
- * POST /crews/:crewId/settings — rename, resize, turn off a link, hand over
- * or delete. The private API checks every role and has the final say.
- */
 export async function action({ request, params }: Route.ActionArgs) {
   const { crewFormAction, updateCrew, revokeCrewInvite, handOverCrew, deleteCrew } =
     await import("../services/crews.server");

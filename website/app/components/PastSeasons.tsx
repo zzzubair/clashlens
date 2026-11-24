@@ -16,12 +16,8 @@ const monthFormatter = new Intl.DateTimeFormat("en-GB", {
   timeZone: "UTC",
 });
 
-// This table stops at the Season that ended 7 Sep 2026.
 const LAST_OLDER_SEASON_END = Date.parse("2026-09-07T05:00:00Z");
 
-// Official and ClashKing finishes stream in after the rest of the page.
-// An unavailable history response leaves the rest of the page usable.
-// Visitors without JavaScript never see them; that is accepted for this section.
 export function PastSeasons({
   finishes,
 }: {
@@ -47,7 +43,6 @@ export function PastSeasons({
 export function PastSeasonList({ finishes }: { finishes: PastSeasonFinish[] }) {
   return (
     <section className="data-section past-seasons" aria-labelledby="past-seasons-title">
-      {/* Closed by default so a long history doesn't crowd the page. */}
       <details>
         <summary>
           <h2 id="past-seasons-title">Older history</h2>

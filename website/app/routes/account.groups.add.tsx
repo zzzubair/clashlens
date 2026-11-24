@@ -17,17 +17,14 @@ import "../account-groups.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
-/** One of the account's groups as a place the player can go. */
 interface GroupChoice {
   groupId: string;
   name: string;
   count: number;
-  /** The player is already in this group. */
   member: boolean;
 }
 
 export interface AddToGroupLoaderData {
-  /** The player to add, or null when the address holds no readable tag. */
   limits: import("../lib/account-contracts").GroupLimits | null;
   tag: string | null;
   groups: GroupChoice[];
@@ -38,7 +35,6 @@ export interface AddToGroupLoaderData {
 
 export interface AddToGroupActionData {
   notice: string | null;
-  /** The group the player just joined, for its link. */
   addedTo: string | null;
   fieldErrors: { name?: string; tag?: string };
   generalError: WebsiteErrorResponse | null;
@@ -56,18 +52,12 @@ function choices(groups: ListedGroup[], tag: string): GroupChoice[] {
   }));
 }
 
-/** Account setup, returning to this page once the account exists. */
 async function setupRedirect(request: Request): Promise<Response> {
   const { accountSetupPath } = await import("../server/return-path.server");
   const url = new URL(request.url);
   return redirect(accountSetupPath(url.pathname, url));
 }
 
-/**
- * GET /account/watchlists/add/:tag — where a player is saved: into the only
- * group, a chosen one of several, or a first group created on the spot. The
- * tag is in the path so login and account setup return here with it.
- */
 export async function loader({ request, params }: Route.LoaderArgs) {
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
@@ -97,11 +87,6 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   }
 }
 
-/**
- * POST /account/watchlists/add/:tag — add the player to a chosen group, or, for an
- * account with no groups, create the first one and add the player to it.
- * Same-origin only, with a canonical idempotency UUID for each change.
- */
 export async function action({ request, context }: Route.ActionArgs) {
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
@@ -155,7 +140,6 @@ export async function action({ request, context }: Route.ActionArgs) {
     const { groups, limits } = await client.listGroups();
     let group: ListedGroup | undefined;
     if (creating) {
-      // The form only offers a new group to an account that has none.
       if (groups.length > 0) {
         return reply(409, {
           fieldErrors: { tag: "Choose one of your watchlists below." },
@@ -167,7 +151,6 @@ export async function action({ request, context }: Route.ActionArgs) {
           fieldErrors: { name: "Choose a watchlist name of 1–80 characters." },
         });
       }
-      // Check the player first, so a mistyped tag leaves no empty group behind.
       const refusal = adding.lookupRefusal(
         await players.checkPlayerTag(clientAddress, tag),
         tag,
@@ -243,7 +226,6 @@ export function headers() {
   return NO_STORE;
 }
 
-/** A refused save can follow a change, such as a first group created, so the choices reload. */
 export function shouldRevalidate({
   formMethod,
   defaultShouldRevalidate,

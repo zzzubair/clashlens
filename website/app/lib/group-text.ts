@@ -3,7 +3,6 @@ import type { GroupPlayer } from "./account-contracts";
 export const groupLimit = (max: number) =>
   `You have ${max} watchlists, the most an account can have. Delete one to create another.`;
 
-/** What a member row says when the player is not tracked in Legend League. */
 export const STATE_LABELS: Record<GroupPlayer["state"], string> = {
   tracking: "",
   not_in_legend: "Not in Legend League, no data",
@@ -14,7 +13,6 @@ export const STATE_LABELS: Record<GroupPlayer["state"], string> = {
   failed: "Lookup failed; open the player to retry",
 };
 
-/** What the page says after a player joins a group, naming the group when given. */
 export function addedNotice(player: GroupPlayer, groupName?: string): string {
   const who = player.name === null ? player.tag : `${player.name} (${player.tag})`;
   const added = groupName === undefined ? `Added ${who}` : `Added ${who} to ${groupName}`;

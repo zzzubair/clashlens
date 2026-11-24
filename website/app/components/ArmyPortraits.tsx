@@ -49,10 +49,6 @@ function Portrait({
   );
 }
 
-// The troops each army type is named after, from the rules that sort armies
-// into types (COMBINATIONS, LEADER_TYPES and LEADING_PAIRS in
-// python/src/clashlens/army_types.py). Other, Unreadable and a type missing
-// here show no art.
 const TYPE_TROOPS: Record<string, string> = {
   "3": "troop:132",
   "4": "troop:8,troop:65",
@@ -70,9 +66,6 @@ const TYPE_TROOPS: Record<string, string> = {
   "16": "troop:132,troop:109",
 };
 
-/** A list row's unit art, from its key ("troop:23", "hero:1|equipment:15",
- * "cc:troop:58,troop:1", "troop:58@5", or an army type's "army-type:3"):
- * beside the row's name, so decorative. */
 export function UnitArt({ unitKey }: { unitKey: string }) {
   const type = /^army-type:(\d+)$/.exec(unitKey)?.[1];
   const art = (type === undefined ? unitKey : (TYPE_TROOPS[type] ?? ""))
@@ -105,7 +98,6 @@ function Units({ units, names }: { units: ArmyUnit[]; names: ArmyUnitNames }) {
   ));
 }
 
-/** The army a battle used, drawn from its Copy army code. */
 export function ArmyPortraits({
   id,
   code,

@@ -5,11 +5,6 @@ import type { Route } from "./+types/obs-overlay.settings";
 
 const NO_STORE = { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" };
 
-/**
- * GET /o/:link/settings — what an overlay in OBS shows, read every 3 seconds
- * through its private link. 404 once the link is replaced: the overlay then
- * shows nothing.
- */
 export async function loader({ params }: Route.LoaderArgs) {
   const link = params.link ?? "";
   if (!isOverlayLinkId(link))

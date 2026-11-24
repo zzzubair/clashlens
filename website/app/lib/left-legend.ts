@@ -1,9 +1,6 @@
 import { utcDate } from "./date-format";
-/** When a player left Legend I this Season, and the total they left on. */
 export interface LeftLegendI {
-  /** The Monday Reset they left at. */
   leftAt: string;
-  /** Their last Legend I day of the Season. */
   lastDayNumber: number | null;
   /** That day's end of day, which no weekly raise follows. */
   trophies: number | null;
@@ -28,7 +25,6 @@ export function parseLeftLegendI(value: unknown): LeftLegendI | null {
   };
 }
 
-/** "Mon 12 Oct", the Reset a player left Legend I at. */
 export function leftDate(left: LeftLegendI) {
   return utcDate(left.leftAt, { weekday: true });
 }

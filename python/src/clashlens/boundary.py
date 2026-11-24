@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, NamedTuple
 
 from psycopg.errors import LockNotAvailable
 from psycopg.types.json import Jsonb
@@ -108,8 +108,6 @@ def lock_boundary_publication_once_swept(connection: Any, boundary_at: datetime)
 # the build. Above the transactions that can write member results at once:
 # 12 worker lanes, their maintenance and the late-battle sweep.
 OPEN_GENERATION_TAIL = 100
-# A caller limiting its wait waits this long for it: on 14 Oct 2026 the last
-# 95 day results gave up after 250 ms and came back 37 to 99 s later.
 TAIL_LOCK_WAIT = "5s"
 
 
@@ -265,7 +263,6 @@ def _supersede_generation(
     now (``boundary_members``), started as the Reset's active correction;
     the published other one is kept. Corrections still waiting on the
     replaced generation wait on its replacement."""
-    # An army-only rebuild keeps the board, and with it the board's rule.
     ordering = None if "snapshot" in affected else connection.execute(
         "SELECT ordering_rule_version FROM boundary_publication_generations WHERE id = %s",
         (generation_id,),
@@ -322,10 +319,21 @@ def _supersede_generation(
     return new_id, new_generation
 
 
+class PublicationGeneration(NamedTuple):
+    number: int
+    sweep_id: int | None
+    snapshot_state: str
+    army_state: str
+    expected_member_count: int
+    affected_artifacts: list[str] | None
+    target_at: datetime
+    target_rule: str
+    ordering_rule_version: str
+
+
 def _try_enqueue_boundary_artifacts(
     database, connection: Any, *, boundary_at: datetime, generation_id: int, army: bool = False
 ) -> None:
-    # A repair holds no Reset's first board and army results past 06:00.
     if boundary_held(connection, boundary_at) and not board_deadline.overdue(connection, boundary_at):
         return
     _inherit_deferred_army_successor_snapshot(connection, generation_id=generation_id)
@@ -342,11 +350,11 @@ def _try_enqueue_boundary_artifacts(
     ).fetchone()
     if generation is None:
         return
-    generation_number = int(generation[0])
-    # A past Reset starts no build in the quiet window.
+    generation = PublicationGeneration(*generation)
+    generation_number = generation.number
     if past_reset_build_waits(connection, boundary_at):
         return
-    sweep_id = int(generation[1]) if generation[1] is not None else None
+    sweep_id = generation.sweep_id
     if sweep_id is None:
         return
 
@@ -366,18 +374,22 @@ def _try_enqueue_boundary_artifacts(
     member_count, snapshot_pending, army_pending, bad_snapshot, bad_army = (
         int(value) for value in classifications
     )
-    if member_count != int(generation[4]) or bad_snapshot or bad_army:
+    if member_count != generation.expected_member_count or bad_snapshot or bad_army:
         return
     boundary_text = boundary_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    if text_value(generation[7]) != "boundary-delay-v1":
+    if text_value(generation.target_rule) != "boundary-delay-v1":
         return
-    target = generation[6]
+    target = generation.target_at
     now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
     if now < target:
         return
-    affected_artifacts = [text_value(value) for value in (generation[5] or [])]
-    for column, pending, state in (("snapshot_state", snapshot_pending, generation[2]),
-                                   ("army_state", army_pending, generation[3])):
+    affected_artifacts = [
+        text_value(value) for value in (generation.affected_artifacts or [])
+    ]
+    for column, pending, state in (
+        ("snapshot_state", snapshot_pending, generation.snapshot_state),
+        ("army_state", army_pending, generation.army_state),
+    ):
         if pending == 0 and text_value(state) == ArtifactState.PENDING:
             connection.execute(
                 f"UPDATE boundary_publication_generations SET {column} = %s, updated_at = clock_timestamp() WHERE id = %s AND {column} = %s",
@@ -393,11 +405,7 @@ def _try_enqueue_boundary_artifacts(
         and text_value(snapshot[0]) == "ready"
         and (not affected_artifacts or "snapshot" in affected_artifacts)
     ):
-        # A board built under an older ordering rule, such as an army-only
-        # replacement of one that gains a board rebuild, freezes its inputs
-        # under the current rule in a replacement; a generation's rule
-        # cannot change once its membership is captured.
-        if text_value(generation[8]) != SNAPSHOT_ORDERING_RULE_VERSION:
+        if text_value(generation.ordering_rule_version) != SNAPSHOT_ORDERING_RULE_VERSION:
             new_id, _ = _supersede_generation(
                 database,
                 connection,
@@ -439,7 +447,6 @@ def _try_enqueue_boundary_artifacts(
                 PROCESSING_VERSION,
                 DOMAIN_RULE_VERSION,
                 ANALYTICS_RULE_VERSION,
-                # The board goes before the slower army build.
                 PYTHON_BACKFILL_PRIORITY
                 if operator_generation(connection, boundary_at, generation_number)
                 else ended_day_priority(boundary_at - timedelta(days=1)),
@@ -449,11 +456,6 @@ def _try_enqueue_boundary_artifacts(
         "SELECT army_state, snapshot_state FROM boundary_publication_generations WHERE id = %s FOR UPDATE",
         (generation_id,),
     ).fetchone()
-    # The army's inputs freeze in a later transaction, once the board's build
-    # has published it, whether or not its statistics ever do. Frozen with
-    # the board's, on 14 Oct 2026 they took 2 min 58 s, growing each Season
-    # day, and the board's build job stayed unseen until they finished. Only
-    # the background check (``army``) freezes them, never a job's response slot.
     board_first = (
         not affected_artifacts or "snapshot" in affected_artifacts
     ) and text_value(snapshot_state) == "ready"
@@ -469,8 +471,6 @@ def _try_enqueue_boundary_artifacts(
         if manifest is None:
             return
         key = base = f"build_army_analytics:boundary:{boundary_text}:gen:{generation_number}:manifest:{manifest[1]}"
-        # A build that gave up while members were still pending runs again,
-        # under a new key, once they have all settled; it stays failed.
         while (
             failed := connection.execute(
                 """
@@ -512,7 +512,6 @@ def _try_enqueue_boundary_artifacts(
         )
 
 
-# Why an army build fails while a member's army status is still pending.
 ARMY_MEMBERS_PENDING = "boundary army publication dependency is not terminal"
 
 
@@ -590,9 +589,6 @@ def _record_boundary_generation(
             """,
             (generation_id, player_id),
         ).fetchone()
-        # A generation's members never change. A player whose day is saved
-        # after they were taken joins the board at its next rebuild, which
-        # takes the members again; before the record, never.
         joins = prior_member is None
         if joins:
             if not boundary_members.joins_late(boundary_at):
@@ -602,9 +598,6 @@ def _record_boundary_generation(
                     f"Reset {boundary_at.isoformat()} queues a new member only under its full lock"
                 )
             prior_member = (None, None, None, None)
-        # Only a member published without a day result, whose day has saved
-        # since, rebuilds the newest Reset at once; a new member waits for
-        # the normal pace (docs/domain.md, section 6).
         arrival = not joins and prior_member[0] is None
         if prior_member[0] is None:
             changes = ["snapshot", "army"]
@@ -612,7 +605,6 @@ def _record_boundary_generation(
                 int(ranked_day_version_id), ranked_day_input_hash):
             changes = []
         else:
-            # A correction waiting with a newer result of theirs applies it.
             waiting = connection.execute(
                 """
                 SELECT (input.value ->> 'ranked_day_version_id')::bigint
@@ -635,7 +627,6 @@ def _record_boundary_generation(
                 else (int(waiting[0]), None, None),
                 ranked_day_version_id=ranked_day_version_id, generation_id=generation_id)
             if not changes:
-                # The board and its army records would show what they show.
                 if not shared:
                     _try_enqueue_boundary_artifacts(
                         database, connection, boundary_at=boundary_at,
@@ -657,10 +648,6 @@ def _record_boundary_generation(
                 kind for kind in frozen_artifacts if kind in affected
             ]
         elif changed and (frozen_artifacts or joins):
-            # Once either manifest has frozen, the member's pin cannot
-            # change (migration 0011): a correction rebuilds each changed
-            # artifact from the new result, and inherits the other one. A new
-            # member needs both rebuilt, frozen or not.
             frozen_artifacts = changes
         queued = (
             connection.execute(
@@ -681,9 +668,6 @@ def _record_boundary_generation(
         fully_published = (
             text_value(current[2]) == "published"
             and text_value(current[3]) == "published"
-            # A correction already waiting, a repair campaign holding this
-            # Reset, or a Reset not yet due to rebuild keeps the change
-            # queued, so waiting inputs start together.
             and not (
                 changed
                 and (
@@ -741,9 +725,6 @@ def _record_boundary_generation(
             and frozen_artifacts
             and (correction_active or not fully_published)
         ):
-            # Keep the changed input only in the correction queue. The
-            # captured generation member remains immutable; the queued
-            # successor applies this input before it seals inheritance.
             pending_input = {
                 "player_id": player_id,
                 "ranked_day_version_id": ranked_day_version_id,
@@ -776,8 +757,6 @@ def _record_boundary_generation(
                     """,
                     (correction_artifacts, queued[0]),
                 )
-                # One row per added input: adding to the list itself saved
-                # the whole list again (migration 0124).
                 connection.execute(
                     """
                     INSERT INTO boundary_publication_correction_inputs
@@ -820,10 +799,7 @@ def _record_boundary_generation(
     return True
 
 
-# Member statuses whose day the board ranks, by the member's reading.
 _RANKED_STATUSES = frozenset({"complete", "partial", "inconsistent", "malformed"})
-# A battle log event's record of the poll that last reported it, which moves
-# with each poll; the army build reads none of it.
 _POLL_KEYS = frozenset({"source_observation_id", "source_evidence_id", "source_row_id",
                         "source_observed_at"})
 
@@ -922,7 +898,6 @@ def _tie_moved(
         """,
         (manifest_id, player_id),
     ).fetchone()
-    # A board frozen under an older order is rebuilt for it elsewhere.
     if frozen is None or not frozen[1]:
         return False
     now = latest_trophy_changes(
@@ -978,8 +953,6 @@ def queue_board_rebuilds(
         for (boundary_at,) in resets:
             with connection.transaction():
                 lock_boundary_publication(connection, boundary_at)
-                # An army-only replacement not yet holding its board ranks
-                # the board it inherits.
                 current = connection.execute(
                     """
                     SELECT generation.id, generation.generation,
@@ -999,7 +972,6 @@ def queue_board_rebuilds(
                     """,
                     (boundary_at,),
                 ).fetchone()
-                # A board not frozen yet is built under the current rule.
                 if current is None or current[2] is None:
                     continue
                 generation_id, generation, manifest_id, snapshot_id = current
@@ -1019,10 +991,6 @@ def queue_board_rebuilds(
                     int(row[0]): datetime.fromisoformat(str(row[1])) for row in rows
                 }
                 not_found = profiles_not_found(connection, boundary_at, readings)
-                # Saved entries whose value or mark differs from the Reset
-                # total the player's day result now shown stores, as a
-                # rebuild would pin it. A board not built yet saves them
-                # already.
                 shown = dict(connection.execute(
                     """
                     SELECT DISTINCT ON (log.player_id) log.player_id, log.ranked_day_version_id
@@ -1066,16 +1034,12 @@ def queue_board_rebuilds(
                     != expected.get(int(player_id))
                     for player_id, trophies, confidence in entries
                 )
-                # Players a Season's last board ranks out of the game's order
-                # inside a tie (analytics.follow_official_ties).
                 saved = [{"player_id": int(row[0]), "trophies": int(row[1])} for row in entries]
                 official_order = sum(entry is not kept for entry, kept in zip(
                     follow_official_ties(saved, season_end_placements(
                         connection, boundary_at,
                         {entry["player_id"]: entry["trophies"] for entry in saved},
                     )), saved, strict=True))
-                # A board ordered by an older rule, such as equal trophies
-                # by tag hash alone before the shared tie order.
                 rule = connection.execute(
                     "SELECT ordering_rule_version FROM leaderboard_snapshots WHERE id = %s",
                     (snapshot_id,),
@@ -1090,12 +1054,8 @@ def queue_board_rebuilds(
                     " WHERE input_identity->>'snapshot_quality' <> 'eligible'",
                     (manifest_id,),
                 ).fetchall()
-                # Players left out whom the board now ranks at 5,000, unless
-                # "player not found" since keeps them out of the rebuild too.
                 added = unplayed_profiles(connection, boundary_at, [
                     int(row[0]) for row in left_off])
-                # Members left out, not for their league, whom their Complete
-                # day now ranks, named by a reading after the Reset.
                 late = len(boundary_members.first_readings(connection, boundary_at, {
                     int(row[0]): int(row[1]) for row in left_off
                     if row[1] is not None
@@ -1105,7 +1065,6 @@ def queue_board_rebuilds(
                     connection, boundary_at,
                     {player_id: row[2] for player_id, row in added.items()},
                 ))
-                # Members the weekly league record now adds or takes off.
                 members = {int(row[0]) for row in connection.execute(
                     "SELECT player_id FROM boundary_publication_manifest_entries(%s)",
                     (manifest_id,),
@@ -1235,7 +1194,6 @@ def queue_army_corrections(
                     days,
                 ).fetchall()
             ]
-            # A side counts only if its newest saved army is readable.
             affected = connection.execute(
                 f"""
                 SELECT fact.ranked_day_start + interval '1 day', count(*)
@@ -1282,7 +1240,6 @@ def queue_army_corrections(
                     """,
                     (boundary_at, generation_id),
                 ).fetchone()
-                # A build not yet published reads the saved armies itself.
                 correction = (
                     "rebuilding" if text_value(army_state) != "published"
                     else "already_queued" if queued is not None
@@ -1375,7 +1332,6 @@ def remove_league_members(
     (``TAIL_LOCK_WAIT`` while the last members wait), as while its board
     freezes, raises LockNotAvailable, and the decider tries the player again
     after the rest, ``league_decider.BUSY_SECONDS`` later."""
-    # The Reset's newest generation, and the player's member row in it.
     newest = """
         SELECT generation.id, generation.snapshot_manifest_id,
                generation.army_manifest_id, member.status

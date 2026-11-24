@@ -358,8 +358,6 @@ def screen_events(
             (lens, timestamp, battle_id_sort_key(battle_id), index, event)
         )
 
-    # A published version should already contain one canonical row, but keep
-    # the API deterministic if an older or malformed payload repeats a battle.
     candidates.sort(key=lambda item: (item[1], item[2], -item[3]), reverse=True)
     seen: set[str] = set()
     offense: list[dict[str, Any]] = []
@@ -370,7 +368,6 @@ def screen_events(
             continue
         seen.add(identity)
         (offense if lens == "offense" else defense).append(event)
-    # Rows are numbered in play order: the first battle of the Legend day is 1.
     offense.reverse()
     defense.reverse()
     return offense, defense
@@ -442,8 +439,6 @@ def screen_event_timestamp(value: Any) -> datetime | None:
     return _parsed_timestamp(value) if isinstance(value, str) else None
 
 
-# A page's day facts compare each day's times with every other day's, so the
-# same few strings are parsed again and again; keep the parsed values.
 @lru_cache(maxsize=4096)
 def _parsed_timestamp(value: str) -> datetime | None:
     try:
@@ -507,8 +502,6 @@ def daily_log(day: Any) -> dict[str, Any]:
         "battles": json_array(day[16]),
         "partial_reasons": json_array(day[17]),
         "start_trophies": None if day[18] is None else int(day[18]),
-        # "season_rule" when Day 1, or the day a player signed up, starts at
-        # the Season rule's 5,000.
         "start_trophies_source": None if day[19] is None else text_value(day[19]),
     }
 

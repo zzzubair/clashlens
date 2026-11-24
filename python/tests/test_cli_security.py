@@ -21,6 +21,7 @@ from clashlens.cli import (
 )
 from clashlens.collector_http import ApiKey
 from clashlens.runtime import file_value, open_archive
+from clashlens.spool import Spool
 
 
 def _secret_text(value: bytes) -> str:
@@ -784,8 +785,10 @@ def test_current_season_republication_command_rejects_unbounded_batches(
     assert excinfo.value.code == 2
 
 
-def _ready_namespace() -> Namespace:
+def _ready_namespace(spool_root: Path) -> Namespace:
+    Spool(spool_root, max_body_bytes=1024)
     return Namespace(
+        spool_root=str(spool_root),
         database_url="postgresql://stub",
         database_url_file="",
         expected_contract_version=3,
@@ -831,6 +834,7 @@ class _ReadyArchiveStub:
 def test_cli_ready_fails_on_terminal_marker_mismatch_only(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
     remote_health: str,
     expected_exit: int,
 ) -> None:
@@ -840,7 +844,7 @@ def test_cli_ready_fails_on_terminal_marker_mismatch_only(
         lambda _arguments, **_kwargs: _ReadyArchiveStub(remote_health),
     )
 
-    exit_code = _run_ready(_ready_namespace())
+    exit_code = _run_ready(_ready_namespace(tmp_path / "spool"))
 
     assert exit_code == expected_exit
     payload = json.loads(capsys.readouterr().out)

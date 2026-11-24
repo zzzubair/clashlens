@@ -37,18 +37,12 @@ function advanceClock(clock: Clock) {
   // Some browsers pause performance.now() during device sleep. Only use the
   // device clock's elapsed time, never its absolute date.
   clock.now += Math.max(ran, moved);
-  // Sleep or a device clock change: only a fresh server time can settle it.
   if (Math.abs(moved - ran) > 1_000) clock.trust = "slipped";
   clock.elapsed = elapsed;
   clock.wall = wall;
   return clock.now;
 }
 
-/**
- * Whether a check reads the page again: never while hidden or while a read or
- * navigation runs; when Reset passed, a recovery is awaited or the clock is
- * not settled; and at most once a minute unless the clock just slipped.
- */
 export function seasonCheckReads(check: {
   hidden: boolean;
   busy: boolean;
@@ -61,11 +55,6 @@ export function seasonCheckReads(check: {
   return check.trust === "slipped" || check.sinceRead >= 60_000;
 }
 
-/**
- * Reread saved data at Season Reset (or at `seasonEnd`, the time the data stops
- * holding) and once a minute while awaiting recovery. Returns whether the
- * trusted clock has passed `expiresAt`, which defaults to that reread time.
- */
 export function useSeasonReread(
   loadedAt: string | undefined,
   waiting: boolean,
@@ -92,11 +81,9 @@ export function useSeasonReread(
   if (loadedAt && clock.current.loadedAt !== loadedAt) {
     const served = Date.parse(loadedAt);
     if (clock.current.trust === "asked") {
-      // Requested after the device clock slipped, so it carries the real time.
       clock.current.now = lastRead.current = served;
       clock.current.trust = "settled";
     } else {
-      // A buffered response from before Reset cannot wind the established clock back.
       clock.current.now = Math.max(clock.current.now, served);
     }
     clock.current.loadedAt = loadedAt;
@@ -134,7 +121,6 @@ export function useSeasonReread(
           inFlight.current = false;
         });
     };
-    // One boundary read, then bounded retries if that read fails or data is pending.
     let boundary: ReturnType<typeof setTimeout> | undefined;
     const scheduleBoundary = () => {
       const remaining = reset - advanceClock(clock.current);

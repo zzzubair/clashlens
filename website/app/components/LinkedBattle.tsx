@@ -3,18 +3,9 @@ import { useLocation, useRevalidator } from "react-router";
 
 import type { RankedDaySummary } from "../lib/contracts";
 
-// Two minutes of checks, one every five seconds.
 const CHECKS = 24;
 const CHECK_EVERY_MS = 5_000;
 
-/**
- * A link to one battle, /players/%23TAG?day=YYYY-MM-DD#battle-ID, opens that
- * battle highlighted. Discord alerts send a battle as soon as it is saved, a
- * little before its Legend day is recalculated, so while the page does not
- * show the battle it reads the player again every five seconds for two minutes
- * and says so. `log` are the days of the page's Legend log and `day` is a
- * linked day shown on its own; Reset can move the battle from one to the other.
- */
 export function LinkedBattle({
   log,
   day,
@@ -105,22 +96,6 @@ export function LinkedBattle({
   );
 }
 
-/**
- * Where a linked battle stands on the page:
- *
- * - `none`: the address names no battle.
- * - `shown`: the battle is in the linked `day` or in the Legend log, and is
- *   highlighted for two seconds each time the page is shown.
- * - `waiting`: not on the page yet; the player is read again every five
- *   seconds, one read at a time, while checks are left.
- * - `givenUp`: the two minutes of checks ran out; Check again starts another
- *   two minutes.
- *
- * Events: the address's #battle- part, each page read (which can show the
- * battle, or move it between the day and the log at Reset), each check and
- * Check again. `linkedBattleArrival` decides it from those alone; the checks
- * left live in `LinkedBattle`, and a reload starts the two minutes again.
- */
 export type LinkedBattleArrival =
   | { kind: "none" }
   | { kind: "shown"; in: "day" | "log" }

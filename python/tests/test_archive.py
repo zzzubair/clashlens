@@ -187,19 +187,6 @@ def test_s3_archive_reader_defaults_to_tls_and_requires_an_explicit_test_overrid
         )
 
 
-def test_s3_archive_reader_reports_archive_readiness_without_claiming_work() -> None:
-    reader = S3ArchiveReader(
-        endpoint="archive.example.test:9000",
-        bucket="evidence",
-        access_key="test",
-        secret_key="test",
-        max_retries=0,
-    )
-    reader.client.bucket_exists = lambda _bucket: False  # type: ignore[method-assign]
-
-    assert reader.check_ready() is False
-
-
 def test_s3_archive_reader_sets_a_total_request_deadline() -> None:
     reader = S3ArchiveReader(
         endpoint="archive.example.test:9000",
@@ -330,11 +317,8 @@ def test_s3_archive_reader_counts_remote_attempts(archive_server) -> None:
         allow_insecure_test_origin=True,
         max_retries=0,
     )
-    assert reader.remote_attempts == {"get": 0, "bucket": 0, "marker": 0}
+    assert reader.remote_attempts == {"get": 0, "marker": 0}
     reader.read_verified(reference, digest)
-    assert reader.remote_attempts["get"] == 1
-    reader.check_ready()
-    assert reader.remote_attempts["bucket"] == 1
     assert reader.remote_attempts["get"] == 1
 
 

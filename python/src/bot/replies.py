@@ -26,7 +26,6 @@ MAX_CHOICES = 25
 _MAX_CHOICE_LABEL = 100
 WAITING_FOR_RESET = "Waiting for Season reset"
 
-# One line per command for /help, also used as each command's description.
 COMMANDS = (
     ("help", "What the bot does, its commands and your connection"),
     ("link", "Link your Clash of Clans accounts on the Clash Lens website"),
@@ -39,7 +38,6 @@ GOLD = 0xF2B33D
 # One colour per linked account, in the order they were linked, the same in
 # every message about it; never yellow. The eighth starts the list again.
 PLAYER_COLOURS = (0x4C8DFF, 0x3FB37F, 0xE8618C, 0x9B6DFF, 0xF07C3A, 0x2BB3C0, 0xA3D65C)
-# Beside the players a Legend day summary names as not finished yet.
 GREY = 0x6D7680
 
 _STATE_WORDS = {
@@ -79,8 +77,6 @@ class Card:
     button: Link | None = None
     # The box's own small bold top line, in Discord's older layout only.
     title: str | None = None
-    # A PNG between the first two parts, in place of the line; while still
-    # being drawn, the drawing, waited for after the database reads end.
     picture: bytes | Future[bytes] | None = None
 
 
@@ -91,14 +87,9 @@ class Reply:
     # layout, and small text below them.
     title: str | None = None
     footer: str | None = None
-    # Buttons below everything.
     links: tuple[Link, ...] = ()
-    # A dropdown of the person's own players; picking one shows their stats.
     choices: tuple[Choice, ...] = ()
     placeholder: str | None = None
-    # Only the person who ran the command sees it: the not-connected pointer
-    # and plain errors meant for them. Every other reply is a normal message
-    # anyone in the conversation can see and forward.
     private: bool = False
     # The one line a phone's notification shows. Discord's cards cannot carry
     # it, so a reply with one goes in Discord's older layout: this line, then
@@ -224,15 +215,9 @@ def not_your_menu() -> Reply:
     return say("Only the person who ran this command can use these buttons.", private=True)
 
 
-# Where a Clasher connects Discord, links and unlinks players, and chooses the
-# default player: the website's Settings page.
 SETTINGS = "/account/settings"
-# Where a Clasher connects Discord and turns attack alerts on or off; /alerts
-# opens it, and a signed-out visitor signs in first and lands there.
 DISCORD_ALERTS = "/account/discord-alerts"
-# Where a Clasher links a Clash of Clans player to their account.
 LINK_PLAYER = "/account/verify-player"
-# Signing up with Discord, landing on that page once the account exists.
 SIGN_UP = "/auth/discord?returnPath=%2Faccount%2Fverify-player"
 
 
@@ -471,7 +456,6 @@ def bad_tag() -> Reply:
     return say("That doesn't look like a player tag.", private=True)
 
 
-# Longer than any game name; what someone typed is cut to this.
 MAX_NAME_SHOWN = 50
 
 
@@ -668,7 +652,6 @@ def alerts_on(site: Site, switch: Mapping[str, Any], colour: int) -> Reply:
 # take the rest.
 _SUMMARY_LENGTH = 3_700
 _SUMMARY_CARDS = 8
-# Players named in one "Not finished yet" card, so no card outgrows a DM.
 _WAITING_NAMES = 40
 
 

@@ -52,9 +52,6 @@ POLL_UNTIL = timedelta(hours=1)
 SCORE_FROM = timedelta(hours=2)
 RETRY_AFTER = timedelta(minutes=2)
 EARLY_RETRY_AFTER = timedelta(minutes=1)
-# The midday pull of every country's list, a failed one again after
-# RETRY_AFTER until MIDDAY_UNTIL. On 10 Nov 2026, 197 Legend I players first
-# seen in the lists pulled just after the Reset joined its board from 05:56.
 MIDDAY = "country_midday"
 MIDDAY_AT = timedelta(hours=12)
 MIDDAY_UNTIL = timedelta(hours=13)
@@ -582,10 +579,8 @@ def score_day(database: CollectorDatabase, boundary: datetime) -> dict[str, Any]
     # player with a stored Legend battle, attack or defense, earlier this Season.
     at_5000 = sorted({row.tag for rows in countries.values() for row in rows
                       if row.legend_i and row.trophies == 5000 and row.attack_wins == 0})
-    # Our newest saved trophies when each board player's country list was requested.
     live = [(row.tag, pulled_at[location]) for location, rows in countries.items()
             for row in rows if row.legend_i and row.tag in board]
-    # Board players whose trophies differ from their country's first list.
     differ = [(row.tag, first_at[location]) for location, rows in first.items()
               for row in rows if row.legend_i and row.tag in board
               and row.trophies != board[row.tag][1]]
@@ -727,7 +722,6 @@ async def pull_due(collector: Collector, puller: _Puller) -> Counter[str]:
         last = _last_try(pulls, purpose, location_id)
         return _latest(pulls, purpose, location_id) is None and (last is None or now - last >= gap)
 
-    # Worked out again only after a pull: each reading parses the early list.
     step = ranking_step(boundary, now, pulls)
     if (
         step is RankingStep.EARLY
@@ -762,7 +756,6 @@ async def pull_due(collector: Collector, puller: _Puller) -> Counter[str]:
             break
         tries = [tried for tried in pulls
                  if tried.purpose == purpose and tried.location_id == location[0]]
-        # A list not yet switched is pulled again until R+1 h.
         given_up = (bool(tries) and tries[-1].failure == NOT_SWITCHED
                     and now >= boundary + POLL_UNTIL)
         if due(purpose, location[0], RETRY_AFTER) and not given_up:

@@ -5,8 +5,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import cache
 
-# v1 gave a 2-star attack at exactly 55% 18 trophies; Supercell's formula
-# gives 17. v1 stays for results already saved under it.
 HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION = "legend-trophy-allocation-v1"
 TROPHY_ALLOCATION_RULE_VERSION = "legend-trophy-allocation-v2"
 SEASON_ANCHOR_RULE_VERSION = "legend-season-anchor-v1"
@@ -15,13 +13,9 @@ BOOTSTRAP_PREVIOUS_SEASON_ID = "1781499600"
 RANKED_DAY_DURATION = timedelta(days=1)
 SEASON_DURATION = timedelta(days=28)
 SEASON_DAY_COUNT = SEASON_DURATION // RANKED_DAY_DURATION
-# Reset work stops collecting at 04:55 UTC the next day.
 RESET_COLLECTION_WINDOW = timedelta(hours=23, minutes=55)
-# Every Legend I player starts a Season at exactly this many trophies.
 SEASON_START_TROPHIES = 5000
-# One attack or defense moves trophies by at most this many.
 MAX_BATTLE_TROPHIES = 40
-# The game allows this many attacks and this many defenses a Legend day.
 MAX_DAILY_ATTACKS = 8
 MAX_DAILY_DEFENSES = 8
 # Reasons after which a day's end cannot start the next day: a 9th attack or
@@ -31,11 +25,6 @@ CHAIN_BREAK_REASONS = frozenset({
     "attack_count_exceeds_eight", "defense_count_exceeds_eight",
     "not_enrolled", "player_not_eligible",
 })
-# No new-day attack can start in the first minutes after the Reset, so a
-# battle reported in the first five minutes finished a previous-day attack.
-# The attacker's report is stamped when the attack ends, often after the
-# Reset; the defender's for the same battle usually before it. The Reset
-# itself stays at 05:00 UTC.
 BATTLE_DAY_GRACE = timedelta(minutes=5)
 
 _ALLOCATION_THRESHOLDS: dict[int, tuple[tuple[int, int], ...]] = {

@@ -54,14 +54,8 @@ from .season_lifecycle import SEASON_CLOSE_WAIT
 EVIDENCE_REFRESH_WINDOW = timedelta(days=7)
 CHECK_INTERVAL_SECONDS = 600
 RECHECK_SPREAD = timedelta(hours=4)
-# A profile read this long from a Reset may prove the ended day's stored
-# Reset total before the board builds (``queue_for_reset_proof``): its hard
-# deadline. On 14 and 15 November 2026 every such proof came 05:19 to 05:54.
 RESET_PROOF_WINDOW = timedelta(hours=1)
-# Readings in this first hour after a Reset still show whether and when
-# the automatic defense loss and the Monday raise landed (``settled``).
 SETTLE_WINDOW = timedelta(hours=1)
-# A pass waits while this many rechecks are already due in its lane.
 RECHECK_ROOM = 5000
 NIGHT_PASS_DUE_BY = timedelta(hours=22)  # 03:00 UTC, counted from the Reset.
 _VERSIONS = {
@@ -178,10 +172,6 @@ def _queue_day(connection: Any, player_id: int, day_start: datetime, key: str,
     )
 
 
-# The earliest profile a battle log read at %(at)s first covers, read since
-# the player's previous log under its parser, %(log_parser)s: a profile no
-# log covers yet can only confirm a day (``reading_rule``), so the log is
-# what lets it judge one. Without one, the log's own time.
 _FIRST_COVERED = """COALESCE((
     SELECT min(profile.response_completed_at) FROM collector_observations AS profile
     WHERE profile.player_id = %(player)s AND profile.endpoint = 'profile'
@@ -399,7 +389,6 @@ def queue_for_reset_proof(connection: Any, player_id: int, key: str, at: datetim
         return
     day_start, (relation, state) = reset - timedelta(days=1), jobs
     day = _day_text(day_start)
-    # Only the worker reads the Reset's responses; a check has none.
     reset_response = "" if observation_id is None else """
           AND NOT EXISTS (SELECT FROM reset_baseline_evidence AS pair
               WHERE pair.boundary_at = %(reset)s AND pair.player_id = %(player)s

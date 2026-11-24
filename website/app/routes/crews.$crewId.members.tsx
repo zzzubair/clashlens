@@ -18,10 +18,8 @@ import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import type { Route } from "./+types/crews.$crewId.members";
 
 const NO_STORE = { "Cache-Control": "no-store" };
-/** Each account picked to add is its own form field, named by this and its tag. */
 const JOIN_FIELD = "join:";
 const INTENTS = ["remove", "add", "promote", "demote", "leave"] as const;
-/** The row's remove button says what it does; its name adds whose account. */
 const REMOVE_ICON = <span aria-hidden="true">Remove</span>;
 
 export const handle: BackHandle = {
@@ -31,7 +29,6 @@ export const handle: BackHandle = {
   },
 };
 
-/** GET /crews/:crewId/members — who is in the crew, and their accounts. */
 export async function loader({ request, params }: Route.LoaderArgs) {
   const { loadCrew } = await import("../services/crews.server");
   const loaded = await loadCrew(request, params.crewId, true);
@@ -56,11 +53,6 @@ export function meta({ loaderData: loaded }: Route.MetaArgs) {
   ];
 }
 
-/**
- * POST /crews/:crewId/members — remove your own account or kick someone
- * else's, add more of your accounts, make or remove an admin, or leave.
- * The private API checks every role and has the final say.
- */
 export async function action({ request, params, context }: Route.ActionArgs) {
   const crews = await import("../services/crews.server");
   const { clientAddressContext } = await import("../server/client-address.server");
@@ -94,7 +86,6 @@ export async function action({ request, params, context }: Route.ActionArgs) {
         const tag = normalizePlayerTag(fields["tag"] ?? "") ?? "";
         const removed = await crews.removeCrewPlayer(identity, crewId, tag, key(tag));
         const own = fields["own"] === "1";
-        // Your last account out takes you out of the crew.
         if (own && removed.leftCrew === true) throw redirect("/crews");
         return { notice: own ? `Removed ${tag}.` : `Kicked ${tag}.` };
       }
@@ -138,7 +129,6 @@ export default function CrewMembersRoute() {
     );
   }
   const key = result?.idempotencyKey ?? loadedKey;
-  // You first, then the owner, admins and members.
   const members = [...crew.members].sort((a, b) => Number(b.you) - Number(a.you));
   return (
     <main id="main-content" tabIndex={-1} className="page-shell crew-page">
@@ -176,7 +166,6 @@ function MemberCard({
   const canKick =
     !member.you && (role === "owner" || (role === "admin" && member.role === "member"));
   const count = member.players.length;
-  // The owner keeps a place until they hand over or delete the crew.
   const canRemove = member.you && !(member.role === "owner" && count === 1);
   return (
     <li className="crew-panel crew-member">
@@ -255,7 +244,6 @@ function MemberCard({
           </li>
         ))}
       </ul>
-      {/* The owner can't leave, so with nothing to add their tray would be empty. */}
       {member.you &&
       (member.role !== "owner" ||
         spareAccounts(crew, member.players, accounts).length > 0) ? (
@@ -286,7 +274,6 @@ function MemberCard({
   );
 }
 
-/** The owner's one choice for another member, named on the button. */
 function RoleForm({
   member,
   idempotencyKey,
@@ -308,7 +295,6 @@ function RoleForm({
   );
 }
 
-/** A placed account that boards leave out, and why. */
 function PlayerStatus({ player }: { player: CrewPlayer }) {
   if (player.status === "tracking") return null;
   return (
@@ -322,7 +308,6 @@ function PlayerStatus({ player }: { player: CrewPlayer }) {
   );
 }
 
-/** Your linked Legend accounts that can still join, or none when the crew is full. */
 function spareAccounts(crew: Crew, mine: CrewPlayer[], accounts: LinkedAccount[]) {
   if (crew.used >= crew.size) return [];
   return accounts.filter(
@@ -330,7 +315,6 @@ function spareAccounts(crew: Crew, mine: CrewPlayer[], accounts: LinkedAccount[]
   );
 }
 
-/** Your linked Legend accounts that aren't in the crew yet, to add. */
 function AddAccounts({
   crew,
   mine,

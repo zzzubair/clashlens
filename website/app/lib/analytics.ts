@@ -39,13 +39,10 @@ export interface AnalyticsEvent {
   properties: EventProperties;
 }
 
-/** "accepted" or "declined": the visitor's analytics choice in this browser. */
 export const ANALYTICS_CHOICE_KEY = "clashlens-analytics";
 
 export type AnalyticsChoice = "accepted" | "declined" | null;
 
-// Every event the browser sends, with the labels it may carry. Each event
-// also carries its page's route label.
 const EVENTS: Record<string, readonly string[]> = {
   $pageview: ["route", "signed_in"],
   search_submitted: ["route", "source", "input"],
@@ -81,7 +78,6 @@ const POSTHOG_PROPERTIES = [
   "$process_person_profile",
 ];
 
-// Every page the site serves, as [label, address with its IDs replaced].
 const ROUTES: ReadonlyArray<readonly [string, string]> = [
   ["home", "/"],
   ["search", "/search"],
@@ -114,10 +110,6 @@ const ROUTES: ReadonlyArray<readonly [string, string]> = [
   ["privacy", "/privacy"],
 ];
 
-/**
- * The page's label and its address with every ID replaced by a placeholder.
- * `/` is "dashboard" while it shows the signed-in Dashboard, else "home".
- */
 export function routeOf(
   pathname: string,
   dashboard = false,
@@ -147,7 +139,6 @@ function safeUrl(value: string): string | undefined {
   }
 }
 
-// Another site's address keeps only its origin; this site's loses its IDs.
 function safeReferrer(value: string, host: unknown): string | undefined {
   if (value === "$direct") return value;
   try {
@@ -158,11 +149,6 @@ function safeReferrer(value: string, host: unknown): string | undefined {
   }
 }
 
-/**
- * PostHog's last step before sending. Drops any event not on the list, keeps
- * only the event's own labels and what PostHog needs to count it, and
- * rewrites every page address to its route.
- */
 export function sanitizeEvent(event: CaptureResult | null): CaptureResult | null {
   const labels = event ? EVENTS[event.event] : undefined;
   if (!event || !labels) return null;
@@ -190,7 +176,6 @@ export function sanitizeEvent(event: CaptureResult | null): CaptureResult | null
   };
 }
 
-/** What kind of thing was typed into a search box, never what was typed. */
 export function searchInput(value: string): string {
   return normalizePlayerTag(value) ? "tag" : "name";
 }
@@ -199,7 +184,6 @@ export function countBucket(count: number): string {
   return count === 0 ? "zero" : count === 1 ? "one" : "many";
 }
 
-// The Armies labels approved for counting; anything else is sent as "other".
 const ARMY_CATEGORIES = new Set([
   "army-types",
   "troops",
@@ -232,16 +216,11 @@ export function armySort(column: string): string {
   return ARMY_SORTS.has(column) ? column : "other";
 }
 
-// A player group's kind, never its numbers: top-100 is "top".
 function armyPopulation(population: string): string {
   const kind = population.replace(/(-\d+)+$/, "");
   return ARMY_POPULATIONS.includes(kind) ? kind : "other";
 }
 
-/**
- * What a page shows, as its loader accepted it: values compared between loads
- * to find what changed, and the labels sent with the change.
- */
 export interface Selection {
   values: Record<string, string>;
   labels: EventProperties;
@@ -299,11 +278,6 @@ export function selectionOf(routeId: string, data: unknown): Selection | null {
   return null;
 }
 
-/**
- * Events for a change of what a page shows, read from what its loader
- * accepted, so the pages themselves need no tracking code. `before` is the
- * page's previous selection, or null when the page has just been opened.
- */
 export function selectionEvents(
   route: string,
   before: Selection | null,
@@ -342,8 +316,6 @@ export function selectionEvents(
   return [];
 }
 
-// The player page's visible outcome for each lookup state without current
-// results: still checking, not found, or failed.
 const LOOKUP_OUTCOMES: Partial<Record<PlayerLookup["state"], string>> = {
   checking: "checking",
   tracking: "checking",
@@ -353,7 +325,6 @@ const LOOKUP_OUTCOMES: Partial<Record<PlayerLookup["state"], string>> = {
   failed: "failed",
 };
 
-/** Events read from what a page loaded: search results. */
 export function loadedPageEvents(routeId: string, data: unknown): AnalyticsEvent[] {
   if (!data || typeof data !== "object") return [];
   const page = data as Record<string, unknown>;
@@ -376,7 +347,6 @@ export function loadedPageEvents(routeId: string, data: unknown): AnalyticsEvent
   return [];
 }
 
-/** The lookup outcome the player page shows, from what it renders. */
 export function lookupOutcome(
   requestedTag: string | null,
   trackedPlayer: PlayerPage | null,
@@ -394,7 +364,6 @@ function timeBucket(milliseconds: number): string {
   return "over-10s";
 }
 
-/** One page load in ten reports, in coarse steps, how long it took. */
 export function pagePerformance(
   timing: PerformanceNavigationTiming | undefined,
   sample = Math.random(),
@@ -434,20 +403,14 @@ type ClientLoad =
 
 let load: ClientLoad = { kind: "notLoaded", queue: [] };
 const readyClient = (): PostHog | null => (load.kind === "ready" ? load.posthog : null);
-// Whether the ready client was last told to count.
 let clientCounting = false;
-// A choice this browser could not save, kept for this page only.
 let unsavedChoice: AnalyticsChoice | undefined;
-// Whether the choice was reopened after one was made.
 let reopened = false;
 let watchingTabs = false;
-// Rises each time acceptance is withdrawn, here or in another tab.
 let withdrawals = 0;
-// Whether `/` shows this browser the signed-in Dashboard, not the front page.
 let dashboardShown = false;
 const choiceListeners = new Set<() => void>();
 
-/** The visitor's choice in this browser, or null before they make one. */
 export function analyticsChoice(): AnalyticsChoice {
   if (unsavedChoice !== undefined) return unsavedChoice;
   try {
@@ -458,7 +421,6 @@ export function analyticsChoice(): AnalyticsChoice {
   }
 }
 
-/** Changes each time acceptance is withdrawn, here or in another tab. */
 export function analyticsWithdrawals(): number {
   return withdrawals;
 }
@@ -478,14 +440,11 @@ export function consentStage(): ConsentStage {
   return analyticsChoice() ?? "undecided";
 }
 
-/** Whether to show the Accept or Decline question. */
 export function askingForChoice(): boolean {
   const stage = consentStage();
   return stage === "reopened" || stage === "undecided";
 }
 
-// Deletes everything PostHog keeps in this browser: its ID and its own record
-// of the choice.
 function forgetPostHog(): void {
   for (const name of ["localStorage", "sessionStorage"] as const) {
     try {
@@ -493,15 +452,10 @@ function forgetPostHog(): void {
       for (const key of Object.keys(storage)) {
         if (key.startsWith("ph_") || key.startsWith("__ph_")) storage.removeItem(key);
       }
-    } catch {
-      // Nothing can be kept where nothing can be read.
-    }
+    } catch {}
   }
 }
 
-// Brings PostHog in line with the latest choice, including one made in
-// another tab, so nothing is sent once a visitor declines. True when it may
-// count.
 function applyChoice(
   posthog: PostHog,
   accepted = analyticsChoice() === "accepted",
@@ -530,7 +484,6 @@ function notifyChoice(withdrawn = false): void {
   for (const listener of choiceListeners) listener();
 }
 
-/** Saves the visitor's choice in this browser and applies it straight away. */
 export function setAnalyticsChoice(choice: "accepted" | "declined"): void {
   try {
     window.localStorage.setItem(ANALYTICS_CHOICE_KEY, choice);
@@ -542,7 +495,6 @@ export function setAnalyticsChoice(choice: "accepted" | "declined"): void {
   notifyChoice();
 }
 
-/** Shows the Accept or Decline question again. */
 export function reopenAnalyticsChoice(): void {
   reopened = true;
   for (const listener of choiceListeners) listener();
@@ -551,7 +503,6 @@ export function reopenAnalyticsChoice(): void {
 export function onAnalyticsChoiceChange(listener: () => void): () => void {
   if (!watchingTabs) {
     watchingTabs = true;
-    // Another tab made a choice.
     window.addEventListener("storage", (event) => {
       if (event.key === ANALYTICS_CHOICE_KEY || event.key === null) {
         unsavedChoice = undefined;
@@ -563,18 +514,14 @@ export function onAnalyticsChoiceChange(listener: () => void): () => void {
   return () => choiceListeners.delete(listener);
 }
 
-// The only way an event leaves: the latest choice is applied, then PostHog
-// sends it at once, never later from a wait or a retry.
 function send(posthog: PostHog, event: string, properties: Properties): void {
   if (applyChoice(posthog)) posthog.capture(event, properties, { send_instantly: true });
 }
 
-/** Says whether `/` shows the signed-in Dashboard, which names it in events. */
 export function setDashboardShown(shown: boolean): void {
   dashboardShown = shown;
 }
 
-/** Loads PostHog; called only once the visitor has accepted. */
 export function startAnalytics(settings: AnalyticsSettings): void {
   if (load.kind !== "notLoaded") return;
   const { queue } = load;
@@ -583,7 +530,6 @@ export function startAnalytics(settings: AnalyticsSettings): void {
     .then(({ default: posthog }) => {
       posthog.init(settings.token, {
         api_host: POSTHOG_HOST,
-        // Nothing is kept or sent until the choice is applied below.
         opt_out_capturing_by_default: true,
         opt_out_persistence_by_default: true,
         persistence: "localStorage",
@@ -617,10 +563,6 @@ export function startAnalytics(settings: AnalyticsSettings): void {
     });
 }
 
-/**
- * Sends one listed event with label-only properties and the page it happened
- * on; a no-op unless the visitor accepted.
- */
 export function track(
   event: string,
   labels: EventProperties = {},
@@ -629,7 +571,6 @@ export function track(
   const allowed = EVENTS[event];
   if (!allowed || analyticsChoice() !== "accepted") return;
   const { route, path } = routeOf(pathname, dashboardShown);
-  // Kept with the event, so one sent after PostHog loads still names its page.
   const properties: Properties = {
     route,
     $current_url: `${window.location.origin}${path}`,

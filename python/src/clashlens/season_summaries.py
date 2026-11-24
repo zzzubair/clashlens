@@ -26,14 +26,9 @@ from typing import Any
 from .domain import SEASON_DAY_COUNT, SEASON_START_TROPHIES
 from .season_lifecycle import acquire_player_season_lock, season_completed
 
-# v2 added eod_change and its evidence states; readers report them unknown for v1.
 PROJECTION_VERSION = "player-season-summary-v2"
 _SEASON_DAYS = tuple(range(1, SEASON_DAY_COUNT + 1))
 
-# Arbitrary source reason strings are normalized into a bounded
-# representation so a valid source row can never fail the compact
-# publication CHECK on flag size. Projection-owned literals are always
-# kept; only free-form reasons are capped, with an explicit marker.
 _REASON_CHARS = 64
 _DAY_REASON_LIMIT = 8
 _SEASON_REASON_LIMIT = 16
@@ -159,8 +154,6 @@ def _adjustment_total(adjustments: Any) -> tuple[bool, int | None]:
 
 
 def _project(player_id: int, season_id: str, connection: Any) -> dict[str, Any] | None:
-    # Migration 0011 (ranked_day_version_id) is guaranteed before 0019, so
-    # the link column is always selected.
     query = (
         "SELECT "
         + ", ".join(_DAILY_COLUMNS)
@@ -331,9 +324,6 @@ def _project(player_id: int, season_id: str, connection: Any) -> dict[str, Any] 
         | set(final_reasons)
         | ({TRUNCATED_REASONS_FLAG} if season_overflow else set())
     )
-    # Complete requires 28 valid complete-covered days, no missing day
-    # numbers, no unresolved flags or reasons, and known season
-    # boundary trophies. Unknown stays NULL and forces partial.
     complete = (
         numbers_known
         and len(days) == SEASON_DAY_COUNT
@@ -526,9 +516,6 @@ def materialize_player_season(
             if existing_digest is not None
             else None,
         }
-    # Two refreshes for one player-season must not interleave: the later
-    # one re-projects only after the first commits, so the stored summary
-    # always reflects every committed daily log.
     acquire_player_season_lock(connection, int(player_id), season_id)
     projected = _project(int(player_id), season_id, connection)
     if projected is None:

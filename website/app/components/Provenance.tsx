@@ -11,10 +11,8 @@ const utcTimestampFormatter = new Intl.DateTimeFormat("en-GB", {
 let localTimestampFormatter: Intl.DateTimeFormat | null = null;
 let localTimeFormatter: Intl.DateTimeFormat | null = null;
 
-/** A player update older than this is shown as old. */
 export const OLD_UPDATE_SECONDS = 600;
 
-/** Starts at the server's time so the first render matches, then ticks every 30 seconds. */
 export function useCurrentTime(loadedAt: string | undefined) {
   const [now, setNow] = useState(() => (loadedAt ? Date.parse(loadedAt) : 0));
   useEffect(() => {
@@ -45,7 +43,6 @@ export function formatTimestamp(value: string): string {
   return `${utcTimestampFormatter.format(date).replace("Sept", "Sep")} UTC`;
 }
 
-/** A time in the viewer's own timezone, written the same way on every page. */
 export function LocalTimestamp({
   value,
   timeOnly,

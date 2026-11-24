@@ -108,7 +108,6 @@ from .reconciliation import RECONCILIATION_RULE_VERSION
 from .season_lifecycle import SEASON_CLOSE_WAIT
 from .source_observation_contract import BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT
 
-# The rules saved days and Daily boards come out by; see season_repair.
 DAY_RULES_REVISION = "2026-10-19-league-week"
 REPAIR_ACTIONS = ("preview", "queue", "receipt")
 REPAIR_SCOPES = ("day-1-or-unplayed",)
@@ -211,11 +210,9 @@ def season_repair(
             "SELECT 1 FROM season_detail_retirements WHERE official_season_id = %s",
             (season_id,),
         ).fetchone():
-            # Its days can no longer be recalculated.
             return {"season": season_id, "refused": f"season {season_id} is finalized"}
         receipt = _receipt(connection, season_id, revision)
         if scope and receipt is not None:
-            # A scoped repair's first run saves its players with the receipt.
             players = list(receipt.players)
         elif scope:
             players = _scoped_players(connection, start)
@@ -306,13 +303,9 @@ def season_repair(
         ).fetchone()[0]
         settled = {} if undecided else league_days.settle(database, connection, start, max_jobs)
     if undecided or settled["players_settled"]:
-        # Days are recalculated by the decided weeks: a week not Legend I
-        # keeps no public day.
         return {**report, "phase": RepairPhase.LEAGUE, "undecided_weeks": int(undecided), **settled}
     inputs = _repair_inputs(database, season_id, start, max_jobs)
     if inputs["queued"] or inputs["unfinished"] or inputs["failed"]:
-        # Days wait for every repair of their evidence; a failed one holds
-        # them until it is investigated and retried by hand.
         return {**report, "phase": RepairPhase.INPUTS, **inputs}
     if report["left_to_queue"]:
         batch = [player for player in players if player > through][:max_jobs]
@@ -320,8 +313,6 @@ def season_repair(
         return {**report, "phase": RepairPhase.DAYS, "queued": len(batch),
                 "left_to_queue": report["left_to_queue"] - len(batch)}
     if report["unfinished"] or report["failed"]:
-        # A failed recalculation is not retried; it holds every board and
-        # summary until it is investigated and retried by hand.
         return {**report, "phase": RepairPhase.DAYS, "queued": 0}
     boards = boundary.queue_board_rebuilds(
         database, season_id, queue=True, repair=True)["boards"]
@@ -745,7 +736,6 @@ def _board_counts(connection: Any, start: datetime) -> dict[str, Any]:
 
 
 ACTIONS = ("preview", "register", "activate")
-# Campaign execution is not installed; preview and registration remain available.
 REQUIRED_STAGES = ("battle_reports", "army_decodes", "day_results", "publications")
 
 

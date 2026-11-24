@@ -145,8 +145,6 @@ class Commands:
         if page is None:
             return replies.not_tracked(self.site, tag)
         else:
-            # The person's own linked accounts in their colour, anyone else in
-            # Clash Lens yellow.
             colour = (
                 replies.GOLD if account is None
                 else self.store.colours(account).get(tag, replies.GOLD)
@@ -155,9 +153,6 @@ class Commands:
             has_season = bool((page.get("screen_ready") or {}).get("season_day_starts"))
             if status not in (None, replies.WAITING_FOR_RESET) and not has_season:
                 return replies.player_status(self.site, page, status, now, colour)
-            # Today's picture, dark when the person's own account chose it,
-            # left out while too many pictures wait to be drawn. The reply
-            # carries the drawing, so no database read waits for it.
             day = picture.legend_day(page, ranked_day_for(now).start)
             drawn = None
             if day is not None:

@@ -65,7 +65,7 @@ from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from threading import Condition, Lock, Thread
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 from . import army_types, projected_place
 from .api_db import ApiDatabase
@@ -89,8 +89,6 @@ BOARD_MAX_AGE_SECONDS = 600
 # A follow-up request waits this long for the board read under way, inside
 # the website's 5 second limit.
 BOARD_WAIT_SECONDS = 4
-# No request waits on the background board read past BOARD_WAIT_SECONDS, so
-# it gets longer than a request's 10 seconds: busy mornings took it 9 to 12.
 BOARD_STATEMENT_TIMEOUT = "30s"
 # Bases you attacked: compare with players whose day started this near the
 # base's Reset trophies, widened until the comparison holds enough defenses
@@ -111,9 +109,6 @@ PAST_DAY_WAIT_SECONDS = 8
 OFFENSE_ARMY_DAYS = (3, army_types.OFFENSE_CARD_DAYS, "season")
 _MAX_OPPONENTS = MAX_DAILY_ATTACKS
 
-# Each active player's latest log for one Legend day, with its start
-# trophies. Reading every log's saved input record took 4.4 of 4.8 s on
-# 13 October 2026 production data: about 6 KB each, stored apart from the row.
 _BOARD_SQL = """
 SELECT player.normalized_tag, ranked_day.start_trophies,
        day.attack_count, day.attack_gain, day.defense_count, day.defense_loss,
@@ -166,16 +161,8 @@ WHERE daily.id = ANY(%s)
   AND event ->> 'valid' IS DISTINCT FROM 'false'
 """
 _LOGS_A_READ = 2000
-# With only the defender's report, a battle ends this long after it, the
-# median attack length (analytics.latest_trophy_changes).
 _DEFENSE_REPORT_TO_END = timedelta(seconds=155)
 
-# Every player's defenses, held defenses and trophies lost on defense in
-# their latest log of the Legend day %s, with that day's start trophies:
-# 11,666 players in 2.8 s on 13 October 2026 and 4.1 s on 14 October, most
-# of it reading the whole table from disk. No index helps: going player by
-# player took 5.2 s, as about 11,700 saved days are read either way. So
-# DashboardBoard.past_day keeps it an hour and runs one such read at a time.
 _PAST_DAY_SQL = """
 SELECT ranked_day.start_trophies, day.defense_count,
        day.defense_count - COALESCE(day.defense_three_star_count, 0),
@@ -193,9 +180,6 @@ JOIN ranked_day_versions AS ranked_day
 WHERE day.defense_count > 0 AND ranked_day.start_trophies IS NOT NULL
 """
 
-# Each player's latest log for one Legend day, with the day's start trophies
-# and its "no opponent, no battle" defense slots, which the game counts as
-# used.
 _DAY_LOGS_SQL = """
 SELECT DISTINCT ON (daily.player_id)
        player.normalized_tag, daily.attack_count, daily.defense_count,
@@ -217,43 +201,55 @@ ORDER BY daily.player_id, daily.version DESC
 class _Similar:
     """One Legend day's defenses by day start trophies, for comparing bases."""
 
-    # Distinct day start trophies, ascending, and the defenses, held defenses
-    # and trophies lost on defense of players who started below each (one
-    # more entry than starts).
     starts: list[int]
     defenses_below: list[int]
     held_below: list[int]
     lost_below: list[int]
 
 
-def _similar(by_start: dict[int, list[int]]) -> _Similar:
-    """``by_start`` maps day start trophies to [defenses, held, lost]."""
+def _similar(by_start: dict[int, _Defenses]) -> _Similar:
+    """``by_start`` maps day start trophies to the day's defenses, held and lost."""
     starts = sorted(by_start)
     defenses_below, held_below, lost_below = [0], [0], [0]
     for value in starts:
-        defenses_below.append(defenses_below[-1] + by_start[value][0])
-        held_below.append(held_below[-1] + by_start[value][1])
-        lost_below.append(lost_below[-1] + by_start[value][2])
+        defenses = by_start[value]
+        defenses_below.append(defenses_below[-1] + defenses.defenses)
+        held_below.append(held_below[-1] + defenses.held)
+        lost_below.append(lost_below[-1] + defenses.lost)
     return _Similar(starts, defenses_below, held_below, lost_below)
+
+
+class _Defenses(NamedTuple):
+    defenses: int
+    held: int
+    lost: int
+
+
+class _Ends(NamedTuple):
+    best: int
+    worst: int
+
+
+class _Slots(NamedTuple):
+    basis: int
+    open_attacks: int
+    open_defenses: int
 
 
 @dataclass(frozen=True)
 class _Board:
     day_start: datetime
     computed_at: datetime
-    # tag -> (best end of day, worst end of day)
-    ends: dict[str, tuple[int, int]]
+    ends: dict[str, _Ends]
     best_ends: list[int]
     worst_ends: list[int]
     similar: _Similar
-    # tag -> (trophies now, open attacks, open defenses), for the projection.
-    slots_left: dict[str, tuple[int, int, int]]
+    slots_left: dict[str, _Slots]
 
 
 @dataclass(frozen=True)
 class _Projection:
     day_start: datetime
-    # tag -> projected place, before it is kept inside the tag's range.
     places: dict[str, int]
 
 
@@ -282,10 +278,9 @@ def _read_board(
             for row in connection.execute(_ZERO_SLOTS_SQL, (unread,)).fetchall()
         }
     slots = {version: slots[version] for version in versions if version in slots}
-    ends: dict[str, tuple[int, int]] = {}
-    slots_left: dict[str, tuple[int, int, int]] = {}
-    # Day start trophies -> [defenses, held defenses, trophies lost].
-    by_start: dict[int, list[int]] = {}
+    ends: dict[str, _Ends] = {}
+    slots_left: dict[str, _Slots] = {}
+    by_start: dict[int, _Defenses] = {}
     for row in live:
         tag, trophies = text_value(row[0]), row[2]
         start, attacks, gained, defended, lost, tripled, version = days.get(
@@ -302,22 +297,25 @@ def _read_board(
             basis = int(start) + int(gained) - int(lost)
             open_attacks = _open(int(attacks) + zero_attacks, MAX_DAILY_ATTACKS)
             open_defenses = _open(int(defended) + zero_defenses, MAX_DAILY_DEFENSES)
-        ends[tag] = (
+        ends[tag] = _Ends(
             basis + MAX_BATTLE_TROPHIES * open_attacks,
             basis - MAX_BATTLE_TROPHIES * open_defenses,
         )
-        slots_left[tag] = (basis, open_attacks, open_defenses)
+        slots_left[tag] = _Slots(basis, open_attacks, open_defenses)
         if defended and start is not None:
-            tally = by_start.setdefault(int(start), [0, 0, 0])
-            tally[0] += int(defended)
-            tally[1] += int(defended) - int(tripled or 0)
-            tally[2] += int(lost)
+            started = int(start)
+            seen = by_start.get(started, _Defenses(0, 0, 0))
+            by_start[started] = _Defenses(
+                seen.defenses + int(defended),
+                seen.held + int(defended) - int(tripled or 0),
+                seen.lost + int(lost),
+            )
     return _Board(
         day_start=day_start,
         computed_at=now,
         ends=ends,
-        best_ends=sorted(best for best, _ in ends.values()),
-        worst_ends=sorted(worst for _, worst in ends.values()),
+        best_ends=sorted(end.best for end in ends.values()),
+        worst_ends=sorted(end.worst for end in ends.values()),
         similar=_similar(by_start),
         slots_left=slots_left,
     ), slots
@@ -327,7 +325,6 @@ def _in_background(read: Callable[[], None]) -> None:
     Thread(target=read, name="dashboard-board", daemon=True).start()
 
 
-# A log's kept battles: (attack, battle, report time, moved trophies).
 _Reports = tuple[tuple[bool, str, datetime, bool], ...]
 
 
@@ -343,8 +340,6 @@ def _latest_changes(
     kept = {log: reports[log] for log in newest.values() if log in reports}
     unread = [log for log in newest.values() if log not in kept]
     read: dict[int, list[tuple[bool, str, datetime, bool]]] = {log: [] for log in unread}
-    # A few thousand at a time: all of them, after a restart, took about
-    # 3 s on 13,300 players with 11 battles each.
     for first in range(0, len(unread), _LOGS_A_READ):
         for log, lens, battle, at, moved in connection.execute(
             _LOG_REPORTS_SQL, (unread[first : first + _LOGS_A_READ],)
@@ -386,9 +381,10 @@ def _projection_inputs(
         ).fetchall()
     }
     latest, reports = _latest_changes(connection, board.day_start, reports)
-    trophies, open_attacks, open_defenses = (
-        list(column) for column in zip(*board.slots_left.values(), strict=True)
-    )
+    slots = list(board.slots_left.values())
+    trophies = [slot.basis for slot in slots]
+    open_attacks = [slot.open_attacks for slot in slots]
+    open_defenses = [slot.open_defenses for slot in slots]
     found = [players.get(tag, (None, 0, 0)) for tag in tags]
     return (
         trophies,
@@ -459,14 +455,11 @@ class DashboardBoard:
         self._next_read = float("-inf")
         self._reading = False
         self._tried_day: datetime | None = None
-        # Saved day -> its (attack, defense) "no opponent, no battle" slots.
         self._slots: dict[int, tuple[int, int]] = {}
         self._projection: _Projection | None = None
         self._projected_at = float("-inf")
         self._projecting = False
-        # Published log -> its battles, for the projection's equal-trophy order.
         self._reports: dict[int, _Reports] = {}
-        # Earlier Legend day start -> (when read, its comparison).
         self._past: dict[datetime, tuple[float, _Similar]] = {}
         self._past_read = Lock()
 
@@ -491,7 +484,6 @@ class DashboardBoard:
 
         while True:
             with self._lock:
-                # A new Legend day reads at once; a failed read waits its turn.
                 start = not self._reading and (
                     self._clock() >= self._next_read or self._tried_day != day_start
                 )
@@ -504,7 +496,6 @@ class DashboardBoard:
                     lambda: shown() is not None or not self._reading,
                     max(0.0, until - time.monotonic()),
                 )
-                # A read from before the Reset hands the wait to today's.
                 if (
                     shown() is not None
                     or self._tried_day == day_start
@@ -513,9 +504,7 @@ class DashboardBoard:
                     return shown()
 
     def _read(self, database: ApiDatabase, now: datetime) -> None:
-        # A failed read waits a turn instead of starting again at once.
         try:
-            # A background thread, not a request's, so it waits its turn.
             live = self._live_board.current(database, now, wait=None).rows
             with database.pool.connection() as connection:
                 # Only until the block's commit: the pool's requests keep 10 s.
@@ -611,18 +600,20 @@ class DashboardBoard:
                 return similar
             raise PastDayBusy
         try:
-            # Another request may have read it while this one waited.
             similar = kept()
             if similar is not None:
                 return similar
-            by_start: dict[int, list[int]] = {}
+            by_start: dict[int, _Defenses] = {}
             with database.pool.connection() as connection:
                 rows = connection.execute(_PAST_DAY_SQL, (day_start,)).fetchall()
             for start, defended, held, lost in rows:
-                tally = by_start.setdefault(int(start), [0, 0, 0])
-                tally[0] += int(defended)
-                tally[1] += int(held)
-                tally[2] += int(lost or 0)
+                started = int(start)
+                seen = by_start.get(started, _Defenses(0, 0, 0))
+                by_start[started] = _Defenses(
+                    seen.defenses + int(defended),
+                    seen.held + int(held),
+                    seen.lost + int(lost or 0),
+                )
             similar = _similar(by_start)
             with self._lock:
                 self._past[day_start] = (self._clock(), similar)
@@ -666,12 +657,8 @@ def rank_range(board: _Board, tag: str) -> dict[str, int] | None:
     ends = board.ends.get(tag)
     if ends is None:
         return None
-    best_end, worst_end = ends
-    # Players whose worst end beats this best end finish above it whatever happens.
-    surely_above = len(board.worst_ends) - bisect_right(board.worst_ends, best_end)
-    # Players whose best end reaches this worst end may finish above it; the
-    # count includes this player, whose best end always reaches its own worst.
-    maybe_above_or_self = len(board.best_ends) - bisect_left(board.best_ends, worst_end)
+    surely_above = len(board.worst_ends) - bisect_right(board.worst_ends, ends.best)
+    maybe_above_or_self = len(board.best_ends) - bisect_left(board.best_ends, ends.worst)
     return {"best": surely_above + 1, "worst": maybe_above_or_self}
 
 
@@ -706,8 +693,6 @@ def similar_held(board: _Similar, trophies: int | None) -> dict[str, int] | None
 
     reach = SIMILAR_TROPHIES
     if within(reach)[1] < SIMILAR_DEFENSES:
-        # The narrowest wider reach with enough defenses, by halving between
-        # one too narrow and the most, which is kept if none has enough.
         narrow, reach = reach, SIMILAR_MOST_TROPHIES
         while reach - narrow > 1:
             middle = (narrow + reach) // 2
@@ -803,8 +788,6 @@ def _opponents(
             for event in defended
         ]
         if not any(defense["yours"] for defense in defenses):
-            # This attack is in your log but not yet in theirs. A defense
-            # loses what the attack won, except a 0-star one, which loses 0.
             defenses.append({
                 "stars": attack["stars"],
                 "trophy_change": -attack["trophy_change"] if attack["stars"] else 0,
@@ -868,7 +851,6 @@ def get_player_today(
     pending = False
     if board is not None and tag in board.ends:
         projection = board_cache.projection(now, tag, wait=until - time.monotonic())
-        # Not once today's projection found no day's examples saved.
         pending = projection is None or (
             bool(projection.places) and tag not in projection.places
         )
@@ -962,10 +944,13 @@ def get_player_bases(
     }
 
 
-# Per army type: battles, three-star battles, and trophies won on attack or
-# lost on defense.
-_Totals = dict[int, list[int]]
-# Named types only: Other and Unreadable count in the totals, never as a row.
+class _Counts(NamedTuple):
+    battles: int
+    three_stars: int
+    trophies: int
+
+
+_Totals = dict[int, _Counts]
 _UNNAMED = frozenset({army_types.OTHER, army_types.UNREADABLE})
 
 
@@ -975,10 +960,12 @@ def _add_outcomes(totals: _Totals, rows: list[tuple[str, int, int, int, int]]) -
         trophies = (
             allocation.attacker_gain if lens == "offense" else allocation.defender_loss
         )
-        total = totals.setdefault(type_id, [0, 0, 0])
-        total[0] += battles
-        total[1] += battles if stars == 3 else 0
-        total[2] += battles * trophies
+        counted = totals.get(type_id, _Counts(0, 0, 0))
+        totals[type_id] = _Counts(
+            battles=counted.battles + battles,
+            three_stars=counted.three_stars + (battles if stars == 3 else 0),
+            trophies=counted.trophies + battles * trophies,
+        )
 
 
 class ArmyDays:
@@ -1010,7 +997,6 @@ class ArmyDays:
                         self._days[(lens, start)] = (
                             (marker, army_types.RULES_VERSION), read[start]
                         )
-                # Older days than any card can ask for go.
                 for key in sorted(self._days, key=lambda key: key[1])[
                     : -4 * SEASON_DAY_COUNT
                 ]:
@@ -1132,11 +1118,14 @@ def get_player_armies(
         "covered_days": [_iso(day[0]) for day in covered],
         "rows": rows,
         "total": outcome(
-            [sum(counts[index] for counts in mine.values()) for index in range(3)]
+            _Counts(
+                sum(count.battles for count in mine.values()),
+                sum(count.three_stars for count in mine.values()),
+                sum(count.trophies for count in mine.values()),
+            )
         ),
     }
     if lens == "defense":
-        # Every defense, Other and unreadable armies included.
         result["legends_total"] = outcome(
             [sum(counts[index] for counts in legends.values()) for index in range(3)]
         ) if legend_days else None

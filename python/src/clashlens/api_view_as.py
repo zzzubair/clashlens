@@ -35,9 +35,7 @@ from .api_requests import OperationResult, RequestBinding
 from .db_rows import text_value
 from .profile import normalize_player_tag
 
-# What any account but the owner gets from a pin or follow, whatever it sent.
 NOT_OWNER = OperationResult(404, {"error": "not_found"})
-# The owner's switch for each alert, as the Discord alerts page names them.
 FOLLOW_TABLES = {"attack": Switch.ATTACK, "day_summary": Switch.DAY_SUMMARY}
 
 
@@ -118,7 +116,6 @@ def view_as(
         "player": cards[0] if cards else None,
         "pinned": None if pinned is None else text_value(pinned[0]),
         "follow": follow,
-        # When the viewed card's today numbers stop being today's.
         "calendar": calendar_payload(now),
     }
 
@@ -186,8 +183,6 @@ def set_follow(
 
 
 class PinBody(StrictBody):
-    # None unpins. Any text up to this long is read as a tag, so every
-    # account but the owner gets one answer for every tag.
     tag: str | None = Field(default=None, max_length=64)
 
 

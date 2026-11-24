@@ -1,10 +1,5 @@
 import type { KeyboardEvent } from "react";
 
-/**
- * Up and Down arrows move focus through the items matching `selector` inside
- * the element handling the key, focusing each item's link. Up from the first
- * item returns to `above`, such as the search box the items belong to.
- */
 export function moveFocusWithArrows(
   event: KeyboardEvent<HTMLElement>,
   selector: string,
