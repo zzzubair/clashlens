@@ -1014,8 +1014,9 @@ def test_a_dropped_sunday_proves_its_reset_total_as_before_the_drop() -> None:
     04:40: a 05:06 reading of 3,820 is stale, and the 05:08 reading proves
     3,860. Once the new week drops the player out of Legend I, the automatic
     loss is unknown, but the Reset total is proven as before, setting the
-    stale reading aside. Without its start the day leaves no end to prove,
-    so readings lagging the day's attack prove nothing."""
+    stale reading aside. Without its start, or with a start a reading
+    during the day contradicts, the day leaves no end to prove, so readings
+    lagging the day's attack prove nothing."""
     sunday = ranked_day_for(datetime(2026, 11, 22, 12, tzinfo=UTC))
     shift = sunday.start - DAY.start
     coverage = tuple(replace(log, observed_at=log.observed_at + shift) for log in _coverage())
@@ -1041,8 +1042,8 @@ def test_a_dropped_sunday_proves_its_reset_total_as_before_the_drop() -> None:
             "attack", "offense", 40, battle_timestamp=at - timedelta(minutes=30)),),
         readings=(read(at - timedelta(minutes=20), 3800),))
 
-    before, after, unstarted = (
-        reconcile_ranked_day(item) for item in (week, dropped, no_start))
+    before, after, unstarted, contradicted = (reconcile_ranked_day(item) for item in (
+        week, dropped, no_start, replace(no_start, start_trophies=3850)))
 
     assert before.state == "Complete"
     assert after.state == "Partial"
@@ -1053,3 +1054,5 @@ def test_a_dropped_sunday_proves_its_reset_total_as_before_the_drop() -> None:
     assert after.formula_components["reset_total"] == total
     assert (total["value"], total["proven"]) == (3860, True)
     assert unstarted.formula_components["reset_total"]["proven"] is False
+    assert contradicted.state == "Inconsistent"
+    assert contradicted.formula_components["reset_total"]["proven"] is False

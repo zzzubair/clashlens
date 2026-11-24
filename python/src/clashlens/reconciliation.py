@@ -759,7 +759,10 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
         ),
     )
     end_before_loss = None if final_trophies is None else final_trophies + (automatic_loss or 0)
-    if not automatic_value_known and proof_rule is not None:
+    # The automatic loss alone unknown: nothing else fails, not even a reading during the day.
+    loss_alone_unknown = not automatic_value_known and proof_rule is not None and set(unique_failures) <= {
+        "missing_end_baseline", "automatic_defense_basis_unavailable"}
+    if loss_alone_unknown:
         # The day's end before its unknown loss; the EOD stays unknown. As for a day whose
         # loss is known (``reconcile_ranked_day``), a stale reading is set aside only when,
         # without that, a reading contradicts it.
@@ -773,7 +776,7 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
         final_trophies=final_trophies, end_before_loss=end_before_loss,
         # A reading during the day that contradicts it leaves no end to prove.
         end_proof=None if during is not None and during.reading is not None else proof_rule,
-        ledger=ledger if automatic_value_known or proof_rule is not None else None,
+        ledger=ledger if automatic_value_known or loss_alone_unknown else None,
     )
 
     return ReconciliationResult(
