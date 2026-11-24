@@ -1007,3 +1007,49 @@ def test_a_monday_after_an_unfinished_day_starts_at_5000_when_its_readings_prove
     # what it is.
     assert (not_monday.state, not_monday.start_trophies) == ("Inconsistent", 4884)
     assert (expected.state, expected.start_trophies) == ("Inconsistent", 4884)
+
+
+def test_a_dropped_sunday_proves_its_reset_total_as_before_the_drop() -> None:
+    """A Sunday with no defense, 3,800 plus attacks of 10, 20 and 30 from
+    04:40: a 05:06 reading of 3,820 is stale, and the 05:08 reading proves
+    3,860. Once the new week drops the player out of Legend I, the automatic
+    loss is unknown, but the Reset total is proven as before, setting the
+    stale reading aside. Without its start the day leaves no end to prove,
+    so readings lagging the day's attack prove nothing."""
+    sunday = ranked_day_for(datetime(2026, 11, 22, 12, tzinfo=UTC))
+    shift = sunday.start - DAY.start
+    coverage = tuple(replace(log, observed_at=log.observed_at + shift) for log in _coverage())
+    at = sunday.end
+    read = reading_rule.Reading
+    week = _input(
+        ranked_day=sunday, now=at + timedelta(minutes=66), coverage_observations=coverage,
+        previous_day=PreviousRankedDay(True, 8, 160, 0), start_trophies=3800,
+        next_start_trophies=3860, boundary_kind="weekly", covered_until=at + timedelta(minutes=9),
+        contributions=tuple(
+            BattleContribution(str(i), "offense", gain,
+                               battle_timestamp=at - timedelta(minutes=20 - i * 2))
+            for i, gain in enumerate((10, 20, 30))),
+        readings=(read(at - timedelta(minutes=14), 3800), read(at + timedelta(minutes=6), 3820)),
+        end_baseline_evidence={"profile": {"observed_at": (at + timedelta(minutes=8)).isoformat()}},
+    )
+    dropped = replace(week, boundary_kind=None, end_baseline_evidence={
+        **week.end_baseline_evidence, "dropped_from_legend_i": True})
+    no_start = replace(
+        dropped, start_trophies=None, next_start_trophies=3800,
+        previous_day=PreviousRankedDay(False, 8, 160, 0, battles_known=True),
+        contributions=(BattleContribution(
+            "attack", "offense", 40, battle_timestamp=at - timedelta(minutes=30)),),
+        readings=(read(at - timedelta(minutes=20), 3800),))
+
+    before, after, unstarted = (
+        reconcile_ranked_day(item) for item in (week, dropped, no_start))
+
+    assert before.state == "Complete"
+    assert after.state == "Partial"
+    assert after.failure_reasons == ("automatic_defense_basis_unavailable",)
+    assert after.final_trophies_before_reset is None
+    assert after.next_start_trophies == 3860
+    total = before.formula_components["reset_total"]
+    assert after.formula_components["reset_total"] == total
+    assert (total["value"], total["proven"]) == (3860, True)
+    assert unstarted.formula_components["reset_total"]["proven"] is False

@@ -760,15 +760,20 @@ def _reconcile(data: ReconciliationInput, *, stale: bool) -> ReconciliationResul
     )
     end_before_loss = None if final_trophies is None else final_trophies + (automatic_loss or 0)
     if not automatic_value_known and proof_rule is not None:
-        # The day's end before its unknown loss, which the EOD and the next start wait for.
+        # The day's end before its unknown loss; the EOD stays unknown. As for a day whose
+        # loss is known (``reconcile_ranked_day``), a stale reading is set aside only when,
+        # without that, a reading contradicts it.
         assert start_trophies is not None
         end_before_loss = start_trophies + attack_gain - defense_loss
+        if not stale and reading_rule.decide(
+                end_before_loss=end_before_loss, **proof_rule).outcome == "contradicted":
+            proof_rule = {**proof_rule, "stale": True}
     at_reset = _reset_total(
         data, contributions, state=state, failures=unique_failures, coverage_complete=coverage_complete,
         final_trophies=final_trophies, end_before_loss=end_before_loss,
         # A reading during the day that contradicts it leaves no end to prove.
         end_proof=None if during is not None and during.reading is not None else proof_rule,
-        ledger=ledger,
+        ledger=ledger if automatic_value_known or proof_rule is not None else None,
     )
 
     return ReconciliationResult(
@@ -861,13 +866,14 @@ def _settled_start(data: ReconciliationInput) -> tuple[int | None, int, int]:
 def _reset_total(
     data: ReconciliationInput, contributions: tuple[BattleContribution, ...], *, state: DayState,
     failures: tuple[str, ...], coverage_complete: bool, final_trophies: int | None,
-    end_before_loss: int | None, end_proof: dict[str, Any] | None, ledger: dict[str, Any],
+    end_before_loss: int | None, end_proof: dict[str, Any] | None, ledger: dict[str, Any] | None,
 ) -> reset_total.ResetTotal:
     """The ended day's Reset total (``reset_total``), from its counted
     battles and its newest trustworthy reading at or before the Reset;
     ``end_proof`` is the rule the day's own end was judged by, ``None``
     when none was, and ``ledger`` what a reading may show from the end
-    Reset on."""
+    Reset on, ``None`` when the automatic loss is not known and the day's
+    end before it cannot be judged."""
     official = data.end_baseline_evidence.get("official_final_trophies")
     old = max((reading for reading in data.readings if reading.read_at <= data.ranked_day.end
                and not reading.confirm_only), key=lambda reading: reading.read_at,
@@ -886,8 +892,9 @@ def _reset_total(
         battles_usable=coverage_complete and not DISPUTED_BATTLE_REASONS & set(failures) and all(
             item.battle_timestamp is not None and not item.disagreement for item in contributions),
         old_reading=old, end_proof=end_proof,
-        reading_proof={"readings": _readings(data), "reset_at": data.ranked_day.end, **ledger,
-                       "unknown_from": data.first_unshown_report},
+        reading_proof=None if ledger is None else {
+            "readings": _readings(data), "reset_at": data.ranked_day.end, **ledger,
+            "unknown_from": data.first_unshown_report},
     )
 
 
