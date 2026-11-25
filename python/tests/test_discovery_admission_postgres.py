@@ -255,8 +255,8 @@ def _attached_during_the_pass(database_url: str, function: str) -> tuple[str, st
             with ThreadPoolExecutor(1) as pool:
                 admission = pool.submit(_pass, connection_info, function, commit=True)
                 while not watcher.execute(
-                    "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'"
-                    " AND query LIKE 'SELECT clashlens_admit%'"
+                    "SELECT count(*) FROM pg_stat_activity"
+                    " WHERE %s = ANY(pg_blocking_pids(pid))", (collector.info.backend_pid,)
                 ).fetchone()[0]:
                     assert not admission.done(), admission.result()
                     sleep(0.01)
