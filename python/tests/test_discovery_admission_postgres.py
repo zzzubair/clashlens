@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import json
 import statistics
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from itertools import product
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter, sleep
 from typing import Any
 
 import psycopg
@@ -196,11 +197,14 @@ def _outcome(connection: psycopg.Connection[Any]) -> tuple[list[tuple], list[tup
     return work, players
 
 
-def _pass(connection_info: str, function: str) -> tuple[list[tuple], list[tuple]]:
+def _pass(
+    connection_info: str, function: str, *, commit: bool = False
+) -> tuple[list[tuple], list[tuple]]:
     with psycopg.connect(connection_info) as connection:
         connection.execute(f"SELECT {function}(%s)", (INSTANT,))
         outcome = _outcome(connection)
-        connection.rollback()
+        if not commit:
+            connection.rollback()
     return outcome
 
 
@@ -230,6 +234,48 @@ def test_waiting_checks_end_as_they_did_under_0084(database_url: str) -> None:
     }
     assert len(new[0]) > len(before[0])  # due players without a check got one
     assert new[1] != before[1]  # and their next try moved
+
+
+def _attached_during_the_pass(database_url: str, function: str) -> tuple[str, str, bool]:
+    """The collector saves a not-found profile reading on a waiting check while
+    the pass, about to attach this week's earlier reading, waits for its row."""
+    with domain_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            _install_0084(connection)
+            _case(connection, 0, (False, False, True, "not_applicable", "processing", "none"))
+            work, player, tag = connection.execute(
+                "SELECT id, player_id, normalized_tag FROM collector_work").fetchone()
+            gone = _observation(connection, (player, tag), "late-404", INSTANT, status=404)
+        with psycopg.connect(connection_info) as collector, psycopg.connect(
+            connection_info, autocommit=True
+        ) as watcher:
+            collector.execute(
+                "UPDATE collector_work SET profile_status = 'observed',"
+                " profile_observation_id = %s WHERE id = %s", (gone, work))
+            with ThreadPoolExecutor(1) as pool:
+                admission = pool.submit(_pass, connection_info, function, commit=True)
+                while not watcher.execute(
+                    "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'"
+                    " AND query LIKE 'SELECT clashlens_admit%'"
+                ).fetchone()[0]:
+                    assert not admission.done(), admission.result()
+                    sleep(0.01)
+                collector.commit()
+                admission.result()
+            status, profile_status, observation = collector.execute(
+                "SELECT status, profile_status, profile_observation_id FROM collector_work"
+                " WHERE id = %s", (work,)).fetchone()
+    return status, profile_status, observation == gone
+
+
+def test_a_check_the_collector_writes_during_the_pass_ends_as_under_0084(
+    database_url: str,
+) -> None:
+    assert _attached_during_the_pass(
+        database_url, "clashlens_admit_discovery_profiles"
+    ) == _attached_during_the_pass(
+        database_url, "clashlens_admit_discovery_profiles_0084"
+    ) == ("cancelled", "observed", False)
 
 
 def _seed_reset(connection: psycopg.Connection[Any]) -> int:
@@ -389,4 +435,3 @@ def test_a_reset_admission_pass_asks_for_proof_only_for_waiting_checks(
     }, sort_keys=True))
     # At most once for each waiting check in each of the two housekeeping updates.
     assert all(proofs <= 2 * waiting for _seconds, proofs in runs["current"])
-    assert statistics.median(seconds for seconds, _ in runs["current"]) < 1

@@ -106,11 +106,7 @@ AS $$
         updated_at = clock_timestamp()
     FROM proven
     WHERE work.id = proven.id AND work.kind = 'discovery_profile'
-      AND work.status IN ('pending', 'waiting_retry')
-      AND NOT coalesce((
-          SELECT observation.http_status BETWEEN 200 AND 299 OR observation.http_status = 404
-          FROM collector_observations AS observation
-          WHERE observation.id = work.profile_observation_id), false);
+      AND work.status IN ('pending', 'waiting_retry');
 
     SELECT clashlens_admit_due_eligibility(instant);
 $$;
