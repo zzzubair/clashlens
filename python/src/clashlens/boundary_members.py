@@ -6,7 +6,8 @@ decided their ended day's week below Legend I or unknown, and the players
 whose ended day's week it decided Legend I with that day's result saved
 since, never one still Live, read at or before the Reset, as a board ranks
 a player by their last reading before it, or with that day Complete, as a
-Complete day proves its own total (``first_readings``), so a board never
+Complete day proves its own total, or with a proven Reset total and a
+Legend I reading after the Reset (``first_readings``), so a board never
 waits for a player its Reset did not sweep (``board_members``). A Monday's
 board ranks Sunday, whose week
 was decided days earlier, so no board waits for a new week's decisions; a
@@ -43,6 +44,25 @@ from .domain import RANKED_DAY_DURATION
 from .job_contracts import ANALYTICS_RULE_VERSION, ARMY_ANALYTICS_RULE_VERSION
 from .league_week import week_start
 from .publication_states import CorrectionState, day_snapshot_status, move_correction
+
+# Whether a player not read at or before the Reset, tagged {tag}, ranks by
+# {ranked}, the result of their ended day the board pins, named by their
+# first Legend I reading after the Reset (``first_readings``): when it is
+# Complete, as a Complete day proves its own total, or when it stores a
+# proven Reset total (a proven total always has a value), the record decided
+# the day's week Legend I and such a reading exists. On 24 November 2026
+# two players found by country lists after the sweep had proven totals in
+# Inconsistent days, and all seven boards left them off.
+_RANKS_LATE = """({ranked}.state = 'Complete' OR (
+    {ranked}.formula_components -> 'reset_total' -> 'proven' = 'true'::jsonb
+    AND EXISTS (
+        SELECT 1 FROM player_league_weeks AS late_week
+        WHERE late_week.player_id = {ranked}.player_id AND late_week.week_start = %(week)s
+          AND late_week.league = 'legend_i')
+    AND EXISTS (
+        SELECT 1 FROM player_profile_versions AS late_read
+        WHERE late_read.normalized_tag = {tag} AND late_read.observed_at > %(reset)s
+          AND late_read.eligibility_state = 'eligible')))"""
 
 
 def board_members(
@@ -83,11 +103,16 @@ def board_members(
               SELECT 1 FROM player_profile_versions AS version
               WHERE version.normalized_tag = player.normalized_tag
                 AND version.observed_at <= %(reset)s)
-            OR (SELECT day.state FROM api_player_daily_logs AS day
-                WHERE day.player_id = week.player_id AND day.ranked_day_start = %(day)s
-                ORDER BY day.version DESC LIMIT 1) = 'Complete')
+            OR EXISTS (
+              SELECT 1 FROM ranked_day_versions AS ranked
+              WHERE ranked.id = (
+                  SELECT day.ranked_day_version_id FROM api_player_daily_logs AS day
+                  WHERE day.player_id = week.player_id AND day.ranked_day_start = %(day)s
+                  ORDER BY day.version DESC LIMIT 1)
+                AND {late}))
         ORDER BY 1
-        """.format(only="" if only is None else "AND week.player_id = %(only)s"),
+        """.format(only="" if only is None else "AND week.player_id = %(only)s",
+                   late=_RANKS_LATE.format(ranked="ranked", tag="player.normalized_tag")),
         {"week": week_start(day), "swept": swept, "day": day, "reset": boundary_at,
          "only": only},
     ).fetchall()]
@@ -108,12 +133,14 @@ def first_readings(
     connection: Any, boundary_at: datetime, days: dict[int, int]
 ) -> dict[int, tuple[Any, ...]]:
     """Each player of ``days``, a player and their ranked day ending at the
-    Reset, whose day is Complete and who was not read in its week before
-    the Reset, with their first Legend I profile read after it, in any
-    source state, as ``boundary_manifest`` reads a newest profile. On 27
-    October 2026, 173 players promoted at the Monday Reset were read only
-    from 05:01: on Monday the game still showed them in Legend II. Their
-    Complete Mondays give their totals; the reading only names them."""
+    Reset, whose day ranks without a reading before the Reset
+    (``_RANKS_LATE``) and who was not read in its week before the Reset,
+    with their first Legend I profile read after it, in any source state, as
+    ``boundary_manifest`` reads a newest profile. On 27 October 2026, 173
+    players promoted at the Monday Reset were read only from 05:01: on
+    Monday the game still showed them in Legend II. Their Complete Mondays,
+    or the proven Reset totals their days store, give their totals; the
+    reading only names them."""
     if not days:
         return {}
     return {
@@ -125,9 +152,10 @@ def first_readings(
                    earliest.eligibility_state, earliest.current_league_season_id
             FROM unnest(%(players)s::bigint[], %(versions)s::bigint[])
                 AS member (player_id, version_id)
-            JOIN ranked_day_versions AS ranked
-              ON ranked.id = member.version_id AND ranked.state = 'Complete'
             JOIN players AS player ON player.id = member.player_id
+            JOIN ranked_day_versions AS ranked
+              ON ranked.id = member.version_id
+             AND {_RANKS_LATE.format(ranked='ranked', tag='player.normalized_tag')}
             CROSS JOIN LATERAL (
                 SELECT id, observation_id, observed_at, profile_json, normalized_tag,
                        name, trophies, eligibility_state, current_league_season_id
