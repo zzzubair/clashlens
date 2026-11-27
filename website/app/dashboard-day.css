@@ -563,3 +563,10 @@
 .legend-day-places:has(> .legend-day-range-line) {
   padding-bottom: 0.5rem;
 }
+
+/* "Legend day 26 · Sloothy": whose day, quieter than the day. */
+.legend-day-who {
+  color: var(--cl-muted);
+  font-size: 0.8em;
+  font-weight: 500;
+}

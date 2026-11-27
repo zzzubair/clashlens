@@ -622,17 +622,10 @@
   line-height: 1.25rem;
 }
 
-/* The tag after the clan is for pointing at a row on wide screens; an
-   iPad gives the name the larger share, so a long one shows whole. */
+/* The tag after the clan is for pointing at a row on wide screens. */
 @media (max-width: 64rem) {
   .leaderboard-table .clan-tag {
     display: none;
-  }
-  .leaderboard-table .player-cell {
-    width: 62%;
-  }
-  .leaderboard-table .clan-cell {
-    width: 38%;
   }
 }
 
@@ -900,6 +893,13 @@
   height: 1px;
   background: color-mix(in srgb, var(--cl-muted) 55%, transparent);
   content: "";
+}
+
+/* An iPad gives the chart less, so the clan beside it shows whole. */
+@media (max-width: 64rem) {
+  .recent-days {
+    width: 7.5rem;
+  }
 }
 
 /* A whole seventh of the chart, so a bar is easy to point at or tap. */

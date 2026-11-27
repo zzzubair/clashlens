@@ -131,7 +131,8 @@ export function LegendDayCard({
         title={
           <>
             {day?.dayNumber ? `Legend day ${day.dayNumber}` : "Legend day"}
-            <span className="sr-only">, {player.name ?? player.tag}</span>
+            {/* Named in the card, so a cropped screenshot says whose day. */}
+            <small className="legend-day-who"> · {player.name ?? player.tag}</small>
           </>
         }
       />
