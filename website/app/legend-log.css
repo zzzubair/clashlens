@@ -534,9 +534,6 @@
   .player-page .log-row .log-battles > .log-stat strong.score-negative {
     color: var(--cl-negative);
   }
-  .player-page .log-end strong::before {
-    display: none;
-  }
   .player-page .log-row .log-end {
     grid-area: eod;
   }

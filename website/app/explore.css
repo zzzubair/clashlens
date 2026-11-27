@@ -622,10 +622,17 @@
   line-height: 1.25rem;
 }
 
-/* The tag after the clan is for pointing at a row on wide screens. */
+/* The tag after the clan is for pointing at a row on wide screens; an
+   iPad gives the name the larger share, so a long one shows whole. */
 @media (max-width: 64rem) {
   .leaderboard-table .clan-tag {
     display: none;
+  }
+  .leaderboard-table .player-cell {
+    width: 62%;
+  }
+  .leaderboard-table .clan-cell {
+    width: 38%;
   }
 }
 

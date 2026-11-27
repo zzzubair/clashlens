@@ -70,9 +70,12 @@
 }
 /* The one key for every card's heat map, right under the cards, at the
    heat maps' side. */
+/* In from the page edge by the cards' own padding, in line with their
+   contents. */
 .profile-heat-key {
   display: flex;
   margin-top: 0.5rem;
+  padding-inline: 1rem;
 }
 @media (min-width: 64rem) {
   .profile-heat-key {

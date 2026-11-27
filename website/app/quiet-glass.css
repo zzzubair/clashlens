@@ -535,7 +535,7 @@
 /* The log's rows: a wide screen's headings name attacks and defenses, so
    its numbers need no sword and shield; a phone has no headings and keeps
    them. */
-@media (min-width: 48rem) {
+@media (min-width: 64rem) {
   :root .player-page .log-row .log-battles .game-mark {
     display: none;
   }
