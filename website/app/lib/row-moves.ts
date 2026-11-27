@@ -17,7 +17,8 @@ export function useRowMoves<T extends HTMLElement>() {
       const top = (row as HTMLElement).offsetTop;
       const before = places.current.get(row);
       places.current.set(row, top);
-      if (still || before === undefined || before === top) continue;
+      // A move of a few pixels is a row height change, not a new place.
+      if (still || before === undefined || Math.abs(before - top) < 4) continue;
       row.animate(
         [{ transform: `translateY(${before - top}px)` }, { transform: "none" }],
         { duration: 320, easing: "cubic-bezier(0.2, 0, 0, 1)" },
