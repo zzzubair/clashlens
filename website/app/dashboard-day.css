@@ -208,11 +208,12 @@
   font-weight: 500;
 }
 
-/* Before any projection the range is Next Reset's own number. On a narrow
-   phone "worst #184" wraps under "best #1" instead of leaving the card. */
+/* Before any projection the range is Next Reset's own number: "best #1"
+   over "worst #184", each labelled, so no dash is left at a line's end. */
 .legend-day-next > dd > .legend-day-range:only-child {
-  flex-wrap: wrap;
-  gap: 0.3rem;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
   color: var(--cl-ink);
   font: 600 1.125rem/1.2 var(--cl-font);
 }
@@ -239,6 +240,9 @@
 
 .legend-day-range-dash {
   color: var(--cl-faint);
+}
+.legend-day-next > dd > .legend-day-range:only-child > .legend-day-range-dash {
+  display: none;
 }
 
 /* A narrow card (a phone) keeps three columns, packed tighter. */
@@ -429,6 +433,13 @@
 /* A slot still to play is only its faint rule. */
 .dash-star-box-empty {
   border-bottom-color: color-mix(in srgb, var(--cl-ink) 14%, transparent);
+}
+
+/* A row with no battles yet is only its rules, close under its name, so
+   they never read as the next row's. */
+.dash-star-boxes:not(:has(> :not(.dash-star-box-empty))) > .dash-star-box {
+  min-height: 0.5rem;
+  padding: 0;
 }
 
 /* A narrow card (a phone) packs its rows tighter. Under 18rem (a 320px

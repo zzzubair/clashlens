@@ -478,8 +478,8 @@
   border-bottom-color: var(--cl-outline);
 }
 
-/* Gold, pewter and bronze plates, and their colours, are in brand.css; the
-   podium's rows are otherwise like every other row. */
+/* Gold, pewter and bronze numerals and their rows' edges are in brand.css;
+   the podium's rows are otherwise like every other row. */
 
 /* The Clasher's own row and the player a jump opened, as watchlists and
    crews mark theirs: an ember edge at the start of the row and a light
@@ -746,13 +746,6 @@
 
   .leaderboard-table .player-sub {
     white-space: nowrap;
-  }
-
-  .leaderboard-table .rank-mark {
-    min-width: 1.85rem;
-    height: 1.6rem;
-    padding: 0 0.4rem;
-    font-size: 0.95rem;
   }
 
   .trophy-cell strong {
@@ -1058,7 +1051,6 @@
 }
 
 @media (forced-colors: active) {
-  .rank-mark,
   .leaderboard-view-switch .button[aria-current="page"] {
     border: 1px solid CanvasText;
   }

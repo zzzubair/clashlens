@@ -11,10 +11,14 @@
 .player-page .score-neutral {
   color: inherit;
 }
-.player-page .stat-unavailable {
+/* A missing value is quiet words in the body face, so it never outweighs a
+   real number beside it. */
+.player-page :is(.stat-unavailable, .summary-words) {
   color: var(--cl-muted);
   font-family: var(--cl-font);
-  font-weight: 700;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  letter-spacing: 0;
 }
 /* Text links are underlined so they read as links before hover. */
 .player-page a:not([class]) {
@@ -30,7 +34,7 @@
    the Season summary and the Daily Legend log; and a part inside one, such
    as today's battles and the Season trophies chart in the header. */
 .player-page {
-  --head-2: 1.5rem;
+  --head-2: clamp(1.125rem, 1rem + 0.4vw, 1.25rem);
   --head-3: 1.125rem;
   /* The Season summary and the log sit open on the page (.open-board in
      brand.css), their rows and tints the page's width, as on Rankings; a
@@ -96,7 +100,7 @@
     font-weight: 650;
   }
   :root[data-theme="dark"] .player-page .player-jumps .button[aria-current="location"] {
-    background: rgb(255 236 218 / 0.13);
+    background: rgb(255 255 255 / 0.12);
     box-shadow: 0 1px 2px rgb(0 0 0 / 0.5);
   }
 }
@@ -111,35 +115,40 @@
 
 /* ---------- Header: name, tag line, trophies, freshness, Refresh ---------- */
 
-/* A phone: Refresh beside the count it acts on and when it was saved beside
-   the rank, so no row holds controls alone; then today's battles and the
-   Season chart. */
+/* A phone: the rank just after the count, so the two numbers read
+   together, and Refresh at the end of their line; when it was saved under
+   them; then today's battles and the Season chart. */
 .player-page .player-hero {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
   grid-template-areas:
-    "name name"
-    "who who"
-    "count actions"
-    "rank fresh"
-    "status status"
-    "today today"
-    "line line";
+    "name name name name"
+    "who who who who"
+    "count rank . actions"
+    "fresh fresh fresh fresh"
+    "status status status status"
+    "today today today today"
+    "line line line line";
   align-items: center;
   column-gap: 1rem;
   margin: 0 0 1.75rem;
 }
-/* Two buttons take their own row under the rank. */
+@media (min-width: 24.01rem) and (max-width: 47.99rem) {
+  .player-page .player-hero > .player-freshness {
+    justify-self: start;
+  }
+}
+/* Two buttons take their own row under the time. */
 .player-page .player-hero:has(.player-actions > :nth-child(2)) {
   grid-template-areas:
-    "name name"
-    "who who"
-    "count count"
-    "rank fresh"
-    "actions actions"
-    "status status"
-    "today today"
-    "line line";
+    "name name name name"
+    "who who who who"
+    "count rank . ."
+    "fresh fresh fresh fresh"
+    "actions actions actions actions"
+    "status status status status"
+    "today today today today"
+    "line line line line";
 }
 .player-hero > h1 {
   grid-area: name;
@@ -583,7 +592,7 @@
   .player-page .player-refresh-form button {
     padding: 0;
   }
-  .player-page :is(.player-updated-word, .player-refresh-label) {
+  .player-page .player-refresh-label {
     position: absolute;
     width: 1px;
     height: 1px;

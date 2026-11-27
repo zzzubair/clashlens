@@ -1344,7 +1344,7 @@ describe("dashboard page", () => {
     expect(html).not.toContain("data-card=");
   });
 
-  it("puts search first and says what an account adds after it", async () => {
+  it("puts search first, shows what an account adds after it, and leaves the way in to the header's Sign in", async () => {
     const html = await renderPage({
       kind: "signed-out",
       loginAvailable: true,
@@ -1357,6 +1357,6 @@ describe("dashboard page", () => {
       plain.indexOf("Your Legend day, live"),
     );
     expect(plain).toContain("Your Legend day, live");
-    expect(plain).toContain("Your Legend day, live Create account");
+    expect(html).not.toMatch(/class="button[^"]*"[^>]*>Create account</);
   });
 });

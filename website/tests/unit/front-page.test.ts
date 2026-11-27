@@ -731,7 +731,7 @@ it("ends with three more things the site does, each one link with its art and a 
   expect(links(all)).toEqual([
     "Watchlists /account/watchlists",
     "Crews /crews",
-    "Armies /analytics/armies",
+    "Analytics /analytics/armies",
   ]);
   // Each led by three close-up portraits, the same kind of art for all three.
   expect(
@@ -746,7 +746,7 @@ it("ends with three more things the site does, each one link with its art and a 
   // Crews switched off: no link to a page that isn't there.
   expect(links(await render(false))).toEqual([
     "Watchlists /account/watchlists",
-    "Armies /analytics/armies",
+    "Analytics /analytics/armies",
   ]);
 });
 

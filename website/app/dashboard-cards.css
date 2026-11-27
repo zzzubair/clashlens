@@ -93,9 +93,9 @@
   font-variant-numeric: tabular-nums;
 }
 
-.rival-table td:nth-child(3) {
-  font-size: 0.9375rem;
-  font-weight: 600;
+/* Trophies, last as on Rankings, bolder than the day's net beside it. */
+.rival-table td:nth-child(4) {
+  font-weight: 700;
 }
 
 .rival-table :is(th, td):nth-child(2),
@@ -526,8 +526,13 @@
   /* The rank and its move on one line, the plate a little tighter; a long
      name takes a second line rather than being cut short. */
   .rival-table :is(th, td):first-child {
-    width: 6rem;
+    width: 4.75rem;
     white-space: nowrap;
+  }
+
+  /* Numbers take only their own width, so a name gets the rest. */
+  .rival-table :is(th, td):nth-child(n + 3) {
+    width: 4rem;
   }
 
   .rival-table td:nth-child(2),
@@ -535,17 +540,13 @@
     white-space: normal;
   }
 
-  .rival-table td .rank-mark {
-    padding-inline: 0.4rem 0.35rem;
-  }
-
   .rival-table .rival-moved {
     margin-left: 0.25rem;
     font-size: 0.8125rem;
   }
 
-  /* Trophies' heading may reach left over its narrow numbers, so Today's
-     keeps a clear gap from it. */
+  /* Today's narrow numbers, then Trophies, whose heading keeps a clear
+     gap from Today's. */
   .rival-table :is(th, td):nth-child(3) {
     width: 3.5rem;
   }
@@ -558,11 +559,4 @@
   .group-table :is(th, td):first-child {
     width: 23%;
   }
-}
-
-/* Ranks on the site's rank plate, sized for a table row. */
-.rival-table .rank-mark {
-  height: 1.35rem;
-  padding: 0 0.45rem 0 0.5rem;
-  font-size: 0.9rem;
 }

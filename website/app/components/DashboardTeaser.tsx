@@ -59,24 +59,16 @@ const place = (rank: number) => `#${rank.toLocaleString("en-GB")}`;
 
 /**
  * What the dashboard holds, shown to a visitor who is not signed in: the
- * example board under its caption, a short title and the way in, set to the
- * board's edges on every width, so Create account shows before the example
- * without standing in its way. The
- * example shows what an account adds, so no list repeats it. Sign in stays in
- * the header.
+ * example board under a short title. The way in is the header's one Sign in,
+ * whose page also makes new accounts, so Home never shows two account
+ * buttons. The example shows what an account adds, so no list repeats it.
  */
 export function DashboardTeaser({ loginAvailable }: { loginAvailable: boolean }) {
   return (
     <section className="teaser-cta" aria-labelledby="front-teaser-title">
       <div className="teaser-caption">
         <h2 id="front-teaser-title">Your Legend day, live</h2>
-        {loginAvailable ? (
-          <Link className="button button-primary" to="/signup?returnPath=%2F">
-            Create account
-          </Link>
-        ) : (
-          <p role="status">Sign-in is not available right now.</p>
-        )}
+        {loginAvailable ? null : <p role="status">Sign-in is not available right now.</p>}
       </div>
       <TeaserBoard link={loginAvailable} />
     </section>
@@ -144,8 +136,8 @@ export function TeaserBoard({ link }: { link: boolean }) {
   );
 }
 
-// The example itself, a second way into Create account for a tap or click;
-// keyboards and screen readers use the buttons beside it. Without a link (sign-in
+// The example itself, a way into Create account for a tap or click;
+// keyboards and screen readers use Sign in in the header. Without a link (sign-in
 // is off, or it already sits on the sign-in page) it is only a picture.
 function Board({ link, children }: { link: boolean; children: React.ReactNode }) {
   return link ? (

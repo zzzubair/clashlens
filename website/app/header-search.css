@@ -172,26 +172,10 @@
   line-height: 1;
 }
 
-/* A page with its own search box marks it data-page-search; the header then
-   keeps its search to the icon alone, as on phones, so the screen shows one
-   search box. */
+/* A page with its own search box marks it data-page-search; the header
+   then drops its search button, so the screen shows one search. "/" still
+   opens the header's panel there. */
 :root:has([data-page-search]) .site-header .header-search .header-search-toggle {
-  flex: 0 0 2.75rem;
-  width: 2.75rem;
-  padding: 0;
-  color: var(--cl-header-ink);
-  background: transparent;
-  border-radius: 999px;
-}
-
-:root:has([data-page-search])
-  .site-header
-  .header-search
-  .header-search-toggle:is(:hover, [aria-expanded="true"]) {
-  background: var(--cl-header-soft);
-}
-
-:root:has([data-page-search]) :is(.header-search-label, .header-search-key) {
   display: none;
 }
 

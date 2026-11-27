@@ -300,7 +300,9 @@ describe("today's Legend day wording", () => {
         .split("<small>Reset rank</small>")[1]
         .split("</strong>")[0];
     expect(rank("2026-10-07")).toMatch(/>1,234$/);
-    expect(rank("2026-10-06")).toMatch(/>Unknown$/);
+    expect(rank("2026-10-06")).toMatch(
+      />—<\/span><span class="sr-only">Unknown<\/span>$/,
+    );
     expect(rank("2026-10-08")).toMatch(/>After Reset$/);
   });
 

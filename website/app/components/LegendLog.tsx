@@ -98,9 +98,16 @@ export function LogRank({ rank, move }: { rank: number | null; move?: number }) 
       data-podium-rank={rank !== null && rank <= 3 ? rank : undefined}
     >
       <small>Reset rank</small>
-      <strong className={rank === null ? "stat-unavailable" : "rank-mark"}>
-        {formatCount(rank)}
-      </strong>
+      {rank === null ? (
+        // A dash, so a missing rank beside a missing net never reads
+        // "Unknown Unknown"; screen readers still hear the word.
+        <strong className="stat-unavailable">
+          <span aria-hidden="true">—</span>
+          <span className="sr-only">Unknown</span>
+        </strong>
+      ) : (
+        <strong className="rank-mark">{formatCount(rank)}</strong>
+      )}
       {move ? (
         <span className={`log-rank-move ${valueTone(move)}`}>
           <span aria-hidden="true">
@@ -299,7 +306,7 @@ function LegendDay({
     if (linked && defenseIds.split(" ").includes(linked)) setSide("defense");
   }, [hash, defenseIds]);
   const facts = [
-    // Phones show an ended day's start in its open row; wider rows have no room.
+    // An open day says where it started, on every screen.
     day.startTrophies != null ? (
       <span key="start" className="log-fact-start">
         Started at <b>{day.startTrophies.toLocaleString("en-GB")}</b>

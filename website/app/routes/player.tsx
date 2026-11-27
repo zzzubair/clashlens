@@ -1003,7 +1003,6 @@ function PlayerFreshness({ profile }: { profile: PlayerProfile }) {
   return (
     <details className="player-freshness">
       <summary>
-        {/* A phone says only "6 min ago", under the Refresh it belongs to. */}
         <span className="player-updated-word">Updated </span>
         <time className="player-updated" dateTime={observedAt}>
           {ago(age(observedAt))}
@@ -1027,7 +1026,8 @@ function ago(seconds: number): string {
   if (minutes < 1) return "just now";
   if (minutes < 60) return `${minutes} min ago`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const rest = minutes % 60;
+  if (hours < 24) return `${hours}h${rest ? ` ${rest}m` : ""} ago`;
   const days = Math.floor(hours / 24);
   return `${days.toLocaleString("en-GB")} day${days === 1 ? "" : "s"} ago`;
 }

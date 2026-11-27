@@ -246,13 +246,6 @@ export default function UserRoute() {
     <>
       <div className="profile-players-head">
         <h2 id="user-players-title">Clash players</h2>
-        {/* One key for every card's Season heat map, while one draws. */}
-        {players.some((player) => {
-          const season = days?.[player.tag]?.season;
-          return season ? heatMapShown(season.today) : false;
-        }) ? (
-          <HeatKey />
-        ) : null}
       </div>
       <ul className="linked-player-cards">
         {players.map((player) => (
@@ -265,6 +258,16 @@ export default function UserRoute() {
           </li>
         ))}
       </ul>
+      {/* One key for every card's Season heat map, under the cards it
+          explains, while one draws. */}
+      {players.some((player) => {
+        const season = days?.[player.tag]?.season;
+        return season ? heatMapShown(season.today) : false;
+      }) ? (
+        <div className="profile-heat-key">
+          <HeatKey />
+        </div>
+      ) : null}
     </>
   );
   return (
@@ -505,10 +508,7 @@ function LinkedPlayer({
                   className="rank-mark"
                   data-podium-rank={player.rank <= 3 ? player.rank : undefined}
                 >
-                  {/* A podium plate shows the bare place, as on Rankings. */}
-                  {player.rank <= 3
-                    ? player.rank
-                    : `#${player.rank.toLocaleString("en-GB")}`}
+                  {`#${player.rank.toLocaleString("en-GB")}`}
                 </strong>
                 <RankMove rank={player.rank} since={day?.resetRank ?? null} />
               </span>

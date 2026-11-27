@@ -184,9 +184,6 @@
 :root {
   --cl-action-edge: #c46a2a;
 }
-:root[data-theme="dark"] {
-  --cl-action-edge: #a8582a;
-}
 :root .site-header .nav-link-primary {
   color: var(--cl-action-text);
   background: var(--cl-action-soft);
@@ -208,11 +205,6 @@
   --cl-control-fill: rgb(255 253 250 / 0.65);
   --cl-control-fill-hover: #fffcf9;
   --cl-control-edge: #8b735c;
-}
-:root[data-theme="dark"] {
-  --cl-control-fill: rgb(255 240 228 / 0.06);
-  --cl-control-fill-hover: rgb(255 240 228 / 0.13);
-  --cl-control-edge: #756b63;
 }
 :root
   :is(
@@ -351,7 +343,7 @@
 :root[data-theme="dark"]
   :is(.leaderboard-view-switch, .dash-switch)
   :is(.button, button):is([aria-current="page"], [aria-pressed="true"]) {
-  background: rgb(255 236 218 / 0.13);
+  background: rgb(255 255 255 / 0.12);
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.07),
     0 1px 2px rgb(0 0 0 / 0.5);
@@ -368,13 +360,6 @@
   /* The Clasher's own row, and a row a jump opened: one ember wash on every
      board, strong enough to find at a glance. */
   --cl-you-wash: rgb(255 138 31 / 0.15);
-}
-:root[data-theme="dark"] {
-  --cl-sheet-fill: rgb(255 238 222 / 0.045);
-  --cl-sheet-solid: #141110;
-  --cl-sheet-line: rgb(255 226 200 / 0.09);
-  --cl-sheet-border: transparent;
-  --cl-you-wash: rgb(255 140 40 / 0.12);
 }
 :root
   :is(
@@ -537,48 +522,40 @@
   border-bottom: 1px solid var(--cl-sheet-line);
 }
 
-/* Rank plates: a slanted scoreboard tab, gold, pewter and bronze on the
-   podium. Second place is a warm pewter, never a cold blue-grey, in both
-   themes; --cl-podium-N tints a podium row to match its plate. */
+/* Ranks: a tall scoreboard numeral with nothing around it, so it always
+   sits where its column puts it. The podium's numerals are gold, pewter and
+   bronze (deeper in light, to read on the sand page), and a podium row on a
+   board takes a thin edge in its colour. --cl-podium-N tints elsewhere. */
 :root {
   --cl-podium-1: #f2b51d;
   --cl-podium-2: #a39486;
   --cl-podium-3: #c9814f;
+  --cl-rank-1: #a87400;
+  --cl-rank-2: #7d6f62;
+  --cl-rank-3: #a8582a;
 }
 :root[data-theme="dark"] {
-  --cl-podium-2: #c2b5a8;
+  --cl-rank-1: #f2c33a;
+  --cl-rank-2: #d6ccc1;
+  --cl-rank-3: #dc9d6c;
 }
 :root :is(.rank-mark, .crew-rank) {
-  display: inline-grid;
+  display: inline-block;
   flex: none;
-  place-items: center;
-  min-width: 2.35rem;
-  height: 1.65rem;
-  padding: 0 0.55rem;
+  min-width: 1.4em;
+  height: auto;
+  padding: 0;
   color: var(--cl-ink);
-  background: var(--cl-raised);
+  background: none;
   border: 0;
-  border-radius: 3px;
-  clip-path: polygon(0.4rem 0, 100% 0, calc(100% - 0.4rem) 100%, 0 100%);
-  font-size: 0.9375rem;
-  font-weight: 650;
+  border-radius: 0;
+  clip-path: none;
+  font-family: var(--cl-font-score);
+  font-size: 1.35em;
+  font-weight: 700;
   line-height: 1;
   font-variant-numeric: tabular-nums;
-  box-shadow: none;
-}
-/* In light, a plate below the podium is a deeper sand, so it shows on an
-   ivory sheet and on the sand page alike. */
-:root:not([data-theme="dark"]) :is(.rank-mark, .crew-rank) {
-  background: #e2ceb2;
-}
-:root
-  :is(
-    .leaderboard-row[data-podium-rank] .rank-mark,
-    .log-rank[data-podium-rank] .rank-mark,
-    .rank-mark[data-podium-rank]
-  ) {
-  color: var(--cl-brand-night);
-  border: 0;
+  text-align: center;
   box-shadow: none;
 }
 :root
@@ -587,7 +564,7 @@
     .log-rank[data-podium-rank="1"] .rank-mark,
     .rank-mark[data-podium-rank="1"]
   ) {
-  background: #f2c33a;
+  --cl-rank: var(--cl-rank-1);
 }
 :root
   :is(
@@ -595,7 +572,7 @@
     .log-rank[data-podium-rank="2"] .rank-mark,
     .rank-mark[data-podium-rank="2"]
   ) {
-  background: #d6ccc1;
+  --cl-rank: var(--cl-rank-2);
 }
 :root
   :is(
@@ -603,7 +580,34 @@
     .log-rank[data-podium-rank="3"] .rank-mark,
     .rank-mark[data-podium-rank="3"]
   ) {
-  background: #dc9d6c;
+  --cl-rank: var(--cl-rank-3);
+}
+:root
+  :is(
+    .leaderboard-row[data-podium-rank] .rank-mark,
+    .log-rank[data-podium-rank] .rank-mark,
+    .rank-mark[data-podium-rank]
+  ) {
+  color: var(--cl-rank);
+}
+/* In a board's Rank column, places below the podium step back. */
+:root
+  :is(
+    .leaderboard-row:not([data-podium-rank]) .rank-mark,
+    .rival-table .rank-mark:not([data-podium-rank]),
+    .crew-rows .crew-rank:not([data-podium-rank])
+  ) {
+  color: var(--cl-muted);
+  font-size: 1.15em;
+}
+.leaderboard-row[data-podium-rank="1"] > :first-child {
+  box-shadow: inset 2px 0 0 var(--cl-rank-1);
+}
+.leaderboard-row[data-podium-rank="2"] > :first-child {
+  box-shadow: inset 2px 0 0 var(--cl-rank-2);
+}
+.leaderboard-row[data-podium-rank="3"] > :first-child {
+  box-shadow: inset 2px 0 0 var(--cl-rank-3);
 }
 
 /* ---------- Badges ---------- */

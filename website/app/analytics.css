@@ -953,17 +953,6 @@
     margin-bottom: 0.75rem;
   }
 
-  /* One line a field: the chosen value says what it is, and screen readers
-     still hear the label. */
-  .analytics-field > span {
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-  .analytics-field select {
-    min-height: 2.75rem;
-    padding-block: 0;
-  }
-
   .analytics-note {
     margin: 0;
   }

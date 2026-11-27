@@ -549,7 +549,9 @@ describe("past-Season view", () => {
     expect(html).toContain(
       '<small>Reset rank</small><strong class="rank-mark">1,042</strong>',
     );
-    expect(html).toMatch(/Reset rank<\/small><strong class="stat-unavailable">Unknown</);
+    expect(html).toMatch(
+      /Reset rank<\/small><strong class="stat-unavailable"><span aria-hidden="true">—<\/span><span class="sr-only">Unknown</,
+    );
     // A climb from the day before shows under the rank; a top-3 finish gets its podium plate.
     expect(html).toMatch(
       /data-podium-rank="2"><small>Reset rank<\/small><strong class="rank-mark">2<\/strong><span class="log-rank-move score-positive"><span aria-hidden="true"><span class="rank-move-arrow">▲<\/span>1,040<\/span><span class="sr-only">, up 1,040 since the day before</,
@@ -594,7 +596,9 @@ describe("past-Season view", () => {
       },
       SEASON,
     );
-    expect(html).toMatch(/Trophy change<\/small><strong class="score-neutral">Unknown</);
+    expect(html).toMatch(
+      /Trophy change<\/small><strong class="score-neutral stat-unavailable">Unknown</,
+    );
   });
 
   it("uses the supplied Season-list bounds in a summary error", async () => {

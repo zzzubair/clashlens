@@ -39,7 +39,9 @@ export function formatSigned(value: number | null): string {
 }
 
 export function valueTone(value: number | null): string {
-  if (value === null || value === 0) return "score-neutral";
+  // A missing value reads as quiet words, never as a loud number.
+  if (value === null) return "score-neutral stat-unavailable";
+  if (value === 0) return "score-neutral";
   return value > 0 ? "score-positive" : "score-negative";
 }
 

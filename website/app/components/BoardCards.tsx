@@ -540,8 +540,8 @@ function RivalTable({
         <tr>
           <th scope="col">Rank</th>
           <th scope="col">Player</th>
-          <th scope="col">Trophies</th>
           <th scope="col">{live ? "Today" : "A day"}</th>
+          <th scope="col">Trophies</th>
         </tr>
       </thead>
       <tbody>
@@ -555,7 +555,12 @@ function RivalTable({
               }
             >
               <td>
-                <b className="rank-mark">#{count(row.rank)}</b>
+                <b
+                  className="rank-mark"
+                  data-podium-rank={row.rank <= 3 ? row.rank : undefined}
+                >
+                  {count(row.rank)}
+                </b>
                 {row.moved ? (
                   <span
                     className={`rival-moved ${row.moved > 0 ? "positive" : "negative"}`}
@@ -571,8 +576,8 @@ function RivalTable({
                   <Name>{row.name}</Name>
                 </Link>
               </td>
-              <td>{count(row.trophies)}</td>
               <td className={tone(net)}>{signedOr(net)}</td>
+              <td>{count(row.trophies)}</td>
             </tr>
           );
         })}

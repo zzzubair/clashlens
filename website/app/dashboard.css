@@ -1054,18 +1054,8 @@
     display: none;
   }
 
-  /* Named for screen readers, out of the way on screen. */
-  :is(.dash-account-today, .dash-account-add-text) {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-
   .dash-account-add {
-    padding: 0;
+    padding: 0 0.6rem;
   }
 
   .dash-account-add .dash-icon {
@@ -1453,4 +1443,10 @@
     min-width: 2.75rem;
     min-height: 2.75rem;
   }
+}
+
+/* The chosen player's numbers are on the card right under it, so its chip
+   keeps only the name, at every width; the others keep their line. */
+.dash-account[aria-current="page"] .dash-account-line {
+  display: none;
 }

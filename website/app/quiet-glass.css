@@ -52,30 +52,37 @@
   --cl-control-fill-hover: #fff;
   --cl-control-edge: var(--v4-line-strong);
 }
-:root[data-theme="dark"] {
-  --v4-page: #0c0a09;
-  --v4-ink: #f3ece6;
-  --v4-muted: #bdb0a3;
-  --v4-faint: #aa9d91;
-  --v4-line: rgb(255 235 215 / 0.07);
-  --v4-line-strong: rgb(255 235 215 / 0.13);
-  --v4-glass: rgb(255 240 228 / 0.03);
-  --v4-glass-hi: rgb(255 240 228 / 0.065);
-  --v4-glass-edge: rgb(255 235 215 / 0.075);
-  --v4-fill: rgb(255 240 228 / 0.05);
-  --v4-fill-2: rgb(255 240 228 / 0.09);
-  --v4-ember: #ff8f2e;
-  --v4-ember-text: #ffa45a;
-  --v4-ember-wash: rgb(255 140 40 / 0.07);
-  --v4-up: #8bbf84;
-  --v4-down: #f2836f;
-  --cl-header-bg: rgb(12 10 9);
-  --cl-sheet-solid: #151210;
-  --cl-control-fill: rgb(255 240 228 / 0.06);
-  --cl-control-fill-hover: rgb(255 240 228 / 0.11);
-}
 :root body {
   background: var(--v4-page);
+  /* Its own layer, so the band below paints over the page colour and
+     under everything else. */
+  isolation: isolate;
+}
+/* The top right of every page: ember pixels in an ordered dither, thinning
+   to nothing before the content, like a scoreboard's light. Texture only:
+   it sits behind the title, never behind data, and never moves. */
+:root:not(.obs-page) body::before {
+  position: absolute;
+  z-index: -1;
+  top: var(--cl-header-h, 4.5rem);
+  right: 0;
+  left: 0;
+  height: 240px;
+  background: var(--cl-dither) right top / 1440px 240px no-repeat;
+  image-rendering: pixelated;
+  pointer-events: none;
+  content: "";
+}
+/* Fainter on every page but the signed-out home, whose hero has the room. */
+:root:not(.obs-page) body:not(:has(.front-hero))::before {
+  opacity: 0.6;
+}
+/* A phone keeps a smaller corner, so the dots stay off its title. */
+@media (max-width: 47.99rem) {
+  :root:not(.obs-page) body::before {
+    height: 100px;
+    background-size: 600px 100px;
+  }
 }
 
 /* Surfaces: the flat card, the default. */
@@ -175,14 +182,14 @@
 }
 :root h2 {
   font-family: var(--cl-font);
-  font-size: 1.0625rem;
-  font-weight: 600;
-  line-height: 1.3;
-  letter-spacing: -0.01em;
+  font-size: clamp(1.125rem, 1rem + 0.4vw, 1.25rem);
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -0.015em;
 }
 :root .dash-card h2 {
-  font-size: 1.0625rem;
-  font-weight: 600;
+  font-size: clamp(1.125rem, 1rem + 0.4vw, 1.25rem);
+  font-weight: 650;
 }
 :root .dash-card h2 > .dash-icon {
   display: none;
@@ -208,11 +215,33 @@
 /* Tables: quiet headers, hairline rows, numbers in tabular Archivo. */
 :root :is(.leaderboard-table, .data-table) thead th,
 :root .open-board thead th {
-  color: var(--cl-faint);
   border-bottom: 1px solid var(--v4-line);
-  font-size: 0.8125rem;
+}
+/* Column headings and the labels over figures speak in small mono capitals,
+   as uncommon web labels its numbers, so the numbers lead. */
+:root
+  :is(
+    thead th,
+    .player-page .log-head > *,
+    .legend-day-ranks dt,
+    .season-summary-headline dt,
+    .season-summary-averages dt,
+    .teaser-ranks small,
+    .teaser-example,
+    .linked-player-stat > small,
+    .analytics-field > span
+  ) {
+  color: var(--cl-muted);
+  font-family: var(--cl-font-mono);
+  font-size: 0.75rem;
   font-weight: 500;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+:root thead th :is(button, a) {
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
 }
 :root .open-board tbody > tr > :is(td, th) {
   border-bottom: 1px solid var(--v4-line);
@@ -222,33 +251,6 @@
 }
 :root .leaderboard-table .player-name {
   font-weight: 600;
-}
-
-/* Rank: a plain number; the podium gets a small medal disc. */
-:root :is(.rank-mark, .crew-rank) {
-  min-width: 1.75rem;
-  height: 1.75rem;
-  padding: 0 0.35rem;
-  color: var(--cl-muted);
-  background: transparent;
-  border-radius: 999px;
-  clip-path: none;
-  font-family: var(--cl-font);
-  font-size: 0.875rem;
-  font-weight: 600;
-}
-:root:not([data-theme="dark"]) :is(.rank-mark, .crew-rank) {
-  background: transparent;
-}
-:root
-  :is(
-    .leaderboard-row[data-podium-rank] .rank-mark,
-    .log-rank[data-podium-rank] .rank-mark,
-    .rank-mark[data-podium-rank]
-  ) {
-  min-width: 1.75rem;
-  padding: 0;
-  color: #2a1a06;
 }
 
 /* Buttons: one solid ember action; everything else is quiet glass. */
@@ -290,8 +292,9 @@
   background: var(--v4-fill);
   border-radius: 10px;
 }
+/* Solid in dark, so the corner's dots never show through a switch. */
 :root[data-theme="dark"] :is(.leaderboard-view-switch, .dash-switch) {
-  background: var(--v4-fill);
+  background: var(--cl-solid);
 }
 :root :is(.leaderboard-view-switch, .dash-switch) :is(.button, button) {
   border-radius: 8px;
@@ -355,16 +358,8 @@
     [aria-current="true"],
     [aria-pressed="true"]
   ) {
-  background: rgb(255 240 228 / 0.12);
+  background: #2b2b30;
   box-shadow: none;
-}
-
-/* One card-title size everywhere: the player page's sections match the
-   dashboard's cards. */
-:root .player-page h2 {
-  font-size: 1.0625rem;
-  font-weight: 600;
-  letter-spacing: -0.01em;
 }
 
 /* Small day-by-day bars in watchlists: a gain is a quiet ink bar and a
@@ -549,28 +544,19 @@
     display: none;
   }
 }
-/* Notes over the log are quiet labels, not paragraphs. */
+/* A note over the log is a soft tinted bar, apart from the data it is
+   about, so it reads as a note and not as one more row. */
 :root .player-page .legend-log > .section-note {
+  padding: 0.45rem 0.75rem;
   color: var(--cl-muted);
+  background: color-mix(in srgb, var(--cl-gold) 9%, transparent);
+  border-radius: 8px;
   font-size: 0.8125rem;
 }
-/* Home's open Top 10: its title and first column start at the page's edge,
-   like every other heading. */
+/* Home's open Top 10: its title starts at the page's edge, like every
+   other heading; its rank column keeps room for the podium's edge. */
 :root .home-leaderboard > .section-heading {
   padding-inline: 0;
-}
-:root .home-leaderboard :is(th, td):first-child {
-  padding-left: 0;
-}
-/* A crew board's podium plates are the round ones Rankings uses. */
-:root .crew-rows .crew-rank.rank-mark {
-  display: inline-grid;
-  place-items: center;
-  width: 1.75rem;
-  height: 1.75rem;
-  padding: 0;
-  border-radius: 50%;
-  font-size: 0.875rem;
 }
 /* The notes over the log share one line where there's room (a key shows
    only while the log has its mark, in player.css). */
@@ -623,26 +609,13 @@
   background: transparent;
   border-color: var(--cl-action-border);
 }
-/* Home's example: its caption starts at the page's edge, and on a phone
-   the title and Create account share one line, as the caption means; its
-   three places are plain numbers of one size. */
+/* Home's example: its caption starts at the page's edge; its three places
+   are plain numbers of one size. */
 :root .teaser-caption {
   padding-inline: 0;
 }
-@media (max-width: 40rem) {
-  :root .teaser-cta h2 {
-    font-size: 1.1875rem;
-  }
-  :root .teaser-cta .button-primary {
-    min-height: 2.75rem;
-    padding-inline: 0.85rem;
-    font-size: 0.875rem;
-  }
-}
 :root .teaser-ranks .rank-mark {
-  height: auto;
-  padding: 0;
-  background: none;
+  min-width: 0;
   font: inherit;
 }
 
@@ -693,9 +666,6 @@
 :root .crew-rows .crew-row-you > .crew-row {
   box-shadow: inset 2px 0 0 var(--cl-action);
 }
-:root .crew-rows .crew-row-you > .crew-row .crew-rank {
-  margin-left: 0.6rem;
-}
 :root .crew-rows .you-badge {
   position: absolute;
   width: 1px;
@@ -705,11 +675,7 @@
   white-space: nowrap;
 }
 :root .crew-board:not(.crew-board-live) .crew-rows .crew-rank.rank-mark {
-  width: auto;
-  background: none;
-  box-shadow: none;
   color: var(--cl-muted);
-  font-weight: 600;
 }
 
 /* A phone keeps the space after a "show more" link to one step: no extra
@@ -754,6 +720,19 @@
     min-width: 10rem;
     field-sizing: content;
   }
+}
+
+/* A dropdown has an edge, like a secondary button, so it never reads as a
+   selected tab (a fill) or the main action (orange). */
+:root
+  :is(
+    .analytics-field select,
+    .analytics-sort-field select,
+    .player-page .season-menu select,
+    .filter-field select
+  ) {
+  background-color: var(--cl-control-fill);
+  border-color: var(--cl-control-edge);
 }
 
 /* On a wide screen the Season picker is a small control beside the
@@ -835,29 +814,24 @@
   opacity: 0;
 }
 
-/* Home's search is the page's main job: its button is the page's one
-   filled ember button, and Create account beside the example takes the
-   ember outline. */
-:root .front-hero .search-controls button {
+/* The search box is solid, so the corner's dots never show through it. */
+:root :is(.home-page, .leaderboard-search) .search-controls {
+  background: var(--cl-solid);
+}
+/* Finding a player is the main job of Home and of Rankings, so their
+   search button is the page's one filled ember button, the same on both. */
+:root :is(.front-hero, .leaderboard-search) .search-controls button {
   color: var(--cl-on-action);
   background: var(--cl-action);
   border-color: var(--cl-action);
 }
-:root .front-hero .search-controls button:is(:hover, :focus-visible) {
+:root
+  :is(.front-hero, .leaderboard-search)
+  .search-controls
+  button:is(:hover, :focus-visible) {
   color: var(--cl-on-action);
   background: color-mix(in srgb, var(--cl-action) 88%, var(--cl-ink));
   border-color: transparent;
-}
-/* Search is the page's one ember button; Create account is the quiet one. */
-:root .teaser-cta .button-primary {
-  color: var(--cl-ink);
-  background: var(--cl-control-fill);
-  border: 1px solid var(--v4-line-strong);
-  box-shadow: none;
-}
-:root .teaser-cta .button-primary:is(:hover, :focus-visible) {
-  color: var(--cl-ink);
-  background: var(--cl-raised);
 }
 
 /* A wide table's usage bars all start at one place: the number before each
@@ -989,35 +963,6 @@
   display: none;
 }
 
-/* A phone's log: today's row takes the same fixed columns as the days
-   under it, so their numbers line up, and its "In progress" takes its own
-   line under its day, so it never runs into the battle totals. */
-@media (min-width: 24rem) and (max-width: 47.99rem) {
-  :root .player-page .log-day-live > .log-row {
-    grid-template-columns: minmax(0, 1fr) 4rem 4.75rem 4.75rem 0.75rem;
-  }
-}
-@media (max-width: 47.99rem) {
-  :root .player-page .log-day-live > .log-row {
-    grid-template-areas:
-      "date att net . chev"
-      "meta def net . chev"
-      "live live live live chev"
-      "swing swing swing swing swing";
-  }
-  :root .player-page .log-day-live .log-day-meta {
-    display: contents;
-  }
-  :root .player-page .log-day-live .log-day-meta > small {
-    grid-area: meta;
-  }
-  :root .player-page .log-day-live .log-live {
-    grid-area: live;
-    justify-self: start;
-    margin-top: 0.35rem;
-  }
-}
-
 /* The More sheet: rows a thumb's height, and the sheet meets the bottom
    bar, so no line of the page shows between them. */
 :root .site-menu-panel {
@@ -1066,14 +1011,6 @@
   }
   :root .analytics-name-battles {
     font-weight: 450;
-  }
-}
-
-/* Rivals watch on a wide card: the table keeps a reading width, so each
-   name sits near its trophies instead of across an empty middle. */
-@media (min-width: 64rem) {
-  :root .rival-table {
-    max-width: 35rem;
   }
 }
 
@@ -1127,68 +1064,16 @@
   }
 }
 
-/* A phone's log lines up with the page: its title, key and each day's
-   words start at the page's own margin; today's tinted band keeps its words
-   a little in from its edge, its numbers still in the days' columns. */
-@media (max-width: 47.99rem) {
-  :root .player-page .legend-log {
-    --sheet-pad: 0rem;
-  }
-  :root .player-page .log-day-live > .log-row {
-    padding-left: 0.75rem;
-  }
-}
-
-/* A phone's log names its bars' scale once over the rows: the lowest,
-   zero and the highest, each over its place on every row's bar. Today's
-   row keeps its words in from the tint, but its bar keeps the shared
-   scale. */
-@media (max-width: 47.99rem) {
-  :root .player-page .log-head {
-    display: block;
-    padding: 0 0.85rem 0.3rem 0;
-  }
-  :root .player-page .log-head > :not(.log-head-scale) {
-    display: none;
-  }
-  :root .player-page .log-head-scale {
-    position: relative;
-    display: block;
-    height: 1.1rem;
-    color: var(--cl-faint);
-    font-size: 0.8125rem;
-    font-weight: 500;
-    font-variant-numeric: tabular-nums;
-  }
-  :root .player-page .log-head-scale > span {
-    position: absolute;
-    top: 0;
-  }
-  :root .player-page .log-head-scale > [data-at="low"] {
-    left: 0;
-  }
-  :root .player-page .log-head-scale > [data-at="zero"] {
-    left: calc(var(--zero) * 100%);
-    translate: -50% 0;
-  }
-  :root .player-page .log-head-scale > [data-at="high"] {
-    right: 0;
-  }
-  :root .player-page .log-day-live .log-swing {
-    margin-left: -0.75rem;
-  }
-}
-
-/* A player's header on a wide screen: when the count was saved and Refresh
-   sit on the rank's line under the count, not on a row of their own over
-   the name, so the Season chart starts higher. */
-@media (min-width: 64rem) {
+/* A player's header on an iPad or wider: the rank sits just before the
+   count on its line, so the two numbers read together; when the count was
+   saved and Refresh sit under them, so the Season chart starts higher. */
+@media (min-width: 48rem) {
   :root .player-page .player-hero,
   :root .player-page .player-hero:has(.player-actions > :nth-child(2)) {
     grid-template-columns: minmax(0, 1fr) auto auto auto;
     grid-template-areas:
-      "name count count count"
-      "who fresh actions rank"
+      "name name rank count"
+      "who fresh actions actions"
       "status status status status"
       "today today today today"
       "line line line line";
@@ -1217,4 +1102,20 @@
   :root .dash-card:has(> .show-all:last-child, > :last-child > .show-all:last-child) {
     padding-bottom: 0.5rem;
   }
+}
+
+/* One empty screen everywhere: a left-aligned card with its title, a quiet
+   line saying why, and its action. */
+:root :is(main > .empty-state, .analytics-empty) {
+  justify-items: start;
+  padding: 1.5rem;
+  text-align: left;
+}
+:root :is(main > .empty-state, .analytics-empty) > h2 {
+  margin: 0 0 0.4rem;
+  font-size: 1.125rem;
+}
+:root :is(main > .empty-state, .analytics-empty) > p:not(.hero-actions) {
+  max-width: 52ch;
+  color: var(--cl-muted);
 }

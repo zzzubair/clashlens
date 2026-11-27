@@ -226,7 +226,7 @@ export function SeasonSummary({
             ).map(([label, value, hint]) => (
               <div key={label}>
                 <dt title={hint}>{label}</dt>
-                <dd>{value}</dd>
+                <dd className={words(value)}>{value}</dd>
               </div>
             ))}
           </dl>

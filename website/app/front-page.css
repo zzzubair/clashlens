@@ -158,6 +158,11 @@
   gap: 0.35rem 1.5rem;
 }
 
+/* The example's Season grid in shorter cells, so its colours stay behind
+   the trophy count and the search beside it. */
+.teaser-cta .season-heat-days > li {
+  height: 2rem;
+}
 .teaser-day .teaser-label {
   grid-area: label;
 }
@@ -339,12 +344,6 @@
   color: var(--cl-action-text);
 }
 
-.teaser-ranks .rank-mark {
-  height: 1.45rem;
-  padding: 0 0.45rem 0 0.5rem;
-  font-size: 1.05rem;
-}
-
 .teaser-next {
   color: var(--cl-ink);
   font-size: 1.4rem;
@@ -396,8 +395,7 @@
   translate: -50% -50%;
 }
 
-/* The example under its caption: the title at the board's left edge and
-   Create account at its right, so the two read as one. */
+/* The example under its title, at the board's left edge. */
 .teaser-cta {
   display: grid;
   gap: 0.75rem;
@@ -414,7 +412,6 @@
 
 .teaser-cta h2 {
   margin: 0;
-  font-size: clamp(1.5rem, 1.3rem + 0.6vw, 1.75rem);
   line-height: 1.05;
 }
 
@@ -424,15 +421,8 @@
   font-size: 0.9rem;
 }
 
-.teaser-cta .button-primary {
-  min-height: 2.75rem;
-  padding-inline: 1.35rem;
-  font-size: 1rem;
-}
-
 /* A phone shows the example's Legend day as one flat card with the Season
-   a week to a row under it, under the same caption line as on a desktop:
-   the title, and a compact Create account at its right, never a gate. */
+   a week to a row under it, under the same title as on a desktop. */
 @media (max-width: 40rem) {
   .teaser-board {
     padding-inline: 0.85rem;
@@ -440,11 +430,6 @@
 
   .teaser-caption {
     column-gap: 0.75rem;
-  }
-
-  .teaser-cta .button-primary {
-    padding-inline: 1rem;
-    font-size: 0.9375rem;
   }
 
   .front-grid {
@@ -497,7 +482,6 @@
   }
 
   .teaser-cta h2 {
-    font-size: 1.4rem;
     white-space: nowrap;
   }
 

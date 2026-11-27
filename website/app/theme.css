@@ -66,6 +66,8 @@
   --cl-negative: #b22d22;
   --cl-negative-soft: #ffe9e5;
   --cl-radius: 10px;
+  /* The dithered band at the top of each page (quiet-glass.css). */
+  --cl-dither: url("/images/dither-light.png");
   /* Panel edges and the small lift of a tip or menu over the page; cards
      themselves are flat (see Surfaces in brand.css). */
   --cl-card-line: rgb(150 80 20 / 0.13);

@@ -33,12 +33,12 @@
 /* Dark: the same five steps, rising from the card's own dark to ember,
    evenly spread; every number at least 4.5:1 on its tile. */
 :root[data-theme="dark"] :is(.season-heat, .season-heat-key) {
-  --cl-heat-0: #2a2320;
+  --cl-heat-0: #222226;
   --cl-heat-1: #4e2e17;
   --cl-heat-2: #83430f;
   --cl-heat-3: #c2641a;
   --cl-heat-4: #f39a2e;
-  --cl-heat-0-text: #cdbdae;
+  --cl-heat-0-text: #c4c4cc;
   --cl-heat-1-text: #ecd9c6;
   --cl-heat-2-text: #fff1e4;
   --cl-heat-3-text: #1a0d03;
@@ -120,13 +120,11 @@
   color: var(--cl-muted);
   background: var(--cl-raised);
 }
+/* A day with no result is a flat, quiet tile with a dash: it says "nothing
+   here" without pulling the eye from the days that have one. */
 .season-heat-days .season-heat-missing {
-  color: var(--cl-muted);
-  background: repeating-linear-gradient(
-    -45deg,
-    var(--cl-outline) 0 1px,
-    transparent 1px 5px
-  );
+  color: var(--cl-faint);
+  background: var(--cl-panel);
 }
 .season-heat-days .season-heat-today {
   color: var(--cl-action-text);

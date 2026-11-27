@@ -173,7 +173,9 @@ describe("supplied Season summary rendering", () => {
       '<dt>Reset trophies</dt><dd class="summary-words">Unavailable</dd>',
     );
     expect(html).toContain('<dt>Hit rate</dt><dd class="summary-words">Unavailable</dd>');
-    expect(html).toContain("<dt>Per attack</dt><dd>Unavailable</dd>");
+    expect(html).toContain(
+      '<dt>Per attack</dt><dd class="summary-words">Unavailable</dd>',
+    );
     for (const text of ["Stars unknown", "NaN", "Infinity"])
       expect(html).not.toContain(text);
   });

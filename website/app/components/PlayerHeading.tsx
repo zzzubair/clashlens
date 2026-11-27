@@ -123,8 +123,7 @@ export function LiveRank({
               }. Open the Leaderboard`}
             >
               <strong className="rank-mark" data-podium-rank={now <= 3 ? now : undefined}>
-                {/* A podium plate shows the bare place, as on Rankings. */}
-                {now <= 3 ? now : `#${now.toLocaleString("en-GB")}`}
+                {`#${now.toLocaleString("en-GB")}`}
               </strong>
               {/* One line: the place, its move, and what the move is against. */}
               {moved ? (

@@ -304,7 +304,7 @@ it("shows worst-case linked players with separators and every missing value name
   for (const text of [
     "#13,204",
     "6,499",
-    'data-podium-rank="1">1<',
+    'data-podium-rank="1">#1<',
     "0/8 attacks · 0/8 defenses",
     "1/8 attacks · 8/8 defenses",
     "Waiting for this player's Season reset",
@@ -374,9 +374,9 @@ it("shows each linked player's Season heat map and their rank's move since the R
   expect(card).not.toContain("today-slot");
   // The Season so far in the dashboard's grid, each day against the player's
   // own: best deep ember, worst plain, and a lost day marked. One key for every card
-  // sits beside the section's heading.
+  // sits right under the cards.
   expect(html).toMatch(
-    /id="user-players-title">Clash players<\/h2><span class="season-heat-key">/,
+    /<\/ul><div class="profile-heat-key"><span class="season-heat-key">/,
   );
   expect(card).not.toContain("own Season: worst");
   expect(card).toContain('<div class="linked-player-heat"><div class="season-heat">');

@@ -18,7 +18,8 @@ export function shortAge(seconds: number) {
   return seconds < 60 ? "<1 min" : formatAge(seconds).replace(/ minutes?$/, " min");
 }
 
-/** "updated 3 min ago", or nothing until the browser knows the time. */
+/** "updated 3 min ago" or "updated 1h 50m ago", as the clock writes its
+ *  countdown, or nothing until the browser knows the time. */
 export function updatedAgo(
   observedAtMs: number | null,
   nowMs: number | null,
@@ -26,6 +27,7 @@ export function updatedAgo(
   if (observedAtMs === null || nowMs === null) return null;
   const { minutes, hours } = elapsedUnits(Math.max(0, (nowMs - observedAtMs) / 1000));
   if (minutes < 1) return "updated just now";
-  if (minutes < 120) return `updated ${minutes} min ago`;
-  return `updated ${hours} h ago`;
+  if (minutes < 60) return `updated ${minutes} min ago`;
+  const rest = minutes % 60;
+  return `updated ${hours}h${rest ? ` ${rest}m` : ""} ago`;
 }
