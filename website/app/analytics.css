@@ -687,6 +687,10 @@
   .analytics-more-columns {
     display: none;
   }
+  /* The order's arrow shows once, beside the Sort menu. */
+  .analytics-results-table thead .analytics-sort-button > span[aria-hidden] {
+    display: none;
+  }
 }
 
 /* ---------- Results: ruled rows open on the page ---------- */
@@ -1135,8 +1139,9 @@
     font-weight: 700;
     line-height: 1.25;
   }
+  /* The Sort menu above already names the order, so the key stays plain. */
   .analytics-phone-key > [data-sorted] {
-    color: var(--cl-action-text);
+    color: var(--cl-ink);
   }
   .analytics-phone-key small {
     display: block;

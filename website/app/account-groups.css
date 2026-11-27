@@ -542,7 +542,8 @@
   clip-path: inset(50%);
 }
 :root .data-section:has(> .empty-state) > .empty-state {
-  padding: 0 0.25rem;
+  margin-bottom: 0.75rem;
+  padding: 0;
   background: none;
   border: 0;
   box-shadow: none;

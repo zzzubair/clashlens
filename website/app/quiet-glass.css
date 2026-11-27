@@ -924,16 +924,9 @@
   color: var(--cl-ink);
 }
 
-/* A narrow card gives the Next Reset range its own name line, so the line
-   between best and worst has the card's width, and its ends read at 13px. */
+/* A narrow card gives the line between best and worst the card's width,
+   and its ends read at 13px. */
 @container (max-width: 30rem) {
-  :root .legend-day-range-line {
-    flex-wrap: wrap;
-    row-gap: 0.3rem;
-  }
-  :root .legend-day-range-line .legend-day-range-name {
-    flex-basis: 100%;
-  }
   :root .legend-day-range-line .legend-day-range-bar {
     max-width: none;
   }
@@ -1061,22 +1054,6 @@
     background: transparent;
     border-color: transparent;
     box-shadow: none;
-  }
-}
-
-/* Home's example on a phone: the Next Reset range takes its own name line,
-   as the real card does, so the line between best and worst has the
-   card's width. */
-@media (max-width: 40rem) {
-  :root .teaser-range {
-    flex-wrap: wrap;
-    row-gap: 0.3rem;
-  }
-  :root .teaser-range-name {
-    flex-basis: 100%;
-  }
-  :root .teaser-range i {
-    max-width: none;
   }
 }
 

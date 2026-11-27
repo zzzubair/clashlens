@@ -422,36 +422,41 @@
   color: var(--cl-faint);
   font-size: 0.875rem;
 }
-/* A phone's day in three short lines, its labels said once in the head
-   above the days: the date and the day's net; where it ended and its Reset
-   rank; then defenses, the bar and attacks, each number on its own side of
-   zero. Screen readers still hear each number's label. */
+/* A phone's day in three short lines: the date and the day's net; where it
+   ended and its Reset rank; then defenses, the bar and attacks, each number
+   on its own side of zero. Screen readers still hear each number's label. */
 @media (max-width: 63.99rem) {
   /* Fixed side columns, so every row's zero line meets the head's. */
   .player-page :is(.log-day > .log-row, .log-head) {
     grid-template-columns: 4.75rem minmax(0, 1fr) 3.75rem 0.75rem;
+    row-gap: 0.3rem;
+    column-gap: 0.6rem;
+  }
+  .player-page .log-day > .log-row {
     grid-template-areas:
       "when when net chev"
       "eod rank rank rank"
       "def swing att att";
-    row-gap: 0.3rem;
-    column-gap: 0.6rem;
   }
+  /* The head is one guide line, Defenses 0 Attacks, over the bars; the
+     date, net, end of day and rank read plainly without labels, which
+     screen readers still hear. */
   .player-page .log-head {
     display: grid;
+    grid-template-areas: "def swing att att";
     padding: 0 0.85rem 0.5rem var(--sheet-pad);
     font-size: 0.75rem;
     font-weight: 500;
   }
-  .player-page .log-head > :nth-child(1) {
-    grid-area: when;
-  }
-  .player-page .log-head > :nth-child(2) {
-    grid-area: eod;
-  }
-  .player-page .log-head > :nth-child(2)::after {
-    margin-left: 0.5rem;
-    content: "·";
+  .player-page
+    .log-head
+    > :is(:nth-child(1), :nth-child(2), :nth-child(6), :nth-child(7)) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
   .player-page .log-head > :nth-child(3) {
     grid-area: swing;
@@ -471,13 +476,6 @@
   }
   .player-page .log-head > :nth-child(5) {
     grid-area: def;
-  }
-  .player-page .log-head > :nth-child(6) {
-    grid-area: net;
-    justify-self: end;
-  }
-  .player-page .log-head > :nth-child(7) {
-    grid-area: rank;
   }
   .player-page .log-row .log-when {
     grid-area: when;

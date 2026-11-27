@@ -98,10 +98,7 @@ export default function CrewsRoute() {
       ) : error ? null : (
         <div className="empty-state">
           <h2>No crews yet</h2>
-          <p>
-            Start one for shared live and daily boards, or join with a member&apos;s
-            invite link.
-          </p>
+          <p>Start one, or join with a member&apos;s invite link.</p>
           {canCreate ? (
             <p className="hero-actions">
               <Link className="button button-primary" to="/crews/new">

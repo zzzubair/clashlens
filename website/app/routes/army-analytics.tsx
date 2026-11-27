@@ -997,8 +997,7 @@ export default function ArmyAnalyticsRoute() {
       {snapshot ? (
         <aside className="notice sample-data-notice" aria-label="Real battle data">
           <div>
-            Real battles of the top {snapshot.playerCount}, saved{" "}
-            <LocalTimestamp value={snapshot.fetchedAt} />; some days are missing.
+            Real battles of the top {snapshot.playerCount}; some days are missing.
           </div>
           <Link to="?saved=1">Completed-day stats</Link>
         </aside>
@@ -1420,6 +1419,11 @@ export default function ArmyAnalyticsRoute() {
               <span>
                 Excluded <strong>{excludedBattleRecords.toLocaleString()}</strong>
               </span>
+              {snapshot ? (
+                <span>
+                  Saved <LocalTimestamp value={snapshot.fetchedAt} />
+                </span>
+              ) : null}
             </div>
             {armyTypes || excludedBattleRecords > 0 || partialArmies > 0 ? (
               <p>
