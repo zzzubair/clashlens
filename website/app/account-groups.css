@@ -528,18 +528,30 @@
   justify-self: start;
 }
 
-/* No watchlists yet: the create form is the page's one card, at a width
-   that suits a short name. "No watchlists yet" and the list heading stay
-   for screen readers and for focus after a delete. */
+/* No watchlists yet: one quiet line over the create form, the page's one
+   card, at a width that suits a short name. The list heading stays for
+   screen readers and for focus after a delete. */
 :root .data-section:has(> .empty-state) {
   margin-top: 1.25rem;
 }
-:root .data-section:has(> .empty-state) > :is(h2, .empty-state) {
+:root .data-section:has(> .empty-state) > h2 {
   position: absolute;
   width: 1px;
   height: 1px;
   overflow: hidden;
   clip-path: inset(50%);
+}
+:root .data-section:has(> .empty-state) > .empty-state {
+  padding: 0 0.25rem;
+  background: none;
+  border: 0;
+  box-shadow: none;
+}
+:root .data-section:has(> .empty-state) > .empty-state h3 {
+  margin: 0;
+  color: var(--cl-muted);
+  font-size: 0.9rem;
+  font-weight: 500;
 }
 :root .data-section:has(> .empty-state) > .form-panel {
   max-width: 34rem;

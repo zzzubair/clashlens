@@ -71,12 +71,11 @@ test("the front page and the full leaderboard show collected synthetic players",
     page.getByRole("heading", { name: "Your Legend day, live" }),
   ).toBeVisible();
   const preview = page.getByRole("region", { name: "Your Legend day, live" });
-  await expect(preview.getByRole("link", { name: "Create account" })).toHaveAttribute(
-    "href",
-    "/signup?returnPath=%2F",
+  // The header's Sign in is Home's one account button; its page also makes
+  // new accounts, so the example adds no second one.
+  await expect(preview.getByRole("link", { name: /Create account|Sign in/ })).toHaveCount(
+    0,
   );
-  // Sign in is the header's; the hero keeps one action.
-  await expect(preview.getByRole("link", { name: "Sign in" })).toHaveCount(0);
   await expect(
     page.getByRole("banner").getByRole("link", { name: "Sign in", exact: true }),
   ).toHaveAttribute("href", "/login?returnPath=%2F");
@@ -448,15 +447,21 @@ test("header search opens from its icon or / away from the search page, suggests
   await expect(input).toHaveValue("");
 });
 
-test("typing / in another field does not open the header search", async ({ page }) => {
+test("/ goes to Rankings' own search box, and typing / there types it", async ({
+  page,
+}) => {
   await page.goto("/leaderboards/tracked?view=live&page=1");
-  // Prove the shortcut is live on this page before typing elsewhere.
-  await openHeaderSearch(page, () => page.keyboard.press("/"));
-  await page.keyboard.press("Escape");
   const rankSearch = page.getByRole("searchbox", { name: "Find your rank" });
+  // Retry until the page's scripts are running and the shortcut is live.
+  await expect(async () => {
+    await page.locator("body").press("/");
+    await expect(rankSearch).toBeFocused({ timeout: 1_000 });
+  }).toPass();
   await rankSearch.pressSequentially("a/b");
   await expect(rankSearch).toHaveValue("a/b");
-  await expect(page.getByRole("button", { name: "Search players" })).toHaveAttribute(
+  // The page has its own box, so the header shows no search of its own.
+  await expect(page.locator(".header-search-toggle")).toBeHidden();
+  await expect(page.locator(".header-search-toggle")).toHaveAttribute(
     "aria-expanded",
     "false",
   );
