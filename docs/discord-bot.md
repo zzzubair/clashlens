@@ -92,15 +92,18 @@ by Clash Lens yet", then their clan and Open battle and Alert settings as
 small links. Each name in it is wrapped in Unicode isolation marks, so a name
 written right to left cannot move the numbers beside it.
 
-The box ends with a picture of the defending player's Legend day so far: its
-Season day, trophies and rank from the Reset to now, then each attack and
-defense with their totals, the new defense marked. A message with a picture
+The box ends with a picture of the defending player's Legend day so far, drawn
+as a small dashboard of square pixels: its Season day, trophies from the Reset
+to now with a stepped line of them through the day, rank from the Reset to
+now, a dial of the day's 8 attacks and 8 defenses, then each attack and defense
+with their totals, each with a pixel bar as long as its trophies and as dense
+as its destruction, the new defense marked. A message with a picture
 shows only "Sent an image" in the notification, so the bot sends the box
 first, then adds the picture by editing the message, which sends no second
 notification, once Clash Lens has saved the battle into the player's day,
 usually seconds later. After 5 minutes it stops waiting, and the alert stays
 without a picture. `/stats` shows the same picture of today's Legend day. The
-picture uses the website's fonts and colours, light unless the Clasher turns
+picture uses the website's orange and Geist fonts, light unless the Clasher turns
 on "Dark picture" on the Discord alerts page: one switch for the account, a
 row in `discord_alert_dark_picture` (migration 0136), which `/stats` follows
 for the person who ran it, light for anyone without an account. It is drawn
