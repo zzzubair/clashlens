@@ -420,7 +420,7 @@ export function HeaderSearch() {
       // A page with its own search box (Home, Rankings) hides the header's
       // button, so "/" goes to the page's box instead of a second one.
       const pageInput = document.querySelector<HTMLInputElement>(
-        "[data-page-search] input",
+        '[data-page-search] input:not([type="hidden"])',
       );
       if (pageInput) pageInput.focus();
       else if (inputRef.current) inputRef.current.focus();

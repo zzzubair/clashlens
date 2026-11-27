@@ -565,6 +565,7 @@
     display: none;
   }
   .player-page .legend-log .log-day-live > .log-row {
+    grid-template-columns: auto minmax(0, 1fr) auto 0.75rem;
     grid-template-areas:
       "when when net chev"
       "batt batt batt batt"
@@ -622,13 +623,13 @@
    lines up whether its day moved or not. */
 @media (min-width: 64rem) {
   .player-page {
-    --log-rank-width: 6.25rem;
+    --log-rank-width: 8rem;
   }
   .player-page .log-swing {
     --mark-size: 0.75rem;
   }
   .player-page .log-row .log-rank {
-    grid-template-columns: minmax(0, 1fr) minmax(2.25rem, auto);
+    grid-template-columns: minmax(max-content, 1fr) minmax(2.25rem, auto);
     align-items: center;
     column-gap: 0.4rem;
   }
