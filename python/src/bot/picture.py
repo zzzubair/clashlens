@@ -242,14 +242,16 @@ class _Canvas:
 
     def shaded_text(self, x: float, y: float, text: str, size: int, width: float) -> float:
         """`text` filled top to bottom from the first fill colour to the
-        second in square pixels; colour emoji keep their colours."""
-        image, self.image = self.image, Image.new("RGBA", self.image.size)
-        drawn = self.text(x, y, text, size, "#ffffff", "name", width=width)
+        second in square pixels; colour emoji keep their colours. Drawn on
+        a strip just around the text, about 2 MB, not the whole picture."""
+        top = y - size * 1.1
+        image, self.image = self.image, Image.new("RGBA", (self.image.width, self.s(size * 1.6)))
+        drawn = self.text(x, y - top, text, size, "#ffffff", "name", width=width)
         layer, self.image = self.image, image
-        top, bottom = self.s(y - size * 0.95), self.s(y + size * 0.3)
         colours = self.colours["fill"]
         cell = self.s(2)
-        rows = max(1, (bottom - top) // cell)
+        # The shade runs over the letters, from a little above to a little below them.
+        start, rows = self.s(size * 0.15), max(1, self.s(size * 1.25) // cell)
         tile = Image.new("RGBA", (8, rows))
         for row in range(rows):
             for column in range(8):
@@ -258,13 +260,13 @@ class _Canvas:
         tile = tile.resize((8 * cell, rows * cell), Image.Resampling.NEAREST)
         fill = Image.new("RGBA", layer.size, colours[1])
         for left in range(0, layer.width, tile.width):
-            fill.paste(tile, (left, top))
+            fill.paste(tile, (left, start))
         red, green, blue, alpha = layer.split()
         white = ImageChops.darker(ImageChops.darker(red, green), blue).point(lambda v: 255 if v > 235 else 0)
         text_mask = ImageChops.multiply(alpha, white)
         layer.putalpha(ImageChops.subtract(alpha, text_mask))
-        self.image.alpha_composite(layer)
-        self.image.paste(fill, (0, 0), text_mask)
+        layer.paste(fill, (0, 0), text_mask)
+        self.image.alpha_composite(layer, (0, self.s(top)))
         return drawn
 
     def star(self, x: float, y: float, on: bool) -> None:
