@@ -521,6 +521,7 @@
   padding: 0;
   color: var(--cl-ink);
   font: inherit;
+  text-align: start;
 }
 
 /* A narrow card (a phone) puts each row's name and total over its slots. */

@@ -616,7 +616,10 @@
 }
 :root .teaser-ranks .rank-mark {
   min-width: 0;
+  height: auto;
+  padding: 0;
   font: inherit;
+  text-align: start;
 }
 
 /* A log row colours only its net: the attacks' and defenses' totals are
