@@ -473,7 +473,7 @@ describe("today's Legend day wording", () => {
     // Each day is a button named for screen readers, showing its result as
     // the dashboard's do; today says so, and the days to come are empty.
     expect(summary).toContain('aria-label="Day 2: −20">−20</button>');
-    expect(summary).toContain('aria-label="Day 1: +10">10</button>');
+    expect(summary).toContain('aria-label="Day 1: +10">+10</button>');
     expect(summary).toContain(
       'aria-label="Day 4: today, not finished yet">Today</button>',
     );

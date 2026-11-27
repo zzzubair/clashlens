@@ -384,7 +384,7 @@ function LegendDay({
           {soFar ? (
             <>
               <strong className={valueTone(battleNet)}>{formatSigned(battleNet)}</strong>
-              <span>so far</span>
+              <span className="sr-only">so far</span>
             </>
           ) : (
             <strong className={valueTone(day.trophyChange)}>

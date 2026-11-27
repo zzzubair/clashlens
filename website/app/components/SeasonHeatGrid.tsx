@@ -12,11 +12,11 @@ import { heatStep } from "../lib/dashboard-cards";
 
 const sign = (value: number) => (value > 0 ? "+" : value < 0 ? "−" : "");
 
-/** A day's result as a cell shows it: a gain plain, as most are, and only a
- *  loss signed (and red); a rare four-digit one in thousands. */
+/** A day's result as a cell shows it, signed so "72" never reads as a rank
+ *  (a loss also red); a rare four-digit one in thousands. */
 function shown(value: number): string {
   const size = Math.abs(value);
-  return `${value < 0 ? "−" : ""}${size < 1000 ? size.toLocaleString("en-GB") : `${(size / 1000).toFixed(1)}k`}`;
+  return `${sign(value)}${size < 1000 ? size.toLocaleString("en-GB") : `${(size / 1000).toFixed(1)}k`}`;
 }
 
 /** A day's result in words, for screen readers and readouts. */

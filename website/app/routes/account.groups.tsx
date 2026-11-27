@@ -439,7 +439,10 @@ export default function GroupsRoute() {
 
   const createForm = (
     <section className="form-panel" aria-labelledby="group-create-title">
-      <h2 id="group-create-title">New watchlist</h2>
+      {/* With no lists yet, "No watchlists yet" heads the form instead. */}
+      <h2 id="group-create-title" className={groups.length > 0 ? undefined : "sr-only"}>
+        New watchlist
+      </h2>
       <Form key={createKey} method="post" action="." className="stack-form" replace>
         <input type="hidden" name="action" value="create" />
         <input type="hidden" name="idempotencyKey" value={createKey} />
@@ -452,7 +455,7 @@ export default function GroupsRoute() {
               ? ""
               : atLimit
                 ? groupLimit(loaderData.limits!.max_groups)
-                : `Up to ${loaderData.limits!.max_groups} watchlists. Add players once it exists.`
+                : `Up to ${loaderData.limits!.max_groups} lists; add players after.`
           }
         />
         <button

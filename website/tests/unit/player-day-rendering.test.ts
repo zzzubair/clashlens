@@ -271,7 +271,7 @@ describe("player day honesty", () => {
     const today = dayHtml(await page([day27], { currentDay: day27 }), "2026-10-03");
     expect(today).toContain("In progress");
     expect(today).toMatch(
-      /<small>Trophy change<\/small><strong class="[^"]+">\+156<\/strong><span>so far<\/span>/,
+      /<small>Trophy change<\/small><strong class="[^"]+">\+156<\/strong><span class="sr-only">so far<\/span>/,
     );
 
     const gap = { ...day27, battlesComplete: false };
