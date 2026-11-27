@@ -963,6 +963,20 @@
     margin: 0;
   }
 
+  /* The explanation opens from the page's edge under the days, so it stays
+     on screen however far the Sort menu pushes its button. */
+  .analytics-results-head {
+    position: relative;
+  }
+  .analytics-results-head .analytics-rule {
+    position: static;
+  }
+  .analytics-results-head .analytics-rule > p {
+    right: auto;
+    left: 0;
+    max-width: min(18rem, calc(100vw - 2rem));
+  }
+
   /* "vs Legend avg" wraps under the days, so it needs no dot. */
   .analytics-days {
     flex-wrap: wrap;

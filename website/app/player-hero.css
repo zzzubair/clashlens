@@ -31,6 +31,13 @@
     text-decoration: underline;
   }
 }
+/* A narrow phone wraps "since Reset" under a long rank and move. */
+@media (max-width: 47.99rem) {
+  .player-page .player-live-rank {
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+}
 @media (min-width: 48rem) {
   .player-page .player-live-rank {
     justify-self: end;

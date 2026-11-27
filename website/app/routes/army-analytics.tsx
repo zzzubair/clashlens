@@ -29,6 +29,7 @@ import { ArmyMap } from "../components/ArmyMap";
 import { UnitArt } from "../components/ArmyPortraits";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { TrophyIcon } from "../components/GameIcons";
+import { UnitTypeMenu } from "../components/UnitTypeMenu";
 import { LocalTimestamp } from "../components/Provenance";
 import { ArmyDetail } from "../components/VariantExamples";
 import {
@@ -1055,16 +1056,10 @@ export default function ArmyAnalyticsRoute() {
         )}
         <div className="analytics-filter-row">
           {armyTypes ? null : (
-            <label className="analytics-field analytics-unit-menu">
-              <span>Unit type</span>
-              <select key={category} name="category" defaultValue={category}>
-                {unitTypeChoices.map((value) => (
-                  <option key={value} value={value}>
-                    {filterLabels[value]}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <UnitTypeMenu
+              choices={unitTypeChoices.map((value) => [value, filterLabels[value]])}
+              category={category}
+            />
           )}
           <label className="analytics-field">
             <span>Players</span>
