@@ -1344,7 +1344,7 @@ describe("dashboard page", () => {
     expect(html).not.toContain("data-card=");
   });
 
-  it("puts search first, shows what an account adds after it, and leaves the way in to the header's Sign in", async () => {
+  it("puts search first, shows what an account adds after it, and adds no account button of its own", async () => {
     const html = await renderPage({
       kind: "signed-out",
       loginAvailable: true,
@@ -1353,10 +1353,13 @@ describe("dashboard page", () => {
       error: null,
     });
     const plain = text(html);
+    expect(html).toMatch(/<input[^>]*id="player-search"/);
+    expect(plain.indexOf("Find any Legend League player")).toBeGreaterThanOrEqual(0);
     expect(plain.indexOf("Find any Legend League player")).toBeLessThan(
       plain.indexOf("Your Legend day, live"),
     );
-    expect(plain).toContain("Your Legend day, live");
-    expect(html).not.toMatch(/class="button[^"]*"[^>]*>Create account</);
+    // Sign in lives in the site header alone, so the page adds neither
+    // account button.
+    expect(html).not.toMatch(/class="button[^"]*"[^>]*>(Create account|Sign in)</);
   });
 });

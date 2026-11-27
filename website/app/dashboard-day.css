@@ -375,6 +375,12 @@
     align-self: center;
   }
 
+  /* Before the day's first battle, each row is its name over its rules,
+     not a tall empty band. */
+  .legend-day-slots:not(:has(.dash-star-box:not(.dash-star-box-empty))) {
+    grid-auto-rows: auto;
+  }
+
   .legend-day-slots .dash-star-box {
     font-size: 1.125rem;
   }

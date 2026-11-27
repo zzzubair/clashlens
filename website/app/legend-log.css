@@ -416,7 +416,7 @@
    then its bar. Every number has its label, so the row needs no icons,
    key or column headings. */
 @media (max-width: 47.99rem) {
-  .player-page .legend-log .log-day > .log-row {
+  .player-page .log-day > .log-row {
     grid-template-columns: auto minmax(0, 1fr) auto 0.75rem;
     grid-template-areas:
       "when when net chev"
@@ -499,8 +499,15 @@
   .player-page .log-row .log-battles {
     display: grid;
     grid-template-columns:
-      minmax(max-content, calc(var(--zero) * 100%))
+      minmax(max-content, calc(var(--zero, 0.5) * 100%))
       minmax(max-content, 1fr);
+  }
+  /* "+40 from battles", when the day's change is unknown, on its own line. */
+  .player-page .log-battles > span:not(.log-stat) {
+    grid-column: 1 / -1;
+    justify-self: center;
+    color: var(--cl-muted);
+    font-size: 0.8125rem;
   }
   .player-page .log-battles > .log-stat:nth-child(2) {
     grid-row: 1;
@@ -525,7 +532,6 @@
     margin-right: 0.25rem;
   }
   .player-page .log-battles svg,
-  .player-page .log-battles > span:not(.log-stat),
   .player-page .log-bars-key,
   .player-page .log-swing::after {
     display: none;

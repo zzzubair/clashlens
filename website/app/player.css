@@ -137,6 +137,11 @@
   .player-page .player-hero > .player-freshness {
     justify-self: start;
   }
+  /* Its times open from the left edge it now sits at, on screen. */
+  .player-page .player-hero > .player-freshness > p {
+    right: auto;
+    left: 0;
+  }
 }
 /* Two buttons take their own row under the time. */
 .player-page .player-hero:has(.player-actions > :nth-child(2)) {

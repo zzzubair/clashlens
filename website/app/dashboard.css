@@ -1445,8 +1445,9 @@
   }
 }
 
-/* The chosen player's numbers are on the card right under it, so its chip
-   keeps only the name, at every width; the others keep their line. */
-.dash-account[aria-current="page"] .dash-account-line {
+/* The chosen player's numbers are on the Legend day card right under it,
+   so while that card shows, its chip keeps only the name; the others keep
+   their line. */
+body:has([data-card="legend-day"]) .dash-account[aria-current="page"] .dash-account-line {
   display: none;
 }

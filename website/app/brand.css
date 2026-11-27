@@ -530,9 +530,9 @@
   --cl-podium-1: #f2b51d;
   --cl-podium-2: #a39486;
   --cl-podium-3: #c9814f;
-  --cl-rank-1: #a87400;
-  --cl-rank-2: #7d6f62;
-  --cl-rank-3: #a8582a;
+  --cl-rank-1: #805800;
+  --cl-rank-2: #6b5e52;
+  --cl-rank-3: #8f4520;
 }
 :root[data-theme="dark"] {
   --cl-rank-1: #f2c33a;

@@ -173,8 +173,8 @@
 }
 
 /* A page with its own search box marks it data-page-search; the header
-   then drops its search button, so the screen shows one search. "/" still
-   opens the header's panel there. */
+   then drops its search button, so the screen shows one search, and "/"
+   goes to the page's box. */
 :root:has([data-page-search]) .site-header .header-search .header-search-toggle {
   display: none;
 }
