@@ -545,7 +545,6 @@ export function TodaySlots({ day }: { day: TodayBattles }) {
       {/* Names the day the slots belong to, apart from the Season chart under them. */}
       <p className="today-day">
         {day.dayNumber === null ? "Legend day" : `Legend day ${day.dayNumber}`}
-        <span> · today</span>
       </p>
       {sides.map(([side, title, saved, total, events]) => {
         const played = [...events].sort(

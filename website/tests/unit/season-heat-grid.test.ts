@@ -68,11 +68,9 @@ describe("Season heat map", () => {
     expect(html).toContain('aria-label="Day 9: today, not finished yet"');
     expect(html).toContain('aria-label="Day 10: not played yet"');
     expect(html).toMatch(
-      /--heat:var\(--cl-heat-4\)[^>]*><span[^>]*>D<span>ay <\/span>8<\/span><button[^>]*aria-label="Day 8: \+86"/,
+      /data-step="4"[^>]*><span[^>]*>D<span>ay <\/span>8<\/span><button[^>]*aria-label="Day 8: \+86"/,
     );
-    expect(html).toMatch(
-      /--heat:var\(--cl-heat-0\)[^>]*><button[^>]*aria-label="Day 6: \+2"/,
-    );
+    expect(html).toMatch(/data-step="0"[^>]*><button[^>]*aria-label="Day 6: \+2"/);
   });
 
   it("dates each day from the Season's start, never the device's clock", () => {
@@ -110,16 +108,20 @@ describe("Season heat map", () => {
     expect(heatCells(season([day(1, 40)]), "net")[0]!.shade).toBe(1);
   });
 
-  it("reds a lost day only on the palest steps, where red can be read", () => {
+  it("draws every lost day red, on its step, whatever the step", () => {
     // Every day lost: the least bad is the Season's best, its richest step.
     const data = season([day(1, -10), day(2, -120), day(3, -60)], 4);
     const html = renderToStaticMarkup(createElement(HeatMapCard, { data }));
     const cellOf = (n: number) =>
       html.split("<li").find((cell) => cell.includes(`aria-label="Day ${n}: `))!;
-    expect(cellOf(1)).toContain("--cl-heat-4");
-    expect(cellOf(1)).not.toContain("is-loss");
-    expect(cellOf(2)).toContain("--cl-heat-0");
+    expect(cellOf(1)).toContain('data-step="4"');
+    expect(cellOf(1)).toContain("is-loss");
+    expect(cellOf(2)).toContain('data-step="0"');
     expect(cellOf(2)).toContain("is-loss");
+    // Its key shows only the red half, worst to best, with no gains or 0.
+    expect(text(html)).toContain("Net trophies −120 −10");
+    expect(text(html)).toContain("every day a loss");
+    expect(html.match(/class="season-heat-ramp"/g)).toHaveLength(1);
   });
 
   it("ranks a day with no battles but an automatic loss, not as a shield day", () => {

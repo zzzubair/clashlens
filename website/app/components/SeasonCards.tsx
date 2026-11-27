@@ -79,7 +79,11 @@ export function HeatMapCard({ data }: { data: SeasonData }) {
         readout={shownCell ? say(shownCell) : null}
         fallback={todayCell ? say(todayCell) : null}
       >
-        {data.today !== null && data.today > 1 ? <HeatKey /> : FIRST_DAY_NOTE}
+        {data.today !== null && data.today > 1 ? (
+          <HeatKey loss={mode === "net"} cells={cells} />
+        ) : (
+          FIRST_DAY_NOTE
+        )}
       </HeatFoot>
       <dl className="heat-summary">
         {pickedDay ? (

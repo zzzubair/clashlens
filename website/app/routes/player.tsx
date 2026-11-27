@@ -593,38 +593,41 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell player-page">
         {lookup?.profile ? (
-          <header className="player-hero">
-            <PlayerHeading
-              name={lookup.profile.name}
-              tag={lookup.tag}
-              clan={lookup.profile.clan}
-              liveClan={data.liveClan}
-            >
-              <PlayerCrews crews={data.crews} name={lookup.profile.name} />
-            </PlayerHeading>
-            <div className="player-score">
-              {current && leftOn !== null && shape && droppedRun ? (
-                <div className="player-trophies">
-                  <span className="metric-label">Last Legend I trophies</span>
-                  <strong className="player-trophy-count">
-                    <TrophyMark />
-                    {leftOn.toLocaleString("en-GB")}
-                  </strong>
-                  <span className="player-reset-note">
-                    Left Legend I at the {seasonDayDate(shape, droppedRun.last + 1)} Reset
-                  </span>
-                </div>
-              ) : (
-                <div className="player-trophies">
-                  <span className="metric-label">Trophies</span>
-                  <strong className="player-trophy-count">
-                    <TrophyMark />
-                    {lookup.profile.trophies.toLocaleString("en-GB")}
-                  </strong>
-                </div>
-              )}
-              <PlayerActions tag={data.requestedTag} />
-            </div>
+          <>
+            <header className="player-hero">
+              <PlayerHeading
+                name={lookup.profile.name}
+                tag={lookup.tag}
+                clan={lookup.profile.clan}
+                liveClan={data.liveClan}
+              >
+                <PlayerCrews crews={data.crews} name={lookup.profile.name} />
+              </PlayerHeading>
+              <div className="player-score">
+                {current && leftOn !== null && shape && droppedRun ? (
+                  <div className="player-trophies">
+                    <span className="metric-label">Last Legend I trophies</span>
+                    <strong className="player-trophy-count">
+                      <TrophyMark />
+                      {leftOn.toLocaleString("en-GB")}
+                    </strong>
+                    <span className="player-reset-note">
+                      Left Legend I at the {seasonDayDate(shape, droppedRun.last + 1)}{" "}
+                      Reset
+                    </span>
+                  </div>
+                ) : (
+                  <div className="player-trophies">
+                    <span className="metric-label">Trophies</span>
+                    <strong className="player-trophy-count">
+                      <TrophyMark />
+                      {lookup.profile.trophies.toLocaleString("en-GB")}
+                    </strong>
+                  </div>
+                )}
+                <PlayerActions tag={data.requestedTag} />
+              </div>
+            </header>
             {current && leftOn !== null && shape && droppedRun ? (
               <TrophyLine
                 history={allHistory}
@@ -635,7 +638,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
                 endLabel="Left"
               />
             ) : null}
-          </header>
+          </>
         ) : (
           <header className="player-hero">
             <h1>{data.requestedTag}</h1>
@@ -811,18 +814,19 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         {today && !seasonExpired && !trackedPlayer.profile.seasonResetPending ? (
           <TodaySlots day={today} />
         ) : null}
-        {seasonExpired || trackedPlayer.profile.seasonResetPending ? null : (
-          <TrophyLine
-            history={history}
-            player={trackedPlayer}
-            now={statisticsTime}
-            current={trackedPlayer.profile.trophies}
-          />
-        )}
         {visibleStatus ? (
           <RefreshProgress status={visibleStatus} failed={visibleRefreshError !== null} />
         ) : null}
       </header>
+      {/* The card is today's scoreboard; the Season so far is its own figure. */}
+      {seasonExpired || trackedPlayer.profile.seasonResetPending ? null : (
+        <TrophyLine
+          history={history}
+          player={trackedPlayer}
+          now={statisticsTime}
+          current={trackedPlayer.profile.trophies}
+        />
+      )}
       {visibleRefreshError ? <ErrorNotice error={visibleRefreshError} /> : null}
       {data.lookupError ? <ErrorNotice error={data.lookupError} /> : null}
       {trackedPlayer.profile.notFoundAt ? (

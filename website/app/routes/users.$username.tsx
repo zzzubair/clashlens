@@ -18,7 +18,6 @@ import { Crest } from "../components/GameIcons";
 import { TrophyMark } from "../components/LeaderboardShared";
 import { ProviderMark } from "../components/ProviderMark";
 import { SavedLine } from "../components/SavedLine";
-import { HeatKey } from "../components/SeasonHeatGrid";
 import { SeasonHeatMap, heatMapShown } from "../components/SeasonSummary";
 import type { LinkedPlayerCard, PublicUser } from "../lib/account-contracts";
 import { normalizeUsername } from "../lib/account-validation";
@@ -258,16 +257,6 @@ export default function UserRoute() {
           </li>
         ))}
       </ul>
-      {/* One key for every card's Season heat map, under the cards it
-          explains, while one draws. */}
-      {players.some((player) => {
-        const season = days?.[player.tag]?.season;
-        return season ? heatMapShown(season.today) : false;
-      }) ? (
-        <div className="profile-heat-key">
-          <HeatKey />
-        </div>
-      ) : null}
     </>
   );
   return (

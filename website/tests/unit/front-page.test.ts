@@ -768,13 +768,13 @@ it("draws the example Legend day as the dashboard does: chip, places, range and 
   // The Season in the shared heat map: 22 played days with their results,
   // the losing ones marked, Today on day 23 and 5 empty days to come.
   expect(html.match(/class="season-heat-played/g)).toHaveLength(22);
-  // Every red day lost trophies, so each carries the mark and no gain does.
+  // Every red day lost trophies, so each carries the mark and no gain does;
+  // a played day is its pixels alone, its result in its name.
   expect(html.match(/class="season-heat-played is-loss"/g)).toHaveLength(8);
   for (const cell of html.match(/<li class="season-heat-played[^"]*"[^>]*>.*?<\/li>/g) ??
     []) {
-    const red = /--heat:var\(--cl-heat-[01]\)/.test(cell);
-    expect(cell.includes("is-loss")).toBe(red);
-    expect(cell.includes("is-loss")).toBe(/>−\d/.test(cell));
+    expect(cell).toMatch(/data-step="[0-4]"/);
+    expect(cell.includes("is-loss")).toBe(/: −\d/.test(cell));
   }
   expect(html).toMatch(
     /class="season-heat-today"[^>]*>(?:<[^>]+>[^<]*<\/span>)*<span aria-hidden="true">Today<\/span>/,

@@ -129,7 +129,7 @@ export function TeaserBoard({ link }: { link: boolean }) {
       <div className="teaser-card teaser-heat">
         <SeasonHeatGrid cells={HEAT} label="An example Season" loss />
         <HeatFoot readout={null}>
-          <HeatKey />
+          <HeatKey cells={HEAT} />
         </HeatFoot>
       </div>
     </Board>

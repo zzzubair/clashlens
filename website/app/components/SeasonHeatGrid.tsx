@@ -5,10 +5,11 @@ import { heatStep } from "../lib/dashboard-cards";
 
 // The Season heat map in its one form, for the dashboard, the player page
 // and a profile alike: a week to a row, each row named by its first day,
-// each day's result in its cell, coloured against the player's own Season
-// from worst (plain stone) to best (ember). Today says so and the days to come are
-// dotted outlines. A day that lost trophies shows its figure in red, as
-// relative colours can't say so.
+// each day a square of ember pixels, denser the better the day against the
+// player's own Season, and red pixels for a day that lost trophies, denser
+// the bigger the loss. Each day's figure reads out on hover, focus or tap
+// (and in the Daily Legend log); today is an ember ring and the days to come
+// are faint outlines.
 
 const sign = (value: number) => (value > 0 ? "+" : value < 0 ? "−" : "");
 
@@ -45,9 +46,7 @@ export function SeasonHeatGrid({
   /** The list's name for screen readers. */
   label: string;
   /** The values are each day's net change, so a negative one is a day that
-   *  lost trophies, named by the class is-loss, which shows its figure in red
-   *  on the two palest steps; on a richer step red can't be read, so the
-   *  minus sign alone marks it. */
+   *  lost trophies, named by the class is-loss, which draws it in red. */
   loss: boolean;
   picked?: number | null;
   onPick?: (day: number) => void;
@@ -58,32 +57,24 @@ export function SeasonHeatGrid({
       <ol className="season-heat-days" aria-label={label}>
         {cells.map((cell) => {
           const step = cell.shade === null ? null : heatStep(cell.shade);
-          const lost =
-            loss &&
-            cell.kind === "played" &&
-            (cell.value ?? 0) < 0 &&
-            (step === null || step <= 1);
+          const lost = loss && cell.kind === "played" && (cell.value ?? 0) < 0;
+          // A played day is its pixels alone; its figure is in its name.
           const text =
-            cell.kind === "today"
-              ? "Today"
-              : cell.kind === "future"
-                ? ""
-                : cell.value === null || cell.kind === "missing"
-                  ? "–"
-                  : shown(cell.value);
+            step !== null
+              ? ""
+              : cell.kind === "today"
+                ? "Today"
+                : cell.kind === "future"
+                  ? ""
+                  : cell.value === null || cell.kind === "missing"
+                    ? "–"
+                    : shown(cell.value);
           const name = `Day ${cell.day}: ${heatResult(cell)}`;
           return (
             <li
               key={cell.day}
               className={`season-heat-${cell.kind}${lost ? " is-loss" : ""}`}
-              style={
-                step === null
-                  ? undefined
-                  : ({
-                      "--heat": `var(--cl-heat-${step})`,
-                      "--heat-text": `var(--cl-heat-${step}-text, var(--cl-heat-text))`,
-                    } as React.CSSProperties)
-              }
+              data-step={step ?? undefined}
             >
               {cell.day % 7 === 1 ? (
                 <span className="season-heat-week" aria-hidden="true">
@@ -118,21 +109,50 @@ export function SeasonHeatGrid({
   );
 }
 
-/** The scale in words: the same words on every page. */
-export function HeatKey() {
+/** The scale: one ramp from the worst day to the best, red pixels for
+ *  losses and ember for gains, as the grid draws them, ended by the
+ *  Season's own worst and best results when there are `cells` to read them
+ *  from (else the words). A Season of only losses or only gains shows only
+ *  its own half; 0 marks where they meet. */
+export function HeatKey({ loss = true, cells }: { loss?: boolean; cells?: HeatCell[] }) {
+  const values = (cells ?? []).flatMap((cell) =>
+    cell.kind === "played" && cell.value !== null ? [cell.value] : [],
+  );
+  const worst = values.length ? Math.min(...values) : null;
+  const best = values.length ? Math.max(...values) : null;
+  const red = loss && (worst === null || worst < 0);
+  const ember = !loss || best === null || best >= 0;
+  const ends =
+    worst === null || best === null ? "" : ` from ${shown(worst)} to ${shown(best)}`;
   return (
     <span className="season-heat-key">
       <span className="sr-only">
-        Coloured against the player's own Season: best days deep ember, worst plain.
+        {`Each day against the player's own Season${ends}: `}
+        {red && ember
+          ? "losses red and gains ember, denser the further from 0."
+          : red
+            ? "every day a loss, red, denser the bigger the loss."
+            : "denser ember the better the day."}
       </span>
       <span className="season-heat-scale" aria-hidden="true">
-        vs own Season: worst
-        <span className="season-heat-ramp">
-          {[0, 1, 2, 3, 4].map((step) => (
-            <i key={step} style={{ background: `var(--cl-heat-${step})` }} />
-          ))}
-        </span>
-        best
+        {loss ? <span className="season-heat-unit">Net trophies</span> : null}
+        {worst === null ? "worst" : shown(worst)}
+        {red ? (
+          <span className="season-heat-ramp">
+            {[0, 1, 2].map((step) => (
+              <i key={step} data-step={step} className="is-loss" />
+            ))}
+          </span>
+        ) : null}
+        {red && ember ? "0" : null}
+        {ember ? (
+          <span className="season-heat-ramp">
+            {[0, 1, 2, 3, 4].map((step) => (
+              <i key={step} data-step={step} />
+            ))}
+          </span>
+        ) : null}
+        {best === null ? "best" : shown(best)}
       </span>
     </span>
   );

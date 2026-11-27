@@ -1038,9 +1038,22 @@
   .analytics-results.open-board .analytics-results-table tbody > tr > :is(td, th) {
     border-bottom: 0;
   }
-  /* No chart: each army's row below shows its use and 3-star rate as bars,
-     which a phone-sized scatter could only repeat. */
+  /* The chart fits a phone: shorter, its scale in a narrower gutter; names
+     go where they fit and the rest read out on a tap. */
   .army-map {
+    --map-h: 15rem;
+  }
+  .army-map-plot {
+    margin: 0 0.75rem 2.75rem 2.75rem;
+  }
+  .army-map-axis[data-axis="rate"] {
+    left: -2.35rem;
+  }
+  .army-map-tick[data-axis="rate"] {
+    right: calc(100% + 0.35rem);
+  }
+  /* No room for the quarters' names between a phone's gridlines. */
+  .army-map-quarter[data-wide] {
     display: none;
   }
 

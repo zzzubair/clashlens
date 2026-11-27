@@ -461,25 +461,31 @@ describe("today's Legend day wording", () => {
     const summary = html.split('id="season-summary-title"')[1].split("</section>")[0];
     const cell = (day: number) =>
       summary.split(`aria-label="Day ${day}: `)[0].split("<li").at(-1) ?? "";
-    // Best day deep ember, worst plain and marked as a loss; today and later days unshaded.
-    expect(cell(3)).toContain("--heat:var(--cl-heat-4)");
+    // Best day densest, worst plainest and marked as a loss; today and later days unshaded.
+    expect(cell(3)).toContain('data-step="4"');
     expect(cell(2)).toContain('class="season-heat-played is-loss"');
     // Only a day that lost trophies is named a loss, never a gain; its signed
     // value is what shows it.
     expect(cell(1)).not.toContain("is-loss");
     expect(cell(3)).not.toContain("is-loss");
-    expect(cell(2)).toContain("--heat:var(--cl-heat-0)");
-    expect(cell(1)).toContain("--heat:var(--cl-heat-2)");
-    // Each day is a button named for screen readers, showing its result as
-    // the dashboard's do; today says so, and the days to come are empty.
-    expect(summary).toContain('aria-label="Day 2: −20">−20</button>');
-    expect(summary).toContain('aria-label="Day 1: +10">+10</button>');
+    expect(cell(2)).toContain('data-step="0"');
+    expect(cell(1)).toContain('data-step="2"');
+    // Each day is a button named with its result for screen readers and the
+    // readout, drawn as its pixels alone; today says so, and the days to
+    // come are empty.
+    expect(summary).toContain('aria-label="Day 2: −20"></button>');
+    expect(summary).toContain('aria-label="Day 1: +10"></button>');
     expect(summary).toContain(
       'aria-label="Day 4: today, not finished yet">Today</button>',
     );
     expect(summary).toContain('aria-label="Day 28: not played yet"></button></li>');
-    // The key reads the scale, as on the dashboard, with no separate loss mark.
-    expect(summary).toContain("vs own Season: worst");
+    // The key names its unit and runs from the Season's worst day, through
+    // red losses to 0, then ember gains to its best, as on the dashboard,
+    // with no separate loss mark.
+    expect(summary.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ")).toContain(
+      "Net trophies −20 0 +40",
+    );
+    expect(summary.match(/class="season-heat-ramp"><i/g)).toHaveLength(2);
     expect(summary).not.toContain("lost trophies");
     // A phone, with no pointer, reads out today under the grid until a day
     // is tapped.
