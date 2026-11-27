@@ -304,7 +304,7 @@ it("shows worst-case linked players with separators and every missing value name
   for (const text of [
     "#13,204",
     "6,499",
-    'data-podium-rank="1">1<',
+    'data-podium-rank="1">#1<',
     "0/8 attacks · 0/8 defenses",
     "1/8 attacks · 8/8 defenses",
     "Waiting for this player's Season reset",
@@ -373,18 +373,19 @@ it("shows each linked player's Season heat map and their rank's move since the R
   // The card stays compact: today's battles are on the player page.
   expect(card).not.toContain("today-slot");
   // The Season so far in the dashboard's grid, each day against the player's
-  // own: best deep ember, worst plain, and a lost day marked. One key for every card
-  // sits beside the section's heading.
-  expect(html).toMatch(
-    /id="user-players-title">Clash players<\/h2><span class="season-heat-key">/,
+  // own: best densest ember, a lost day red. Each card has its own key, its
+  // Season's worst and best at the ends.
+  expect(card.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ")).toContain(
+    "Net trophies −20 0 +40",
   );
-  expect(card).not.toContain("own Season: worst");
-  expect(card).toContain('<div class="linked-player-heat"><div class="season-heat">');
+  expect(card).toContain(
+    '<div class="linked-player-heat"><div class="season-heat-map"><div class="season-heat">',
+  );
   expect(card).toContain('class="season-heat-played is-loss"');
   expect(card).toContain("Day 1: −20</span>");
   expect(card).toContain("Day 2: +40</span>");
   expect(card).toContain("Day 3: today, not finished yet</span>");
-  expect(card).toContain("--heat:var(--cl-heat-4)");
+  expect(card).toContain('data-step="4"');
   // Only the card's link takes focus: no toggle, no buttons in the grid.
   expect(card).not.toContain("tabindex");
   expect(card).not.toContain("<button");

@@ -695,7 +695,7 @@ describe("automatic tag lookup", () => {
     };
     // One short age; the exact times open on a tap, an old one with its date.
     expect(await render(stale)).toContain(
-      "Updated 2 hours agoProfile 7 Sep 2026, 12:00 UTCBattles 7 Sep 2026, 11:40 UTC",
+      "Updated 2h 1m agoProfile 7 Sep 2026, 12:00 UTCBattles 7 Sep 2026, 11:40 UTC",
     );
     const fresh = await render({
       ...PLAYER,

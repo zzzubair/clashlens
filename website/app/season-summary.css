@@ -105,9 +105,7 @@
   content: "#";
 }
 .player-page .season-summary-headline dd.summary-words {
-  font-family: var(--cl-font);
-  font-size: 0.95rem;
-  font-weight: 650;
+  font-size: 0.9375rem;
 }
 .player-page .season-summary dd small {
   flex-basis: 100%;

@@ -175,7 +175,8 @@ test("large army view keeps every row and shows the browser's local time", async
       page.getByRole("table", { name: "Army analytics results" }).getByRole("row"),
     ).toHaveCount(49);
 
-    const timestamp = page.getByLabel("Real battle data").locator("time");
+    // The save time sits with the battle counts under "How these are counted".
+    const timestamp = page.locator('[aria-label="Battle coverage"] time');
     const value = await timestamp.getAttribute("datetime");
     expect(value).not.toBeNull();
     const expected = await page.evaluate(

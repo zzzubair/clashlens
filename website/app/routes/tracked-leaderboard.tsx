@@ -1,5 +1,6 @@
 import { StandingsCells } from "../components/StandingsCells";
 import { useEffect, useRef } from "react";
+import { useRowMoves } from "../lib/row-moves";
 import {
   data,
   Form,
@@ -270,6 +271,7 @@ export function headers() {
 }
 
 export default function TrackedLeaderboardRoute() {
+  const rowMoves = useRowMoves<HTMLTableSectionElement>();
   const {
     leaderboard: savedLeaderboard,
     error,
@@ -749,7 +751,7 @@ export default function TrackedLeaderboardRoute() {
                       </th>
                     </tr>
                   </thead>
-                  <tbody>
+                  <tbody ref={rowMoves}>
                     {entries.map((entry) => (
                       <tr
                         className="leaderboard-row"

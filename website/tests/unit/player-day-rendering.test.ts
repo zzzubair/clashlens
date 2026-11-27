@@ -271,7 +271,7 @@ describe("player day honesty", () => {
     const today = dayHtml(await page([day27], { currentDay: day27 }), "2026-10-03");
     expect(today).toContain("In progress");
     expect(today).toMatch(
-      /<small>Trophy change<\/small><strong class="[^"]+">\+156<\/strong><span>so far<\/span>/,
+      /<small>Trophy change<\/small><strong class="[^"]+">\+156<\/strong><span class="sr-only">so far<\/span>/,
     );
 
     const gap = { ...day27, battlesComplete: false };
@@ -477,7 +477,7 @@ describe("player day honesty", () => {
       "Clash of Clans returned 9 defenses for this day, more than the usual 8, so this day is uncertain.",
     );
     expect(text[4]).toContain(
-      "Trophy change 0 Reset rank Unknown Attacks +310 Defenses 0",
+      "Trophy change 0 Reset rank — Unknown Attacks +310 Defenses 0",
     );
     expect(text[4]).toContain("Recorded battle net +310");
     expect(rows[5]).toContain("<strong>Calculated.</strong>");

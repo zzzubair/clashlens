@@ -29,6 +29,7 @@ import { ArmyMap } from "../components/ArmyMap";
 import { UnitArt } from "../components/ArmyPortraits";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { TrophyIcon } from "../components/GameIcons";
+import { UnitTypeMenu } from "../components/UnitTypeMenu";
 import { LocalTimestamp } from "../components/Provenance";
 import { ArmyDetail } from "../components/VariantExamples";
 import {
@@ -42,6 +43,7 @@ import { publicPageMeta } from "../lib/blog";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import { seasonDates, unavailableSeasonDates } from "../lib/season-end";
 import type { Route } from "./+types/army-analytics";
+import { InfoMark } from "../components/InfoMark";
 
 export function links() {
   return [
@@ -810,6 +812,13 @@ export default function ArmyAnalyticsRoute() {
     query.set("category", unitType);
     return `?${query}`;
   };
+  // Past Seasons keep the first six, plus the one in the link.
+  const unitTypeChoices = [
+    ...unitTypes.filter(
+      (value) => !isHistorical || unitTypes.indexOf(value) < 6 || value === category,
+    ),
+    ...(category === "cc-composition" ? ["cc-composition"] : []),
+  ];
   const unavailable = "selectionUnavailable" in result && result.selectionUnavailable;
   const preparing = "armyTypesPreparing" in result && result.armyTypesPreparing;
   const armiesNotAvailable = "armiesNotAvailable" in result && result.armiesNotAvailable;
@@ -996,11 +1005,7 @@ export default function ArmyAnalyticsRoute() {
       {snapshot ? (
         <aside className="notice sample-data-notice" aria-label="Real battle data">
           <div>
-            <strong>Real battle data.</strong> Recent Legend battles from the top{" "}
-            {snapshot.playerCount} players.
-            <br />
-            Fetched <LocalTimestamp value={snapshot.fetchedAt} />. This is a saved
-            snapshot; daily coverage is incomplete.
+            Real battles of the top {snapshot.playerCount}; some days are missing.
           </div>
           <Link to="?saved=1">Completed-day stats</Link>
         </aside>
@@ -1025,7 +1030,7 @@ export default function ArmyAnalyticsRoute() {
           name="sort"
           value={selected?.sort ?? params.get("sort") ?? "usage-rate"}
         />
-        <input type="hidden" name="category" value={category} />
+        {armyTypes ? <input type="hidden" name="category" value={category} /> : null}
         {snapshot ? <input type="hidden" name="recent" value="1" /> : null}
         {params.get("saved") === "1" ? (
           <input type="hidden" name="saved" value="1" />
@@ -1036,15 +1041,7 @@ export default function ArmyAnalyticsRoute() {
             aria-label="Unit type"
             className="tab-row analytics-unit-types"
           >
-            {[
-              ...unitTypes
-                // Past Seasons keep the first six, plus the one in the link.
-                .filter(
-                  (value) =>
-                    !isHistorical || unitTypes.indexOf(value) < 6 || value === category,
-                ),
-              ...(category === "cc-composition" ? ["cc-composition"] : []),
-            ].map((value) => (
+            {unitTypeChoices.map((value) => (
               <Link
                 key={value}
                 to={unitTypeQuery(value)}
@@ -1058,6 +1055,12 @@ export default function ArmyAnalyticsRoute() {
           </nav>
         )}
         <div className="analytics-filter-row">
+          {armyTypes ? null : (
+            <UnitTypeMenu
+              choices={unitTypeChoices.map((value) => [value, filterLabels[value]])}
+              category={category}
+            />
+          )}
           <label className="analytics-field">
             <span>Players</span>
             <select
@@ -1108,11 +1111,7 @@ export default function ArmyAnalyticsRoute() {
             </label>
           )}
           <span className="analytics-status" role="status">
-            {navigation.state !== "idle"
-              ? "Updating…"
-              : snapshot
-                ? "Recent real battles"
-                : null}
+            {navigation.state !== "idle" ? "Updating…" : null}
           </span>
         </div>
         <noscript>
@@ -1185,7 +1184,7 @@ export default function ArmyAnalyticsRoute() {
                   vs Legend avg
                   <details className="analytics-rule">
                     <summary title={clearWords(averages)}>
-                      <span aria-hidden="true">ⓘ</span>
+                      <InfoMark />
                       <span className="sr-only">
                         The averages, and how differences are coloured
                       </span>
@@ -1426,6 +1425,11 @@ export default function ArmyAnalyticsRoute() {
               <span>
                 Excluded <strong>{excludedBattleRecords.toLocaleString()}</strong>
               </span>
+              {snapshot ? (
+                <span>
+                  Saved <LocalTimestamp value={snapshot.fetchedAt} />
+                </span>
+              ) : null}
             </div>
             {armyTypes || excludedBattleRecords > 0 || partialArmies > 0 ? (
               <p>

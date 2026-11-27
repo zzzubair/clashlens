@@ -16,6 +16,12 @@ const date = new Intl.DateTimeFormat("en-GB", {
   timeZone: "UTC",
 });
 const count = (value: number) => value.toLocaleString("en-GB");
+/** The area under the line as a CSS mask, stretched to the plot like the
+ *  chart itself. */
+const areaMask = (path: string) =>
+  `url("data:image/svg+xml,${encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${HEIGHT}" preserveAspectRatio="none"><path d="${path}"/></svg>`,
+  )}")`;
 
 /**
  * The Season so far as one line, read like a stock chart: each finished
@@ -147,6 +153,20 @@ export function TrophyLine({
           if (event.pointerType === "mouse") setActive(null);
         }}
       >
+        {/* Under the line, ember pixels in an ordered dither: sparse, and
+            twice as dense over the upper half, so the highs carry the ink. */}
+        <span
+          className="trophy-line-fill"
+          aria-hidden="true"
+          style={
+            {
+              "--area": areaMask(`${line} L${WIDTH} ${HEIGHT} L0 ${HEIGHT} Z`),
+            } as React.CSSProperties
+          }
+        >
+          <span />
+          <span />
+        </span>
         <svg
           viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
           preserveAspectRatio="none"
@@ -176,12 +196,6 @@ export function TrophyLine({
               vectorEffect="non-scaling-stroke"
             />
           ))}
-          <path
-            className="trophy-line-area"
-            d={`${line} L${WIDTH} ${HEIGHT} L0 ${HEIGHT} Z`}
-            fill="var(--cl-brand-orange)"
-            fillOpacity={0.06}
-          />
           <path
             className="trophy-line-path"
             d={steps(false)}

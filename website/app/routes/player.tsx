@@ -23,7 +23,13 @@ import { usePlayerLookupEvent } from "../components/Analytics";
 import { BattleStatistics } from "../components/BattleStatistics";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { TrophyMark } from "../components/LeaderboardShared";
-import { DayBattles, LegendLog, LogBarsKey, TodaySlots } from "../components/LegendLog";
+import {
+  DayBattles,
+  LegendLog,
+  LogBarsKey,
+  TodayNet,
+  TodaySlots,
+} from "../components/LegendLog";
 import { LinkedBattle } from "../components/LinkedBattle";
 import { PastSeasons } from "../components/PastSeasons";
 import { PlayerActions } from "../components/PlayerActions";
@@ -587,38 +593,41 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell player-page">
         {lookup?.profile ? (
-          <header className="player-hero">
-            <PlayerHeading
-              name={lookup.profile.name}
-              tag={lookup.tag}
-              clan={lookup.profile.clan}
-              liveClan={data.liveClan}
-            >
-              <PlayerCrews crews={data.crews} name={lookup.profile.name} />
-            </PlayerHeading>
-            <div className="player-score">
-              {current && leftOn !== null && shape && droppedRun ? (
-                <div className="player-trophies">
-                  <span className="metric-label">Last Legend I trophies</span>
-                  <strong className="player-trophy-count">
-                    <TrophyMark />
-                    {leftOn.toLocaleString("en-GB")}
-                  </strong>
-                  <span className="player-reset-note">
-                    Left Legend I at the {seasonDayDate(shape, droppedRun.last + 1)} Reset
-                  </span>
-                </div>
-              ) : (
-                <div className="player-trophies">
-                  <span className="metric-label">Trophies</span>
-                  <strong className="player-trophy-count">
-                    <TrophyMark />
-                    {lookup.profile.trophies.toLocaleString("en-GB")}
-                  </strong>
-                </div>
-              )}
-              <PlayerActions tag={data.requestedTag} />
-            </div>
+          <>
+            <header className="player-hero">
+              <PlayerHeading
+                name={lookup.profile.name}
+                tag={lookup.tag}
+                clan={lookup.profile.clan}
+                liveClan={data.liveClan}
+              >
+                <PlayerCrews crews={data.crews} name={lookup.profile.name} />
+              </PlayerHeading>
+              <div className="player-score">
+                {current && leftOn !== null && shape && droppedRun ? (
+                  <div className="player-trophies">
+                    <span className="metric-label">Last Legend I trophies</span>
+                    <strong className="player-trophy-count">
+                      <TrophyMark />
+                      {leftOn.toLocaleString("en-GB")}
+                    </strong>
+                    <span className="player-reset-note">
+                      Left Legend I at the {seasonDayDate(shape, droppedRun.last + 1)}{" "}
+                      Reset
+                    </span>
+                  </div>
+                ) : (
+                  <div className="player-trophies">
+                    <span className="metric-label">Trophies</span>
+                    <strong className="player-trophy-count">
+                      <TrophyMark />
+                      {lookup.profile.trophies.toLocaleString("en-GB")}
+                    </strong>
+                  </div>
+                )}
+                <PlayerActions tag={data.requestedTag} />
+              </div>
+            </header>
             {current && leftOn !== null && shape && droppedRun ? (
               <TrophyLine
                 history={allHistory}
@@ -629,7 +638,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
                 endLabel="Left"
               />
             ) : null}
-          </header>
+          </>
         ) : (
           <header className="player-hero">
             <h1>{data.requestedTag}</h1>
@@ -756,6 +765,9 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
                 {trackedPlayer.profile.trophies.toLocaleString("en-GB")}
               </strong>
             )}
+            {today && !seasonExpired && !trackedPlayer.profile.seasonResetPending ? (
+              <TodayNet day={today} />
+            ) : null}
           </div>
           {seasonExpired || trackedPlayer.profile.seasonResetPending ? null : (
             <LiveRank rank={data.liveRank} tag={trackedPlayer.tag} />
@@ -802,18 +814,19 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         {today && !seasonExpired && !trackedPlayer.profile.seasonResetPending ? (
           <TodaySlots day={today} />
         ) : null}
-        {seasonExpired || trackedPlayer.profile.seasonResetPending ? null : (
-          <TrophyLine
-            history={history}
-            player={trackedPlayer}
-            now={statisticsTime}
-            current={trackedPlayer.profile.trophies}
-          />
-        )}
         {visibleStatus ? (
           <RefreshProgress status={visibleStatus} failed={visibleRefreshError !== null} />
         ) : null}
       </header>
+      {/* The card is today's scoreboard; the Season so far is its own figure. */}
+      {seasonExpired || trackedPlayer.profile.seasonResetPending ? null : (
+        <TrophyLine
+          history={history}
+          player={trackedPlayer}
+          now={statisticsTime}
+          current={trackedPlayer.profile.trophies}
+        />
+      )}
       {visibleRefreshError ? <ErrorNotice error={visibleRefreshError} /> : null}
       {data.lookupError ? <ErrorNotice error={data.lookupError} /> : null}
       {trackedPlayer.profile.notFoundAt ? (
@@ -857,7 +870,13 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           aria-labelledby="season-days-title"
         >
           <div className="log-title">
-            <h2 id="season-days-title">Daily Legend log</h2>
+            {/* Named for its player, so a cropped screenshot says whose days these are. */}
+            <h2 id="season-days-title">
+              Daily Legend log{" "}
+              <small className="log-title-who" aria-hidden="true">
+                · {trackedPlayer.profile.name}
+              </small>
+            </h2>
             {allHistory.length > 0 ? <LogBarsKey /> : null}
           </div>
           {/* Each shown only while a day in the log carries its dot. */}
@@ -1003,7 +1022,6 @@ function PlayerFreshness({ profile }: { profile: PlayerProfile }) {
   return (
     <details className="player-freshness">
       <summary>
-        {/* A phone says only "6 min ago", under the Refresh it belongs to. */}
         <span className="player-updated-word">Updated </span>
         <time className="player-updated" dateTime={observedAt}>
           {ago(age(observedAt))}
@@ -1027,7 +1045,8 @@ function ago(seconds: number): string {
   if (minutes < 1) return "just now";
   if (minutes < 60) return `${minutes} min ago`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const rest = minutes % 60;
+  if (hours < 24) return `${hours}h${rest ? ` ${rest}m` : ""} ago`;
   const days = Math.floor(hours / 24);
   return `${days.toLocaleString("en-GB")} day${days === 1 ? "" : "s"} ago`;
 }

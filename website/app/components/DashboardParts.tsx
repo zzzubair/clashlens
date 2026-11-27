@@ -1,6 +1,7 @@
 import { type MouseEvent, type ReactNode } from "react";
 
 import { DashboardIcon, type IconName } from "./DashboardIcon";
+import { InfoMark } from "./InfoMark";
 
 export function count(value: number | null): string {
   return value === null ? "–" : value.toLocaleString("en-US");
@@ -52,7 +53,7 @@ export function InfoTip({ label, children }: { label: string; children: ReactNod
   return (
     <details className="dash-info">
       <summary title={label} onClick={growFromButton}>
-        <span aria-hidden="true">ⓘ</span>
+        <InfoMark />
         <span className="sr-only">{label}</span>
       </summary>
       <div className="dash-info-body">{children}</div>

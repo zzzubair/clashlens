@@ -1,6 +1,7 @@
 import "../last-days.css";
 
 import { growFromButton } from "./DashboardParts";
+import { InfoMark } from "./InfoMark";
 
 /**
  * The heading over a table's daily bars, as Rankings words its own: "Last 7
@@ -14,7 +15,7 @@ export function LastDays({ count, range }: { count: number; range: string | null
       {range === null ? null : (
         <details className="last-days-info">
           <summary title={range} onClick={growFromButton}>
-            <span aria-hidden="true">ⓘ</span>
+            <InfoMark />
             <span className="sr-only">Which days</span>
           </summary>
           <span className="last-days-body">

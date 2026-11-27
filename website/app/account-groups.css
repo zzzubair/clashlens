@@ -528,10 +528,11 @@
   justify-self: start;
 }
 
-/* No watchlists yet: one quiet line over the form, not a second card. The
-   list heading stays for screen readers and for focus after a delete. */
+/* No watchlists yet: one quiet line over the create form, the page's one
+   card, at a width that suits a short name. The list heading stays for
+   screen readers and for focus after a delete. */
 :root .data-section:has(> .empty-state) {
-  margin-top: 0.85rem;
+  margin-top: 1.25rem;
 }
 :root .data-section:has(> .empty-state) > h2 {
   position: absolute;
@@ -541,7 +542,8 @@
   clip-path: inset(50%);
 }
 :root .data-section:has(> .empty-state) > .empty-state {
-  padding: 0 0.25rem;
+  margin-bottom: 0.75rem;
+  padding: 0;
   background: none;
   border: 0;
   box-shadow: none;
@@ -551,4 +553,7 @@
   color: var(--cl-muted);
   font-size: 0.9rem;
   font-weight: 500;
+}
+:root .data-section:has(> .empty-state) > .form-panel {
+  max-width: 34rem;
 }

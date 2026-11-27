@@ -107,7 +107,7 @@ function MoreFeatures() {
         ) : null}
         <Link to="/analytics/armies">
           <UnitArt unitKey="troop:110|troop:12|troop:11" />
-          <strong>Armies</strong>
+          <strong>Analytics</strong>
           <span>What Legend players attack with, and how it scores</span>
         </Link>
       </div>

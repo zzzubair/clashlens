@@ -15,9 +15,12 @@
   white-space: nowrap;
 }
 .player-page .player-live-rank .rank-mark {
-  height: 1.9rem;
-  padding-inline: 0.55rem;
-  font-size: 1.2rem;
+  white-space: nowrap;
+  font-size: 1.75rem;
+}
+.player-page .player-live-rank-name {
+  color: var(--cl-muted);
+  font-weight: 500;
 }
 .player-page .player-live-rank :is(.score-positive, .score-negative) {
   font: 650 1.05rem var(--cl-font);
@@ -26,6 +29,13 @@
   .player-page .player-live-rank:hover .player-live-rank-since {
     color: var(--cl-action-text);
     text-decoration: underline;
+  }
+}
+/* A narrow phone wraps "since Reset" under a long rank and move. */
+@media (max-width: 47.99rem) {
+  .player-page .player-live-rank {
+    flex-wrap: wrap;
+    white-space: normal;
   }
 }
 @media (min-width: 48rem) {

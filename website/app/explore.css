@@ -283,6 +283,10 @@
 }
 
 /* ▲ and ▼ are places moved since Reset, kept tight to the plate. */
+.rank-cell-move {
+  display: none;
+}
+
 .leaderboard-table .move-cell {
   padding-inline: 0.3rem 0.5rem;
 }
@@ -478,8 +482,8 @@
   border-bottom-color: var(--cl-outline);
 }
 
-/* Gold, pewter and bronze plates, and their colours, are in brand.css; the
-   podium's rows are otherwise like every other row. */
+/* Gold, pewter and bronze numerals and their rows' edges are in brand.css;
+   the podium's rows are otherwise like every other row. */
 
 /* The Clasher's own row and the player a jump opened, as watchlists and
    crews mark theirs: an ember edge at the start of the row and a light
@@ -710,17 +714,16 @@
     padding-left: 0.4rem;
   }
 
+  /* The move sits under its rank, so the name gets the column. */
   .leaderboard-table .move-cell {
-    padding-inline: 0.15rem 0.3rem;
+    display: none;
   }
 
-  /* "Since Reset" stays over the arrows, on two short lines, so a phone
-     says what they count from. */
-  .move-head {
+  .leaderboard-table .rank-cell-move {
     display: block;
-    width: min-content;
-    line-height: 1.15;
-    white-space: normal;
+    margin-top: 0.1rem;
+    font-size: 0.75rem;
+    line-height: 1;
   }
 
   .leaderboard-table .today-cell {
@@ -746,13 +749,6 @@
 
   .leaderboard-table .player-sub {
     white-space: nowrap;
-  }
-
-  .leaderboard-table .rank-mark {
-    min-width: 1.85rem;
-    height: 1.6rem;
-    padding: 0 0.4rem;
-    font-size: 0.95rem;
   }
 
   .trophy-cell strong {
@@ -897,6 +893,13 @@
   height: 1px;
   background: color-mix(in srgb, var(--cl-muted) 55%, transparent);
   content: "";
+}
+
+/* An iPad gives the chart less, so the clan beside it shows whole. */
+@media (max-width: 64rem) {
+  .recent-days {
+    width: 7.5rem;
+  }
 }
 
 /* A whole seventh of the chart, so a bar is easy to point at or tap. */
@@ -1058,7 +1061,6 @@
 }
 
 @media (forced-colors: active) {
-  .rank-mark,
   .leaderboard-view-switch .button[aria-current="page"] {
     border: 1px solid CanvasText;
   }

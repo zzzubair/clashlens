@@ -98,9 +98,16 @@ export function LogRank({ rank, move }: { rank: number | null; move?: number }) 
       data-podium-rank={rank !== null && rank <= 3 ? rank : undefined}
     >
       <small>Reset rank</small>
-      <strong className={rank === null ? "stat-unavailable" : "rank-mark"}>
-        {formatCount(rank)}
-      </strong>
+      {rank === null ? (
+        // A dash, so a missing rank beside a missing net never reads
+        // "Unknown Unknown"; screen readers still hear the word.
+        <strong className="stat-unavailable">
+          <span aria-hidden="true">—</span>
+          <span className="sr-only">Unknown</span>
+        </strong>
+      ) : (
+        <strong className="rank-mark">{formatCount(rank)}</strong>
+      )}
       {move ? (
         <span className={`log-rank-move ${valueTone(move)}`}>
           <span aria-hidden="true">
@@ -299,7 +306,7 @@ function LegendDay({
     if (linked && defenseIds.split(" ").includes(linked)) setSide("defense");
   }, [hash, defenseIds]);
   const facts = [
-    // Phones show an ended day's start in its open row; wider rows have no room.
+    // An open day says where it started, on every screen.
     day.startTrophies != null ? (
       <span key="start" className="log-fact-start">
         Started at <b>{day.startTrophies.toLocaleString("en-GB")}</b>
@@ -377,7 +384,7 @@ function LegendDay({
           {soFar ? (
             <>
               <strong className={valueTone(battleNet)}>{formatSigned(battleNet)}</strong>
-              <span>so far</span>
+              <span className="sr-only">so far</span>
             </>
           ) : (
             <strong className={valueTone(day.trophyChange)}>
@@ -515,8 +522,19 @@ type TodayBattle = Pick<
  * card draws them: stars over the trophies each one moved, in the order
  * played, with dashed slots still to play, headed by the Legend day.
  */
-export function TodaySlots({ day }: { day: TodayBattles }) {
+/** Today's net so far, beside the player's trophies: the first thing a
+ * Clasher asks of the day. A day with battles missing has no net to show. */
+export function TodayNet({ day }: { day: TodayBattles }) {
   const net = day.presentation!.battle_net_complete;
+  if (net === null) return null;
+  return (
+    <span className="today-net">
+      <b className={valueTone(net)}>{formatSigned(net)}</b> today
+    </span>
+  );
+}
+
+export function TodaySlots({ day }: { day: TodayBattles }) {
   const defense = day.defense.trophyLoss === null ? null : -day.defense.trophyLoss;
   const sides = [
     ["attack", "Attacks", day.offense.attacks, day.offense.trophyGain, day.offenseEvents],
@@ -527,12 +545,6 @@ export function TodaySlots({ day }: { day: TodayBattles }) {
       {/* Names the day the slots belong to, apart from the Season chart under them. */}
       <p className="today-day">
         {day.dayNumber === null ? "Legend day" : `Legend day ${day.dayNumber}`}
-        <span> · today</span>
-        {/* The day's net so far, the first thing a Clasher asks of it; a day
-            with battles missing has no net to show. */}
-        {net !== null ? (
-          <b className={`today-net ${valueTone(net)}`}>{formatSigned(net)}</b>
-        ) : null}
       </p>
       {sides.map(([side, title, saved, total, events]) => {
         const played = [...events].sort(

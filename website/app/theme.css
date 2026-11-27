@@ -66,6 +66,15 @@
   --cl-negative: #b22d22;
   --cl-negative-soft: #ffe9e5;
   --cl-radius: 10px;
+  /* Chart fills: the Bayer 4×4 ordered-dither tile at four densities, after
+     dithercn's (MIT), used as a mask over a solid colour, so a fill is whole
+     pixels, never see-through colour. Tiled at 8px, a dither cell is 2px. */
+  --dither-12: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%204%204'%20shape-rendering='crispEdges'%3E%3Cpath%20d='M0%200h1v1h-1zM2%202h1v1h-1z'/%3E%3C/svg%3E");
+  --dither-25: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%204%204'%20shape-rendering='crispEdges'%3E%3Cpath%20d='M0%200h1v1h-1zM2%200h1v1h-1zM0%202h1v1h-1zM2%202h1v1h-1z'/%3E%3C/svg%3E");
+  --dither-50: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%204%204'%20shape-rendering='crispEdges'%3E%3Cpath%20d='M0%200h1v1h-1zM2%200h1v1h-1zM1%201h1v1h-1zM3%201h1v1h-1zM0%202h1v1h-1zM2%202h1v1h-1zM1%203h1v1h-1zM3%203h1v1h-1z'/%3E%3C/svg%3E");
+  --dither-75: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%204%204'%20shape-rendering='crispEdges'%3E%3Cpath%20d='M0%200h4v1h-4zM1%201h1v1h-1zM3%201h1v1h-1zM0%202h4v1h-4zM1%203h1v1h-1zM3%203h1v1h-1z'/%3E%3C/svg%3E");
+  /* The dithered band at the top of each page (quiet-glass.css). */
+  --cl-dither: url("/images/dither-light.png");
   /* Panel edges and the small lift of a tip or menu over the page; cards
      themselves are flat (see Surfaces in brand.css). */
   --cl-card-line: rgb(150 80 20 / 0.13);

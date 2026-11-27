@@ -208,11 +208,12 @@
   font-weight: 500;
 }
 
-/* Before any projection the range is Next Reset's own number. On a narrow
-   phone "worst #184" wraps under "best #1" instead of leaving the card. */
+/* Before any projection the range is Next Reset's own number: "best #1"
+   over "worst #184", each labelled, so no dash is left at a line's end. */
 .legend-day-next > dd > .legend-day-range:only-child {
-  flex-wrap: wrap;
-  gap: 0.3rem;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
   color: var(--cl-ink);
   font: 600 1.125rem/1.2 var(--cl-font);
 }
@@ -239,6 +240,9 @@
 
 .legend-day-range-dash {
   color: var(--cl-faint);
+}
+.legend-day-next > dd > .legend-day-range:only-child > .legend-day-range-dash {
+  display: none;
 }
 
 /* A narrow card (a phone) keeps three columns, packed tighter. */
@@ -371,6 +375,12 @@
     align-self: center;
   }
 
+  /* Before the day's first battle, each row is its name over its rules,
+     not a tall empty band. */
+  .legend-day-slots:not(:has(.dash-star-box:not(.dash-star-box-empty))) {
+    grid-auto-rows: auto;
+  }
+
   .legend-day-slots .dash-star-box {
     font-size: 1.125rem;
   }
@@ -429,6 +439,13 @@
 /* A slot still to play is only its faint rule. */
 .dash-star-box-empty {
   border-bottom-color: color-mix(in srgb, var(--cl-ink) 14%, transparent);
+}
+
+/* A row with no battles yet is only its rules, close under its name, so
+   they never read as the next row's. */
+.dash-star-boxes:not(:has(> :not(.dash-star-box-empty))) > .dash-star-box {
+  min-height: 0.5rem;
+  padding: 0;
 }
 
 /* A narrow card (a phone) packs its rows tighter. Under 18rem (a 320px
@@ -504,6 +521,7 @@
   padding: 0;
   color: var(--cl-ink);
   font: inherit;
+  text-align: start;
 }
 
 /* A narrow card (a phone) puts each row's name and total over its slots. */
@@ -518,4 +536,38 @@
     margin-left: auto;
     font-size: 0.9375rem;
   }
+}
+
+/* With a projection, Last Reset and Now sit side by side, and the projected
+   place heads the range it always falls in, so the forecast reads as one
+   picture: "◆ Projected place #296" over best ──◆── worst. The range keeps
+   its name for screen readers. */
+.legend-day-places:has(> .legend-day-range-line) .legend-day-ranks {
+  grid-template-columns: repeat(2, max-content);
+  row-gap: 1rem;
+}
+.legend-day-places:has(> .legend-day-range-line) .legend-day-next {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0;
+}
+.legend-day-range-line .legend-day-range-name {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.legend-day-places:has(> .legend-day-range-line) {
+  padding-bottom: 0.5rem;
+}
+
+/* "Legend day 26 · Sloothy": whose day, quieter than the day. */
+.legend-day-who {
+  color: var(--cl-muted);
+  font-size: 0.8em;
+  font-weight: 500;
 }

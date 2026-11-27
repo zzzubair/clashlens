@@ -10,40 +10,16 @@
   max-width: 30rem;
   container-type: inline-size;
 }
-/* The scale: worst (0) to best (4) of the player's own Season, one warm
-   hue growing steadily richer, stone to sand to amber to ember, so each
-   better day is plainly heavier than the one below it and a weaker day
-   never reads as a loss; a day that lost trophies shows its figure in red
-   instead. These replace the shared --cl-heat tokens, which nothing else
-   uses. */
+/* The two ends of the scale: the plainest tile and the ember drawn over it
+   in pixels (see Dithered steps below). These replace the shared --cl-heat
+   tokens, which nothing else uses. */
 :is(.season-heat, .season-heat-key) {
   --cl-heat-0: #e6c8a6;
-  --cl-heat-1: #ecbd8c;
-  --cl-heat-2: #ebb077;
-  --cl-heat-3: #e5914b;
   --cl-heat-4: #dc7420;
-  --cl-heat-0-text: #4a3a2c;
-  --cl-heat-1-text: #3d2a18;
-  --cl-heat-2-text: #3a240e;
-  --cl-heat-3-text: #2e1906;
-  --cl-heat-4-text: #1f0e02;
-  /* At least 4.5:1 on the two palest steps, the only ones it is used on. */
-  --cl-heat-loss-text: #9a1f17;
 }
-/* Dark: the same five steps, rising from the card's own dark to ember,
-   evenly spread; every number at least 4.5:1 on its tile. */
 :root[data-theme="dark"] :is(.season-heat, .season-heat-key) {
-  --cl-heat-0: #2a2320;
-  --cl-heat-1: #4e2e17;
-  --cl-heat-2: #83430f;
-  --cl-heat-3: #c2641a;
+  --cl-heat-0: #24201c;
   --cl-heat-4: #f39a2e;
-  --cl-heat-0-text: #cdbdae;
-  --cl-heat-1-text: #ecd9c6;
-  --cl-heat-2-text: #fff1e4;
-  --cl-heat-3-text: #1a0d03;
-  --cl-heat-4-text: #1a0d03;
-  --cl-heat-loss-text: #ff8f7a;
 }
 .season-heat-days {
   /* A result's size; a three-digit one takes a size down, never under 13px. */
@@ -60,8 +36,7 @@
   display: grid;
   place-items: center;
   height: 2.25rem;
-  color: var(--heat-text, var(--cl-ink));
-  background: var(--heat, transparent);
+  color: var(--cl-ink);
   border-radius: 5px;
   /* The font's own narrow figures, a touch closer: each cell is centred on
      its own, so no column needs tabular ones. */
@@ -69,10 +44,6 @@
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
   text-align: center;
-}
-/* A day that lost trophies: its figure in red, whatever its step. */
-.season-heat-days > .is-loss {
-  color: var(--cl-heat-loss-text);
 }
 /* The row's name, in the gutter level with its first day. */
 .season-heat-week {
@@ -120,13 +91,11 @@
   color: var(--cl-muted);
   background: var(--cl-raised);
 }
+/* A day with no result is a flat, quiet tile with a dash: it says "nothing
+   here" without pulling the eye from the days that have one. */
 .season-heat-days .season-heat-missing {
-  color: var(--cl-muted);
-  background: repeating-linear-gradient(
-    -45deg,
-    var(--cl-outline) 0 1px,
-    transparent 1px 5px
-  );
+  color: var(--cl-faint);
+  background: var(--cl-panel);
 }
 .season-heat-days .season-heat-today {
   color: var(--cl-action-text);
@@ -253,6 +222,80 @@
   border-radius: 3px;
 }
 .season-heat-ramp i {
-  width: 1.6rem;
+  width: 1.1rem;
   height: 0.6rem;
+}
+.season-heat-unit {
+  color: var(--cl-ink);
+  margin-right: 0.15rem;
+}
+
+/* ---------- Dithered steps ---------- */
+
+/* A step is ember pixels at a density (none, a quarter, half, three
+   quarters, solid) over the plainest tile, the same ordered dither as the
+   band at the top of the page, so a better day is plainly denser. A day
+   that lost trophies is red pixels instead, densest for the worst. */
+.season-heat-days > li[data-step],
+.season-heat-ramp i {
+  /* 2px dots; a sharp screen (a phone's) draws them at 1px, still whole
+     device pixels, so a grid of squares stays calm at arm's length. */
+  --heat-tile: 8px;
+  position: relative;
+  isolation: isolate;
+  background: var(--cl-heat-0);
+}
+.season-heat-days > li[data-step]::before,
+.season-heat-ramp i::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--cl-heat-4);
+  -webkit-mask: var(--heat-dither, none) 0 0 / var(--heat-tile) var(--heat-tile);
+  mask: var(--heat-dither, none) 0 0 / var(--heat-tile) var(--heat-tile);
+  content: "";
+}
+:is(.season-heat-days > li, .season-heat-ramp i)[data-step="0"]:not(.is-loss)::before {
+  content: none;
+}
+:is(.season-heat, .season-heat-key) [data-step="1"] {
+  --heat-dither: var(--dither-25);
+}
+:is(.season-heat, .season-heat-key) [data-step="2"] {
+  --heat-dither: var(--dither-50);
+}
+:is(.season-heat, .season-heat-key) [data-step="3"] {
+  --heat-dither: var(--dither-75);
+}
+/* A loss: red pixels, three quarters for the worst step, then half, then a
+   quarter, so a small loss still shows and a big one never outshouts the
+   best days. */
+:is(.season-heat-days > li, .season-heat-ramp i).is-loss::before {
+  background: var(--cl-negative);
+}
+:is(.season-heat, .season-heat-key) .is-loss[data-step="0"] {
+  --heat-dither: var(--dither-75);
+}
+:is(.season-heat, .season-heat-key) .is-loss[data-step="1"] {
+  --heat-dither: var(--dither-50);
+}
+:is(.season-heat, .season-heat-key)
+  .is-loss:is([data-step="2"], [data-step="3"], [data-step="4"]) {
+  --heat-dither: var(--dither-25);
+}
+@media (min-resolution: 2dppx) {
+  .season-heat-days > li[data-step],
+  .season-heat-ramp i {
+    --heat-tile: 4px;
+  }
+}
+/* With the system's high-contrast colours on, the tile and its pixels keep
+   their own colours, or both would become the same system colour and the
+   day's result would vanish. */
+@media (forced-colors: active) {
+  .season-heat-days > li[data-step],
+  .season-heat-ramp i {
+    forced-color-adjust: none;
+  }
 }

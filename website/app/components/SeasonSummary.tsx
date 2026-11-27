@@ -226,7 +226,7 @@ export function SeasonSummary({
             ).map(([label, value, hint]) => (
               <div key={label}>
                 <dt title={hint}>{label}</dt>
-                <dd>{value}</dd>
+                <dd className={words(value)}>{value}</dd>
               </div>
             ))}
           </dl>
@@ -291,8 +291,18 @@ export function SeasonHeatMap({
   if (!heatMapShown(today)) return null;
   const cells = heatCells({ today, days, dayCount }, "net");
   const label =
-    "Each day's trophy change this Season, coloured against the player's own days: best deep ember, worst plain";
-  if (still) return <SeasonHeatGrid cells={cells} label={label} loss />;
+    "Each day's trophy change this Season against the player's own days: best densest ember, worst plain, a loss red";
+  // A profile card's map: the grid and its own key, its Season's worst and
+  // best at the ends; the card links to the player page for each day.
+  if (still)
+    return (
+      <div className="season-heat-map">
+        <SeasonHeatGrid cells={cells} label={label} loss />
+        <HeatFoot readout={null}>
+          <HeatKey cells={cells} />
+        </HeatFoot>
+      </div>
+    );
   const cell = cells.find((each) => each.day === (pointed ?? picked)) ?? null;
   const current = cells.find((each) => each.kind === "today") ?? null;
   const say = (each: HeatCell) =>
@@ -311,7 +321,7 @@ export function SeasonHeatMap({
         readout={cell ? say(cell) : null}
         fallback={current ? say(current) : null}
       >
-        <HeatKey />
+        <HeatKey cells={cells} />
       </HeatFoot>
     </div>
   );

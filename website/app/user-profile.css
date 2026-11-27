@@ -56,7 +56,7 @@
   margin: 0 0 0.75rem;
 }
 
-/* The players' heading, with the one key for every card's heat map. */
+/* The players' heading. */
 .profile-players-head {
   display: flex;
   flex-wrap: wrap;
@@ -68,7 +68,6 @@
 .profile-players-head h2 {
   margin: 0;
 }
-
 /* ---------- A linked player ---------- */
 
 /* Each player a card on the site's one card surface (brand.css). */
@@ -240,6 +239,13 @@
 .linked-player-rank > span {
   white-space: normal;
 }
+/* The rank as tall as the trophies beside it, starting at its label. */
+.linked-player-rank .rank-mark {
+  min-width: 0;
+  font-size: 2.1rem;
+  line-height: 0.88;
+  text-align: left;
+}
 .linked-player-since {
   color: var(--cl-muted);
   font: 600 0.8125rem var(--cl-font);
@@ -282,7 +288,6 @@
    starts it. A wide screen sets the two side by side. */
 .profile-body > .profile-tools-section > h2 {
   margin-bottom: 0.25rem;
-  font-size: 1.125rem;
 }
 .profile-tools {
   display: grid;

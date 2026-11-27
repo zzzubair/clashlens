@@ -21,7 +21,7 @@ import {
 } from "react-router";
 
 import type { PlayerPage, RankedDaySummary } from "../../app/lib/contracts";
-import { TodaySlots } from "../../app/components/LegendLog";
+import { TodayNet } from "../../app/components/LegendLog";
 import PlayerRoute from "../../app/routes/player";
 
 const TAG = "#2PP";
@@ -300,7 +300,9 @@ describe("today's Legend day wording", () => {
         .split("<small>Reset rank</small>")[1]
         .split("</strong>")[0];
     expect(rank("2026-10-07")).toMatch(/>1,234$/);
-    expect(rank("2026-10-06")).toMatch(/>Unknown$/);
+    expect(rank("2026-10-06")).toMatch(
+      />—<\/span><span class="sr-only">Unknown<\/span>$/,
+    );
     expect(rank("2026-10-08")).toMatch(/>After Reset$/);
   });
 
@@ -459,25 +461,31 @@ describe("today's Legend day wording", () => {
     const summary = html.split('id="season-summary-title"')[1].split("</section>")[0];
     const cell = (day: number) =>
       summary.split(`aria-label="Day ${day}: `)[0].split("<li").at(-1) ?? "";
-    // Best day deep ember, worst plain and marked as a loss; today and later days unshaded.
-    expect(cell(3)).toContain("--heat:var(--cl-heat-4)");
+    // Best day densest, worst plainest and marked as a loss; today and later days unshaded.
+    expect(cell(3)).toContain('data-step="4"');
     expect(cell(2)).toContain('class="season-heat-played is-loss"');
     // Only a day that lost trophies is named a loss, never a gain; its signed
     // value is what shows it.
     expect(cell(1)).not.toContain("is-loss");
     expect(cell(3)).not.toContain("is-loss");
-    expect(cell(2)).toContain("--heat:var(--cl-heat-0)");
-    expect(cell(1)).toContain("--heat:var(--cl-heat-2)");
-    // Each day is a button named for screen readers, showing its result as
-    // the dashboard's do; today says so, and the days to come are empty.
-    expect(summary).toContain('aria-label="Day 2: −20">−20</button>');
-    expect(summary).toContain('aria-label="Day 1: +10">10</button>');
+    expect(cell(2)).toContain('data-step="0"');
+    expect(cell(1)).toContain('data-step="2"');
+    // Each day is a button named with its result for screen readers and the
+    // readout, drawn as its pixels alone; today says so, and the days to
+    // come are empty.
+    expect(summary).toContain('aria-label="Day 2: −20"></button>');
+    expect(summary).toContain('aria-label="Day 1: +10"></button>');
     expect(summary).toContain(
       'aria-label="Day 4: today, not finished yet">Today</button>',
     );
     expect(summary).toContain('aria-label="Day 28: not played yet"></button></li>');
-    // The key reads the scale, as on the dashboard, with no separate loss mark.
-    expect(summary).toContain("vs own Season: worst");
+    // The key names its unit and runs from the Season's worst day, through
+    // red losses to 0, then ember gains to its best, as on the dashboard,
+    // with no separate loss mark.
+    expect(summary.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ")).toContain(
+      "Net trophies −20 0 +40",
+    );
+    expect(summary.match(/class="season-heat-ramp"><i/g)).toHaveLength(2);
     expect(summary).not.toContain("lost trophies");
     // A phone, with no pointer, reads out today under the grid until a day
     // is tapped.
@@ -486,10 +494,10 @@ describe("today's Legend day wording", () => {
     );
   });
 
-  it("heads today's slots with the day's net only while every battle is recorded", () => {
+  it("shows the day's net beside the trophies only while every battle is recorded", () => {
     const slots = (battlesComplete: boolean) =>
       renderToString(
-        createElement(TodaySlots, {
+        createElement(TodayNet, {
           day: {
             ...TODAY,
             battlesComplete,
@@ -502,8 +510,10 @@ describe("today's Legend day wording", () => {
           },
         }),
       ).replaceAll("<!-- -->", "");
-    expect(slots(true)).toContain('<b class="today-net score-positive">+156</b>');
+    expect(slots(true)).toBe(
+      '<span class="today-net"><b class="score-positive">+156</b> today</span>',
+    );
     // With battles missing the sum is not the day's net, so none shows.
-    expect(slots(false)).not.toContain("today-net");
+    expect(slots(false)).toBe("");
   });
 });

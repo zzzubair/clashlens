@@ -488,7 +488,10 @@ describe("army analytics route historical reads", () => {
     // colouring rule open from its ⓘ, not a sentence over the table.
     const rule =
       "Differences are against the Legend average: 37.5% 3-star. Green or red when 5% or more from it: 1.9+ pts for 3-star.";
-    expect(renderedText(html)).toContain(`vs Legend avg ⓘ`);
+    // The ⓘ is drawn, so a font without the character never shows a box.
+    expect(renderedText(html)).toContain(`vs Legend avg The averages`);
+    expect(html).toMatch(/<summary[^>]*><svg class="info-mark"/);
+    expect(html).not.toContain("ⓘ");
     expect(renderedText(html)).toContain(rule);
     expect(html).toContain(`<details class="analytics-rule"><summary title="${rule}">`);
     expect(html).not.toMatch(/class="analytics-note"[^]*?Green or red/);

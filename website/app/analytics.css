@@ -294,13 +294,19 @@
   }
 }
 
+/* Where the saved battles came from: one quiet line, not a card. */
 .analytics-page .sample-data-notice {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem 1.5rem;
+  align-items: baseline;
+  gap: 0.25rem 1rem;
   margin-bottom: 1rem;
+  padding: 0;
+  color: var(--cl-muted);
+  background: none;
+  border: 0;
+  box-shadow: none;
+  font-size: 0.875rem;
 }
 
 /* ---------- Filters: unit type chips, then Players and Season ---------- */
@@ -310,21 +316,21 @@
   gap: 0.75rem;
   margin: 0 0 1.75rem;
 }
-/* The chips run to the screen edge on a phone and fade out at the right, so
-   a cut-off chip reads as "more this way". The shared tab row style can load
-   after this file, so this selector is the more specific one. */
+/* The shared tab row style can load after this file, so this selector is
+   the more specific one. */
 :root .analytics-controls .analytics-unit-types {
-  margin: 0 -1rem;
-  padding: 0 2.5rem 0 1rem;
-  scroll-padding-inline: 1rem;
-  mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), transparent);
+  flex-wrap: wrap;
+}
+/* A phone picks the unit type from one menu beside Players, so no type
+   hides past the screen's edge; wider screens show every type as a tab. */
+@media (max-width: 39.99rem) {
+  :root .analytics-controls .analytics-unit-types {
+    display: none;
+  }
 }
 @media (min-width: 40rem) {
-  :root .analytics-controls .analytics-unit-types {
-    flex-wrap: wrap;
-    margin-inline: 0;
-    padding-inline: 0;
-    mask-image: none;
+  :root .analytics-unit-menu {
+    display: none;
   }
 }
 .analytics-filter-row {
@@ -681,6 +687,10 @@
   .analytics-more-columns {
     display: none;
   }
+  /* The order's arrow shows once, beside the Sort menu. */
+  .analytics-results-table thead .analytics-sort-button > span[aria-hidden] {
+    display: none;
+  }
 }
 
 /* ---------- Results: ruled rows open on the page ---------- */
@@ -939,29 +949,45 @@
     flex: 1 0 100%;
   }
 
+  /* Days on the left, Sort on the right, on one row above the list. */
   .analytics-results > .analytics-sort-menu {
-    flex: 0 1 auto;
-    margin: 0 0 0.75rem;
+    flex: none;
+    order: -1;
+    margin: 0;
   }
 
   .analytics-results > .analytics-results-head {
-    margin: 0 0 0.25rem;
+    flex: 1 1 0;
+    order: -2;
+    min-width: 0;
+    margin: 0;
+  }
+
+  /* The explanation opens from the page's edge under the days, so it stays
+     on screen however far the Sort menu pushes its button. */
+  .analytics-results-head {
+    position: relative;
+  }
+  .analytics-results-head .analytics-rule {
+    position: static;
+  }
+  .analytics-results-head .analytics-rule > p {
+    right: auto;
+    left: 0;
+    max-width: min(18rem, calc(100vw - 2rem));
+  }
+
+  /* "vs Legend avg" wraps under the days, so it needs no dot. */
+  .analytics-days {
+    flex-wrap: wrap;
+  }
+  .analytics-average-key::before {
+    content: none;
   }
 
   .analytics-controls {
     gap: 0.5rem;
     margin-bottom: 0.75rem;
-  }
-
-  /* One line a field: the chosen value says what it is, and screen readers
-     still hear the label. */
-  .analytics-field > span {
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-  .analytics-field select {
-    min-height: 2.75rem;
-    padding-block: 0;
   }
 
   .analytics-note {
@@ -1012,9 +1038,22 @@
   .analytics-results.open-board .analytics-results-table tbody > tr > :is(td, th) {
     border-bottom: 0;
   }
-  /* No chart: each army's row below shows its use and 3-star rate as bars,
-     which a phone-sized scatter could only repeat. */
+  /* The chart fits a phone: shorter, its scale in a narrower gutter; names
+     go where they fit and the rest read out on a tap. */
   .army-map {
+    --map-h: 15rem;
+  }
+  .army-map-plot {
+    margin: 0 0.75rem 2.75rem 2.75rem;
+  }
+  .army-map-axis[data-axis="rate"] {
+    left: -2.35rem;
+  }
+  .army-map-tick[data-axis="rate"] {
+    right: calc(100% + 0.35rem);
+  }
+  /* No room for the quarters' names between a phone's gridlines. */
+  .army-map-quarter[data-wide] {
     display: none;
   }
 
@@ -1114,8 +1153,9 @@
     font-weight: 700;
     line-height: 1.25;
   }
+  /* The Sort menu above already names the order, so the key stays plain. */
   .analytics-phone-key > [data-sorted] {
-    color: var(--cl-action-text);
+    color: var(--cl-ink);
   }
   .analytics-phone-key small {
     display: block;

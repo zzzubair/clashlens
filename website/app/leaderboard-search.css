@@ -247,7 +247,7 @@
 
 .standings-toolbar h2 {
   margin: 0 auto 0 0;
-  font-size: 1.35rem;
+  font-size: clamp(1.125rem, 1rem + 0.4vw, 1.25rem);
 }
 
 .standings-total {

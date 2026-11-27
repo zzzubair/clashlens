@@ -26,55 +26,82 @@ body {
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  /* "Ember night": a warm near-black lit from above by the logo's orange,
-     under smoked-glass panels. Text is warm white, never pure white, so long
-     sessions stay easy on the eyes. Three clear steps of light: the darkest
-     page, cards a step up in a near-neutral warm grey (so they read as
-     charcoal, not brown boxes), and controls a step above the cards. */
-  --cl-ink: #f5eee7;
-  --cl-paper: #090706;
-  --cl-surface: rgb(255 242 230 / 0.055);
-  --cl-solid: #18120f;
-  --cl-panel: rgb(255 240 228 / 0.045);
-  --cl-raised: rgb(255 240 228 / 0.1);
-  --cl-fill-hover: rgb(255 236 218 / 0.15);
-  --cl-muted: #b3a79c;
-  --cl-faint: #9d9187;
-  --cl-border: rgb(255 226 200 / 0.085);
-  --cl-outline: rgb(255 226 200 / 0.16);
-  --cl-input-border: #77695f;
+  /* Night: warm near-blacks, like a dark room lit by a fire rather than a
+     screen, stepping up in lightness with the same faint warmth, so black
+     reads as black and the ember accent belongs to it.
+     Every dark colour token lives in this one block. */
+  --v4-page: #0b0a09;
+  --v4-ink: #f6f2ec;
+  --v4-muted: #aaa298;
+  --v4-faint: #948b80;
+  --v4-line: rgb(255 240 220 / 0.075);
+  --v4-line-strong: rgb(255 240 220 / 0.13);
+  --v4-glass: #11100e;
+  --v4-glass-hi: #151311;
+  --v4-glass-edge: rgb(255 240 220 / 0.08);
+  --v4-fill: rgb(255 240 220 / 0.045);
+  --v4-fill-2: rgb(255 240 220 / 0.085);
+  --v4-ember: #ff9a2e;
+  --v4-ember-text: #ffa149;
+  --v4-ember-wash: rgb(255 154 46 / 0.08);
+  --v4-up: #74d18f;
+  --v4-down: #f47f6f;
+  --cl-ink: var(--v4-ink);
+  --cl-paper: var(--v4-page);
+  --cl-surface: rgb(255 240 220 / 0.04);
+  --cl-solid: #161412;
+  --cl-panel: var(--v4-fill);
+  --cl-raised: var(--v4-fill-2);
+  --cl-fill-hover: rgb(255 240 220 / 0.12);
+  --cl-muted: var(--v4-muted);
+  --cl-faint: var(--v4-faint);
+  --cl-border: var(--v4-line);
+  --cl-outline: rgb(255 240 220 / 0.14);
+  --cl-input-border: #736a60;
   --cl-accent: #ffa149;
   --cl-accent-contrast: #ffa149;
-  --cl-header-bg: rgb(14 10 8 / 0.74);
-  --cl-header-solid: #0f0b09;
-  --cl-header-ink: #f5eee7;
-  --cl-header-muted: #b3a79c;
-  --cl-header-soft: rgb(255 236 218 / 0.07);
+  --cl-header-bg: var(--v4-page);
+  --cl-header-solid: #0e0c0b;
+  --cl-header-ink: var(--v4-ink);
+  --cl-header-muted: var(--v4-muted);
+  --cl-header-soft: rgb(255 240 220 / 0.06);
   --cl-action-text: #ffa149;
-  --cl-meter: #b8793d;
-  --cl-action-soft: rgb(255 140 40 / 0.12);
-  --cl-action-border: rgb(255 150 60 / 0.42);
+  --cl-action-edge: #a8582a;
+  --cl-meter: #b07a45;
+  --cl-action-soft: rgb(255 154 46 / 0.12);
+  --cl-action-border: rgb(255 154 46 / 0.42);
   --cl-gold: #ffc53d;
   --cl-star: #ffc53d;
   /* The dark rim of a won star and the hollow of a missed one. */
   --cl-star-edge: #6b3500;
-  --cl-star-empty: rgb(255 240 220 / 0.08);
-  --cl-star-empty-edge: rgb(255 240 220 / 0.5);
+  --cl-star-empty: rgb(255 255 255 / 0.08);
+  --cl-star-empty-edge: rgb(255 255 255 / 0.45);
   /* Two and one star on a star split: greys, never a darkened gold. */
-  --cl-star-2: #a1a1aa;
-  --cl-star-1: #626269;
+  --cl-star-2: #aaa298;
+  --cl-star-1: #69625a;
   /* The heat map's edge on a played day; its scale is in season-heat.css. */
   --cl-sky: #ffa149;
-  --cl-sky-soft: #23170c;
-  --cl-positive: #77cf85;
-  --cl-positive-soft: #182f1c;
-  --cl-negative: #f07968;
-  --cl-negative-soft: #3a1d19;
-  --cl-card-line: rgb(255 226 200 / 0.09);
+  --cl-sky-soft: #1d1813;
+  --cl-positive: var(--v4-up);
+  --cl-positive-soft: #13271a;
+  --cl-negative: var(--v4-down);
+  --cl-negative-soft: #331a18;
+  --cl-card-line: rgb(255 240 220 / 0.08);
   --cl-card-drop: 0 1px 0 rgb(0 0 0 / 0.5), 0 24px 48px -30px rgb(0 0 0 / 0.95);
-  --cl-glass: rgb(26 19 15 / 0.62);
-  --cl-glass-strong: rgb(24 18 14 / 0.94);
-  --cl-glass-edge: rgb(255 226 200 / 0.1);
+  --cl-glass: rgb(22 20 18 / 0.72);
+  --cl-glass-strong: rgb(22 20 18 / 0.96);
+  --cl-glass-edge: rgb(255 240 220 / 0.09);
+  --cl-control-fill: #171513;
+  --cl-control-fill-hover: #221f1c;
+  /* Keeps 3:1 against the page, so an edge still means "press this". */
+  --cl-control-edge: #675e55;
+  --cl-sheet-fill: rgb(255 240 220 / 0.035);
+  --cl-sheet-solid: #151311;
+  --cl-sheet-line: rgb(255 240 220 / 0.08);
+  --cl-sheet-border: transparent;
+  --cl-you-wash: rgb(255 154 46 / 0.1);
+  --cl-podium-2: #d3cbc1;
+  --cl-dither: url("/images/dither-dark.png");
   /* No ring: every pop-up draws its own 1px edge, and a ring outside it
      made a double edge. */
   --cl-overlay-shadow: 0 24px 56px -12px rgb(0 0 0 / 0.8);
@@ -287,6 +314,12 @@ html {
   color: #ffb2b2;
 }
 
+/* The dashboard's player picker is solid, so the corner's dots never show
+   through it. */
+:root[data-theme="dark"] .dash-account-track {
+  background: var(--cl-solid);
+}
+
 @media (forced-colors: active) {
   .home-page .search-controls:focus-within,
   :is(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
@@ -295,4 +328,10 @@ html {
   .button[aria-current="page"] {
     outline: 2px solid Highlight;
   }
+}
+
+/* The Season picker's arrow is the dark theme's neutral grey, as every
+   other dropdown's is, not light mode's warm one. */
+:root[data-theme="dark"] .player-page .season-menu select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%23a1a1aa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }

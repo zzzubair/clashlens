@@ -99,7 +99,7 @@ describe("Legend day card", () => {
         createElement(LegendDayCard, data(emptyDay({ dayNumber: 9 }))),
       ),
     );
-    expect(card).toContain("Legend day 9 , Lens Main Updated 9 min ago Trophies");
+    expect(card).toContain("Legend day 9 · Lens Main Updated 9 min ago Trophies");
     expect(card).toContain("20h 00m to Reset");
   });
 

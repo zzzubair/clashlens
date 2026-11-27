@@ -927,13 +927,6 @@
   color: var(--cl-positive);
 }
 
-/* Below the top three, a board ranks in plain numbers, not the shared plate
-   (brand.css); a worst-first board's top three keep the plain plate. */
-:root .crew-rows li .crew-rank:not([data-podium-rank], .rank-mark) {
-  color: var(--cl-muted);
-  background: none;
-}
-
 /* ---------- Live and At last Reset: now against a held reading ---------- */
 
 /* Live wears a flat green dot before its title, so it never reads as At last

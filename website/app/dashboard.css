@@ -1054,18 +1054,8 @@
     display: none;
   }
 
-  /* Named for screen readers, out of the way on screen. */
-  :is(.dash-account-today, .dash-account-add-text) {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-
   .dash-account-add {
-    padding: 0;
+    padding: 0 0.6rem;
   }
 
   .dash-account-add .dash-icon {
@@ -1453,4 +1443,11 @@
     min-width: 2.75rem;
     min-height: 2.75rem;
   }
+}
+
+/* The chosen player's numbers are on the Legend day card right under it,
+   so while that card shows, its chip keeps only the name; the others keep
+   their line. */
+body:has([data-card="legend-day"]) .dash-account[aria-current="page"] .dash-account-line {
+  display: none;
 }

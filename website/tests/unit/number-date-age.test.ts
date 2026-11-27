@@ -58,8 +58,9 @@ it("keeps long and short ages and the overlay's rounding distinct", () => {
   expect(elapsedUnits(119, "round").minutes).toBe(2);
   expect(elapsedUnits(5400, "round").hours).toBe(2);
   expect(updatedAgo(0, 119 * 1000)).toBe("updated 1 min ago");
-  expect(updatedAgo(0, 119 * 60000)).toBe("updated 119 min ago");
-  expect(updatedAgo(0, 120 * 60000)).toBe("updated 2 h ago");
+  expect(updatedAgo(0, 59 * 60000)).toBe("updated 59 min ago");
+  expect(updatedAgo(0, 110 * 60000)).toBe("updated 1h 50m ago");
+  expect(updatedAgo(0, 120 * 60000)).toBe("updated 2h ago");
   expect(updatedAgo(null, 0)).toBeNull();
 });
 

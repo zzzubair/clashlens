@@ -21,7 +21,7 @@ For the browser tab icon, the phone home-screen icon and the Discord or social a
 
 At 16 pixels the CL mark reads as two orange blocks rather than letters.
 
-[`assets/mark-cl-block-square.svg`](../assets/mark-cl-block-square.svg) is the CL mark, a little smaller, filling a whole sky blue square with soft white sun rays. The owner chose sky blue over the old dark square on 2026-10-12 to make the icon lighter and more fun; the letters are unchanged. The site's home-screen and web app icons are made from it, and so is [`discord-avatar-512.png`](discord-avatar-512.png), which is the Discord server icon. [`assets/mark-cl-block-square-maskable.svg`](../assets/mark-cl-block-square-maskable.svg) is the same square with the letters shrunk to fit inside the circle Android never crops, for Android's own icon shapes. The browser tab icon is `mark-cl-block.svg` on a transparent background. Player-page link previews use [`website/public/images/og-clashlens.png`](../website/public/images/og-clashlens.png), the wordmark on the night background.
+[`assets/mark-cl-block-square.svg`](../assets/mark-cl-block-square.svg) is the CL mark, a little smaller, filling a whole sky blue square with soft white sun rays. The owner chose sky blue over the old dark square on 2026-10-12 to make the icon lighter and more fun; the letters are unchanged. The site's home-screen and web app icons are made from it, and so is [`discord-avatar-512.png`](discord-avatar-512.png), which is the Discord server icon. [`assets/mark-cl-block-square-maskable.svg`](../assets/mark-cl-block-square-maskable.svg) is the same square with the letters shrunk to fit inside the circle Android never crops, for Android's own icon shapes. The browser tab icon is `mark-cl-block.svg` on a transparent background. Link previews use [`website/public/images/og-clashlens.png`](../website/public/images/og-clashlens.png): the wordmark on the dark page colour, the same corner dots as the site, "Legend League" and what the site does, and the button's yellow-to-orange as a bar along the bottom.
 
 ## Colours
 
@@ -39,22 +39,23 @@ Brand colours, the same in both themes:
 
 The site has a light theme (white and light grey) and a dark theme (night: near-blacks that step up in lightness, never in hue). A first-time visitor gets whichever theme their device is set to; the moon/sun button overrides it and the choice is remembered in that browser.
 
-| Role                     | Light          | Dark           |
-| ------------------------ | -------------- | -------------- |
-| Page                     | `#f4f4f5`      | `#050506`      |
-| Card                     | `#ffffff`      | `#0e0e10`      |
-| Panel, table head        | `#f7f7f8`      | `#141417`      |
-| Raised (rank plate, you) | `#ececef`      | `#1f1f23`      |
-| Text                     | `#0b0b0d`      | `#f4f4f5`      |
-| Muted text               | `#5b5b65`      | `#a1a1aa`      |
-| Link, accent, you        | `#b93c0a`      | `#ffa149`      |
-| Divider, card edge       | `#e6e6e9`      | `#1d1d21`      |
-| Trophies                 | `#855700`      | `#ffc53d`      |
-| Win, trophies gained     | `#13773a`      | `#4ade80`      |
-| Loss, trophies lost      | `#c81e1e`      | `#ff6b5b`      |
-| Top bar, tab bar         | white, frosted | black, frosted |
+| Role                     | Light          | Dark       |
+| ------------------------ | -------------- | ---------- |
+| Page                     | `#f4f4f5`      | `#09090b`  |
+| Card                     | `#ffffff`      | `#0f0f11`  |
+| Panel, table head        | `#f7f7f8`      | `#141416`  |
+| Raised (rank plate, you) | `#ececef`      | `#1e1e20`  |
+| Text                     | `#0b0b0d`      | `#f4f4f5`  |
+| Muted text               | `#5b5b65`      | `#a1a1aa`  |
+| Link, accent, you        | `#b93c0a`      | `#ffa149`  |
+| Divider, card edge       | `#e6e6e9`      | `#1a1a1c`  |
+| Trophies                 | `#855700`      | `#ffc53d`  |
+| Win, trophies gained     | `#13773a`      | `#74d18f`  |
+| Loss, trophies lost      | `#c81e1e`      | `#f47f6f`  |
+| Top bar, tab bar         | white, frosted | page black |
+| Controls (fields, tabs)  | white          | `#151517`  |
 
-Every text colour above reaches at least 4.5:1 contrast on the page, card, panel and raised colours of its theme (the usual minimum for readable text). Text on the orange fill is always Night, which is at least 7.8:1; white on orange is only 2.4:1, so it is never used.
+All dark colours live in one block in `website/app/appearance.css`. Every text colour above reaches at least 4.5:1 contrast on the page, card, panel and raised colours of its theme (the usual minimum for readable text). Text on the orange fill is always Night, which is at least 7.8:1; white on orange is only 2.4:1, so it is never used.
 
 ## Fonts
 
@@ -73,4 +74,6 @@ All are served from the site itself.
 - **Buttons:** the main action is a solid orange fill (`--cl-action`) with Night text, flat with no glow (nothing on the site glows); everything else is a quiet card-coloured button with a thin edge. Controls have 8px corners, cards 12px.
 - **Dashboard teaser:** signed-out visitors see a locked example dashboard on the front page, with Create account and Sign in.
 - **Phones first:** nothing scrolls sideways except a row of tabs or chips; long lists show a first chunk and a "Show all" button.
+- **Corner dots:** the top right of each page, under the top bar, has a small patch of orange pixels in an ordered dither that thins to nothing, like a scoreboard's lights (`website/public/images/dither-dark.png` and `dither-light.png`). It is texture only: it never moves, and fields, tabs and buttons over it are solid so it never shows through them. The stream overlay has none.
+- **One orange button:** a page has at most one filled orange button, its main action (Search on Home and Rankings). Everything else is a quiet button or a link.
 - **Consistency:** every page uses the same edges, corners and colours. Nothing gets a one-off style.

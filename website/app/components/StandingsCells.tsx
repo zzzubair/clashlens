@@ -42,6 +42,13 @@ export function StandingsCells({
         <span className="rank-mark">
           {rankings ? entry.rank.toLocaleString() : entry.rank}
         </span>
+        {/* A phone shows the move under the rank, giving the name its column;
+            wider screens hide this copy and read the move's own column. */}
+        {compared ? (
+          <span className="rank-cell-move">
+            <RankMove entry={entry} />
+          </span>
+        ) : null}
       </td>
       {compared ? (
         <td className="move-cell">

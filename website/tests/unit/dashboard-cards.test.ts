@@ -746,18 +746,19 @@ describe("dashboard cards, from Python's replies through the reads to the page",
 
     // Rivals watch: 3 above and 3 below live, moves since the Reset, each a player link.
     const rivals = text(cards["rivals-watch"]!);
-    expect(rivals).toContain("since Reset Live Season Rank Player Trophies Today");
-    expect(rivals.match(/#3\d\d/g)?.join(" ")).toBe("#313 #314 #315 #316 #317 #318 #319");
+    expect(rivals).toContain("since Reset Live Season Rank Player Today Trophies");
+    const places = [...cards["rivals-watch"]!.matchAll(/class="rank-mark"[^>]*>(\d+)</g)];
+    expect(places.map((place) => place[1]).join(" ")).toBe("313 314 315 316 317 318 319");
     // A phone shows you and 2 either side until Show all 7.
     expect(
       cards["rivals-watch"]!.split('class="rival-far"')
         .slice(1)
-        .map((row) => /#3\d\d/.exec(text(row))?.[0]),
-    ).toEqual(["#313", "#319"]);
+        .map((row) => /rank-mark[^>]*>(\d+)</.exec(row)?.[1]),
+    ).toEqual(["313", "319"]);
     expect(rivals).toContain("Show all 7");
-    expect(rivals).toContain("#315 ▼ 5 Tundra 5,375 +90");
-    expect(rivals).toContain("#316 ▲ 2 Lens Main 5,370 +55");
-    expect(rivals).toContain("#317 Player 317 5,365 –");
+    expect(rivals).toContain("315 ▼ 5 Tundra +90 5,375");
+    expect(rivals).toContain("316 ▲ 2 Lens Main +55 5,370");
+    expect(rivals).toContain("317 Player 317 – 5,365");
     expect(cards["rivals-watch"]).toContain('href="/players/%238PYQ2LJ0"');
     expect(cards["rivals-watch"]!.match(/class="rival-link" href/g)).toHaveLength(7);
     // Tundra's battles were saved 20 minutes ago, before the board's 3.
@@ -1012,11 +1013,11 @@ describe("dashboard cards, from Python's replies through the reads to the page",
 
     // Legend day: the page's trophies and battles, the read's range and open defenses.
     const day = text(cards["legend-day"]!);
-    // The tab shows whose day it is; the card names the player for screen readers only.
-    expect(day).toContain("Legend day 9 , Lens Main");
+    // The card names whose day it is beside the day, for a cropped screenshot.
+    expect(day).toContain("Legend day 9 · Lens Main");
     expect(day).toContain("What Projected place means");
     expect(day).toContain("Trophies 5,370 Net today –");
-    expect(cards["legend-day"]).toMatch(/sr-only">, (<!-- -->)?Lens Main</);
+    expect(cards["legend-day"]).toMatch(/legend-day-who"> · (<!-- -->)?Lens Main</);
     expect(cards["legend-day"]!.match(/Lens Main/g)).toHaveLength(1);
     expect(day).toContain("Last Reset #318 Now #316 Projected place #240 at Reset");
     expect(day).toContain("Next Reset range best #95 worst #760");

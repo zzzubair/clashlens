@@ -18,7 +18,6 @@ import { Crest } from "../components/GameIcons";
 import { TrophyMark } from "../components/LeaderboardShared";
 import { ProviderMark } from "../components/ProviderMark";
 import { SavedLine } from "../components/SavedLine";
-import { HeatKey } from "../components/SeasonHeatGrid";
 import { SeasonHeatMap, heatMapShown } from "../components/SeasonSummary";
 import type { LinkedPlayerCard, PublicUser } from "../lib/account-contracts";
 import { normalizeUsername } from "../lib/account-validation";
@@ -246,13 +245,6 @@ export default function UserRoute() {
     <>
       <div className="profile-players-head">
         <h2 id="user-players-title">Clash players</h2>
-        {/* One key for every card's Season heat map, while one draws. */}
-        {players.some((player) => {
-          const season = days?.[player.tag]?.season;
-          return season ? heatMapShown(season.today) : false;
-        }) ? (
-          <HeatKey />
-        ) : null}
       </div>
       <ul className="linked-player-cards">
         {players.map((player) => (
@@ -505,10 +497,7 @@ function LinkedPlayer({
                   className="rank-mark"
                   data-podium-rank={player.rank <= 3 ? player.rank : undefined}
                 >
-                  {/* A podium plate shows the bare place, as on Rankings. */}
-                  {player.rank <= 3
-                    ? player.rank
-                    : `#${player.rank.toLocaleString("en-GB")}`}
+                  {`#${player.rank.toLocaleString("en-GB")}`}
                 </strong>
                 <RankMove rank={player.rank} since={day?.resetRank ?? null} />
               </span>
