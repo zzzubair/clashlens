@@ -811,6 +811,13 @@ export default function ArmyAnalyticsRoute() {
     query.set("category", unitType);
     return `?${query}`;
   };
+  // Past Seasons keep the first six, plus the one in the link.
+  const unitTypeChoices = [
+    ...unitTypes.filter(
+      (value) => !isHistorical || unitTypes.indexOf(value) < 6 || value === category,
+    ),
+    ...(category === "cc-composition" ? ["cc-composition"] : []),
+  ];
   const unavailable = "selectionUnavailable" in result && result.selectionUnavailable;
   const preparing = "armyTypesPreparing" in result && result.armyTypesPreparing;
   const armiesNotAvailable = "armiesNotAvailable" in result && result.armiesNotAvailable;
@@ -1022,7 +1029,7 @@ export default function ArmyAnalyticsRoute() {
           name="sort"
           value={selected?.sort ?? params.get("sort") ?? "usage-rate"}
         />
-        <input type="hidden" name="category" value={category} />
+        {armyTypes ? <input type="hidden" name="category" value={category} /> : null}
         {snapshot ? <input type="hidden" name="recent" value="1" /> : null}
         {params.get("saved") === "1" ? (
           <input type="hidden" name="saved" value="1" />
@@ -1033,15 +1040,7 @@ export default function ArmyAnalyticsRoute() {
             aria-label="Unit type"
             className="tab-row analytics-unit-types"
           >
-            {[
-              ...unitTypes
-                // Past Seasons keep the first six, plus the one in the link.
-                .filter(
-                  (value) =>
-                    !isHistorical || unitTypes.indexOf(value) < 6 || value === category,
-                ),
-              ...(category === "cc-composition" ? ["cc-composition"] : []),
-            ].map((value) => (
+            {unitTypeChoices.map((value) => (
               <Link
                 key={value}
                 to={unitTypeQuery(value)}
@@ -1055,6 +1054,18 @@ export default function ArmyAnalyticsRoute() {
           </nav>
         )}
         <div className="analytics-filter-row">
+          {armyTypes ? null : (
+            <label className="analytics-field analytics-unit-menu">
+              <span>Unit type</span>
+              <select key={category} name="category" defaultValue={category}>
+                {unitTypeChoices.map((value) => (
+                  <option key={value} value={value}>
+                    {filterLabels[value]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <label className="analytics-field">
             <span>Players</span>
             <select

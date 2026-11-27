@@ -869,7 +869,9 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             {/* Named for its player, so a cropped screenshot says whose days these are. */}
             <h2 id="season-days-title">
               Daily Legend log{" "}
-              <small className="log-title-who">· {trackedPlayer.profile.name}</small>
+              <small className="log-title-who" aria-hidden="true">
+                · {trackedPlayer.profile.name}
+              </small>
             </h2>
             {allHistory.length > 0 ? <LogBarsKey /> : null}
           </div>

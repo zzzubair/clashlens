@@ -438,19 +438,19 @@
       "eod rank rank rank"
       "def swing att att";
   }
-  /* The head is one guide line, Defenses 0 Attacks, over the bars; the
-     date, net, end of day and rank read plainly without labels, which
+  /* The head: Net over the day's net, then Defenses 0 Attacks over the
+     bars; the date, end of day and rank read plainly without labels, which
      screen readers still hear. */
   .player-page .log-head {
     display: grid;
-    grid-template-areas: "def swing att att";
+    grid-template-areas:
+      ". . net ."
+      "def swing att att";
     padding: 0 0.85rem 0.5rem var(--sheet-pad);
     font-size: 0.75rem;
     font-weight: 500;
   }
-  .player-page
-    .log-head
-    > :is(:nth-child(1), :nth-child(2), :nth-child(6), :nth-child(7)) {
+  .player-page .log-head > :is(:nth-child(1), :nth-child(2), :nth-child(7)) {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -476,6 +476,10 @@
   }
   .player-page .log-head > :nth-child(5) {
     grid-area: def;
+  }
+  .player-page .log-head > :nth-child(6) {
+    grid-area: net;
+    justify-self: end;
   }
   .player-page .log-row .log-when {
     grid-area: when;

@@ -622,18 +622,18 @@
     white-space: nowrap;
   }
 }
-/* Narrow phones: the count and the rank a row each, then the time beside
-   Refresh. */
+/* Narrow phones: Refresh beside the name, then the count, the rank and the
+   time a row each. */
 @media (max-width: 29.99rem) {
   .player-page .player-hero,
   .player-page .player-hero:has(.player-actions > :nth-child(2)) {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
-      "name name"
+      "name actions"
       "who who"
       "count count"
       "rank rank"
-      "fresh actions"
+      "fresh fresh"
       "status status"
       "today today"
       "line line";
