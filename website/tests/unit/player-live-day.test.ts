@@ -21,7 +21,7 @@ import {
 } from "react-router";
 
 import type { PlayerPage, RankedDaySummary } from "../../app/lib/contracts";
-import { TodaySlots } from "../../app/components/LegendLog";
+import { TodayNet } from "../../app/components/LegendLog";
 import PlayerRoute from "../../app/routes/player";
 
 const TAG = "#2PP";
@@ -488,10 +488,10 @@ describe("today's Legend day wording", () => {
     );
   });
 
-  it("heads today's slots with the day's net only while every battle is recorded", () => {
+  it("shows the day's net beside the trophies only while every battle is recorded", () => {
     const slots = (battlesComplete: boolean) =>
       renderToString(
-        createElement(TodaySlots, {
+        createElement(TodayNet, {
           day: {
             ...TODAY,
             battlesComplete,
@@ -504,8 +504,10 @@ describe("today's Legend day wording", () => {
           },
         }),
       ).replaceAll("<!-- -->", "");
-    expect(slots(true)).toContain('<b class="today-net score-positive">+156</b>');
+    expect(slots(true)).toBe(
+      '<span class="today-net"><b class="score-positive">+156</b> today</span>',
+    );
     // With battles missing the sum is not the day's net, so none shows.
-    expect(slots(false)).not.toContain("today-net");
+    expect(slots(false)).toBe("");
   });
 });

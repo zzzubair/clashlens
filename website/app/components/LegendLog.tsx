@@ -522,8 +522,19 @@ type TodayBattle = Pick<
  * card draws them: stars over the trophies each one moved, in the order
  * played, with dashed slots still to play, headed by the Legend day.
  */
-export function TodaySlots({ day }: { day: TodayBattles }) {
+/** Today's net so far, beside the player's trophies: the first thing a
+ * Clasher asks of the day. A day with battles missing has no net to show. */
+export function TodayNet({ day }: { day: TodayBattles }) {
   const net = day.presentation!.battle_net_complete;
+  if (net === null) return null;
+  return (
+    <span className="today-net">
+      <b className={valueTone(net)}>{formatSigned(net)}</b> today
+    </span>
+  );
+}
+
+export function TodaySlots({ day }: { day: TodayBattles }) {
   const defense = day.defense.trophyLoss === null ? null : -day.defense.trophyLoss;
   const sides = [
     ["attack", "Attacks", day.offense.attacks, day.offense.trophyGain, day.offenseEvents],
@@ -535,11 +546,6 @@ export function TodaySlots({ day }: { day: TodayBattles }) {
       <p className="today-day">
         {day.dayNumber === null ? "Legend day" : `Legend day ${day.dayNumber}`}
         <span> · today</span>
-        {/* The day's net so far, the first thing a Clasher asks of it; a day
-            with battles missing has no net to show. */}
-        {net !== null ? (
-          <b className={`today-net ${valueTone(net)}`}>{formatSigned(net)}</b>
-        ) : null}
       </p>
       {sides.map(([side, title, saved, total, events]) => {
         const played = [...events].sort(

@@ -42,6 +42,7 @@ import { publicPageMeta } from "../lib/blog";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import { seasonDates, unavailableSeasonDates } from "../lib/season-end";
 import type { Route } from "./+types/army-analytics";
+import { InfoMark } from "../components/InfoMark";
 
 export function links() {
   return [
@@ -996,11 +997,8 @@ export default function ArmyAnalyticsRoute() {
       {snapshot ? (
         <aside className="notice sample-data-notice" aria-label="Real battle data">
           <div>
-            <strong>Real battle data.</strong> Recent Legend battles from the top{" "}
-            {snapshot.playerCount} players.
-            <br />
-            Fetched <LocalTimestamp value={snapshot.fetchedAt} />. This is a saved
-            snapshot; daily coverage is incomplete.
+            Real battles of the top {snapshot.playerCount}, saved{" "}
+            <LocalTimestamp value={snapshot.fetchedAt} />; some days are missing.
           </div>
           <Link to="?saved=1">Completed-day stats</Link>
         </aside>
@@ -1108,11 +1106,7 @@ export default function ArmyAnalyticsRoute() {
             </label>
           )}
           <span className="analytics-status" role="status">
-            {navigation.state !== "idle"
-              ? "Updating…"
-              : snapshot
-                ? "Recent real battles"
-                : null}
+            {navigation.state !== "idle" ? "Updating…" : null}
           </span>
         </div>
         <noscript>
@@ -1185,7 +1179,7 @@ export default function ArmyAnalyticsRoute() {
                   vs Legend avg
                   <details className="analytics-rule">
                     <summary title={clearWords(averages)}>
-                      <span aria-hidden="true">ⓘ</span>
+                      <InfoMark />
                       <span className="sr-only">
                         The averages, and how differences are coloured
                       </span>

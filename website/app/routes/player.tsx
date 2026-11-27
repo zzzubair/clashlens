@@ -23,7 +23,13 @@ import { usePlayerLookupEvent } from "../components/Analytics";
 import { BattleStatistics } from "../components/BattleStatistics";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { TrophyMark } from "../components/LeaderboardShared";
-import { DayBattles, LegendLog, LogBarsKey, TodaySlots } from "../components/LegendLog";
+import {
+  DayBattles,
+  LegendLog,
+  LogBarsKey,
+  TodayNet,
+  TodaySlots,
+} from "../components/LegendLog";
 import { LinkedBattle } from "../components/LinkedBattle";
 import { PastSeasons } from "../components/PastSeasons";
 import { PlayerActions } from "../components/PlayerActions";
@@ -756,6 +762,9 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
                 {trackedPlayer.profile.trophies.toLocaleString("en-GB")}
               </strong>
             )}
+            {today && !seasonExpired && !trackedPlayer.profile.seasonResetPending ? (
+              <TodayNet day={today} />
+            ) : null}
           </div>
           {seasonExpired || trackedPlayer.profile.seasonResetPending ? null : (
             <LiveRank rank={data.liveRank} tag={trackedPlayer.tag} />
@@ -857,7 +866,11 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           aria-labelledby="season-days-title"
         >
           <div className="log-title">
-            <h2 id="season-days-title">Daily Legend log</h2>
+            {/* Named for its player, so a cropped screenshot says whose days these are. */}
+            <h2 id="season-days-title">
+              Daily Legend log{" "}
+              <small className="log-title-who">· {trackedPlayer.profile.name}</small>
+            </h2>
             {allHistory.length > 0 ? <LogBarsKey /> : null}
           </div>
           {/* Each shown only while a day in the log carries its dot. */}

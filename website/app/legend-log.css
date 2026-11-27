@@ -13,6 +13,11 @@
   --log-gained: color-mix(in srgb, var(--cl-positive) 72%, transparent);
   padding: 1rem 0 0.5rem;
 }
+.player-page .log-title-who {
+  color: var(--cl-muted);
+  font-size: 0.8em;
+  font-weight: 500;
+}
 .player-page .log-title {
   display: flex;
   flex-wrap: wrap;
@@ -332,7 +337,13 @@
   grid-area: swing;
   height: 0.9rem;
   margin: 0.35rem calc(var(--mark-size) / 2 + 2px) 0;
+  /* A thin tick where each side's dots end, so the bar's full length reads
+     in a screenshot; then the zero line and the track. */
   background:
+    linear-gradient(var(--log-lost), var(--log-lost))
+      calc((var(--zero) - var(--loss)) * 100%) center / 1px 70% no-repeat,
+    linear-gradient(var(--log-gained), var(--log-gained))
+      calc((var(--zero) + var(--gain)) * 100%) center / 1px 70% no-repeat,
     linear-gradient(var(--log-zero), var(--log-zero)) calc(var(--zero) * 100%) 0 / 1px
       100% no-repeat,
     linear-gradient(var(--cl-border), var(--cl-border)) center / 100% 1px no-repeat;

@@ -17,6 +17,7 @@ import { CardHead, CardNote, Name, Switch, count, percent, tone } from "./Dashbo
 import { signedOr } from "../lib/number-format";
 import { zoneName } from "../lib/clock-format";
 import { LegendClock } from "./LegendClock";
+import { useRowMoves } from "../lib/row-moves";
 
 export function ClockCard({
   data,
@@ -534,6 +535,7 @@ function RivalTable({
   live: boolean;
   allShown: boolean;
 }) {
+  const rowMoves = useRowMoves<HTMLTableSectionElement>();
   return (
     <table className={allShown ? "rival-table rival-all" : "rival-table"}>
       <thead>
@@ -544,7 +546,7 @@ function RivalTable({
           <th scope="col">Trophies</th>
         </tr>
       </thead>
-      <tbody>
+      <tbody ref={rowMoves}>
         {rows.map((row, index) => {
           const net = netOf(row);
           return (

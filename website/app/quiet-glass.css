@@ -217,8 +217,8 @@
 :root .open-board thead th {
   border-bottom: 1px solid var(--v4-line);
 }
-/* Column headings and the labels over figures speak in small mono capitals,
-   as uncommon web labels its numbers, so the numbers lead. */
+/* Column headings and the labels over figures are small quiet words in
+   sentence case, so the numbers under them lead. */
 :root
   :is(
     thead th,
@@ -232,11 +232,11 @@
     .analytics-field > span
   ) {
   color: var(--cl-muted);
-  font-family: var(--cl-font-mono);
-  font-size: 0.75rem;
+  font-family: var(--cl-font);
+  font-size: 0.8125rem;
   font-weight: 500;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
 }
 :root thead th :is(button, a) {
   font: inherit;
@@ -1064,22 +1064,6 @@
   }
 }
 
-/* A player's header on an iPad or wider: the rank sits just before the
-   count on its line, so the two numbers read together; when the count was
-   saved and Refresh sit under them, so the Season chart starts higher. */
-@media (min-width: 48rem) {
-  :root .player-page .player-hero,
-  :root .player-page .player-hero:has(.player-actions > :nth-child(2)) {
-    grid-template-columns: minmax(0, 1fr) auto auto auto;
-    grid-template-areas:
-      "name name rank count"
-      "who fresh actions actions"
-      "status status status status"
-      "today today today today"
-      "line line line line";
-  }
-}
-
 /* Home's example on a phone: the Next Reset range takes its own name line,
    as the real card does, so the line between best and worst has the
    card's width. */
@@ -1104,9 +1088,10 @@
   }
 }
 
-/* One empty screen everywhere: a left-aligned card with its title, a quiet
-   line saying why, and its action. */
+/* One empty screen everywhere: a left-aligned card as wide as what it says,
+   with its title, a quiet line saying why, and its action. */
 :root :is(main > .empty-state, .analytics-empty) {
+  max-width: 34rem;
   justify-items: start;
   padding: 1.5rem;
   text-align: left;
@@ -1118,4 +1103,15 @@
 :root :is(main > .empty-state, .analytics-empty) > p:not(.hero-actions) {
   max-width: 52ch;
   color: var(--cl-muted);
+}
+
+/* The drawn circled "i" that opens an explanation (InfoMark). */
+.info-mark {
+  width: 1em;
+  height: 1em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  vertical-align: -0.125em;
 }

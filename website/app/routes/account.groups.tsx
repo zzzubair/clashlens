@@ -438,8 +438,8 @@ export default function GroupsRoute() {
   }, [groups.length]);
 
   const createForm = (
-    <section className="form-panel" aria-label="Create a watchlist">
-      <h2>Create a watchlist</h2>
+    <section className="form-panel" aria-labelledby="group-create-title">
+      <h2 id="group-create-title">New watchlist</h2>
       <Form key={createKey} method="post" action="." className="stack-form" replace>
         <input type="hidden" name="action" value="create" />
         <input type="hidden" name="idempotencyKey" value={createKey} />

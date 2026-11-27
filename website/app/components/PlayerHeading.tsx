@@ -122,6 +122,9 @@ export function LiveRank({
                   : ""
               }. Open the Leaderboard`}
             >
+              <span className="player-live-rank-name" aria-hidden="true">
+                Live rank
+              </span>
               <strong className="rank-mark" data-podium-rank={now <= 3 ? now : undefined}>
                 {`#${now.toLocaleString("en-GB")}`}
               </strong>

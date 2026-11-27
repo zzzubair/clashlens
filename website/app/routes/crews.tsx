@@ -99,8 +99,8 @@ export default function CrewsRoute() {
         <div className="empty-state">
           <h2>No crews yet</h2>
           <p>
-            Start a crew to share live and daily Legend boards, or open an invite link
-            from a crew member to join theirs.
+            Start one for shared live and daily boards, or join with a member&apos;s
+            invite link.
           </p>
           {canCreate ? (
             <p className="hero-actions">
