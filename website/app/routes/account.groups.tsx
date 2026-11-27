@@ -438,11 +438,14 @@ export default function GroupsRoute() {
   }, [groups.length]);
 
   const createForm = (
-    <section className="form-panel" aria-labelledby="group-create-title">
+    <section
+      className="form-panel"
+      {...(groups.length > 0
+        ? { "aria-labelledby": "group-create-title" }
+        : { "aria-label": "New watchlist" })}
+    >
       {/* With no lists yet, "No watchlists yet" heads the form instead. */}
-      <h2 id="group-create-title" className={groups.length > 0 ? undefined : "sr-only"}>
-        New watchlist
-      </h2>
+      {groups.length > 0 ? <h2 id="group-create-title">New watchlist</h2> : null}
       <Form key={createKey} method="post" action="." className="stack-form" replace>
         <input type="hidden" name="action" value="create" />
         <input type="hidden" name="idempotencyKey" value={createKey} />
