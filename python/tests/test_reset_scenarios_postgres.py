@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -36,6 +37,7 @@ from reset_scenarios_postgres_support import (
     _story,
     _tag,
     attacks,
+    board_transcript,
     day,
     defenses,
     multiplayer,
@@ -753,7 +755,31 @@ def test_reset_at_full_size(database_url: str, archive_server, monkeypatch) -> N
         members = story.board_members(monday)
         board = story.served_board()
         second_page = story.served_board(offset=100)
+        transcript = board_transcript(connection_info, monday)
     assert unfinished == []
+    frozen = transcript.pop("frozen")
+    assert transcript == {
+        "versions": [
+            (1, 'published', 'published', 'finalized', [], None, 'snapshot@1:m1', 'army@1:m2', 1, 1),
+        ],
+        "members": [
+            (1, 'terminal', 'complete', 'complete', 100),
+            (1, 'terminal', 'missing', 'unavailable', 100),
+        ],
+        "rebuilds": [],
+        "identities": [('analytics', 1, 'snapshot@1:m1'), ('army', 1, 'army@1:m2')],
+        "events": [(1, None)],
+        "jobs": [
+            ('build_snapshot:boundary:2026-10-12T05:00:00Z:gen:1:manifest:m1', 'complete'),
+            ('build_analytics:snapshot:#:v1:input:h1', 'complete'),
+            ('build_army_analytics:boundary:2026-10-12T05:00:00Z:gen:1:manifest:m2', 'complete'),
+        ],
+    }
+    # Each member once in each frozen list; the never-played ones have no
+    # day, so no armies.
+    assert sorted(Counter((row[0], row[3]) for row in frozen).items()) == [
+        (("army@1:m2", "Complete"), 100), (("army@1:m2", "Unavailable"), 100),
+        (("snapshot@1:m1", "Complete"), 200)]
     assert battles >= 7 * BATTLES_A_DAY
     # A board build may read the whole table once or twice; the
     # never-played check of PR 451 read it at least once a player.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
@@ -26,6 +27,7 @@ from clashlens.api_db import ApiDatabase
 from clashlens.army_analytics import ArmyAnalyticsSelection
 from clashlens.db import Database
 from clashlens.domain import _ALLOCATION_THRESHOLDS
+from clashlens.job_contracts import SUPPORTED_WORK_TYPES
 from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
 
 # The Season of the 12 October 2026 incident: Day 1 was Monday 5 October.
@@ -66,7 +68,8 @@ class Battle:
     whether it was an attack. A multiplayer battle is no Legend battle, but
     it takes a row of the log's 50. A Legend row with no opponent is the
     game's "no opponent, no battle" row: a used slot that is no battle.
-    ``army`` is the attacker's army share code, None for the fixture's."""
+    ``army`` is the attacker's army share code, None for the fixture's and
+    empty when the report shows none."""
 
     at: datetime
     trophies: int
@@ -146,6 +149,8 @@ class Player:
                 items[-1].update(opponentPlayerTag=None, battleTime=0)
             if battle.army:
                 items[-1]["armyShareCode"] = battle.army
+            elif battle.army == "":
+                del items[-1]["armyShareCode"]
         return json.dumps({"items": items[::-1]}).encode()
 
 
@@ -179,6 +184,9 @@ class Story:
         self.monkeypatch.setattr(
             past_reset_pacing, "_now", lambda connection: clock(connection) + self.elapsed)
         self.monkeypatch.setattr(past_reset_pacing, "_in_quiet_window", lambda _now: False)
+        # Likewise operator corrections, which wait out 04:00 to 07:00 UTC.
+        self.monkeypatch.setattr(past_reset_pacing, "OPERATOR_QUIET_START",
+                                 past_reset_pacing.PAST_RESET_QUIET_END)
         # A story runs weeks after its Resets, so each board's 05:30 deadline
         # would pass before its first day saved. Every day saves within
         # minutes of the Reset here, as production's do: each board waits
@@ -263,20 +271,20 @@ class Story:
             self.run_worker()
 
     def read(self, tag: str, at: datetime, trophies: int | None = None,
-             season: datetime | None = SEASON) -> None:
+             season: datetime | None = SEASON) -> int:
         """A routine read outside a sweep: the profile when ``trophies`` is
-        given, else the battle log."""
+        given, else the battle log. Returns its job's ID."""
         player = self.players[tag]
         self._at(at)
         endpoint, body = (
             ("battle_log", player.log(at)) if trophies is None
             else ("profile", player.profile(trophies, season))
         )
-        store_observation(
+        return store_observation(
             self.connection_info, self.archive_server,
             occurrence_key=f"{tag}-{endpoint}-{at.isoformat()}", endpoint=endpoint,
             body=body, observed_at=at, normalized_tag=tag,
-        )
+        )[1]
 
     def reads(self, at: datetime, totals: dict[str, int], season: datetime | None = SEASON) -> None:
         """The collector's regular check of each player at ``at``: their
@@ -339,6 +347,46 @@ class Story:
                     return
         finally:
             database.close()
+
+    def run_round(self, *, skip: tuple[str, ...] = ()) -> None:
+        """Run the worker without letting time pass: the publication check
+        and every job due now, except those of a work type in ``skip``, until
+        nothing is left. A job sent to wait stays waiting."""
+        kinds = tuple(kind for kind in SUPPORTED_WORK_TYPES if kind not in skip)
+        database, processor = _processor(self.connection_info, self.archive_server)
+        try:
+            for _ in range(20):
+                if self.decides:
+                    league_decider.decide_due(database)
+                boundary_publication.reevaluate_boundary_publications(database)
+                processed = 0
+                while processor.process_once(owner="story", work_types=kinds) is not None:
+                    processed += 1
+                boundary_publication.reevaluate_boundary_publications(database)
+                if not processed:
+                    return
+        finally:
+            database.close()
+
+    def run_jobs(self, *job_ids: int) -> list[tuple[str, str | None]]:
+        """Process exactly these jobs, in order: each one's outcome and its
+        reason, such as ("retrying", "database_lock_busy")."""
+        database, processor = _processor(self.connection_info, self.archive_server)
+        try:
+            return [
+                (result.outcome, result.category) if result else None
+                for result in (processor.process_job(job_id, owner=f"story-{job_id}")
+                               for job_id in job_ids)
+            ]
+        finally:
+            database.close()
+
+    def jobs(self, work_type: str) -> list[int]:
+        """The IDs of the pending jobs of ``work_type``, oldest first."""
+        with psycopg.connect(self.connection_info) as connection:
+            return [row[0] for row in connection.execute(
+                "SELECT id FROM python_processing_jobs WHERE work_type = %s"
+                " AND status = 'pending' ORDER BY id", (work_type,)).fetchall()]
 
     def unfinished_jobs(self) -> list[tuple]:
         """Jobs that failed for good or still wait: none should, in a story
@@ -497,3 +545,172 @@ def _saturday(start: datetime) -> list[Battle]:
 def _even(start: datetime) -> list[Battle]:
     """6 attacks of 40 and 8 defenses of 30: the day ends where it began."""
     return attacks(start, *[40] * 6) + defenses(start, *[30] * 8)
+
+
+def board_transcript(connection_info: str, boundary: datetime) -> dict[str, list]:
+    """Everything a Reset's Daily board has done so far, in order, with no
+    database IDs or times: a board version is named by its number, a frozen
+    input list by its kind, version and digest, and a digest by a label in
+    order of first sight (m1, m2, ... for frozen lists; h1, h2, ... for the
+    other hashes job keys carry), so the same inputs read the same label.
+
+    - versions: (number, board state, army state, rebuild state, artifacts
+      rebuilt, number replaced, frozen board list, frozen army list, version
+      whose statistics identity it names, version whose army identity it
+      names)
+    - members: (number, status, board status, army status, how many)
+    - rebuilds: (state, artifacts, markers, from version, to version, days)
+    - frozen: (frozen list, player, day result number, its class, and for
+      a board list the profile reading it ranks by [trophies, minutes from
+      the Reset, why it may rank], for an army list the army share codes of
+      the battles it read)
+    - identities: (kind, version, frozen list)
+    - events: (version, version it replaced)
+    - jobs: (build job's key, its status)"""
+    labels: dict[str, str] = {}
+
+    def label(value: object, prefix: str = "h") -> str | None:
+        if value is None:
+            return None
+        named = [name for name in labels.values() if name[0] == prefix]
+        return labels.setdefault(text(value), f"{prefix}{len(named) + 1}")
+
+    with psycopg.connect(connection_info) as connection:
+        manifests = {
+            manifest_id: (f"{text(kind)}@{number}", label(digest, "m"))
+            for manifest_id, kind, number, digest in connection.execute(
+                """
+                SELECT manifest.id, manifest.artifact_kind, generation.generation, manifest.digest
+                FROM boundary_publication_manifests AS manifest
+                JOIN boundary_publication_generations AS generation
+                  ON generation.id = manifest.generation_id
+                WHERE generation.boundary_at = %s ORDER BY manifest.id
+                """,
+                (boundary,),
+            ).fetchall()
+        }
+
+        def frozen(manifest_id: int | None) -> str | None:
+            return None if manifest_id is None else "{}:{}".format(*manifests[manifest_id])
+
+        frozen_rows = [
+            (frozen(manifest_id), text(tag), number, text(classification), detail)
+            for manifest_id, tag, number, classification, detail in connection.execute(
+                """
+                SELECT entry.manifest_id, player.normalized_tag, day.version,
+                       entry.classification,
+                       CASE WHEN manifest.artifact_kind = 'army' THEN to_jsonb(ARRAY(
+                           SELECT coalesce(decode.raw_code, decode.status)
+                           FROM battle_army_decodes AS decode
+                           WHERE decode.id IN (
+                               SELECT jsonb_array_elements_text(
+                                   entry.input_identity -> 'decode_ids')::bigint)
+                           ORDER BY 1))
+                       ELSE jsonb_build_array(
+                           entry.input_identity #> '{profile_snapshot,trophies}',
+                           (extract(epoch FROM (entry.input_identity
+                               #>> '{profile_snapshot,observed_at}')::timestamptz
+                               - %(boundary)s) / 60)::int,
+                           entry.input_identity ->> 'snapshot_quality') END
+                FROM boundary_publication_manifests AS manifest
+                CROSS JOIN LATERAL boundary_publication_manifest_entries(manifest.id) AS entry
+                JOIN players AS player ON player.id = entry.player_id
+                LEFT JOIN ranked_day_versions AS day ON day.id = entry.ranked_day_version_id
+                WHERE manifest.id = ANY(%(manifests)s)
+                ORDER BY entry.manifest_id, entry.ordinal
+                """,
+                {"manifests": list(manifests), "boundary": boundary},
+            ).fetchall()
+        ]
+
+        numbers = dict(connection.execute(
+            "SELECT id, generation FROM boundary_publication_generations WHERE boundary_at = %s",
+            (boundary,)).fetchall())
+        identities = {
+            identity_id: (text(kind), numbers[generation_id], frozen(manifest_id))
+            for identity_id, kind, generation_id, manifest_id in connection.execute(
+                """
+                SELECT identity.id, identity.artifact_kind, identity.generation_id,
+                       identity.manifest_id
+                FROM boundary_publication_artifact_identities AS identity
+                WHERE identity.generation_id = ANY(%s) ORDER BY identity.id
+                """,
+                (list(numbers),),
+            ).fetchall()
+        }
+        versions = [
+            (number, text(board), text(army), text(rebuild),
+             sorted(text(kind) for kind in affected or []), numbers.get(replaced),
+             frozen(board_list), frozen(army_list),
+             identities[statistics][1] if statistics else None,
+             identities[army_identity][1] if army_identity else None)
+            for (number, board, army, rebuild, affected, replaced, board_list, army_list,
+                 statistics, army_identity) in connection.execute(
+                """
+                SELECT generation, snapshot_state, army_state, correction_state,
+                       affected_artifacts, supersedes_id, snapshot_manifest_id,
+                       army_manifest_id, snapshot_analytics_publication_id, army_publication_id
+                FROM boundary_publication_generations
+                WHERE boundary_at = %s ORDER BY generation
+                """,
+                (boundary,),
+            ).fetchall()
+        ]
+        members = [
+            (number, text(status), text(board), text(army), count)
+            for number, status, board, army, count in connection.execute(
+                """
+                SELECT generation.generation, member.status, member.snapshot_status,
+                       member.army_status, count(*)
+                FROM boundary_publication_generation_members AS member
+                JOIN boundary_publication_generations AS generation
+                  ON generation.id = member.generation_id
+                WHERE generation.boundary_at = %s
+                GROUP BY 1, 2, 3, 4 ORDER BY 1, 2, 3, 4
+                """,
+                (boundary,),
+            ).fetchall()
+        ]
+        rebuilds = []
+        for state, affected, inputs, source, target in connection.execute(
+            """
+            SELECT state, affected_artifacts, clashlens_correction_inputs(correction),
+                   source_generation_id, generation_id
+            FROM boundary_publication_corrections AS correction
+            WHERE boundary_at = %s ORDER BY id
+            """,
+            (boundary,),
+        ).fetchall():
+            markers = sorted(
+                "arrival" if entry.get("arrival") else text(entry.get("kind"))
+                for entry in inputs if "kind" in entry or entry.get("arrival"))
+            days = sum("ranked_day_version_id" in entry for entry in inputs)
+            rebuilds.append((text(state), sorted(text(kind) for kind in affected or []),
+                             markers, numbers.get(source), numbers.get(target), days))
+        events = [
+            (number, replaced) for number, replaced in connection.execute(
+                """
+                SELECT generation, superseded_generation FROM boundary_publication_events
+                WHERE boundary_at = %s ORDER BY id
+                """,
+                (boundary,),
+            ).fetchall()
+        ]
+        jobs = []
+        for key, status in connection.execute(
+            """
+            SELECT deduplication_key, status FROM python_processing_jobs
+            WHERE work_type IN ('build_snapshot', 'build_analytics', 'build_army_analytics')
+              AND input_json ->> 'boundary_at' = %s ORDER BY id
+            """,
+            (f"{boundary.astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}",),
+        ).fetchall():
+            key = re.sub(r"[0-9a-f]{64}", lambda hashed: label(hashed.group()), text(key))
+            key = re.sub(r":freeze:\d+:.*", ":freeze", key)
+            key = re.sub(r"(snapshot:|:retry:)\d+", r"\1#", key)
+            jobs.append((key, text(status)))
+    return {
+        "versions": versions, "members": members, "rebuilds": rebuilds,
+        "frozen": frozen_rows, "identities": list(identities.values()), "events": events,
+        "jobs": jobs,
+    }
