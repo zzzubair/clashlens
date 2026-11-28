@@ -31,7 +31,6 @@ from clashlens import (
     boundary,
     boundary_publication,
     reconciliation_db,
-    reset_baselines,
     snapshots,
 )
 from clashlens.db import Database
@@ -209,7 +208,7 @@ def test_army_build_does_not_deadlock_with_day_result_rebuild(
                 ]
                 sweep_id = _sweep_with_members(connection, players)
                 for player_id in players:
-                    reset_baselines._record_boundary_baseline(
+                    boundary.reset_reading_settled(
                         database,
                         connection,
                         boundary_at=BOUNDARY,

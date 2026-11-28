@@ -690,6 +690,65 @@ def test_battle_log_started_before_a_reset_records_its_member(
     ]
 
 
+@pytest.mark.parametrize("swept", [False, True])
+def test_a_decode_for_a_day_with_no_reset_board_queues_no_army_build(
+    database_url: str, archive_server, swept: bool
+) -> None:
+    # An army build needs a Reset board's frozen inputs, so a decode for a
+    # finished day whose Reset has no board yet (not swept, or swept with no
+    # generation) saves its armies and leaves the build to that board.
+    with domain_database(database_url) as ci:
+        _unswept_battles(ci, archive_server, {"#2PP": "u1x58"})
+        with psycopg.connect(ci) as connection:
+            player_id = connection.execute(
+                "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+            ).fetchone()[0]
+            connection.execute(
+                """
+                INSERT INTO ranked_day_versions (
+                    player_id, ranked_day_start, ranked_day_end,
+                    official_season_id, season_day_number,
+                    season_anchor_rule_version, reconciliation_rule_version,
+                    result_hash, version, state, confidence, input_hash,
+                    evidence_complete, coverage_complete
+                ) VALUES (
+                    %s, '2026-08-04T05:00:00Z', '2026-08-05T05:00:00Z',
+                    'test-season', 1, 'test-anchor', 'test-rules', %s, 1,
+                    'Complete', 'exact', %s, true, true
+                )
+                """,
+                (player_id, "a" * 64, "a" * 64),
+            )
+            if swept:
+                _sweep_with_members(connection, [player_id])
+        ts = datetime(2026, 8, 4, 13, tzinfo=UTC)
+        _, job_id = store_observation(
+            ci,
+            archive_server,
+            occurrence_key="after-the-day",
+            endpoint="battle_log",
+            body=json.dumps({"items": [_live_row(True, "#9PP", "u2x58", ts)]}).encode(),
+            observed_at=ts + timedelta(minutes=1),
+            normalized_tag="#2PP",
+        )
+        db, proc = _processor(ci, archive_server)
+        try:
+            outcome = proc.process_job(job_id, owner="decode").outcome
+            with db.pool.connection() as connection:
+                decodes, army_jobs = connection.execute(
+                    """
+                    SELECT
+                        (SELECT count(*) FROM battle_army_decodes WHERE is_active),
+                        (SELECT count(*) FROM python_processing_jobs
+                         WHERE work_type = 'build_army_analytics')
+                    """
+                ).fetchone()
+        finally:
+            db.close()
+
+    assert (outcome, decodes, army_jobs) == ("processed", 1, 0)
+
+
 @pytest.mark.parametrize("attack", [True, False])
 @pytest.mark.parametrize(
     ("old_code", "new_code", "expected_status"),

@@ -208,6 +208,19 @@ def require_open_generation(row: Any, boundary_at: datetime) -> None:
         )
 
 
+def reset_reading_settled(
+    database: Database, connection: Any, *, boundary_at: datetime,
+    reset_sweep_id: int, player_id: int, state: str,
+) -> None:
+    """Record a Reset reading that settled as ``state`` ("complete" or
+    "failed") on its Reset's first board, waiting for the Reset's lock with
+    no time limit."""
+    from .boundary_readings import reset_reading_settled as settle
+
+    settle(database, connection, boundary_at=boundary_at,
+           reset_sweep_id=reset_sweep_id, player_id=player_id, state=state)
+
+
 def _inherit_deferred_army_successor_snapshot(
     connection: Any, *, generation_id: int
 ) -> bool:
