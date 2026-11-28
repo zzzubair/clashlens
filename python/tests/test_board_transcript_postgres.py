@@ -15,7 +15,6 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 
 import psycopg
-import pytest
 from board_later_reading_postgres_support import _hold
 from domain_test_support import domain_database, store_observation
 from league_week_days_postgres_support import _decide_below
@@ -1022,12 +1021,13 @@ def test_a_season_repair_rebuilds_the_boards_it_changes(
 def test_a_new_player_saved_while_a_rebuild_waits_on_its_freeze(
     database_url: str, archive_server, monkeypatch
 ) -> None:
-    """Suspected bug (b): A's day is saved again after the freeze, so the
-    hourly rebuild captures its members, A and B, and freezes their inputs.
-    That freeze times out once, as a slow one does in production (forced
-    here by the one internal hook), and NEW, first read meanwhile, has its
-    day saved before the retry. The rebuild should take NEW in, as
-    test_a_new_player_joins_at_the_hourly_rebuild's does."""
+    """Bug (b): A's day is saved again after the freeze, so the hourly
+    rebuild captures its members, A and B, and freezes their inputs. That
+    freeze times out once, as a slow one does in production (forced here by
+    the one internal hook), and NEW, first read meanwhile, has its day saved
+    before the retry. The rebuild keeps the members it took, and NEW waits
+    in the queue for the next rebuild, as a new player does in
+    test_a_new_player_joins_at_the_hourly_rebuild."""
     start, end = day(2), day(3)
     rows, tries = boundary_manifest._snapshot_rows, []
 
@@ -1073,43 +1073,28 @@ def test_a_new_player_saved_while_a_rebuild_waits_on_its_freeze(
         "rebuilds": [('active', ['army', 'snapshot'], [], 1, 2, 1)],
     }
     assert seen["NEW's day"] == "Partial"
-    # The retry published, and A and B are on the board as they should be.
-    newest = final["versions"][-1]
-    assert newest[1:4] == ("published", "published", "finalized")
-    assert {tag: total for tag, total in board.items() if tag != NEW} == {B: 5141, A: 5140}
-    if NEW not in board:
-        # Today: the retry froze A and B only, and NEW is a member of no version.
-        assert {row[1] for row in final["frozen"]
-                if row[0].startswith(f"snapshot@{newest[0]}:")} == {A, B}
-        assert seen["NEW saved"] == {
-            "versions": [
-                (1, 'published', 'published', 'finalized', [], None, 'snapshot@1:m1', 'army@1:m2', 1, 1),
-                (2, 'ready', 'ready', 'active', ['army', 'snapshot'], 1, None, None, None, None),
-            ],
-            "members": [
-                (1, 'terminal', 'complete', 'complete', 1),
-                (1, 'terminal', 'partial', 'partial', 1),
-                (2, 'terminal', 'complete', 'complete', 1),
-                (2, 'terminal', 'partial', 'partial', 1),
-            ],
-            "rebuilds": [('active', ['army', 'snapshot'], [], 1, 2, 1)],
-            "frozen": [
-                ('snapshot@1:m1', '#2PP', 2, 'Partial', [5140, -10, 'eligible']),
-                ('snapshot@1:m1', '#8PP', 2, 'Complete', [5141, -10, 'eligible']),
-                ('army@1:m2', '#2PP', 2, 'Partial', ['u1x0-2x1']),
-                ('army@1:m2', '#8PP', 2, 'Complete', ['u1x0-2x1']),
-            ],
-            "identities": [('analytics', 1, 'snapshot@1:m1'), ('army', 1, 'army@1:m2')],
-            "events": [(1, None)],
-            "jobs": [
-                ('build_snapshot:boundary:2026-10-07T05:00:00Z:gen:1:manifest:m1', 'complete'),
-                ('build_analytics:snapshot:#:v1:input:h1', 'complete'),
-                ('build_army_analytics:boundary:2026-10-07T05:00:00Z:gen:1:manifest:m2', 'complete'),
-                ('build_snapshot:freeze', 'failed'),
-            ],
-        }
-        pytest.xfail(
-            "a day saved while a rebuild waits on its freeze never joins it, "
-            f"nor any later rebuild: the board stays {board}")
+    # NEW waits in the queue behind the rebuild in progress.
+    assert _short(seen["NEW saved"]) == {
+        "versions": [
+            (1, 'published', 'published', 'finalized', [], None, 'snapshot@1:m1', 'army@1:m2', 1, 1),
+            (2, 'ready', 'ready', 'active', ['army', 'snapshot'], 1, None, None, None, None),
+        ],
+        "rebuilds": [
+            ('active', ['army', 'snapshot'], [], 1, 2, 1),
+            ('queued', ['army', 'snapshot'], [], 2, None, 1),
+        ],
+    }
+    # The retry froze the members it took, A and B, and the next rebuild
+    # took NEW in.
+    assert final["versions"] == [
+        (1, 'published', 'published', 'finalized', [], None, 'snapshot@1:m1', 'army@1:m2', 1, 1),
+        (2, 'published', 'published', 'finalized', ['army', 'snapshot'], 1, 'snapshot@2:m3', 'army@2:m4', 2, 2),
+        (3, 'published', 'published', 'finalized', ['army', 'snapshot'], 2, 'snapshot@3:m5', 'army@3:m6', 3, 3),
+    ]
+    assert final["rebuilds"] == [
+        ('finalized', ['army', 'snapshot'], [], 1, 2, 1),
+        ('finalized', ['army', 'snapshot'], [], 2, 3, 1),
+    ]
+    assert {row[1] for row in final["frozen"] if row[0] == 'snapshot@2:m3'} == {A, B}
+    assert {row[1] for row in final["frozen"] if row[0] == 'snapshot@3:m5'} == {A, B, NEW}
     assert board == {NEW: 5142, B: 5141, A: 5140}
-

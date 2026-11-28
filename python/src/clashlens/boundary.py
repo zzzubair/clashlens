@@ -651,7 +651,9 @@ def _record_boundary_generation(
             if manifest_id is not None
         ]
         correction_active = text_value(current[4]) == "active"
-        if correction_active and current[7] and not (changed and frozen_artifacts):
+        # A rebuild that has taken its members keeps them while it freezes,
+        # so a new member waits in the queue for the next one.
+        if correction_active and current[7] and not (changed and (frozen_artifacts or joins)):
             affected = {text_value(value) for value in current[7]}
             frozen_artifacts = [
                 kind for kind in frozen_artifacts if kind in affected
