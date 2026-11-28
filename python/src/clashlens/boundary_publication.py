@@ -23,16 +23,10 @@ from .analytics import (
     CLASSIFICATION_VERSION,
     SNAPSHOT_ORDERING_RULE_VERSION,
 )
-from .army_decoder import DECODER_VERSION
 from .db import Claim, Database
 from .db_rows import text_value
 from .domain import DomainRuleError, battle_window
-from .job_contracts import (
-    ANALYTICS_RULE_VERSION,
-    ARMY_ANALYTICS_RULE_VERSION,
-    DOMAIN_RULE_VERSION,
-    PROCESSING_VERSION,
-)
+from .job_contracts import ANALYTICS_RULE_VERSION
 from .past_reset_pacing import (
     OPERATOR_CORRECTION,
     correction_waits,
@@ -1109,7 +1103,9 @@ def _enqueue_army_analytics(
     changed battles; their status is the only one those decodes can change.
     ``swept`` is whether the caller already holds the Reset's lock as
     ``boundary.lock_boundary_publication_once_swept`` takes it; False means
-    the Reset is not swept yet and the refresh is skipped.
+    the Reset is not swept yet and the refresh is skipped. A Reset with no
+    board yet gets its armies when its board's army inputs freeze, so
+    nothing is queued for it here.
     """
     ranked_day_start = ranked_day_start.astimezone(UTC)
     coordinator = None
@@ -1222,68 +1218,3 @@ def _enqueue_army_analytics(
                 boundary_at=boundary_at,
                 generation_id=generation_id,
             )
-        return
-    # Decode-driven historical/test work without a reset coordinator
-    # retains its existing per-day shape. Coordinated boundaries return
-    # above and can only enqueue manifest-identified army work.
-    completed = connection.execute(
-        """
-        SELECT id, official_season_id
-        FROM ranked_day_versions
-        WHERE ranked_day_start = %s
-          AND state = 'Complete'
-          AND coverage_complete
-        ORDER BY id DESC
-        LIMIT 1
-        """,
-        (ranked_day_start,),
-    ).fetchone()
-    if completed is None:
-        return
-    ranked_day_version_id = int(completed[0])
-    season_id = text_value(completed[1])
-    from .season_lifecycle import acquire_season_lock_shared, is_season_detail_retired
-
-    acquire_season_lock_shared(connection, season_id)
-    if is_season_detail_retired(connection, season_id):
-        return
-    latest_decode = connection.execute(
-        """
-        SELECT COALESCE(max(decode.id), 0)
-        FROM legend_battles AS battle
-        LEFT JOIN battle_army_decodes AS decode
-          ON decode.battle_id = battle.id
-         AND decode.is_active
-         AND decode.decoder_version = %s
-        WHERE battle.ranked_day_start = %s
-        """,
-        (DECODER_VERSION, ranked_day_start),
-    ).fetchone()
-    decode_generation = int(latest_decode[0]) if latest_decode else 0
-    day_text = ranked_day_start.strftime("%Y-%m-%dT%H:%M:%SZ")
-    generation = f"{ranked_day_version_id}:{decode_generation}"
-    connection.execute(
-        """
-        INSERT INTO python_processing_jobs_worker (
-            work_type, deduplication_key, input_json,
-            processing_version, domain_rule_version,
-            analytics_rule_version, due_at
-        ) VALUES (
-            'build_army_analytics', %s, %s, %s, %s, %s,
-            clock_timestamp()
-        )
-        ON CONFLICT (deduplication_key) DO NOTHING
-        """,
-        (
-            f"build_army_analytics:{day_text}:{generation}:{ARMY_ANALYTICS_RULE_VERSION}:{DECODER_VERSION}",
-            Jsonb(
-                {
-                    "ranked_day_start": day_text,
-                    "official_season_id": season_id,
-                }
-            ),
-            PROCESSING_VERSION,
-            DOMAIN_RULE_VERSION,
-            ARMY_ANALYTICS_RULE_VERSION,
-        ),
-    )

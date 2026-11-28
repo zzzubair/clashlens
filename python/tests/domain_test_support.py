@@ -31,10 +31,10 @@ def text(value: Any) -> Any:
 def enable_direct_army_fixture(database: Any, monkeypatch: Any) -> None:
     """Exercise historical army calculation without a collected Reset board.
 
-    The production historical enqueue emits only day/Season fields, while
-    job_contracts.supported_job_filter requires generation and manifest fields.
-    These isolated analytics tests cannot submit that historical job until
-    the source contract is reconciled. Real Reset publication is covered by
+    Production queues an army build only for a Reset board's frozen inputs,
+    and job_contracts.supported_job_filter requires generation and manifest
+    fields, so these isolated analytics tests queue a stand-in job and run
+    the day build without a board. Real Reset publication is covered by
     test_id_history_postgres and the Reset stories, without this substitution.
     """
     original_complete = army_ingestion.complete_army_analytics

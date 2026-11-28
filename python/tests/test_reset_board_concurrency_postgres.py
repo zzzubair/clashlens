@@ -30,7 +30,7 @@ from claim_jobs_postgres_support import (
 )
 from domain_test_support import domain_database
 
-from clashlens import boundary, reset_baselines
+from clashlens import boundary
 from clashlens.collector_db import CollectorDatabase
 from clashlens.db import (
     PYTHON_LIVE_PRIORITY,
@@ -180,7 +180,7 @@ def test_reset_replay_keeps_the_result_it_waited_for(database_url: str) -> None:
             def replay() -> None:
                 try:
                     with psycopg.connect(connection_info) as connection:
-                        reset_baselines._record_boundary_baseline(
+                        boundary.reset_reading_settled(
                             database,
                             connection,
                             boundary_at=BOUNDARY,

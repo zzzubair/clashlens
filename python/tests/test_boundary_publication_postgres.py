@@ -19,7 +19,6 @@ from clashlens import (
     boundary,
     boundary_publication,
     past_reset_pacing,
-    reset_baselines,
     snapshots,
 )
 from clashlens.db import Database
@@ -147,7 +146,7 @@ def test_baseline_recomputes_army_status_until_decodes_exist(
                     ranked_day_version_id=ranked_id,
                     ranked_day_input_hash="a" * 64,
                 )
-                reset_baselines._record_boundary_baseline(database,
+                boundary.reset_reading_settled(database,
                     connection,
                     boundary_at=BOUNDARY,
                     reset_sweep_id=_sweep_id(connection),
@@ -1245,7 +1244,7 @@ def test_mixed_boundary_last_unavailable_still_enqueues_army(
                     connection, [first[0], second[0], third[0]]
                 )
                 for player_id, version_id in (first, second):
-                    reset_baselines._record_boundary_baseline(database,
+                    boundary.reset_reading_settled(database,
                         connection,
                         boundary_at=BOUNDARY,
                         reset_sweep_id=sweep_id,
@@ -1259,7 +1258,7 @@ def test_mixed_boundary_last_unavailable_still_enqueues_army(
                         ranked_day_version_id=version_id,
                         ranked_day_input_hash="a" * 64,
                     )
-                reset_baselines._record_boundary_baseline(database,
+                boundary.reset_reading_settled(database,
                     connection,
                     boundary_at=BOUNDARY,
                     reset_sweep_id=sweep_id,
@@ -1308,7 +1307,7 @@ def test_all_unavailable_boundary_publishes_empty_army_with_anchor_metadata(
                 ]
                 sweep_id = _sweep_with_members(connection, players)
                 for player_id in players:
-                    reset_baselines._record_boundary_baseline(database,
+                    boundary.reset_reading_settled(database,
                         connection,
                         boundary_at=BOUNDARY,
                         reset_sweep_id=sweep_id,

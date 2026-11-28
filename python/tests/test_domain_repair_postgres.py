@@ -22,7 +22,6 @@ from clashlens import (
     boundary_publication,
     domain_repair,
     past_reset_pacing,
-    reset_baselines,
 )
 from clashlens.analytics import SNAPSHOT_ORDERING_RULE_VERSION
 from clashlens.army_decoder import DECODER_VERSION
@@ -452,7 +451,7 @@ def test_campaign_hold_defers_only_affected_artifacts(
 
         for boundary_at, member in itertools.product((held, held_next, free), (player, opponent)):
             with worker.pool.connection() as connection:
-                reset_baselines._record_boundary_baseline(
+                boundary.reset_reading_settled(
                     worker, connection, boundary_at=boundary_at,
                     reset_sweep_id=sweeps[boundary_at], player_id=member, state="failed",
                 )
